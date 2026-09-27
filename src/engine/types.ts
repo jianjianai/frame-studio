@@ -31,6 +31,7 @@ export const projectSchema = z
     fps: z.number().int().min(12).max(60),
     accent: z.string(),
     poster: z.string(),
+    posterTime: z.number().nonnegative().optional(),
     audio: z.string().optional(),
     audioTracks: z.array(audioTrackSchema).max(32).optional(),
     tags: z.array(z.string()),
@@ -46,6 +47,8 @@ export const projectSchema = z
     credits: z.array(z.string()),
   })
   .superRefine((p, ctx) => {
+    if (p.posterTime !== undefined && p.posterTime >= p.duration)
+      ctx.addIssue({ code: "custom", message: "封面时间不能超过片长" });
     if (p.audio && p.audioTracks?.length)
       ctx.addIssue({
         code: "custom",

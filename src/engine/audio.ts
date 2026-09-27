@@ -5,8 +5,6 @@ export class AudioTransport {
   readonly clock: Clock;
   context?: AudioContext;
   private prepared?: PreparedAudio;
-  private recordDestination?: MediaStreamAudioDestinationNode;
-  private recordingSilence?: ConstantSourceNode;
   private gain?: GainNode;
   private graph?: { dispose(): void };
   private boundary?: AudioBufferSourceNode;
@@ -153,36 +151,10 @@ export class AudioTransport {
     boundary.stop(when + length / this.clock.rate);
     this.boundary = boundary;
   }
-  getMediaStream(): MediaStream | undefined {
-    if (!this.context || !this.gain) return;
-    this.releaseMediaStream();
-    this.recordDestination = this.context.createMediaStreamDestination();
-    this.gain.connect(this.recordDestination);
-    // Keep PCM flowing before playback and across pauses, so short generated clips
-    // do not finish before MediaRecorder receives its first audio packet.
-    this.recordingSilence = this.context.createConstantSource();
-    this.recordingSilence.offset.value = 0;
-    this.recordingSilence.connect(this.recordDestination);
-    this.recordingSilence.start();
-    return this.recordDestination.stream;
-  }
-  releaseMediaStream(): void {
-    this.recordingSilence?.stop();
-    this.recordingSilence?.disconnect();
-    this.recordingSilence = undefined;
-    if (this.recordDestination) {
-      this.gain?.disconnect(this.recordDestination);
-      this.recordDestination.stream
-        .getTracks()
-        .forEach((track) => track.stop());
-      this.recordDestination = undefined;
-    }
-  }
   async dispose(): Promise<void> {
     this.closed = true;
     this.abort.abort();
     this.pause();
-    this.releaseMediaStream();
     this.prepared = undefined;
     this.gain?.disconnect();
     if (this.context && this.context.state !== "closed")

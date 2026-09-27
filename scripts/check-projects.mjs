@@ -90,7 +90,7 @@ export function checkProjects(root = process.cwd(), options = {}) {
   const selected = options.ids?.length ? options.ids : directories;
   let catalog = [];
   try {
-    catalog = assetCatalog(root);
+    catalog = assetCatalog(root, selected.filter(validProjectId));
     if (fs.existsSync(path.join(root, "public/assets.json")))
       catalog = JSON.parse(
         fs.readFileSync(path.join(root, "public/assets.json"), "utf8"),
@@ -146,6 +146,18 @@ export function checkProjects(root = process.cwd(), options = {}) {
       continue;
     }
     const { meta, loadPath } = record;
+    if (
+      meta.posterTime !== undefined &&
+      (!Number.isFinite(meta.posterTime) ||
+        meta.posterTime < 0 ||
+        meta.posterTime >= meta.duration)
+    )
+      report(
+        "error",
+        "POSTER_TIME",
+        file,
+        "posterTime must be inside the project duration",
+      );
     if (meta.audioTracks !== undefined) {
       const tracks = meta.audioTracks;
       const ids = new Set();
@@ -520,6 +532,7 @@ export function checkProjects(root = process.cwd(), options = {}) {
     warnings: issues.filter((i) => i.severity === "warning").length,
   };
   return {
+    schemaVersion: 1,
     checkedAt: new Date().toISOString(),
     root,
     strict: Boolean(options.strict),

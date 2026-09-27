@@ -13,7 +13,7 @@ audioTracks: [
 loadAudio: () => import('./audio'),
 ```
 
-`audio.ts` 由脚手架提供示例，可在本项目中替换。实时播放直接调用 Web Audio，不读写预合成文件。命令行 MP4 使用同一生成器在 OfflineAudioContext 中渲染，浏览器 WebM 录入实时混音。完整字段、时间约定、资源释放和分段重建要求见 [AUTHORING.md](AUTHORING.md)。
+`audio.ts` 由脚手架提供示例，可在本项目中替换。实时播放直接调用 Web Audio，不读写预合成文件。命令行 MP4 和浏览器逐帧 WebM 都使用同一生成器在 OfflineAudioContext 中渲染，无需在导出时实时播放。完整字段、时间约定、资源释放和分段重建要求见 [AUTHORING.md](AUTHORING.md)。
 
 每轨可配置起始时间、源偏移、时长、增益和静音，播放器也能临时调音。浏览器导出采用当前设置；命令导出采用元数据设置。需要保留调音结果时在本项目元数据中修改 gain/muted。
 

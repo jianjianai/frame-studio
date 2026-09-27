@@ -6,6 +6,7 @@ export interface ProjectIssue {
   message: string;
 }
 export interface ProjectCheckReport {
+  schemaVersion: 1;
   checkedAt: string;
   root: string;
   strict: boolean;
@@ -22,7 +23,11 @@ export interface ProjectCheckReport {
   passed: boolean;
   limitation: string;
 }
-export function localAsset(root: string, reference: unknown, owner?: string): string;
+export function localAsset(
+  root: string,
+  reference: unknown,
+  owner?: string,
+): string;
 export function checkProjects(
   root?: string,
   options?: { ids?: string[]; strict?: boolean },

@@ -1,11 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { assetPath } from "./project-paths.mjs";
+import { assetPath, projectPath } from "./project-paths.mjs";
 import { readProjectCatalog } from "./project-metadata.mjs";
 
-export function assetCatalog(root) {
-  return readProjectCatalog(root).flatMap(({ directory }) => {
-    const file = path.join(root, "projects", directory, "public/assets.json");
+export function assetCatalog(root, ids) {
+  const selected =
+    ids ?? readProjectCatalog(root).map(({ directory }) => directory);
+  return selected.flatMap((id) => {
+    const file = projectPath(root, id, "public/assets.json");
     return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : [];
   });
 }

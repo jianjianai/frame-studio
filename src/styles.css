@@ -1301,6 +1301,24 @@ kbd {
   padding-top: 20px;
   padding-bottom: 20px;
 }
+.export-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin: 16px 0;
+}
+.export-settings label {
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+}
+.export-settings select {
+  padding: 8px;
+  border: 1px solid #dce1d7;
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+}
 .recording-badge {
   position: absolute;
   top: 12px;

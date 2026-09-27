@@ -24,6 +24,135 @@ test.afterAll(async () => {
   await server?.close();
 });
 
+test("slow browser rendering preserves every frame and cancellation releases the export scene", async ({
+  page,
+}) => {
+  await page.goto(origin + "/?render=tiny-seed&width=320");
+  await page.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
+  const result = await page.evaluate(async () => {
+    const moduleURL = "/src/engine/browser-export.ts",
+      projectURL = "/projects/tiny-seed/project.ts";
+    const { exportWebm } = await import(moduleURL);
+    const { default: original } = await import(projectURL);
+    HTMLCanvasElement.prototype.captureStream = () => {
+      throw new Error("Realtime capture forbidden");
+    };
+    let disposed = 0;
+    const project: AnimationProject = {
+      ...original,
+      duration: 1,
+      fps: 12,
+      audio: undefined,
+      audioTracks: [],
+      async load() {
+        return {
+          createScene({ width, height, quality }) {
+            if (quality !== "high")
+              throw new Error("Export inherited draft quality");
+            const canvas = document.createElement("canvas");
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext("2d")!;
+            return {
+              canvas,
+              render(time) {
+                const began = performance.now();
+                while (performance.now() - began < 100) {
+                  /* slower than a 12 fps deadline */
+                }
+                const frame = Math.round(time * 12);
+                context.fillStyle = `rgb(${10 + frame * 18}, 40, 80)`;
+                context.fillRect(0, 0, width, height);
+              },
+              dispose() {
+                disposed++;
+              },
+            };
+          },
+        };
+      },
+    };
+    const abort = new AbortController();
+    let canceled = false;
+    try {
+      await exportWebm(project, {
+        width: 320,
+        fps: 12,
+        subtitles: false,
+        signal: abort.signal,
+        onProgress: ({ completed }: { completed: number }) => {
+          if (completed === 2) abort.abort();
+        },
+      });
+    } catch (error) {
+      canceled = (error as Error).name === "AbortError";
+    }
+    const afterCancel = disposed;
+    const blob = await exportWebm(project, {
+      width: 320,
+      fps: 12,
+      subtitles: false,
+      signal: new AbortController().signal,
+    });
+    const bytes = new Uint8Array(await blob.arrayBuffer());
+    let data = "";
+    for (let i = 0; i < bytes.length; i += 8192)
+      data += String.fromCharCode(...bytes.subarray(i, i + 8192));
+    return { data: btoa(data), canceled, afterCancel, disposed };
+  });
+  expect(result).toMatchObject({ canceled: true, afterCancel: 1, disposed: 2 });
+  const file = test.info().outputPath("slow-frames.webm");
+  await fs.writeFile(file, Buffer.from(result.data, "base64"));
+  const probe = JSON.parse(
+    (
+      await promisify(execFile)(
+        process.env.FFPROBE_PATH || "ffprobe",
+        [
+          "-v",
+          "error",
+          "-select_streams",
+          "v:0",
+          "-show_frames",
+          "-of",
+          "json",
+          file,
+        ],
+        { windowsHide: true },
+      )
+    ).stdout,
+  );
+  expect(probe.frames).toHaveLength(12);
+  probe.frames.forEach(
+    (frame: { best_effort_timestamp_time: string }, index: number) =>
+      expect(Number(frame.best_effort_timestamp_time)).toBeCloseTo(
+        index / 12,
+        2,
+      ),
+  );
+  const pixels = (
+    await promisify(execFile)(
+      process.env.FFMPEG_PATH || "ffmpeg",
+      [
+        "-v",
+        "error",
+        "-i",
+        file,
+        "-vf",
+        "scale=1:1",
+        "-f",
+        "rawvideo",
+        "-pix_fmt",
+        "rgb24",
+        "pipe:1",
+      ],
+      { encoding: "buffer", windowsHide: true },
+    )
+  ).stdout;
+  expect(pixels.length).toBe(12 * 3);
+  for (let frame = 0; frame < 12; frame++)
+    expect(Math.abs(pixels[frame * 3] - (10 + frame * 18))).toBeLessThan(6);
+});
+
 test("a project-only generated soundtrack exports through CLI and browser without prebuilt WAV", async ({
   page,
 }) => {
@@ -69,6 +198,34 @@ test("a project-only generated soundtrack exports through CLI and browser withou
       height: 180,
       format: "png",
     });
+    await run("scripts/film.mjs", [
+      "storyboard",
+      id,
+      "--times",
+      "0,0.5",
+      "--width",
+      "320",
+    ]);
+    const board = path.join(folder, "exports/storyboard.png");
+    expect(await sharp(board).metadata()).toMatchObject({
+      width: 640,
+      height: 216,
+    });
+    const boardReport = JSON.parse(await fs.readFile(board + ".json", "utf8"));
+    expect(
+      boardReport.frames.map((frame: { time: number }) => frame.time),
+    ).toEqual([0, 0.5]);
+    await expect(run("scripts/film.mjs", ["storyboard", id])).rejects.toThrow(
+      /Output exists/,
+    );
+    await expect(
+      run("scripts/film.mjs", [
+        "storyboard",
+        id,
+        "--out",
+        path.resolve("projects/tiny-seed/exports/forbidden.png"),
+      ]),
+    ).rejects.toThrow(/inside projects/);
     const mp4 = path.join(folder, "exports/generated.mp4");
     await run("scripts/render.mjs", [
       id,
@@ -119,11 +276,36 @@ test("a project-only generated soundtrack exports through CLI and browser withou
         .filter({ hasText: "实时生成" }),
     ).toHaveCount(2);
     await page.getByRole("button", { name: "导出作品" }).click();
-    const download = page.waitForEvent("download", { timeout: 12000 });
+    expect(
+      await page.getByRole("combobox", { name: "导出分辨率" }).inputValue(),
+    ).toBe("1920");
+    await page.getByRole("combobox", { name: "导出帧率" }).selectOption("12");
+    const download = page.waitForEvent("download", { timeout: 30000 });
     await page.getByRole("button", { name: /WebM/ }).click();
-    await expect(page.getByText(/正在实时录制/)).toBeVisible();
     const webm = await download;
     expect((await fs.stat((await webm.path())!)).size).toBeGreaterThan(1000);
+    const webmProbe = JSON.parse(
+      (
+        await promisify(execFile)(
+          process.env.FFPROBE_PATH || "ffprobe",
+          [
+            "-v",
+            "error",
+            "-count_frames",
+            "-show_streams",
+            "-of",
+            "json",
+            (await webm.path())!,
+          ],
+          { windowsHide: true },
+        )
+      ).stdout,
+    );
+    expect(
+      webmProbe.streams.find(
+        (stream: { codec_type: string }) => stream.codec_type === "video",
+      ),
+    ).toMatchObject({ width: 1920, height: 1080, nb_read_frames: "12" });
     const browserPCM = await promisify(execFile)(
       process.env.FFMPEG_PATH || "ffmpeg",
       [
@@ -154,17 +336,15 @@ test("a project-only generated soundtrack exports through CLI and browser withou
     ).toBe(false);
     await page.goto("about:blank");
   } catch (error) {
-    await test
-      .info()
-      .attach("audio-export-state", {
-        body: JSON.stringify(
-          await page.evaluate(() => ({
-            state: window.__FRAME_STUDIO__?.getState(),
-            text: document.body.innerText,
-          })),
-        ),
-        contentType: "application/json",
-      });
+    await test.info().attach("audio-export-state", {
+      body: JSON.stringify(
+        await page.evaluate(() => ({
+          state: window.__FRAME_STUDIO__?.getState(),
+          text: document.body.innerText,
+        })),
+      ),
+      contentType: "application/json",
+    });
     throw error;
   } finally {
     if (

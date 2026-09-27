@@ -29,6 +29,7 @@ import {
 } from "../engine/types";
 import { FrameRenderer } from "../engine/renderer";
 import { AudioTransport } from "../engine/audio";
+import type { ExportProgress } from "../engine/browser-export";
 import { activeSubtitle, toSrt } from "../engine/subtitles";
 import { downloadBlob, downloadCanvas } from "../engine/download";
 import { clamp, formatTime } from "../engine/math";
@@ -82,7 +83,12 @@ export function Player({ project }: { project: AnimationProject }) {
   const [retry, setRetry] = useState(0);
   const [exportOpen, setExportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
-  const [recording, setRecording] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const [exportWidth, setExportWidth] = useState(1920);
+  const [exportFps, setExportFps] = useState(project.fps);
+  const [exportProgress, setExportProgress] = useState<ExportProgress | null>(
+    null,
+  );
   const [starting, setStarting] = useState(false);
   const [fps, setFps] = useState(0);
   const [showSubtitles, setShowSubtitles] = useState(true);
@@ -97,8 +103,7 @@ export function Player({ project }: { project: AnimationProject }) {
     muted: false,
   });
   const [view, setView] = useState<Playback>(saved.current);
-  const finishRecording = useRef<((cancel?: boolean) => void) | null>(null);
-  const recordingVideo = useRef<CanvasCaptureMediaStreamTrack | null>(null);
+  const exportAbort = useRef<AbortController | null>(null);
   const publish = () => {
     const a = transport.current;
     if (a) {
@@ -115,7 +120,7 @@ export function Player({ project }: { project: AnimationProject }) {
     }
   };
   const seek = (t: number) => {
-    if (recording) return;
+    if (exporting) return;
     transport.current?.seek(t);
     renderer.current?.render(
       transport.current?.clock.time() ?? 0,
@@ -125,7 +130,7 @@ export function Player({ project }: { project: AnimationProject }) {
   };
   const toggle = async () => {
     const a = transport.current;
-    if (!a || loading || recording || starting) return;
+    if (!a || loading || exporting || starting) return;
     setError("");
     if (a.clock.playing) {
       a.pause();
@@ -223,13 +228,11 @@ export function Player({ project }: { project: AnimationProject }) {
           try {
             const t = sound.clock.time();
             if (
-              recordingVideo.current ||
               sound.clock.playing ||
               lastRender !== t ||
               lastSub !== subtitleRef.current
             ) {
               output.render(t, subtitleRef.current);
-              recordingVideo.current?.requestFrame?.();
               frames++;
               lastRender = t;
               lastSub = subtitleRef.current;
@@ -240,7 +243,6 @@ export function Player({ project }: { project: AnimationProject }) {
               !sound.clock.loop
             ) {
               sound.pause();
-              finishRecording.current?.();
             }
             if (now - uiAt > 65) {
               publish();
@@ -258,7 +260,6 @@ export function Player({ project }: { project: AnimationProject }) {
             raf = requestAnimationFrame(tick);
           } catch (e) {
             sound.pause();
-            finishRecording.current?.(true);
             setError("渲染错误：" + String(e));
           }
         };
@@ -277,7 +278,6 @@ export function Player({ project }: { project: AnimationProject }) {
     const visibility = () => {
       if (document.hidden) {
         sound.pause();
-        finishRecording.current?.(true);
         publish();
       }
     };
@@ -285,7 +285,7 @@ export function Player({ project }: { project: AnimationProject }) {
     return () => {
       canceled = true;
       cancelAnimationFrame(raf);
-      finishRecording.current?.(true);
+      exportAbort.current?.abort();
       document.removeEventListener("visibilitychange", visibility);
       sound.pause();
       saved.current = {
@@ -304,7 +304,7 @@ export function Player({ project }: { project: AnimationProject }) {
       if (
         element.closest("input,textarea,select,button,a") ||
         element.isContentEditable ||
-        recording
+        exporting
       )
         return;
       if (e.code === "Space") {
@@ -336,90 +336,46 @@ export function Player({ project }: { project: AnimationProject }) {
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   });
-  async function recordWebm() {
-    const a = transport.current,
-      c = canvas.current;
-    if (!a || !c) return;
-    if (!("MediaRecorder" in window) || !c.captureStream) {
-      setError("此浏览器不支持 WebM 录制，请使用下方 MP4 逐帧导出命令。");
-      return;
-    }
-    const mime = [
-      "video/webm;codecs=vp8,opus",
-      "video/webm;codecs=vp9,opus",
-      "video/webm",
-    ].find((v) => MediaRecorder.isTypeSupported(v));
-    if (!mime) {
-      setError("此浏览器没有可用的 WebM 编码器。");
-      return;
-    }
+  async function renderWebm() {
+    const sound = transport.current;
+    if (!sound || exportAbort.current) return;
+    const abort = new AbortController();
+    exportAbort.current = abort;
+    sound.pause();
+    publish();
+    setError("");
+    setExporting(true);
+    setExportOpen(false);
+    setExportProgress({ phase: "preparing", completed: 0, total: 0 });
     try {
-      await a.unlock();
-      a.pause();
-      const oldRate = a.clock.rate,
-        oldLoop = a.clock.loop;
-      a.setRate(1);
-      a.setLoop(false);
-      a.seek(0);
-      renderer.current?.render(0, subtitleRef.current);
-      const stream = c.captureStream(project.fps);
-      recordingVideo.current =
-        stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
-      const audio = a.getMediaStream();
-      audio?.getAudioTracks().forEach((t) => stream.addTrack(t));
-      const recorder = new MediaRecorder(stream, {
-        mimeType: mime,
-        videoBitsPerSecond: quality === "high" ? 12000000 : 7000000,
+      const { exportWebm } = await import("../engine/browser-export");
+      const blob = await exportWebm(project, {
+        width: exportWidth,
+        fps: exportFps,
+        subtitles: subtitleRef.current,
+        controls: new Map(sound.controls),
+        volume: sound.muted ? 0 : sound.volume,
+        signal: abort.signal,
+        onProgress: setExportProgress,
       });
-      const chunks: Blob[] = [];
-      let canceled = false,
-        stopped = false;
-      recorder.ondataavailable = (e) => {
-        if (e.data.size) chunks.push(e.data);
-      };
-      recorder.onerror = () => {
-        setError("录制失败，请使用 MP4 逐帧导出。");
-        finishRecording.current?.(true);
-      };
-      recorder.onstop = () => {
-        recordingVideo.current = null;
-        stream.getTracks().forEach((t) => t.stop());
-        a.releaseMediaStream();
-        a.pause();
-        a.setRate(oldRate);
-        a.setLoop(oldLoop);
-        finishRecording.current = null;
-        setRecording(false);
-        publish();
-        if (!canceled && chunks.length)
-          downloadBlob(new Blob(chunks, { type: mime }), project.id + ".webm");
-        else if (!canceled)
-          setError("浏览器没有生成有效录制数据，请重试或使用 MP4 导出。");
-      };
-      finishRecording.current = (cancel = false) => {
-        if (stopped) return;
-        stopped = true;
-        canceled = cancel;
-        if (recorder.state !== "inactive") recorder.stop();
-      };
-      setRecording(true);
-      setExportOpen(false);
-      recorder.start(250);
-      recordingVideo.current?.requestFrame?.();
-      renderer.current?.render(0, subtitleRef.current);
-      if (stopped) return;
-      await a.play();
-      publish();
-    } catch (e) {
-      finishRecording.current?.(true);
-      recordingVideo.current?.stop();
-      recordingVideo.current = null;
-      a.releaseMediaStream();
-      setRecording(false);
-      setError("录制未能开始：" + String(e));
+      if (!abort.signal.aborted) downloadBlob(blob, project.id + ".webm");
+    } catch (error) {
+      if (!abort.signal.aborted) setError("逐帧导出失败：" + String(error));
+    } finally {
+      if (exportAbort.current === abort) {
+        exportAbort.current = null;
+        setExporting(false);
+        setExportProgress(null);
+      }
     }
   }
-  const command = "pnpm render " + project.id + " --width 1920 --fps 30";
+  const command =
+    "pnpm film render " +
+    project.id +
+    " --width " +
+    exportWidth +
+    " --fps " +
+    exportFps;
   const currentBeat =
     [...project.beats].reverse().find((b) => view.time >= b.at) ??
     project.beats[0];
@@ -444,7 +400,7 @@ export function Player({ project }: { project: AnimationProject }) {
         </div>
         <button
           className="button primary"
-          disabled={loading || recording}
+          disabled={loading || exporting}
           onClick={() => setExportOpen(true)}
         >
           <Download size={16} /> 导出作品
@@ -500,10 +456,15 @@ export function Player({ project }: { project: AnimationProject }) {
                   <Play fill="currentColor" size={32} />
                 </button>
               )}
-              {recording && (
+              {exporting && (
                 <div className="recording-badge">
-                  <i /> 正在实时录制 · 请保持页面可见{" "}
-                  <button onClick={() => finishRecording.current?.(true)}>
+                  <i />{" "}
+                  {exportProgress?.phase === "preparing"
+                    ? "正在准备导出"
+                    : exportProgress?.phase === "finalizing"
+                      ? "正在封装视频"
+                      : `正在逐帧渲染 · ${exportProgress?.completed} / ${exportProgress?.total} 帧`}{" "}
+                  <button onClick={() => exportAbort.current?.abort()}>
                     取消
                   </button>
                 </div>
@@ -514,7 +475,7 @@ export function Player({ project }: { project: AnimationProject }) {
                 <button
                   className="icon-button"
                   aria-label="回到起点"
-                  disabled={loading || recording}
+                  disabled={loading || exporting}
                   onClick={() => seek(0)}
                 >
                   <SkipBack size={18} />
@@ -523,7 +484,7 @@ export function Player({ project }: { project: AnimationProject }) {
                   className="play-button"
                   data-testid="play-toggle"
                   aria-label={view.playing ? "暂停" : "播放"}
-                  disabled={loading || starting || recording}
+                  disabled={loading || starting || exporting}
                   onClick={() => void toggle()}
                 >
                   {starting ? (
@@ -545,7 +506,7 @@ export function Player({ project }: { project: AnimationProject }) {
                 <select
                   aria-label="播放速度"
                   value={view.rate}
-                  disabled={recording}
+                  disabled={exporting}
                   onChange={(e) => {
                     transport.current?.setRate(Number(e.target.value));
                     publish();
@@ -561,7 +522,7 @@ export function Player({ project }: { project: AnimationProject }) {
                   className={"icon-button " + (view.loop ? "active" : "")}
                   aria-label="循环播放"
                   aria-pressed={view.loop}
-                  disabled={recording}
+                  disabled={exporting}
                   onClick={() => {
                     transport.current?.setLoop(!view.loop);
                     publish();
@@ -573,7 +534,7 @@ export function Player({ project }: { project: AnimationProject }) {
                   className={"icon-button " + (showSubtitles ? "active" : "")}
                   aria-label="中文字幕"
                   aria-pressed={showSubtitles}
-                  disabled={recording}
+                  disabled={exporting}
                   onClick={() => setShowSubtitles((s) => !s)}
                 >
                   <Captions size={20} />
@@ -622,7 +583,7 @@ export function Player({ project }: { project: AnimationProject }) {
                 <button
                   className="icon-button"
                   aria-label="上一帧"
-                  disabled={recording}
+                  disabled={exporting}
                   onClick={() => seek(view.time - 1 / project.fps)}
                 >
                   <StepBack size={15} />
@@ -634,7 +595,7 @@ export function Player({ project }: { project: AnimationProject }) {
                 <button
                   className="icon-button"
                   aria-label="下一帧"
-                  disabled={recording}
+                  disabled={exporting}
                   onClick={() => seek(view.time + 1 / project.fps)}
                 >
                   <StepForward size={15} />
@@ -655,7 +616,7 @@ export function Player({ project }: { project: AnimationProject }) {
               max={project.duration}
               step={1 / project.fps}
               value={view.time}
-              disabled={loading || recording}
+              disabled={loading || exporting}
               onChange={(e) => seek(Number(e.target.value))}
               style={
                 {
@@ -674,7 +635,7 @@ export function Player({ project }: { project: AnimationProject }) {
                         (project.beats[i + 1]?.at ?? project.duration) - b.at,
                     }}
                     className={currentBeat === b ? "selected" : ""}
-                    disabled={recording}
+                    disabled={exporting}
                     onClick={() => seek(b.at)}
                     title={b.detail}
                   >
@@ -720,7 +681,7 @@ export function Player({ project }: { project: AnimationProject }) {
                       width: ((s.end - s.start) / project.duration) * 100 + "%",
                     }}
                     title={s.text}
-                    disabled={recording}
+                    disabled={exporting}
                     onClick={() => seek(s.start)}
                   >
                     {s.text}
@@ -784,7 +745,7 @@ export function Player({ project }: { project: AnimationProject }) {
                     <button
                       aria-label={`${track.name}静音`}
                       aria-pressed={control.muted}
-                      disabled={recording}
+                      disabled={exporting}
                       onClick={() => update({ muted: !control.muted })}
                     >
                       {control.muted ? (
@@ -800,7 +761,7 @@ export function Player({ project }: { project: AnimationProject }) {
                       max="4"
                       step="0.01"
                       value={control.gain}
-                      disabled={recording}
+                      disabled={exporting}
                       onChange={(event) =>
                         update({ gain: Number(event.target.value) })
                       }
@@ -850,7 +811,7 @@ export function Player({ project }: { project: AnimationProject }) {
               <select
                 aria-label="预览画质"
                 value={quality}
-                disabled={recording}
+                disabled={exporting}
                 onChange={(e) => {
                   transport.current?.pause();
                   publish();
@@ -947,11 +908,44 @@ export function Player({ project }: { project: AnimationProject }) {
               </div>
               <Download size={18} />
             </button>
-            <button className="export-option" onClick={() => void recordWebm()}>
+            <div className="export-settings">
+              <label>
+                导出分辨率
+                <select
+                  aria-label="导出分辨率"
+                  value={exportWidth}
+                  onChange={(e) => setExportWidth(Number(e.target.value))}
+                >
+                  <option value={640}>640 × 360</option>
+                  <option value={1280}>1280 × 720</option>
+                  <option value={1920}>1920 × 1080</option>
+                  <option value={3840}>3840 × 2160</option>
+                </select>
+              </label>
+              <label>
+                导出帧率
+                <select
+                  aria-label="导出帧率"
+                  value={exportFps}
+                  onChange={(e) => setExportFps(Number(e.target.value))}
+                >
+                  {[...new Set([12, 24, 25, 30, 60, project.fps])]
+                    .sort((a, b) => a - b)
+                    .map((fps) => (
+                      <option key={fps} value={fps}>
+                        {fps} fps
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
+            <button className="export-option" onClick={() => void renderWebm()}>
               <Video size={23} />
               <div>
-                <strong>浏览器录制 · WebM</strong>
-                <span>从头实时录制画面与当前音量的配乐，需保持页面可见。</span>
+                <strong>浏览器逐帧导出 · WebM</strong>
+                <span>
+                  逐帧渲染并离线混音，使用当前混音设置，可取消；预览卡顿不影响导出帧数。
+                </span>
               </div>
               <Play size={18} />
             </button>

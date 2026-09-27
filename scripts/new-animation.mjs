@@ -5,16 +5,35 @@ import { randomUUID } from "node:crypto";
 import { validProjectId } from "./project-metadata.mjs";
 
 const [id, title, ...rest] = process.argv.slice(2);
-const renderer = rest.length ? rest[1] : "pixi";
+const options = new Map();
+for (let i = 0; i < rest.length; i += 2) {
+  if (
+    !["--renderer", "--duration", "--fps", "--audio"].includes(rest[i]) ||
+    !rest[i + 1] ||
+    options.has(rest[i])
+  )
+    throw new Error("Unknown, duplicate or incomplete option: " + rest[i]);
+  options.set(rest[i], rest[i + 1]);
+}
+const renderer = options.get("--renderer") ?? "pixi";
+const duration = Number(options.get("--duration") ?? 24);
+const fps = Number(options.get("--fps") ?? 30);
+const audio = options.get("--audio") ?? "silent";
 if (
   !validProjectId(id) ||
   typeof title !== "string" ||
   !title.trim() ||
-  (rest.length !== 0 && (rest.length !== 2 || rest[0] !== "--renderer")) ||
-  !["canvas", "pixi", "three"].includes(renderer)
+  !["canvas", "pixi", "three"].includes(renderer) ||
+  !Number.isFinite(duration) ||
+  duration <= 0 ||
+  duration > 3600 ||
+  !Number.isInteger(fps) ||
+  fps < 12 ||
+  fps > 60 ||
+  !["silent", "generated"].includes(audio)
 ) {
   console.error(
-    'Usage: pnpm animation:new my-film "我的动画" [--renderer pixi|three|canvas]',
+    'Usage: pnpm film new my-film "我的动画" [--renderer pixi|three|canvas] [--duration 24] [--fps 30] [--audio silent|generated]',
   );
   process.exit(1);
 }
@@ -72,8 +91,15 @@ try {
     subtitle: "新的故事，从这里开始。",
     description: `新建工程；文件和脚本说明见 projects/${id}/README.md。`,
     renderer,
-    duration: 24,
-    fps: 30,
+    duration,
+    fps,
+    ...(audio === "generated"
+      ? {
+          audioTracks: [
+            { id: "melody", name: "旋律", kind: "generated", gain: 0.6 },
+          ],
+        }
+      : {}),
     accent: "#c5d7b1",
     poster: `films/${id}/poster.svg`,
     tags: ["制作中"],
@@ -118,7 +144,9 @@ try {
     path.join(stage, "project.ts"),
     "import type { AnimationProject } from '../../src/engine/types';\nconst project: AnimationProject = { ..." +
       JSON.stringify(meta, null, 2) +
-      ", load: () => import('./scene') };\nexport default project;\n",
+      ", load: () => import('./scene')" +
+      (audio === "generated" ? ", loadAudio: () => import('./audio')" : "") +
+      " };\nexport default project;\n",
   );
   await fs.writeFile(
     path.join(stage, "AGENTS.md"),
@@ -127,6 +155,10 @@ try {
       "/ 内的文件。不得修改其他项目、公共引擎、UI、依赖或配置；需要公共能力时提出维护需求。运行 pnpm project:scope " +
       id +
       " 检查边界。\n",
+  );
+  await fs.writeFile(
+    path.join(stage, "production/brief.md"),
+    "# 制作记录\n\n## 本次任务\n记录用户要求与已确认的选择；未确认的内容标为待定。\n\n## 镜头和声音\n记录镜头时间、画面变化、音轨及资源来源。\n\n## 实际验证\n记录检查命令、结果与需要继续确认的事项。\n",
   );
   await fs.writeFile(path.join(stage, "public/assets.json"), "[]\n");
   await fs.writeFile(path.join(stage, "public/waveforms.json"), "{}\n");
@@ -144,7 +176,7 @@ try {
   }
   published.push(project);
   console.log(
-    `Created ${project}\nProject resource, engineering README and reverse-seek test are ready.\nNext: pnpm project:check ${id}\nEngineering index: projects/${id}/README.md. No shared gallery or asset catalog was rewritten.`,
+    `Created ${project}\nProject resource, engineering README and reverse-seek test are ready.\nNext: pnpm film context ${id}\nCheck: pnpm film check ${id} --strict\nEngineering index: projects/${id}/README.md. No shared gallery or asset catalog was rewritten.`,
   );
 } catch (error) {
   // Remove only paths this invocation successfully published; never delete a colliding destination.

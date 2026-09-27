@@ -22,6 +22,8 @@
 
 ## 工具与检查
 
+统一命令入口是 `pnpm film help`。AI 接手先用 `pnpm --silent film context <id> --json` 读取项目入口、元数据、音轨和修改范围；工具说明见 `docs/AI-WORKFLOW.md`。`film storyboard` 生成带时间标记的组帧预览，`film frame` 定位单帧；均写本工程 exports，不改运行源码。
+
 生成工具只能写目标项目目录，导出到 `projects/<id>/exports/`，临时文件在本项目 `.cache/` 或导出目录并清理。浏览器下载使用浏览器选择的保存位置。海报更新 `pnpm posters --project <id>`；全量必须明确 `--all`。检查命令只读，失败返回非零。
 
 项目任务运行 `pnpm project:check <id> --strict`、相关测试和 `pnpm project:scope <id>`。后者检查暂存、未暂存与未跟踪改动；可用 `--base <commit>` 检查相对基线提交的改动。公共维护运行 `pnpm verify`。这是工程与工具边界，不是操作系统权限沙箱；任意外部程序的写权限需要另行配置系统隔离。

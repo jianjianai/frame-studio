@@ -26,12 +26,14 @@
     "music:build": "node scripts/music/render-scores.mjs",
     "project:scope": "node scripts/project-scope.mjs",
     "frame": "node scripts/render.mjs --frame-mode",
-    "project:check": "node scripts/check-projects.mjs"
+    "project:check": "node scripts/check-projects.mjs",
+    "film": "node scripts/film.mjs"
   },
   "dependencies": {
     "flubber": "0.4.2",
     "gsap": "3.15.0",
     "lucide-react": "1.48.0",
+    "mediabunny": "1.60.0",
     "pixi.js": "8.21.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",

@@ -4,9 +4,9 @@ import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
-import { createServer } from "vite";
 import { writeProjectPoster } from "./poster-output.mjs";
-import { launchBrowser } from "./browser.mjs";
+import { createRenderSession } from "./render-session.mjs";
+import { createExportPlan } from "../src/engine/export-plan.mjs";
 import { projectPath } from "./project-paths.mjs";
 import { validProjectId, readProjectCatalog } from "./project-metadata.mjs";
 const args = process.argv.slice(2);
@@ -29,8 +29,12 @@ const flags = new Set([
   "--frame-mode",
 ]);
 const positional = [];
+const seen = new Set();
 for (let i = 0; i < args.length; i++) {
   const arg = args[i];
+  if (arg.startsWith("--") && seen.has(arg))
+    throw new Error("Duplicate option: " + arg);
+  seen.add(arg);
   if (values.has(arg)) {
     if (!args[i + 1] || args[i + 1].startsWith("--"))
       throw new Error("Missing value for " + arg);
@@ -65,11 +69,9 @@ if (!posters && (!validProjectId(id) || positional.length !== 1)) {
   );
   process.exit(1);
 }
-if (
-  !posters &&
-  !readProjectCatalog(root).some((project) => project.meta.id === id)
-)
-  throw new Error("Unknown project: " + id);
+const catalog = readProjectCatalog(root);
+const selected = catalog.find((project) => project.meta.id === id)?.meta;
+if (!posters && !selected) throw new Error("Unknown project: " + id);
 if (!posters && val("--out"))
   for (const destination of [val("--out"), val("--out") + ".render.json"])
     projectPath(
@@ -78,40 +80,17 @@ if (!posters && val("--out"))
       path.relative(projectPath(root, id), path.resolve(destination)),
     );
 let width = Number(val("--width", posters ? "1280" : "1920"));
-const fps = Number(val("--fps", "30"));
-if (!Number.isInteger(width) || width < 320 || width > 3840 || width % 16 !== 0)
-  throw new Error("--width must be a multiple of 16, between 320 and 3840");
+const fps = Number(val("--fps", String(selected?.fps ?? 30)));
+if (!Number.isInteger(width) || width < 320 || width > 3840 || width % 32 !== 0)
+  throw new Error("--width must be a multiple of 32, between 320 and 3840");
 if (!Number.isInteger(fps) || fps < 12 || fps > 60)
   throw new Error("--fps must be 12..60");
 const height = (width * 9) / 16;
-let server, browser, encoder, temporary, audioTemporary;
+let session, encoder, temporary, audioTemporary;
 let stderr = "";
 try {
-  server = await createServer({
-    logLevel: "error",
-    server: { host: "127.0.0.1", port: 0, strictPort: false, open: false },
-  });
-  await server.listen();
-  const port = server.httpServer.address().port;
-  const origin = "http://127.0.0.1:" + port;
-  browser = await launchBrowser();
-  const renderPage = async (projectId) => {
-    const page = await browser.newPage({
-      viewport: { width, height },
-      deviceScaleFactor: 1,
-    });
-    page.on("pageerror", (e) => console.error("[browser]", e.message));
-    await page.goto(
-      origin + "/?render=" + encodeURIComponent(projectId) + "&width=" + width,
-      { waitUntil: "networkidle" },
-    );
-    await page.waitForFunction(
-      () => window.__FRAME_STUDIO__?.ready,
-      {},
-      { timeout: 60000 },
-    );
-    return page;
-  };
+  session = await createRenderSession({ root, width });
+  const renderPage = (projectId) => session.page(projectId);
   if (posters) {
     const folders = (
       await fs.readdir("projects", { withFileTypes: true })
@@ -132,9 +111,8 @@ try {
         () => window.__FRAME_STUDIO__.duration,
       );
       const at =
-        { "paper-wings": 25, "sunny-rail": 10.5, "tiny-seed": 26.8 }[
-          folder.name
-        ] ?? duration * 0.5;
+        catalog.find((entry) => entry.directory === folder.name)?.meta
+          .posterTime ?? duration * 0.5;
       const data = await page.evaluate((t) => {
         window.__FRAME_STUDIO__.frame(t, false);
         return window.__FRAME_STUDIO__.dataURL().split(",")[1];
@@ -234,8 +212,13 @@ try {
         end > meta.duration
       )
         throw new Error("Invalid --start / --end range");
-      const frames = Math.ceil((end - start) * fps),
-        duration = frames / fps;
+      const { frames, duration } = createExportPlan({
+        duration: meta.duration,
+        fps,
+        width,
+        start,
+        end,
+      });
       const stamp = new Date().toISOString().replace(/[:.]/g, "-");
       const output = scopedOutput(
         "projects/" + id + "/exports/" + id + "-" + stamp + ".mp4",
@@ -456,6 +439,5 @@ try {
   if (temporary) await fs.rm(temporary, { force: true }).catch(() => {});
   if (audioTemporary)
     await fs.rm(audioTemporary, { force: true }).catch(() => {});
-  await browser?.close();
-  await server?.close();
+  await session?.close();
 }

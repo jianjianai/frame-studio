@@ -37,6 +37,7 @@ for (const pkg of [
   "@playwright/test",
   "sharp",
   "svgo",
+  "mediabunny",
 ])
   check(pkg, () => import.meta.resolve(pkg));
 check("FFmpeg", () => command(process.env.FFMPEG_PATH || "ffmpeg"));
@@ -52,7 +53,7 @@ check("Asset index", () => {
 check("Project folders", () =>
   fs
     .readdirSync("projects", { withFileTypes: true })
-    .filter((d) => d.isDirectory())
+    .filter((d) => d.isDirectory() && !d.name.startsWith("."))
     .map((d) => d.name)
     .join(", "),
 );

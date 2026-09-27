@@ -123,8 +123,18 @@ export function scheduleAudio(
 /** Bounded chunks prevent film-sized WAV transfers through the browser bridge. */
 export class OfflineAudioRenderer {
   private prepared?: Promise<PreparedAudio>;
-  constructor(private project: AnimationProject) {}
-  async pcm(start: number, duration: number): Promise<string> {
+  private abort = new AbortController();
+  constructor(
+    private project: AnimationProject,
+    private controls = new Map<string, { gain: number; muted: boolean }>(),
+    private volume = 1,
+  ) {}
+  dispose() {
+    this.abort.abort();
+    this.prepared = undefined;
+  }
+  async render(start: number, duration: number): Promise<AudioBuffer> {
+    this.abort.signal.throwIfAborted();
     if (
       !Number.isFinite(start) ||
       start < 0 ||
@@ -138,43 +148,63 @@ export class OfflineAudioRenderer {
       Math.round(duration * 48000),
       48000,
     );
-    this.prepared ??= prepareAudio(this.project, context).catch((error) => {
+    this.prepared ??= prepareAudio(
+      this.project,
+      context,
+      this.abort.signal,
+    ).catch((error) => {
       this.prepared = undefined;
       throw error;
     });
+    const prepared = await this.prepared;
+    this.abort.signal.throwIfAborted();
+    const master = context.createGain();
+    master.gain.value = this.volume;
+    master.connect(context.destination);
     const graph = scheduleAudio(
-      await this.prepared,
+      prepared,
       context,
-      context.destination,
+      master,
       this.project.duration,
       start,
       duration,
       0,
+      1,
+      this.controls,
     );
     try {
       const buffer = await context.startRendering();
-      const bytes = new Uint8Array(buffer.length * 4),
-        view = new DataView(bytes.buffer);
-      for (let channel = 0; channel < 2; channel++) {
-        const samples = buffer.getChannelData(channel);
-        for (let i = 0; i < samples.length; i++) {
-          const sample = samples[i];
+      this.abort.signal.throwIfAborted();
+      for (let channel = 0; channel < buffer.numberOfChannels; channel++)
+        for (const sample of buffer.getChannelData(channel))
           if (!Number.isFinite(sample)) throw new Error("音轨包含无效采样");
-          view.setInt16(
-            (i * 2 + channel) * 2,
-            Math.round(
-              Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767),
-            ),
-            true,
-          );
-        }
-      }
-      let binary = "";
-      for (let offset = 0; offset < bytes.length; offset += 8192)
-        binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
-      return btoa(binary);
+      return buffer;
     } finally {
       graph.dispose();
+      master.disconnect();
     }
+  }
+  async pcm(start: number, duration: number): Promise<string> {
+    const buffer = await this.render(start, duration);
+    const bytes = new Uint8Array(buffer.length * 4),
+      view = new DataView(bytes.buffer);
+    for (let channel = 0; channel < 2; channel++) {
+      const samples = buffer.getChannelData(channel);
+      for (let i = 0; i < samples.length; i++) {
+        const sample = samples[i];
+        if (!Number.isFinite(sample)) throw new Error("音轨包含无效采样");
+        view.setInt16(
+          (i * 2 + channel) * 2,
+          Math.round(
+            Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767),
+          ),
+          true,
+        );
+      }
+    }
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 8192)
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    return btoa(binary);
   }
 }

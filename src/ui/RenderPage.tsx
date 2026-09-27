@@ -44,11 +44,7 @@ export function RenderPage({ project }: { project: AnimationProject }) {
     };
     window.__FRAME_STUDIO__ = api;
     renderer
-      .init(
-        width,
-        height,
-        width >= 1920 ? "high" : width <= 640 ? "draft" : "standard",
-      )
+      .init(width, height, "high")
       .then(async () => {
         await document.fonts.ready;
         if (canceled) return;
@@ -63,6 +59,7 @@ export function RenderPage({ project }: { project: AnimationProject }) {
       });
     return () => {
       canceled = true;
+      audio.dispose();
       renderer.dispose();
       if (window.__FRAME_STUDIO__ === api) delete window.__FRAME_STUDIO__;
     };

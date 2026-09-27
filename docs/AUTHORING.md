@@ -2,10 +2,12 @@
 
 修改边界见 [NEW-PROJECT-STANDARD.md](NEW-PROJECT-STANDARD.md)。每个视频的全部文件都属于 `projects/<id>/`，项目任务不能修改目录之外的文件。
 
+统一工具入口是 `pnpm film help`；AI 接手与分镜预览见 [AI-WORKFLOW.md](AI-WORKFLOW.md)。
+
 ## 新建、资源与测试
 
 ```powershell
-pnpm animation:new my-film "我的动画" --renderer canvas
+pnpm film new my-film "我的动画" --renderer canvas --duration 12 --fps 24 --audio generated
 pnpm assets:import my-film "D:/assets/voice.wav" --license "来源与许可"
 pnpm project:check my-film --strict
 pnpm project:scope my-film
@@ -72,9 +74,9 @@ export function createAudio(options: GeneratedAudioOptions) {
 }
 ```
 
-生成器必须支持任意 offset 独立重建，不能依赖上一段运行历史。实时播放使用 AudioContext；命令导出使用 OfflineAudioContext，按最多 10 秒一段渲染。滤波、混响等需要历史的效果必须根据源时间重建预滚动状态或解析状态，避免分段交界变化。随机噪声使用固定种子/源时间。不要在模块导入时播放声音或访问文件系统。
+生成器必须支持任意 offset 独立重建，不能依赖上一段运行历史。实时播放使用 AudioContext；浏览器和命令导出都使用 OfflineAudioContext。命令每段最多 10 秒，浏览器以最多 1 秒音频片段和视频交错编码。滤波、混响等需要历史的效果必须根据源时间重建预滚动状态或解析状态，避免分段交界变化。随机噪声使用固定种子/源时间。不要在模块导入时播放声音或访问文件系统。
 
-浏览器 WebM 录入当前每轨/总音量和静音设置。命令 MP4 使用元数据中的每轨设置、总增益 1，不读取浏览器临时调音。两者复用相同的音轨裁切、定位与生成接口。
+浏览器 WebM 离线混合当前每轨/总音量和静音设置。命令 MP4 使用元数据中的每轨设置、总增益 1，不读取浏览器临时调音。两者复用相同的音轨裁切、定位与生成接口。
 
 ## 视频和单帧导出
 
@@ -90,6 +92,8 @@ pnpm render my-film --frame 150
 
 输出默认在 `projects/<id>/exports/`。`--out` 可指定本项目目录内的路径，默认拒绝覆盖，明确添加 `--force` 才替换已有文件。支持 FFMPEG_PATH、FFPROBE_PATH、FRAME_BROWSER。
 
-浏览器的“导出作品”支持当前帧 PNG、字幕 SRT 和含混音的 WebM。WebM 从头实时录制，保持页面可见，切换后台会取消。命令导出逐帧绘制，不依赖实时预览帧率。
+浏览器的“导出作品”支持当前帧 PNG、字幕 SRT 和含混音的逐帧 WebM。WebM 独立选择分辨率和帧率，单独创建 high 细节场景，按第 i 帧 = i / fps 绘制并等待编码器接收每一帧，再封装成视频。命令导出复用同一帧数计算，帧率默认项目 fps；两种导出均不依赖实时预览帧率。片长不整除帧间隔时补齐最后一帧时长，音频补齐对应长度。浏览器可取消并释放资源，后台可能变慢但不主动丢帧；离开项目会取消。浏览器需支持 WebCodecs，编码文件缓存上限 256 MiB，超出时使用命令导出，不退回实时录屏。
+
+`pnpm film storyboard my-film --times "0,2,5"` 生成带时间标记的 PNG 拼图和 JSON 清单，默认取 beats 与首尾帧。`posterTime` 可在元数据中指定封面秒数，省略时用片长中点。
 
 开发页或 `?debug=1` 播放器提供 `window.__FRAME_STUDIO__`。`/?render=my-film&width=1280&time=5&subtitles=1` 为离线入口；等待 ready 后使用 frame(seconds, subtitles)、dataURL() 和 audioChunk(start, duration)。片段音频返回 48 kHz 双声道 16 位 PCM 的 Base64，每段不超过 10 秒。

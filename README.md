@@ -49,7 +49,7 @@ public/                  公共字体与模型解码器
 
 ## 视频和单帧导出
 
-浏览器点“导出作品”：当前帧 PNG、中文字幕 SRT、含混音的 WebM。WebM 从头实时录制，包含当前每轨和总音量/静音；保持页面可见，切换后台会取消录制。
+浏览器点“导出作品”：当前帧 PNG、中文字幕 SRT、含混音的 WebM。WebM 使用固定帧时间逐帧渲染、编码和封装，声音离线混合；可选分辨率和帧率，默认 1080p / 项目帧率，预览画质和播放卡顿不影响输出帧数。显示完成帧数并支持取消，采用当前每轨和总音量/静音。
 
 ```powershell
 pnpm render sunny-rail --width 1920 --fps 30
@@ -66,8 +66,25 @@ pnpm render tiny-seed --frame 150
 - 默认输出 `projects/<id>/exports/`，视频旁写 `.render.json` 报告。
 - `--out projects/<id>/exports/name.mp4` 指定路径，必须在目标项目目录内；默认拒绝覆盖，明确加 `--force` 才替换。
 - 视频音轨使用项目元数据中的每轨设置，总增益为 1；浏览器临时调音不会写回元数据。
-- 宽度 320–3840，16 的倍数，保持 16:9；帧率 12–60。
+- 宽度 320–3840，32 的倍数，保持 16:9 和编码所需的偶数尺寸；帧率 12–60。
 - 支持 `FFMPEG_PATH`、`FFPROBE_PATH`、`FRAME_BROWSER`。没有 Chromium 时执行 `pnpm exec playwright install chromium`。
+
+## AI 制作入口
+
+统一入口是 `pnpm film help`，完整用法见 [AI 工具工作流](docs/AI-WORKFLOW.md)。原命令继续兼容。
+
+```powershell
+pnpm --silent film list --json
+pnpm --silent film context tiny-seed --json
+pnpm film new my-film "我的动画" --renderer canvas --duration 12 --fps 24 --audio generated
+pnpm film storyboard tiny-seed --times "0,5,12" --width 480
+pnpm film check my-film --strict --json
+pnpm film scope my-film
+```
+
+context 只读输出项目入口、音轨、素材和修改边界。storyboard 生成带帧号/秒数的拼图及 JSON 清单，默认取镜头标记和首尾帧，只写本项目 exports。脚手架可以直接启用代码音频，并提供项目制作记录。封面时间由项目可选 posterTime 定义。
+
+浏览器编码依赖 WebCodecs；不支持时明确报错，不降级为实时录屏。浏览器编码文件缓存上限 256 MiB，大型成片使用命令导出。代码音频在浏览器与命令导出时都使用离线混音。
 
 ## 常用命令
 

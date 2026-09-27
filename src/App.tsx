@@ -423,7 +423,7 @@ function Guide() {
           <span className="step-number">01</span>
           <h3>建立动画项目</h3>
           <p>一部动画一个目录。自动加入作品库，不需要修改播放器。</p>
-          <pre>pnpm animation:new my-film "我的动画" --renderer pixi</pre>
+          <pre>pnpm film new my-film "我的动画" --renderer pixi</pre>
           <p className="muted">
             renderer 可选 pixi、three、canvas。编辑生成的 project.ts 与
             scene.ts。
@@ -435,7 +435,7 @@ function Guide() {
           <p>
             将分层插画、角色、音轨、模型导入自己的项目目录，记录来源和授权。
           </p>
-          <pre>pnpm assets:import my-film "D:/assets/character.png"</pre>
+          <pre>pnpm film import my-film "D:/assets/character.png"</pre>
           <p className="muted">
             图像可优化为 WebP；模型推荐 GLB；音频支持多音轨和浏览器实时生成。
           </p>
@@ -460,7 +460,11 @@ function Guide() {
           <span className="step-number">04</span>
           <h3>验证，再导出</h3>
           <p>检查反向拖动、暂停、字幕和音频，使用逐帧渲染输出正式视频。</p>
-          <pre>{"pnpm verify\npnpm render my-film --width 1920 --fps 30"}</pre>
+          <pre>
+            {
+              "pnpm film check my-film --strict\npnpm film storyboard my-film\npnpm film render my-film --width 1920"
+            }
+          </pre>
           <p className="muted">
             逐帧 MP4 不依赖实时帧率，输出包含完整混音与可选字幕。
           </p>
