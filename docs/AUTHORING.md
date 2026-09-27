@@ -1,52 +1,35 @@
 # 工程接入与接口说明
 
-目录和修改规则见 [新增工程规范](NEW-PROJECT-STANDARD.md)。本页仅解释代码接入，不约束动画内容、制作方法、交付或声音质量。
+修改边界见 [NEW-PROJECT-STANDARD.md](NEW-PROJECT-STANDARD.md)。每个视频的全部文件都属于 `projects/<id>/`，项目任务不能修改目录之外的文件。
 
-## 1. 新建与目录
+## 新建、资源与测试
 
 ```powershell
-pnpm animation:new example-project "示例工程" --renderer pixi
-pnpm project:check example-project
+pnpm animation:new my-film "我的动画" --renderer canvas
+pnpm assets:import my-film "D:/assets/voice.wav" --license "来源与许可"
+pnpm project:check my-film --strict
+pnpm project:scope my-film
 ```
 
-脚手架生成：
+自动注册 `projects/*/project.ts`。工程私有模块、脚本、测试都在本目录；可以只读调用 `../../src/engine/` 接口。`public/` 是运行素材，`production/` 是非运行源文件与许可，`exports/` 是忽略的导出结果。`assetUrl('films/my-film/image.webp')` 对应 `projects/my-film/public/image.webp`。
 
-```text
-src/projects/example-project/project.ts
-src/projects/example-project/scene.ts
-public/films/example-project/poster.svg
-production/example-project/README.md
-tests/e2e/example-project.spec.ts
-```
+`tests/unit/` 与 `tests/e2e/` 位于项目目录，Vitest/Playwright 自动发现；无需修改公共测试列表。独立测试端口通过 `FRAME_TEST_PORT` 配置。
 
-项目目录在全部依赖准备后才发布到自动发现范围。遇到已存在的文件拒绝覆盖；同一 id 并发创建只有一个成功。临时锁在 `.cache/new-project-locks/`，崩溃后的残留锁先确认没有活动创建任务，再人工处理。
-
-`project.ts` 是静态元数据对象和 `load: () => import('./scene')`。`id`、目录与路由一致；字段类型见 `src/engine/types.ts`。脚手架的字段默认值是初始化值，不是创作阶段规则。
-
-生产构建新增工程后重新运行 `pnpm build`。公共列表和路由自动发现工程，不需要修改 App 或播放器。
-
-## 2. 场景接口
+## 场景接口
 
 ```typescript
-import type { Scene, SceneOptions } from "../../engine/types";
-
+import type { Scene, SceneOptions } from "../../src/engine/types";
 export function createScene({ width, height }: SceneOptions): Scene {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("Canvas 2D is unavailable");
-  let disposed = false;
+  const ctx = canvas.getContext("2d")!;
   return {
     canvas,
     render(time) {
-      if (disposed) return;
-      ctx.clearRect(0, 0, width, height);
-      // 根据绝对 time 求值并绘制。本例只展示接口结构。
+      /* 按绝对秒数重绘，允许倒退与重复 */
     },
     dispose() {
-      if (disposed) return;
-      disposed = true;
       canvas.width = 1;
       canvas.height = 1;
     },
@@ -54,63 +37,59 @@ export function createScene({ width, height }: SceneOptions): Scene {
 }
 ```
 
-公共 FrameRenderer 将场景画布复制到统一输出画布，再按选项绘制字幕。播放器、截图、录制与离线渲染共用此接口，场景不依赖 DOM 文案被自动捕获。
+公共播放器和导出器调用同一 render(time)，场景不创建独立时钟。按需要释放 timeline、事件、GPU、纹理与音频节点。初始化失败也回收本实例资源。随机内容采用固定种子。
 
-同一时间点能直接重绘，`A → B → A` 不留下历史状态。不要独立启动 `requestAnimationFrame`、库 ticker 或音频定时器。使用 GSAP 时建立暂停的 timeline，由 `timeline.seek(time,true)` 求值；Three 骨骼按绝对时间求值；其他实现只需满足接口，不限定算法或库。
+## 多音轨与浏览器生成音频
 
-随机数据可使用 `engine/math.ts` 的 `seeded()`；释放时清理本实例创建的事件、timeline、WebGL、几何体、材质与纹理，不误删共享缓存。异步初始化失败也需要回收已创建资源。
-
-## 3. 资源和可选音频字段
-
-`assetUrl('films/example-project/image.webp')` 访问 public 下的文件。资源必须真实存在，不引用另一工程私有源码，不硬编码个人磁盘路径或运行时 CDN。
+`project.ts` 示例字段：
 
 ```typescript
-import { assetUrl } from "../../engine/types";
-import {
-  loadGltf,
-  disposeObject,
-  setAnimationTime,
-} from "../../engine/three-assets";
-// const image = await Assets.load(assetUrl('films/example-project/image.webp'));
-// const model = await loadGltf('films/example-project/model.glb', renderer);
+audioTracks: [
+  { id: 'voice', name: '旁白', kind: 'file', src: 'films/my-film/voice.wav', start: 2, offset: 1, duration: 8, gain: 1 },
+  { id: 'melody', name: '旋律', kind: 'generated', gain: 0.6 },
+  { id: 'pulse', name: '节奏', kind: 'generated', gain: 0.4 },
+],
+loadAudio: () => import('./audio'),
 ```
 
-模型加载工具支持项目已接入的解码器；导入工具当前要求自包含模型以避免外部依赖丢失。第三方源文件和许可证记录放在 `production/<id>/`，浏览器所需文件放在 `public/films/<id>/`。
+最多 32 条，每条 id 唯一。`start` 是项目起始秒数（默认 0），`offset` 是素材或生成器内部起点（默认 0），`duration` 默认到影片末尾，`gain` 默认 1、范围 0–4，`muted` 默认 false。文件不足时余下时间静音。播放器支持每轨静音、音量和总音量，暂停、跳转、变速和循环同步作用于所有音轨。旧 `audio: 'films/.../audio.wav'` 保留兼容，不能同时配置非空 audioTracks。
 
-`project.audio` 是可选路径。当前 AudioTransport 解码该资源，并与公共播放时间同步；没有音频字段也可以运行。它是当前接口能力，不规定使用哪种音乐或制作流程。扩展接口时同步维护类型、加载、暂停、定位、释放及相关测试。
+脚手架已提供 `audio.ts` 的可用示例，只需加上上述元数据即可启用，不需要重建音频文件。也可以自行实现：
 
-`project.subtitles` 是可为空的时间区间数组。单条开始包含、结束不包含；不能重叠或超出 duration，顺序应递增。统一字幕合成器负责输出，SRT 工具负责序列化。
+```typescript
+import type { GeneratedAudioOptions } from "../../src/engine/types";
+export function createAudio(options: GeneratedAudioOptions) {
+  const { trackId, context, destination, when, offset, duration, rate } =
+    options;
+  // 使用传入的 BaseAudioContext 创建 Web Audio 节点。
+  // 从源时间 offset 生成 duration 秒内容，在 context 时间 when 开始，按 rate 播放。
+  // 连接 destination，不创建 AudioContext 或独立计时器。
+  return {
+    dispose() {
+      /* stop/disconnect 本次调用的全部节点 */
+    },
+  };
+}
+```
 
-## 4. 命令的读写范围
+生成器必须支持任意 offset 独立重建，不能依赖上一段运行历史。实时播放使用 AudioContext；命令导出使用 OfflineAudioContext，按最多 10 秒一段渲染。滤波、混响等需要历史的效果必须根据源时间重建预滚动状态或解析状态，避免分段交界变化。随机噪声使用固定种子/源时间。不要在模块导入时播放声音或访问文件系统。
+
+浏览器 WebM 录入当前每轨/总音量和静音设置。命令 MP4 使用元数据中的每轨设置、总增益 1，不读取浏览器临时调音。两者复用相同的音轨裁切、定位与生成接口。
+
+## 视频和单帧导出
 
 ```powershell
-pnpm project:check example-project       # 只读检查
-pnpm project:check example-project --strict
-pnpm assets:import "D:/assets/model.glb" --license "来源与许可记录"
-pnpm posters --project example-project  # 更新该工程封面
-pnpm posters --all                      # 明确更新全部封面
-pnpm render example-project --start 5 --end 10 --width 1280 --fps 30
+pnpm render my-film --width 1920 --fps 30
+pnpm render my-film --start 5 --end 10 --width 1280
+pnpm frame my-film --frame 150 --width 1280
+pnpm frame my-film --time 5.5 --no-subtitles
+pnpm render my-film --frame 150
 ```
 
-后两类命令会产生文件；输出、覆盖开关及外部工具要求见 README 和脚本帮助。工程专用脚本在 `scripts/projects/<id>/`，在 `production/<id>/README.md` 写明输入输出和执行方法。诊断脚本不要附带写入行为；生成命令仅写明确目标。
+帧编号从 0 开始；`--frame` 默认按项目 fps 换算秒数，指定 `--fps` 可覆盖。`--time` 直接指定秒数，与 `--frame` 互斥。单帧输出 PNG，无需 FFmpeg；视频输出 MP4，需要 FFmpeg 和 FFprobe 验证。
 
-`pnpm assets` 是已有全局重建命令，可能更新公共插画、解码器和索引，不是单工程操作；新增工程不顺手执行。它不会重新生成三个已有 Demo 的音乐文件。
+输出默认在 `projects/<id>/exports/`。`--out` 可指定本项目目录内的路径，默认拒绝覆盖，明确添加 `--force` 才替换已有文件。支持 FFMPEG_PATH、FFPROBE_PATH、FRAME_BROWSER。
 
-## 5. 测试与调试
+浏览器的“导出作品”支持当前帧 PNG、字幕 SRT 和含混音的 WebM。WebM 从头实时录制，保持页面可见，切换后台会取消。命令导出逐帧绘制，不依赖实时预览帧率。
 
-```powershell
-$env:FRAME_TEST_PORT="4181"
-pnpm verify
-```
-
-端口选择当前未占用的端口。测试默认不复用未知服务；并行任务采用独立 worktree 和构建目录，不能同时写一个 dist。完整验证包括工程检查、类型、单元、构建与浏览器测试。只修改文档时也检查引用有效性。
-
-脚手架附带直接定位与反向定位测试；按修改内容补充接口、资源释放、异常路径与写入边界回归。通用列表测试基于元数据计算预期数量，不依赖固定工程数。
-
-开发页提供 `window.__FRAME_STUDIO__`；生产播放器需带 `?debug=1`，离线渲染入口始终提供此接口：
-
-```text
-/?render=example-project&width=1280&time=5&subtitles=1
-```
-
-等待 `ready` 后调用 `frame(seconds, subtitles)`、`dataURL()`。该渲染入口不播放音频，离线编码器处理音频资源；这是工具行为，不是交付要求。
+开发页或 `?debug=1` 播放器提供 `window.__FRAME_STUDIO__`。`/?render=my-film&width=1280&time=5&subtitles=1` 为离线入口；等待 ready 后使用 frame(seconds, subtitles)、dataURL() 和 audioChunk(start, duration)。片段音频返回 48 kHz 双声道 16 位 PCM 的 Base64，每段不超过 10 秒。

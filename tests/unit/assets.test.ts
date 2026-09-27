@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   mkdtempSync,
+  mkdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -14,7 +15,7 @@ const root = process.cwd();
 describe("actual PCM waveforms", () => {
   it("indexes every bin with finite real sound levels", () => {
     const values = waveformFromWav(
-      readFileSync("public/audio/paper-wings.wav"),
+      readFileSync("projects/paper-wings/public/audio/paper-wings.wav"),
     );
     expect(values).toHaveLength(180);
     expect(values.every((n) => Number.isFinite(n) && n >= 0 && n <= 1)).toBe(
@@ -23,7 +24,9 @@ describe("actual PCM waveforms", () => {
     expect(Math.max(...values)).toBeGreaterThan(0.1);
   });
   it("handles metadata chunks before the PCM data", () => {
-    const original = readFileSync("public/audio/paper-wings.wav");
+    const original = readFileSync(
+      "projects/paper-wings/public/audio/paper-wings.wav",
+    );
     const metadata = Buffer.alloc(12);
     metadata.write("LIST", 0);
     metadata.writeUInt32LE(4, 4);
@@ -37,7 +40,7 @@ describe("actual PCM waveforms", () => {
     expect(waveformFromWav(withMetadata)).toEqual(waveformFromWav(original));
   });
   it("rejects truncated or unsupported audio instead of fabricating a waveform", () => {
-    const data = readFileSync("public/audio/tiny-seed.wav");
+    const data = readFileSync("projects/tiny-seed/public/audio/tiny-seed.wav");
     expect(() => waveformFromWav(data.subarray(0, 100))).toThrow();
     const other = Buffer.from(data);
     other.writeUInt16LE(3, 20);
@@ -47,9 +50,12 @@ describe("actual PCM waveforms", () => {
 describe("local asset imports", () => {
   it("keeps source bytes and makes duplicate-safe indexed copies", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "frame-import-"));
+    mkdirSync(path.join(dir, "projects/story/public"), { recursive: true });
+    writeFileSync(path.join(dir, "projects/story/project.ts"), "");
+    writeFileSync(path.join(dir, "projects/story/public/assets.json"), "[]");
     const source = path.join(dir, "original.svg");
     const original = readFileSync(
-      path.join(root, "public/art/paper-plane.svg"),
+      path.join(root, "projects/paper-wings/public/art/paper-plane.svg"),
     );
     writeFileSync(source, original);
     try {
@@ -58,6 +64,7 @@ describe("local asset imports", () => {
           process.execPath,
           [
             path.join(root, "scripts/import-asset.mjs"),
+            "story",
             source,
             "--license",
             "original fixture",
@@ -68,12 +75,23 @@ describe("local asset imports", () => {
       }
       expect(readFileSync(source)).toEqual(original);
       const catalog = JSON.parse(
-        readFileSync(path.join(dir, "public/assets.json"), "utf8"),
+        readFileSync(
+          path.join(dir, "projects/story/public/assets.json"),
+          "utf8",
+        ),
       ) as { url: string; license: string }[];
       expect(catalog).toHaveLength(2);
       expect(catalog[0].url).not.toBe(catalog[1].url);
       for (const item of catalog) {
-        expect(existsSync(path.join(dir, "public", item.url))).toBe(true);
+        expect(
+          existsSync(
+            path.join(
+              dir,
+              "projects/story/public",
+              item.url.replace("films/story/", ""),
+            ),
+          ),
+        ).toBe(true);
         expect(item.license).toBe("original fixture");
       }
     } finally {
@@ -82,6 +100,8 @@ describe("local asset imports", () => {
   });
   it("rejects a glTF with missing external resources", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "frame-model-"));
+    mkdirSync(path.join(dir, "projects/story/public"), { recursive: true });
+    writeFileSync(path.join(dir, "projects/story/project.ts"), "");
     const source = path.join(dir, "missing.gltf");
     writeFileSync(
       source,
@@ -93,7 +113,7 @@ describe("local asset imports", () => {
     try {
       const result = spawnSync(
         process.execPath,
-        [path.join(root, "scripts/import-asset.mjs"), source],
+        [path.join(root, "scripts/import-asset.mjs"), "story", source],
         { cwd: dir, encoding: "utf8" },
       );
       expect(result.status).not.toBe(0);

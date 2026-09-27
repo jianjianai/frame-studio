@@ -1,24 +1,31 @@
 import { Clock } from "./clock";
-import { assetUrl } from "./types";
+import { prepareAudio, scheduleAudio, type PreparedAudio } from "./audio-graph";
+import { projectAudioTracks, type AnimationProject } from "./types";
 export class AudioTransport {
   readonly clock: Clock;
   context?: AudioContext;
-  private buffer?: AudioBuffer;
+  private prepared?: PreparedAudio;
   private recordDestination?: MediaStreamAudioDestinationNode;
+  private recordingSilence?: ConstantSourceNode;
   private gain?: GainNode;
-  private source?: AudioBufferSourceNode;
+  private graph?: { dispose(): void };
+  private boundary?: AudioBufferSourceNode;
   private loadPromise?: Promise<void>;
   private closed = false;
   private generation = 0;
+  private abort = new AbortController();
+  readonly controls = new Map<string, { gain: number; muted: boolean }>();
   volume = 0.65;
   muted = false;
-  constructor(
-    duration: number,
-    private readonly url?: string,
-  ) {
-    this.clock = new Clock(duration, () =>
+  constructor(private project: AnimationProject) {
+    this.clock = new Clock(project.duration, () =>
       this.context ? this.context.currentTime : performance.now() / 1000,
     );
+    for (const track of projectAudioTracks(project))
+      this.controls.set(track.id, {
+        gain: track.gain ?? 1,
+        muted: track.muted ?? false,
+      });
   }
   async unlock(): Promise<void> {
     if (this.closed) return;
@@ -31,29 +38,32 @@ export class AudioTransport {
       this.applyGain();
     }
     await this.context.resume();
-    if (this.url && !this.buffer) {
-      this.loadPromise ??= fetch(assetUrl(this.url))
-        .then((r) => {
-          if (!r.ok) throw new Error("音轨载入失败：" + r.status);
-          return r.arrayBuffer();
-        })
-        .then((b) => this.context!.decodeAudioData(b))
-        .then((b) => {
-          if (!this.closed) this.buffer = b;
-        })
-        .catch((e) => {
-          this.loadPromise = undefined;
-          throw e;
-        });
-      await this.loadPromise;
-    }
+    if (this.closed) return;
+    this.loadPromise ??= prepareAudio(
+      this.project,
+      this.context,
+      this.abort.signal,
+    )
+      .then((prepared) => {
+        if (!this.closed) this.prepared = prepared;
+      })
+      .catch((error) => {
+        this.loadPromise = undefined;
+        throw error;
+      });
+    await this.loadPromise;
   }
   async play(): Promise<void> {
     const generation = ++this.generation;
     await this.unlock();
     if (this.closed || generation !== this.generation) return;
     this.clock.play();
-    this.syncSource();
+    try {
+      this.syncSource();
+    } catch (error) {
+      this.pause();
+      throw error;
+    }
   }
   pause(): void {
     this.generation++;
@@ -69,7 +79,21 @@ export class AudioTransport {
     if (this.clock.playing) this.syncSource();
   }
   setLoop(loop: boolean): void {
+    const time = this.clock.time();
     this.clock.loop = loop;
+    this.clock.seek(time);
+    if (this.clock.playing) this.syncSource();
+  }
+  setTrack(
+    id: string,
+    change: Partial<{ gain: number; muted: boolean }>,
+  ): void {
+    const previous = this.controls.get(id);
+    if (!previous) throw new Error("未知音轨: " + id);
+    const control = { ...previous, ...change };
+    if (!Number.isFinite(control.gain) || control.gain < 0 || control.gain > 4)
+      throw new Error("无效音轨音量");
+    this.controls.set(id, control);
     if (this.clock.playing) this.syncSource();
   }
   setVolume(v: number): void {
@@ -89,47 +113,78 @@ export class AudioTransport {
       );
   }
   private stopSource(): void {
-    if (this.source) {
-      this.source.stop();
-      this.source.disconnect();
-      this.source = undefined;
+    if (this.boundary) {
+      this.boundary.onended = null;
+      this.boundary.stop();
+      this.boundary.disconnect();
+      this.boundary = undefined;
     }
+    this.graph?.dispose();
+    this.graph = undefined;
   }
   private syncSource(): void {
     this.stopSource();
-    if (!this.context || !this.buffer || !this.gain || !this.clock.playing)
+    if (!this.context || !this.prepared || !this.gain || !this.clock.playing)
       return;
-    const offset = this.clock.time();
-    if (offset >= this.clock.duration) return;
-    const source = this.context.createBufferSource();
-    source.buffer = this.buffer;
-    source.playbackRate.value = this.clock.rate;
-    source.loop = this.clock.loop;
-    source.loopStart = 0;
-    source.loopEnd = this.clock.duration;
-    source.connect(this.gain);
-    source.start(0, offset);
-    this.source = source;
+    const offset = this.clock.time(),
+      length = this.clock.duration - offset;
+    if (length <= 0) return;
+    const when = this.context.currentTime;
+    this.graph = scheduleAudio(
+      this.prepared,
+      this.context,
+      this.gain,
+      this.clock.duration,
+      offset,
+      length,
+      when,
+      this.clock.rate,
+      this.controls,
+    );
+    const boundary = this.context.createBufferSource();
+    boundary.buffer = this.context.createBuffer(1, 1, this.context.sampleRate);
+    boundary.loop = true;
+    boundary.connect(this.gain);
+    boundary.onended = () => {
+      if (!this.closed && this.clock.playing && this.clock.loop)
+        this.syncSource();
+    };
+    boundary.start(when);
+    boundary.stop(when + length / this.clock.rate);
+    this.boundary = boundary;
   }
   getMediaStream(): MediaStream | undefined {
     if (!this.context || !this.gain) return;
     this.releaseMediaStream();
-    const destination = this.context.createMediaStreamDestination();
-    this.recordDestination = destination;
-    this.gain.connect(destination);
-    return destination.stream;
+    this.recordDestination = this.context.createMediaStreamDestination();
+    this.gain.connect(this.recordDestination);
+    // Keep PCM flowing before playback and across pauses, so short generated clips
+    // do not finish before MediaRecorder receives its first audio packet.
+    this.recordingSilence = this.context.createConstantSource();
+    this.recordingSilence.offset.value = 0;
+    this.recordingSilence.connect(this.recordDestination);
+    this.recordingSilence.start();
+    return this.recordDestination.stream;
   }
   releaseMediaStream(): void {
+    this.recordingSilence?.stop();
+    this.recordingSilence?.disconnect();
+    this.recordingSilence = undefined;
     if (this.recordDestination) {
       this.gain?.disconnect(this.recordDestination);
-      this.recordDestination.stream.getTracks().forEach((t) => t.stop());
+      this.recordDestination.stream
+        .getTracks()
+        .forEach((track) => track.stop());
       this.recordDestination = undefined;
     }
   }
   async dispose(): Promise<void> {
     this.closed = true;
+    this.abort.abort();
     this.pause();
     this.releaseMediaStream();
+    this.prepared = undefined;
+    this.gain?.disconnect();
     if (this.context && this.context.state !== "closed")
       await this.context.close();
   }

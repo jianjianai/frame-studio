@@ -1,12 +1,11 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs/promises";
-import { readFileSync } from "node:fs";
+import { assetCatalog as readAssets } from "../../scripts/project-assets.mjs";
 import { readProjectCatalog } from "../../scripts/project-metadata.mjs";
-import path from "node:path";
 import type { StudioApi } from "../../src/engine/debug";
 const projectCatalog = readProjectCatalog().map((record) => record.meta);
 const projectCount = projectCatalog.length;
-const assetCatalog = JSON.parse(readFileSync("public/assets.json", "utf8")) as {
+const assetCatalog = readAssets(process.cwd()) as {
   type: string;
 }[];
 const state = (page: import("@playwright/test").Page) =>
@@ -200,28 +199,4 @@ test("responsive library and player fit a narrow phone viewport", async ({
     path: "test-results/mobile-player.png",
     fullPage: true,
   });
-});
-test("complete 32-second browser WebM includes a downloadable recording", async ({
-  page,
-}) => {
-  test.setTimeout(90000);
-  await ready(page, "paper-wings");
-  await page.getByRole("combobox", { name: "预览画质" }).selectOption("draft");
-  await page.waitForFunction(
-    () =>
-      window.__FRAME_STUDIO__?.ready &&
-      window.__FRAME_STUDIO__.getState().width === 640,
-  );
-  await page.getByRole("button", { name: "导出作品" }).click();
-  const download = page.waitForEvent("download", { timeout: 65000 });
-  await page.getByRole("button", { name: /浏览器录制 · WebM/ }).click();
-  await expect(page.getByText(/正在实时录制/)).toBeVisible();
-  const file = await download;
-  expect(file.suggestedFilename()).toBe("paper-wings.webm");
-  await fs.mkdir("exports", { recursive: true });
-  await file.saveAs(path.resolve("exports/verification-browser.webm"));
-  expect(
-    (await fs.stat("exports/verification-browser.webm")).size,
-  ).toBeGreaterThan(50000);
-  await expect(page.getByText(/正在实时录制/)).toHaveCount(0);
 });

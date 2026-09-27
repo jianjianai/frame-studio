@@ -1,0 +1,30 @@
+{
+  "engine": "spessasynth_core 4.3.22",
+  "soundBank": {
+    "name": "GeneralUser GS 2.0.3",
+    "revision": "684543d5e5efaef08d02be50dcda8d552478fa60",
+    "sha256": "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe"
+  },
+  "tracks": [
+    {
+      "id": "sunny-rail",
+      "duration": 36,
+      "sampleRate": 48000,
+      "channels": 2,
+      "bitDepth": 16,
+      "notes": 437,
+      "instruments": [
+        "Jazz piano",
+        "Nylon guitar",
+        "Upright bass",
+        "Vibraphone",
+        "Clarinet",
+        "Brush kit"
+      ],
+      "integratedLUFS": -18,
+      "truePeakDBTP": -2.68,
+      "loudnessRangeLU": 1.6,
+      "sha256": "5d4661777a84c67752181d36a125c1f813377927dd50204382816476a7e72dcc"
+    }
+  ]
+}

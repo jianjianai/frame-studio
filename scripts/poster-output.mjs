@@ -3,6 +3,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
+import { assetPath } from "./project-paths.mjs";
 import {
   readProject,
   readProjectCatalog,
@@ -18,9 +19,7 @@ const inside = (base, file) => {
 /** Update the path the registry actually references, not a second hard-coded poster folder. */
 export async function writeProjectPoster(root, id, png) {
   if (!validProjectId(id)) throw new Error("Invalid project id");
-  const { meta } = readProject(
-    path.join(root, "src/projects", id, "project.ts"),
-  );
+  const { meta } = readProject(path.join(root, "projects", id, "project.ts"));
   const relative = meta.poster;
   if (
     typeof relative !== "string" ||
@@ -38,8 +37,8 @@ export async function writeProjectPoster(root, id, png) {
     throw new Error(
       "Poster is shared with another project; assign a project-owned path before rewriting",
     );
-  const base = path.resolve(root, "public"),
-    output = path.resolve(base, relative);
+  const base = path.resolve(root, "projects", id),
+    output = assetPath(root, relative, id);
   if (!inside(base, output) || !existsSync(base))
     throw new Error("Poster destination must be under public/");
   let ancestor = output;

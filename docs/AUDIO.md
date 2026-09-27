@@ -1,49 +1,44 @@
-# 配乐、旁白与音效的同步制作
+# 音轨、旁白与代码生成声音
 
-播放器以一条完整音轨对应一部动画。多轨在制作阶段混合，而不是让三个浏览器计时器分别控制音乐、配音与音效。
+播放器直接支持多音轨，无需先合成完整混音文件。文件音轨和代码生成音轨可以同时播放，统一使用公共时间轴。
 
-## 混音工具
+在项目 `project.ts` 配置：
 
-项目提供 FFmpeg 驱动的本地多轨混音脚本，不额外引入音频服务、账户或云费用：
-
-```powershell
-pnpm audio:mix path/to/mix.json
+```typescript
+audioTracks: [
+  { id: 'voice', name: '旁白', kind: 'file', src: 'films/my-film/voice.wav', start: 2, offset: 0, gain: 1 },
+  { id: 'melody', name: '配乐', kind: 'generated', gain: 0.6 },
+  { id: 'pulse', name: '音效', kind: 'generated', gain: 0.4 },
+],
+loadAudio: () => import('./audio'),
 ```
 
-manifest 中所有路径相对于这个 JSON 所在目录。下面示例假定 mix.json 在项目根目录：
+`audio.ts` 由脚手架提供示例，可在本项目中替换。实时播放直接调用 Web Audio，不读写预合成文件。命令行 MP4 使用同一生成器在 OfflineAudioContext 中渲染，浏览器 WebM 录入实时混音。完整字段、时间约定、资源释放和分段重建要求见 [AUTHORING.md](AUTHORING.md)。
+
+每轨可配置起始时间、源偏移、时长、增益和静音，播放器也能临时调音。浏览器导出采用当前设置；命令导出采用元数据设置。需要保留调音结果时在本项目元数据中修改 gain/muted。
+
+## 可选的文件混音
+
+需要固定 WAV 时仍可使用：
+
+```powershell
+pnpm audio:mix my-film projects/my-film/production/mix.json
+```
+
+文件内路径相对于 manifest 所在目录，所有输入输出必须在 `projects/my-film/`：
 
 ```json
 {
-  "duration": 180,
-  "output": "public/audio/my-film.wav",
-  "license": "配乐/旁白/音效均为原创或已经授权",
+  "duration": 24,
+  "output": "../public/audio/mix.wav",
+  "license": "源音轨的作者、出处与授权",
   "tracks": [
-    {
-      "file": "public/imports/music.wav",
-      "start": 0,
-      "gain": 0.25,
-      "fadeIn": 1,
-      "fadeOut": 3
-    },
-    { "file": "public/imports/narration.wav", "start": 1.5, "gain": 1 },
-    {
-      "file": "public/imports/impact.wav",
-      "start": 26,
-      "gain": 0.55,
-      "duration": 2
-    }
+    { "file": "../public/music.wav", "gain": 0.3, "fadeIn": 1, "fadeOut": 2 },
+    { "file": "../public/voice.wav", "start": 1.5, "gain": 1 }
   ]
 }
 ```
 
-每轨参数：file 源文件；start 成片中的开始秒数；trimStart 裁掉源文件开头的秒数；duration 使用的最大长度（默认到成片结束）；gain 线性增益 0–4；fadeIn/fadeOut 淡入淡出秒数。要求 1–32 轨，成片时长不超过 3600 秒。
+默认拒绝覆盖，明确加 `--force` 可替换指定输出。工具只更新该项目的素材和波形索引。FFmpeg 可通过 FFMPEG_PATH 指定。
 
-合成为 48kHz/16bit 双声道 WAV，统一时间偏移，防削波限幅，补齐静音到准确片长。输出在 public/ 下时同步更新素材索引。源文件不改写，默认禁止覆盖成品，明确指定 --force 才可替换。输出旁边的 .mix.json 记录混音参数。
-
-然后将 project.ts 的 audio 设置为 audio/my-film.wav。正式旁白和音效应该围绕画面设计，不要只循环一小段背景音乐撑满片长。
-
-## 限制
-
-当前不是 DAW：没有音频波形拖放编辑、音高保持的倍速算法、动态自动 ducking、TTS 或自动字幕对齐。可在专业音频软件制作混音后导入；本地脚本适合确定的音轨增益、偏移、裁切和淡入淡出。
-
-播放器倍速直接改变音源播放速率，音高也会改变。正式离线导出始终是项目原始速度。
+三个现有 Demo 保留原来的已提交音频。`pnpm music:build <id>` 可选重建指定作品的采样音乐、MIDI 和动作音效；只写该项目目录。它需要采样库及 FFmpeg，不是新实时音频接口的必需步骤。

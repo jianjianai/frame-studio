@@ -7,7 +7,39 @@ import { randomUUID } from "node:crypto";
 import { createServer } from "vite";
 import { writeProjectPoster } from "./poster-output.mjs";
 import { launchBrowser } from "./browser.mjs";
+import { projectPath } from "./project-paths.mjs";
+import { validProjectId, readProjectCatalog } from "./project-metadata.mjs";
 const args = process.argv.slice(2);
+const values = new Set([
+  "--width",
+  "--fps",
+  "--start",
+  "--end",
+  "--out",
+  "--preset",
+  "--project",
+  "--frame",
+  "--time",
+]);
+const flags = new Set([
+  "--posters",
+  "--all",
+  "--no-subtitles",
+  "--force",
+  "--frame-mode",
+]);
+const positional = [];
+for (let i = 0; i < args.length; i++) {
+  const arg = args[i];
+  if (values.has(arg)) {
+    if (!args[i + 1] || args[i + 1].startsWith("--"))
+      throw new Error("Missing value for " + arg);
+    i++;
+  } else if (!flags.has(arg)) {
+    if (arg.startsWith("--")) throw new Error("Unknown option: " + arg);
+    positional.push(arg);
+  }
+}
 const val = (key, fallback) => {
   const i = args.indexOf(key);
   return i >= 0 ? args[i + 1] : fallback;
@@ -25,14 +57,26 @@ if (
 }
 if (posterProject && !/^[a-z][a-z0-9-]*$/.test(posterProject))
   throw new Error("Invalid poster project id");
-const id = args.find((a) => !a.startsWith("--"));
+const id = positional[0];
 const root = process.cwd();
-if (!posters && (!id || !/^[a-z][a-z0-9-]*$/.test(id))) {
+if (!posters && (!validProjectId(id) || positional.length !== 1)) {
   console.error(
-    "Usage: pnpm render <id> [--width 1920] [--fps 30] [--start 0] [--end N] [--out exports/name.mp4] [--no-subtitles] [--force]\n       pnpm render --posters --project <id> | --all",
+    "Usage: pnpm render <id> [--width 1920] [--fps 30] [--start 0] [--end N] [--out projects/<id>/exports/name.mp4] [--no-subtitles] [--force]\n       pnpm frame <id> --frame 150 | --time 5\n       pnpm posters --project <id> | --all",
   );
   process.exit(1);
 }
+if (
+  !posters &&
+  !readProjectCatalog(root).some((project) => project.meta.id === id)
+)
+  throw new Error("Unknown project: " + id);
+if (!posters && val("--out"))
+  for (const destination of [val("--out"), val("--out") + ".render.json"])
+    projectPath(
+      root,
+      id,
+      path.relative(projectPath(root, id), path.resolve(destination)),
+    );
 let width = Number(val("--width", posters ? "1280" : "1920"));
 const fps = Number(val("--fps", "30"));
 if (!Number.isInteger(width) || width < 320 || width > 3840 || width % 16 !== 0)
@@ -40,7 +84,7 @@ if (!Number.isInteger(width) || width < 320 || width > 3840 || width % 16 !== 0)
 if (!Number.isInteger(fps) || fps < 12 || fps > 60)
   throw new Error("--fps must be 12..60");
 const height = (width * 9) / 16;
-let server, browser, encoder, temporary;
+let server, browser, encoder, temporary, audioTemporary;
 let stderr = "";
 try {
   server = await createServer({
@@ -70,10 +114,10 @@ try {
   };
   if (posters) {
     const folders = (
-      await fs.readdir("src/projects", { withFileTypes: true })
+      await fs.readdir("projects", { withFileTypes: true })
     ).filter(
       (e) =>
-        e.isDirectory() && existsSync("src/projects/" + e.name + "/project.ts"),
+        e.isDirectory() && existsSync("projects/" + e.name + "/project.ts"),
     );
     if (
       posterProject &&
@@ -104,216 +148,305 @@ try {
       await page.close();
     }
   } else {
-    const ffmpeg = process.env.FFMPEG_PATH || "ffmpeg";
-    const available = spawnSync(ffmpeg, ["-version"], {
-      encoding: "utf8",
-      windowsHide: true,
-    });
-    if (available.error || available.status !== 0)
-      throw new Error(
-        "FFmpeg is required. Set FFMPEG_PATH or add ffmpeg to PATH.",
-      );
+    const singleFrame =
+      args.includes("--frame-mode") ||
+      args.includes("--frame") ||
+      args.includes("--time");
     const page = await renderPage(id);
     const meta = await page.evaluate(async (projectId) => {
       const { projects } = await import("/src/projects/index.ts");
       const p = projects.find((p) => p.id === projectId);
       return p
-        ? { duration: p.duration, audio: p.audio, title: p.title }
+        ? {
+            duration: p.duration,
+            audio: p.audio,
+            audioTracks: p.audioTracks,
+            title: p.title,
+            fps: p.fps,
+          }
         : null;
     }, id);
     if (!meta) throw new Error("Unknown project: " + id);
-    const start = Number(val("--start", "0")),
-      end = Number(val("--end", String(meta.duration)));
-    if (
-      !Number.isFinite(start) ||
-      !Number.isFinite(end) ||
-      start < 0 ||
-      end <= start ||
-      end > meta.duration
-    )
-      throw new Error("Invalid --start / --end range");
-    const frames = Math.ceil((end - start) * fps),
-      duration = frames / fps;
-    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const output = path.resolve(
-      val("--out", "exports/" + id + "-" + stamp + ".mp4"),
-    );
-    if (existsSync(output) && !args.includes("--force"))
-      throw new Error("Output exists; use --force explicitly: " + output);
-    await fs.mkdir(path.dirname(output), { recursive: true });
-    temporary = path.join(
-      path.dirname(output),
-      "." + path.basename(output, ".mp4") + "-" + randomUUID() + ".tmp.mp4",
-    );
-    const cmd = [
-      "-hide_banner",
-      "-loglevel",
-      "warning",
-      "-f",
-      "image2pipe",
-      "-vcodec",
-      "png",
-      "-framerate",
-      String(fps),
-      "-i",
-      "pipe:0",
-    ];
-    if (meta.audio) {
-      const audio = path.resolve("public", meta.audio);
-      const relative = path.relative(path.resolve("public"), audio);
-      if (
-        relative.startsWith("..") ||
-        path.isAbsolute(relative) ||
-        !existsSync(audio)
-      )
-        throw new Error("Missing or non-local soundtrack: " + meta.audio);
-      cmd.push(
-        "-ss",
-        String(start),
-        "-i",
-        audio,
-        "-map",
-        "0:v:0",
-        "-map",
-        "1:a:0",
-        "-af",
-        "apad",
-        "-c:a",
-        "aac",
-        "-b:a",
-        "192k",
+    const scopedOutput = (fallback, extension) => {
+      const output = path.resolve(val("--out", fallback));
+      projectPath(root, id, path.relative(projectPath(root, id), output));
+      projectPath(
+        root,
+        id,
+        path.relative(projectPath(root, id), output + ".render.json"),
       );
-    }
-    cmd.push(
-      "-c:v",
-      "libx264",
-      "-preset",
-      val("--preset", "medium"),
-      "-crf",
-      "18",
-      "-pix_fmt",
-      "yuv420p",
-      "-r",
-      String(fps),
-      "-t",
-      String(duration),
-      "-movflags",
-      "+faststart",
-      "-y",
-      temporary,
-    );
-    encoder = spawn(ffmpeg, cmd, {
-      stdio: ["pipe", "ignore", "pipe"],
-      windowsHide: true,
-    });
-    let encoderFailure;
-    encoder.on("error", (e) => {
-      encoderFailure = e;
-    });
-    encoder.stdin.on("error", (e) => {
-      encoderFailure = e;
-    });
-    encoder.stderr.on("data", (d) => {
-      stderr = (stderr + d.toString()).slice(-12000);
-    });
-    const closed = once(encoder, "close");
-    const began = Date.now();
-    const subtitles = !args.includes("--no-subtitles");
-    console.log(
-      "Rendering " +
-        id +
-        ": " +
-        frames +
-        " frames, " +
-        width +
-        "x" +
-        height +
-        ", " +
-        fps +
-        " fps, audio " +
-        (meta.audio ? "on" : "off"),
-    );
-    for (let i = 0; i < frames; i++) {
-      if (encoderFailure) throw encoderFailure;
-      if (encoder.exitCode !== null)
-        throw new Error("FFmpeg exited early: " + stderr);
+      if (path.extname(output).toLowerCase() !== extension)
+        throw new Error("Output must end with " + extension);
+      if (existsSync(output) && !args.includes("--force"))
+        throw new Error("Output exists; use --force explicitly: " + output);
+      return output;
+    };
+    if (singleFrame) {
+      if (args.includes("--frame") && args.includes("--time"))
+        throw new Error("Choose either --frame or --time");
+      const frame = Number(val("--frame", "0"));
+      const frameFps = Number(val("--fps", String(meta.fps)));
+      const time = args.includes("--time")
+        ? Number(val("--time"))
+        : frame / frameFps;
+      if (
+        !Number.isInteger(frame) ||
+        frame < 0 ||
+        !Number.isFinite(time) ||
+        time < 0 ||
+        time >= meta.duration
+      )
+        throw new Error("Frame/time is outside the project");
+      const output = scopedOutput(
+        "projects/" + id + "/exports/frame-" + time.toFixed(6) + ".png",
+        ".png",
+      );
       const data = await page.evaluate(
-        ({ t, subtitles }) => {
-          window.__FRAME_STUDIO__.frame(t, subtitles);
+        ({ time, subtitles }) => {
+          window.__FRAME_STUDIO__.frame(time, subtitles);
           return window.__FRAME_STUDIO__.dataURL().split(",")[1];
         },
-        { t: start + i / fps, subtitles },
+        { time, subtitles: !args.includes("--no-subtitles") },
       );
-      const png = Buffer.from(data, "base64");
-      if (!encoder.stdin.write(png))
-        await Promise.race([
-          once(encoder.stdin, "drain"),
-          closed.then(() => {
-            throw new Error("FFmpeg stopped: " + stderr);
-          }),
-        ]);
-      if (i % Math.max(fps, 1) === 0 || i === frames - 1)
-        console.log(
-          "Frame " +
-            (i + 1) +
-            "/" +
-            frames +
-            " (" +
-            Math.round(((i + 1) / frames) * 100) +
-            "%)",
-        );
-    }
-    encoder.stdin.end();
-    const [code] = await closed;
-    if (code !== 0) throw new Error("FFmpeg failed (" + code + "): " + stderr);
-    await fs.rename(temporary, output);
-    temporary = undefined;
-    const probe = spawnSync(
-      process.env.FFPROBE_PATH || "ffprobe",
-      ["-v", "error", "-show_streams", "-show_format", "-of", "json", output],
-      { encoding: "utf8", windowsHide: true },
-    );
-    const inspected = probe.status === 0 ? JSON.parse(probe.stdout) : null;
-    if (inspected) {
-      const video = inspected.streams.find((s) => s.codec_type === "video");
-      if (
-        Number(video?.nb_frames) !== frames ||
-        video?.width !== width ||
-        video?.height !== height
-      )
+      await fs.mkdir(path.dirname(output), { recursive: true });
+      await fs.writeFile(output, Buffer.from(data, "base64"), {
+        flag: args.includes("--force") ? "w" : "wx",
+      });
+      console.log("Exported frame at " + time + "s -> " + output);
+      await page.close();
+    } else {
+      const ffmpeg = process.env.FFMPEG_PATH || "ffmpeg";
+      const available = spawnSync(ffmpeg, ["-version"], {
+        encoding: "utf8",
+        windowsHide: true,
+      });
+      if (available.error || available.status !== 0)
         throw new Error(
-          "Output verification failed: unexpected video dimensions/frame count",
+          "FFmpeg is required. Set FFMPEG_PATH or add ffmpeg to PATH.",
         );
+      const start = Number(val("--start", "0")),
+        end = Number(val("--end", String(meta.duration)));
       if (
-        meta.audio &&
-        !inspected.streams.some((s) => s.codec_type === "audio")
+        !Number.isFinite(start) ||
+        !Number.isFinite(end) ||
+        start < 0 ||
+        end <= start ||
+        end > meta.duration
       )
-        throw new Error("Output verification failed: missing audio");
+        throw new Error("Invalid --start / --end range");
+      const frames = Math.ceil((end - start) * fps),
+        duration = frames / fps;
+      const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+      const output = scopedOutput(
+        "projects/" + id + "/exports/" + id + "-" + stamp + ".mp4",
+        ".mp4",
+      );
+      const hasAudio = Boolean(meta.audio || meta.audioTracks?.length);
+      await fs.mkdir(path.dirname(output), { recursive: true });
+      temporary = path.join(
+        path.dirname(output),
+        "." + path.basename(output, ".mp4") + "-" + randomUUID() + ".tmp.mp4",
+      );
+      const cmd = [
+        "-hide_banner",
+        "-loglevel",
+        "warning",
+        "-f",
+        "image2pipe",
+        "-vcodec",
+        "png",
+        "-framerate",
+        String(fps),
+        "-i",
+        "pipe:0",
+      ];
+      if (hasAudio) {
+        audioTemporary = path.join(
+          path.dirname(output),
+          ".audio-" + randomUUID() + ".pcm",
+        );
+        const handle = await fs.open(audioTemporary, "wx");
+        try {
+          const samples = Math.round(duration * 48000);
+          for (let sample = 0; sample < samples; sample += 480000) {
+            const chunk = Math.min(480000, samples - sample);
+            const data = await page.evaluate(
+              ({ start, duration }) =>
+                window.__FRAME_STUDIO__.audioChunk(start, duration),
+              { start: start + sample / 48000, duration: chunk / 48000 },
+            );
+            const pcm = Buffer.from(data, "base64");
+            if (pcm.length !== chunk * 4)
+              throw new Error("Unexpected audio chunk length");
+            await handle.writeFile(pcm);
+          }
+        } finally {
+          await handle.close();
+        }
+        cmd.push(
+          "-f",
+          "s16le",
+          "-ar",
+          "48000",
+          "-ac",
+          "2",
+          "-i",
+          audioTemporary,
+          "-map",
+          "0:v:0",
+          "-map",
+          "1:a:0",
+          "-c:a",
+          "aac",
+          "-b:a",
+          "192k",
+        );
+      }
+      cmd.push(
+        "-c:v",
+        "libx264",
+        "-preset",
+        val("--preset", "medium"),
+        "-crf",
+        "18",
+        "-pix_fmt",
+        "yuv420p",
+        "-r",
+        String(fps),
+        "-t",
+        String(duration),
+        "-movflags",
+        "+faststart",
+        "-y",
+        temporary,
+      );
+      encoder = spawn(ffmpeg, cmd, {
+        stdio: ["pipe", "ignore", "pipe"],
+        windowsHide: true,
+      });
+      let encoderFailure;
+      encoder.on("error", (e) => {
+        encoderFailure = e;
+      });
+      encoder.stdin.on("error", (e) => {
+        encoderFailure = e;
+      });
+      encoder.stderr.on("data", (d) => {
+        stderr = (stderr + d.toString()).slice(-12000);
+      });
+      const closed = once(encoder, "close");
+      const began = Date.now();
+      const subtitles = !args.includes("--no-subtitles");
+      console.log(
+        "Rendering " +
+          id +
+          ": " +
+          frames +
+          " frames, " +
+          width +
+          "x" +
+          height +
+          ", " +
+          fps +
+          " fps, audio " +
+          (hasAudio ? "on" : "off"),
+      );
+      for (let i = 0; i < frames; i++) {
+        if (encoderFailure) throw encoderFailure;
+        if (encoder.exitCode !== null)
+          throw new Error("FFmpeg exited early: " + stderr);
+        const data = await page.evaluate(
+          ({ t, subtitles }) => {
+            window.__FRAME_STUDIO__.frame(t, subtitles);
+            return window.__FRAME_STUDIO__.dataURL().split(",")[1];
+          },
+          { t: start + i / fps, subtitles },
+        );
+        const png = Buffer.from(data, "base64");
+        if (!encoder.stdin.write(png))
+          await Promise.race([
+            once(encoder.stdin, "drain"),
+            closed.then(() => {
+              throw new Error("FFmpeg stopped: " + stderr);
+            }),
+          ]);
+        if (i % Math.max(fps, 1) === 0 || i === frames - 1)
+          console.log(
+            "Frame " +
+              (i + 1) +
+              "/" +
+              frames +
+              " (" +
+              Math.round(((i + 1) / frames) * 100) +
+              "%)",
+          );
+      }
+      encoder.stdin.end();
+      const [code] = await closed;
+      if (code !== 0)
+        throw new Error("FFmpeg failed (" + code + "): " + stderr);
+      const probe = spawnSync(
+        process.env.FFPROBE_PATH || "ffprobe",
+        [
+          "-v",
+          "error",
+          "-show_streams",
+          "-show_format",
+          "-of",
+          "json",
+          temporary,
+        ],
+        { encoding: "utf8", windowsHide: true },
+      );
+      const inspected = probe.status === 0 ? JSON.parse(probe.stdout) : null;
+      if (!inspected)
+        throw new Error(
+          "FFprobe verification failed: " +
+            (probe.stderr || probe.error?.message),
+        );
+      if (inspected) {
+        const video = inspected.streams.find((s) => s.codec_type === "video");
+        if (
+          Number(video?.nb_frames) !== frames ||
+          video?.width !== width ||
+          video?.height !== height
+        )
+          throw new Error(
+            "Output verification failed: unexpected video dimensions/frame count",
+          );
+        if (
+          hasAudio &&
+          !inspected.streams.some((s) => s.codec_type === "audio")
+        )
+          throw new Error("Output verification failed: missing audio");
+      }
+      await fs.rename(temporary, output);
+      temporary = undefined;
+      const report = {
+        project: id,
+        title: meta.title,
+        output,
+        width,
+        height,
+        fps,
+        frames,
+        start,
+        end,
+        duration,
+        subtitles,
+        audio: meta.audioTracks ?? meta.audio ?? null,
+        elapsedSeconds: (Date.now() - began) / 1000,
+        ffprobe: inspected,
+        warnings: stderr,
+      };
+      await fs.writeFile(
+        output + ".render.json",
+        JSON.stringify(report, null, 2),
+      );
+      console.log("Verified output: " + output);
+      console.log("Render report: " + output + ".render.json");
+      await page.close();
     }
-    const report = {
-      project: id,
-      title: meta.title,
-      output,
-      width,
-      height,
-      fps,
-      frames,
-      start,
-      end,
-      duration,
-      subtitles,
-      audio: meta.audio ?? null,
-      elapsedSeconds: (Date.now() - began) / 1000,
-      ffprobe: inspected,
-      warnings: stderr,
-    };
-    await fs.writeFile(
-      output + ".render.json",
-      JSON.stringify(report, null, 2),
-    );
-    console.log("Verified output: " + output);
-    console.log("Render report: " + output + ".render.json");
-    await page.close();
   }
 } catch (e) {
   console.error(e.stack || String(e));
@@ -321,6 +454,8 @@ try {
 } finally {
   if (encoder && encoder.exitCode === null) encoder.kill();
   if (temporary) await fs.rm(temporary, { force: true }).catch(() => {});
+  if (audioTemporary)
+    await fs.rm(audioTemporary, { force: true }).catch(() => {});
   await browser?.close();
   await server?.close();
 }

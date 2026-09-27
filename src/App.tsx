@@ -326,7 +326,7 @@ function AssetLibrary() {
           <p>素材与音轨随项目保存，不依赖运行时外链。</p>
         </div>
         <span className="outline-badge">
-          <FolderOpen size={15} /> public/
+          <FolderOpen size={15} /> 项目素材
         </span>
       </header>
       <div className="asset-notice">
@@ -334,8 +334,9 @@ function AssetLibrary() {
         <div>
           <strong>导入并优化本地素材</strong>
           <p>
-            运行 <code>pnpm assets:import "素材的完整路径"</code>，文件将复制到
-            public/imports/ 并更新索引。源文件保持不变。
+            运行 <code>pnpm assets:import 项目id "素材的完整路径"</code>
+            ，文件将复制到 该项目的 public/imports/
+            并更新项目索引。源文件保持不变。
           </p>
         </div>
       </div>
@@ -431,10 +432,12 @@ function Guide() {
         <section>
           <span className="step-number">02</span>
           <h3>准备真正的素材</h3>
-          <p>将分层插画、角色、音轨、模型导入公共素材库，记录来源和授权。</p>
-          <pre>pnpm assets:import "D:/assets/character.png"</pre>
+          <p>
+            将分层插画、角色、音轨、模型导入自己的项目目录，记录来源和授权。
+          </p>
+          <pre>pnpm assets:import my-film "D:/assets/character.png"</pre>
           <p className="muted">
-            图像可优化为 WebP；模型推荐 GLB；配乐使用完整音轨。
+            图像可优化为 WebP；模型推荐 GLB；音频支持多音轨和浏览器实时生成。
           </p>
         </section>
         <section>
@@ -473,7 +476,7 @@ function Guide() {
               ["PixiJS", "分层图像、精灵、蒙版与二维场景"],
               ["Three.js", "模型、材质、灯光、骨骼与摄影机"],
               ["GSAP + Flubber", "精确时间轴与矢量形变"],
-              ["Web Audio", "完整音轨、音量与同步播放"],
+              ["Web Audio", "多音轨、实时生成声音与同步混音"],
               ["Playwright + FFmpeg", "逐帧截图、MP4 与浏览器验收"],
               ["Sharp + SVGO", "图像与矢量素材优化"],
             ].map(([name, desc]) => (
@@ -491,7 +494,7 @@ function Guide() {
           </h3>
           <pre>
             {
-              "src/\n  engine/      共用时间轴、音频与渲染器\n  projects/    每部动画的素材约定与场景\n  ui/          播放器与导出界面\npublic/        插画、配乐、模型与封面\nscripts/       新建、导入、渲染与环境检查\ntests/         单元测试与浏览器验收\nAGENTS.md      后续 AI 制作必须遵循的约定"
+              "projects/<id>/  仅修改自己的项目文件夹\n  project.ts   元数据\n  scene.ts     场景\n  audio.ts     可选实时声音\n  public/      素材、配乐与封面\n  production/  原始材料与许可\n  scripts/     项目工具\n  tests/       项目测试\n  exports/     视频与单帧输出\nsrc/engine/    公共引擎（只读使用）"
             }
           </pre>
           <p>详细说明见项目 README.md 与 docs/AUTHORING.md。</p>

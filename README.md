@@ -1,147 +1,102 @@
 # FRAME · 动画工坊
 
-一个长期复用的、代码驱动的浏览器实时动画工作台。使用 pnpm 管理依赖；不再将每个故事压成独立的单文件 HTML。
+代码驱动的浏览器动画工作台，使用 pnpm 管理依赖。工作区：`C:\Users\28018\Desktop\动画`。
 
-本项目目录：C:\Users\28018\Desktop\动画。
-
-GitHub 私有仓库：[jianjianai/frame-studio](https://github.com/jianjianai/frame-studio)，主分支为 `main`。远端使用 HTTPS，不在仓库中保存访问令牌。
-
-源码、pnpm 锁文件和动画必需的本地素材纳入版本管理；依赖目录、构建产物、导出视频、测试报告及敏感配置不提交。测试和构建在本地执行，当前未配置 GitHub Actions 工作流。
-
-新增工程先读 **[工程与文件修改规范](docs/NEW-PROJECT-STANDARD.md)**；当前并行改动的审查结果见 **[工程规范审查](docs/PROJECT-AUDIT-2026-09-28.md)**。
+先读 [工程规范](docs/NEW-PROJECT-STANDARD.md) 和 [接口说明](docs/AUTHORING.md)。当前三个作品已迁移到独立目录，画面与既有配乐保持原样。
 
 ## 打开工作台
 
-双击 **启动工作台.cmd**。或者在此目录打开终端：
+双击 **启动工作台.cmd**，或运行：
 
 ```powershell
 pnpm install --frozen-lockfile
 pnpm dev
 ```
 
-浏览器访问 **http://127.0.0.1:5173**。关闭运行终端会停止开发服务器。已经启动时可直接打开该地址，不必重复启动。端口被其他程序占用时会明确报错，不会静默换端口。
+访问 **http://127.0.0.1:5173**。默认仅监听本机，端口冲突会报错。首次安装需要网络，安装后现有作品播放使用本地资源。
 
-当前是本机浏览器工作台，不是已部署的公网网站。依赖安装完成后，示例的画面、字体、配乐与模型解码器均不需要运行时 CDN。首次安装依赖需要网络。
+## 每个作品只修改自己的目录
 
-## 内置作品
-
-| 作品           | 片长  | 渲染方式                   | 验证重点                                         |
-| -------------- | ----- | -------------------------- | ------------------------------------------------ |
-| 风的邮差       | 32 秒 | PixiJS + 连续摄影机        | 分层插画、纸飞机路径、视差跟拍、遮挡、灯塔抵达   |
-| 日光快线       | 36 秒 | Three.js                   | 微缩岛屿、列车、车轮、风车、柔和阴影与摄影机轨迹 |
-| 一颗种子的四季 | 36 秒 | Canvas 2D + GSAP + Flubber | 矢量形变、根系与茎叶生长、花朵与蜜蜂动作         |
-
-这些是工程演示和风格样片，不是已经完成的 3–8 分钟正式科普影片。故事与场景为原创艺术表达，并不作为植物学等学科的精确模型。
-
-## 已打通的能力
-
-- 作品列表、搜索、渲染类型筛选；每个动画一个目录，自动注册。
-- 通用播放器：播放/暂停、任意拖动、逐帧、0.5–2 倍速、循环、音量/静音、中文字幕、全屏、360p/720p/1080p 预览。
-- 同一个音频时钟驱动画面。所有动画按绝对时间重绘，支持反向拖动，不依赖前面播放了多少帧。
-- PixiJS 2D 分层场景；Three.js 三维模型/灯光/摄影机；Canvas + Flubber 矢量形变；GSAP 受控时间轴。
-- 本地 GLB/glTF、Draco、Meshopt、KTX2 模型加载工具，骨骼动画绝对时间求值与可选后处理链。
-- 素材库、图片与 SVG 优化、音乐预览、字幕 SRT、PNG 当前帧、WebM 实时录制。
-- Playwright + FFmpeg 离线逐帧 MP4，分辨率最高 3840×2160，帧率 12–60；实际导出耗时取决于场景和机器。
-- Vitest 单元测试、Playwright 浏览器测试、环境自检、新项目脚手架。
-
-这里没有伪造的“上传成功”“导出完成”按钮，也没有安装却未接入的远程服务。右侧镜头信息和轨道是检查/导航工具，不是关键帧拖放编辑器。镜头、角色和故事通过项目源码制作。
-
-## 日常命令
-
-```powershell
-pnpm env:check                          # 检查 Node、依赖、浏览器、FFmpeg、素材
-pnpm dev                               # 开发预览，热更新
-pnpm animation:new my-film "我的动画" --renderer pixi
-pnpm assets:import "D:/assets/character.png" --license "作者/授权来源"
-pnpm audio:mix mix.json                 # 配乐、旁白、音效偏移/增益/裁切/淡入淡出混音
-pnpm music:build                       # 重建三个 Demo 的采样乐器配乐与动作音效
-pnpm posters --project my-film         # 只重建目标作品的实际画面封面
-pnpm posters --all                     # 明确全量重建（会覆盖所有作品封面）
-pnpm project:check                     # 静态工程约束与存量迁移提示
-pnpm project:check my-film --strict    # 将目标工程的结构警告也视为失败
-pnpm typecheck
-pnpm test
-pnpm build
-pnpm test:e2e                          # 自动启动构建产物的预览服务器
-pnpm verify                            # 工程约束、类型、单元、构建、浏览器验收
-pnpm format                            # 格式化源码与文档
+```text
+projects/
+  paper-wings/            风的邮差 · 32 秒 · PixiJS
+  sunny-rail/             日光快线 · 36 秒 · Three.js
+  tiny-seed/              一颗种子的四季 · 36 秒 · Canvas
+    AGENTS.md README.md
+    project.ts scene.ts  元数据与场景
+    audio.ts             可选的浏览器音频生成器
+    public/              音轨、封面、素材、项目索引
+    production/          原始材料、MIDI、参数、来源与许可
+    scripts/ tests/      项目专属脚本和测试
+    exports/ .cache/     忽略的输出与临时文件
+src/engine/              公共时钟、声音、字幕、渲染器
+src/ui/                  通用播放器与导出入口
+scripts/ templates/      公共工具与模板
+public/                  公共字体与模型解码器
 ```
 
-注意：pnpm 本身也有 doctor/import 等内置命令，因此项目自检、导入工具分别使用 env:check 与 assets:import，避免同名命令被覆盖。
+视频制作任务只能改 `projects/<id>/`。根配置、共享依赖、公共 UI 与引擎由工作台维护任务修改。`pnpm project:scope <id>` 检查修改边界；生成工具限制写入目标目录并检查路径穿越和符号链接。它不改变外部编辑器的系统文件权限。
 
-pnpm assets 会重新生成演示插画、波形与模型解码器，不会删除后续导入素材的索引，也不会覆盖精修配乐。三个 Demo 的配乐单独使用 pnpm music:build 重建；正常播放使用已提交的素材即可，不必重新生成。
+项目通过 `projects/*/project.ts` 自动注册；运行素材在项目的 public 下，URL 为 `films/<id>/...`。素材库只读汇总各项目索引，不需要项目修改公共文件。项目测试也自动发现。
 
-## 输出视频
+## 音轨和播放
 
-播放器的“导出作品”提供 PNG、SRT、浏览器 WebM。WebM 从头实时录制，包含当前音量与静音设置，录制时必须保持页面可见；切换后台会取消录制，避免误交付缺帧视频。
+支持多条配乐、旁白、音效以及代码音轨，每轨有起始时间、源偏移、长度、音量和静音。所有音轨与画面共用一个时钟，支持暂停、拖动、逐帧、变速和循环。
 
-正式输出推荐逐帧 MP4：
+代码音轨通过项目 `audio.ts` 在浏览器直接生成播放，不要求预先合成 WAV。视频导出复用同一生成器。旧单音频字段继续兼容，三个现有 Demo 保留其原配乐；新建模板带有可启用的生成音轨示例。接口及示例见 [音频说明](docs/AUDIO.md)。
+
+播放器还提供字幕、全屏、360p/720p/1080p 预览，以及每轨音量/静音控制。场景统一实现绝对时间 `render(time)`，允许直接定位和倒放定位。
+
+## 视频和单帧导出
+
+浏览器点“导出作品”：当前帧 PNG、中文字幕 SRT、含混音的 WebM。WebM 从头实时录制，包含当前每轨和总音量/静音；保持页面可见，切换后台会取消录制。
 
 ```powershell
 pnpm render sunny-rail --width 1920 --fps 30
 pnpm render tiny-seed --start 20 --end 26 --width 1280 --fps 24
-pnpm render paper-wings --width 1920 --fps 30 --no-subtitles
-pnpm render my-film --out exports/my-film.mp4
+pnpm render paper-wings --no-subtitles
+pnpm frame tiny-seed --frame 150 --width 1280
+pnpm frame tiny-seed --time 5.5
+pnpm render tiny-seed --frame 150
 ```
 
-- 默认输出 exports/，同目录写入 .render.json 验证报告。
-- 使用独立的本地渲染服务与浏览器，逐帧 PNG 输入 FFmpeg。即使实时预览只有 15 FPS，离线仍可输出正确的 30 FPS 视频，只会渲染更久。
-- H.264 + AAC，检查帧数、画面尺寸与音频流，不把空文件当成功。
-- 默认拒绝覆盖指定名称的已有文件，确需替换时添加 --force。
-- --start / --end 是项目时间（秒）。音轨按相同位置裁切，最后输出帧率可能向上补齐到完整一帧。
-- 宽度要求 320–3840、16 的倍数；画面保持 16:9。帧率 12–60。
-- 默认使用系统 FFmpeg/FFprobe，可用 FFMPEG_PATH / FFPROBE_PATH 指定其他路径。浏览器可用 FRAME_BROWSER 指定。
-- 没有可用 Chromium 时：pnpm exec playwright install chromium。
+- 命令视频输出 H.264 + AAC MP4，逐帧渲染，与预览实时帧率无关；FFprobe 验证帧数、尺寸与音频流。
+- 帧编号从 **0** 开始，按项目 fps 换算；可用 `--fps` 覆盖。`--time` 指定秒数，与 `--frame` 互斥。
+- 单帧输出 PNG，不需要 FFmpeg。视频需要 FFmpeg 和 FFprobe。
+- 默认输出 `projects/<id>/exports/`，视频旁写 `.render.json` 报告。
+- `--out projects/<id>/exports/name.mp4` 指定路径，必须在目标项目目录内；默认拒绝覆盖，明确加 `--force` 才替换。
+- 视频音轨使用项目元数据中的每轨设置，总增益为 1；浏览器临时调音不会写回元数据。
+- 宽度 320–3840，16 的倍数，保持 16:9；帧率 12–60。
+- 支持 `FFMPEG_PATH`、`FFPROBE_PATH`、`FRAME_BROWSER`。没有 Chromium 时执行 `pnpm exec playwright install chromium`。
 
-## 目录
+## 常用命令
 
-```text
-src/
-  engine/                  主时钟、声音、字幕、渲染器、模型与输出辅助
-  projects/
-    paper-wings/           project.ts 元数据 + scene.ts 场景
-    sunny-rail/
-    tiny-seed/
-  ui/                      通用播放器、渲染入口
-  App.tsx                  作品库、素材库、制作指南
-public/
-  art/ audio/ posters/     随项目保存的原创演示素材
-  imports/                 后续导入素材；保留原始源文件不修改
-  vendor/                  Three.js 附带的模型解码器和许可证
-  assets.json              素材索引
-  waveforms.json           从实际 WAV 计算的波形
-scripts/                   创建、导入、资产重建、自检、逐帧输出
-scripts/browser.mjs        共用自动化浏览器选择
-scripts/render.mjs         可验证的离线 MP4 与封面渲染
-scripts/new-animation.mjs  安全的新建工程脚本
-templates/                 三种场景模板、工程说明、倒拖测试模板
-production/<id>/README.md  工程文件、依赖、脚本输入输出和测试命令索引
-tests/unit/ tests/e2e/     自动化测试
-exports/                  本地生成视频，不加入源码版本管理
-docs/AUTHORING.md          工程接入与接口说明
-AGENTS.md                  代码与文件修改约定
+```powershell
+pnpm animation:new my-film "我的动画" --renderer pixi
+pnpm assets:import my-film "D:/assets/character.png" --license "来源与许可"
+pnpm posters --project my-film
+pnpm posters --all                      # 显式全量覆盖封面
+pnpm audio:mix my-film projects/my-film/production/mix.json
+pnpm music:build sunny-rail             # 可选，重建指定 Demo 的旧采样配乐
+pnpm assets --project paper-wings       # 可选，只重建该项目插画
+pnpm project:check my-film --strict
+pnpm project:scope my-film
+pnpm project:scope my-film --base <基线提交>
+pnpm env:check
+pnpm typecheck
+pnpm test
+pnpm build
+$env:FRAME_TEST_PORT="4181"
+pnpm test:e2e
+pnpm verify
 ```
 
-## 部署
+检查命令只读，导入/生成/导出命令写入目标项目。普通播放不需执行音频重建。新工程测试写在本工程 `tests/`；公共测试写在根 `tests/`。`pnpm verify` 包括工程检查、类型、单元、构建与浏览器回归。
 
-pnpm build 输出 dist/。将其部署到普通 HTTP 静态站点即可在线播放，不需要数据库或服务端账号。pnpm preview 是本地验收工具，不是生产服务器。Hash 路由不需要服务器 rewrite。
+## 依赖与部署
 
-默认只监听 127.0.0.1。需要局域网访问时，明确使用 pnpm dev --host 0.0.0.0，并自行确认 Windows 防火墙范围。不要把 Vite 开发服务器直接暴露到公网。
+已接入 PixiJS、Three.js、GSAP、Flubber、Web Audio、模型加载/解码、字幕、PNG、WebM、逐帧 MP4 和测试工具。当前是本机代码制作工作台，不含拖放关键帧编辑、多人服务、云渲染或配音账户。
 
-## 工具范围
+`pnpm build` 输出 `dist/`，包含各工程运行资源，可部署为静态站点。`pnpm preview` 用于本机验收。源码、锁文件和必要素材纳入 Git；依赖、构建、视频和缓存不提交。
 
-这套工程提供复用的渲染、播放和文件处理工具。工程规范只管代码和文件组织，不限制动画制作方式、交付或音乐水准。
-
-尚未做成 AE/Blender 一样的可视化制作软件：没有拖放关键帧编辑、多人协作、云端渲染队列、内置生成式素材服务或 AI 配音账号。此项目使用代码制作，浏览器播放/验收；后续按真实需要添加，不为“全家桶”堆叠闲置依赖。
-
-三个 Demo 已分别编写室内乐、轻爵士与三拍子配乐，以 GeneralUser GS 采样乐器离线演奏，和动作音效混成 48kHz 双声道音轨；每首有独立乐句、配器发展与尾声，不是真人乐团录音。可编辑乐谱、MIDI、分轨、测量报告与采样许可见 production/music/README.md，精修记录见 docs/DEMO-POLISH.md。播放不依赖远程音色库。正式影片仍可替换为具有明确授权的音乐与旁白。素材来源参见 public/ASSET-LICENSES.md。
-
-## 官方参考
-
-- Vite：https://vite.dev/guide/
-- PixiJS Application：https://pixijs.com/8.x/guides/components/application
-- Three.js GLTFLoader：https://threejs.org/docs/#examples/en/loaders/GLTFLoader
-- GSAP timeline seek：https://gsap.com/docs/v3/GSAP/Timeline/seek()/
-- Web Audio start：https://developer.mozilla.org/en-US/docs/Web/API/AudioBufferSourceNode/start
-- Playwright：https://playwright.dev/docs/intro
-- FFmpeg：https://ffmpeg.org/documentation.html
+三个 Demo 的既有采样音乐源文件、测量报告、MIDI 与 GeneralUser GS 许可已分别保存到各自的 `production/music/`。GitHub 私有仓库：[jianjianai/frame-studio](https://github.com/jianjianai/frame-studio)。历史验收记录中的旧路径只代表当时布局，现行入口以本页及各项目 README 为准。

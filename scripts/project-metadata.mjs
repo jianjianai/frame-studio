@@ -65,7 +65,7 @@ export function readProject(file) {
   if (!exported)
     throw new Error("project.ts must have a default project export");
   const visiting = new Set();
-  let loadPath;
+  let loadPath, audioLoadPath;
   function value(node, depth = 0) {
     if (!node || depth > 64)
       throw new Error("Missing or excessively nested metadata");
@@ -128,7 +128,7 @@ export function readProject(file) {
           property.key.type === "Identifier"
             ? property.key.name
             : property.key.value;
-        if (name === "load") {
+        if (name === "load" || name === "loadAudio") {
           const fn = property.value;
           if (
             fn.type !== "ArrowFunctionExpression" ||
@@ -136,7 +136,8 @@ export function readProject(file) {
             fn.body.source.type !== "StringLiteral"
           )
             throw new Error('load must be () => import("./scene")');
-          loadPath = fn.body.source.value;
+          if (name === "load") loadPath = fn.body.source.value;
+          else audioLoadPath = fn.body.source.value;
         } else result[name] = value(property.value, depth + 1);
       }
       return result;
@@ -148,11 +149,17 @@ export function readProject(file) {
   const meta = value(exported.declaration);
   if (!meta || typeof meta !== "object" || Array.isArray(meta))
     throw new Error("Project metadata is not an object");
-  return { file, directory: path.basename(path.dirname(file)), meta, loadPath };
+  return {
+    file,
+    directory: path.basename(path.dirname(file)),
+    meta,
+    loadPath,
+    audioLoadPath,
+  };
 }
 
 export function readProjectCatalog(root = process.cwd()) {
-  const directory = path.join(root, "src/projects");
+  const directory = path.join(root, "projects");
   if (!fs.existsSync(directory)) return [];
   return fs
     .readdirSync(directory, { withFileTypes: true })

@@ -21,7 +21,12 @@ import {
   LoaderCircle,
   SlidersHorizontal,
 } from "lucide-react";
-import { assetUrl, type AnimationProject, type Quality } from "../engine/types";
+import {
+  assetUrl,
+  projectAudioTracks,
+  type AnimationProject,
+  type Quality,
+} from "../engine/types";
 import { FrameRenderer } from "../engine/renderer";
 import { AudioTransport } from "../engine/audio";
 import { activeSubtitle, toSrt } from "../engine/subtitles";
@@ -37,6 +42,12 @@ interface Playback {
   muted: boolean;
 }
 export function Player({ project }: { project: AnimationProject }) {
+  const audioTracks = projectAudioTracks(project);
+  const [trackControls, setTrackControls] = useState<
+    Record<string, { gain: number; muted: boolean }>
+  >({});
+  const trackControlsRef = useRef(trackControls);
+  trackControlsRef.current = trackControls;
   const canvas = useRef<HTMLCanvasElement>(null);
   const theater = useRef<HTMLDivElement>(null);
   const transport = useRef<AudioTransport | null>(null);
@@ -44,12 +55,14 @@ export function Player({ project }: { project: AnimationProject }) {
   const [peaks, setPeaks] = useState<number[]>([]);
   useEffect(() => {
     let canceled = false;
-    fetch(assetUrl("waveforms.json"))
+    fetch(assetUrl("films/" + project.id + "/waveforms.json"))
       .then((r) => (r.ok ? r.json() : {}))
       .then((data) => {
         if (!canceled) {
           const values = (data as Record<string, unknown>)[
-            project.audio ?? project.id
+            project.audio ??
+              audioTracks.find((t) => t.kind === "file")?.src ??
+              project.id
           ];
           setPeaks(
             Array.isArray(values)
@@ -85,6 +98,7 @@ export function Player({ project }: { project: AnimationProject }) {
   });
   const [view, setView] = useState<Playback>(saved.current);
   const finishRecording = useRef<((cancel?: boolean) => void) | null>(null);
+  const recordingVideo = useRef<CanvasCaptureMediaStreamTrack | null>(null);
   const publish = () => {
     const a = transport.current;
     if (a) {
@@ -144,7 +158,9 @@ export function Player({ project }: { project: AnimationProject }) {
       frames = 0,
       fpsAt = performance.now();
     const output = new FrameRenderer(canvas.current!, project);
-    const sound = new AudioTransport(project.duration, project.audio);
+    const sound = new AudioTransport(project);
+    for (const [id, control] of Object.entries(trackControlsRef.current))
+      if (sound.controls.has(id)) sound.setTrack(id, control);
     renderer.current = output;
     transport.current = sound;
     sound.seek(saved.current.time);
@@ -207,11 +223,13 @@ export function Player({ project }: { project: AnimationProject }) {
           try {
             const t = sound.clock.time();
             if (
+              recordingVideo.current ||
               sound.clock.playing ||
               lastRender !== t ||
               lastSub !== subtitleRef.current
             ) {
               output.render(t, subtitleRef.current);
+              recordingVideo.current?.requestFrame?.();
               frames++;
               lastRender = t;
               lastSub = subtitleRef.current;
@@ -327,8 +345,8 @@ export function Player({ project }: { project: AnimationProject }) {
       return;
     }
     const mime = [
-      "video/webm;codecs=vp9,opus",
       "video/webm;codecs=vp8,opus",
+      "video/webm;codecs=vp9,opus",
       "video/webm",
     ].find((v) => MediaRecorder.isTypeSupported(v));
     if (!mime) {
@@ -345,6 +363,8 @@ export function Player({ project }: { project: AnimationProject }) {
       a.seek(0);
       renderer.current?.render(0, subtitleRef.current);
       const stream = c.captureStream(project.fps);
+      recordingVideo.current =
+        stream.getVideoTracks()[0] as CanvasCaptureMediaStreamTrack;
       const audio = a.getMediaStream();
       audio?.getAudioTracks().forEach((t) => stream.addTrack(t));
       const recorder = new MediaRecorder(stream, {
@@ -362,6 +382,7 @@ export function Player({ project }: { project: AnimationProject }) {
         finishRecording.current?.(true);
       };
       recorder.onstop = () => {
+        recordingVideo.current = null;
         stream.getTracks().forEach((t) => t.stop());
         a.releaseMediaStream();
         a.pause();
@@ -372,6 +393,8 @@ export function Player({ project }: { project: AnimationProject }) {
         publish();
         if (!canceled && chunks.length)
           downloadBlob(new Blob(chunks, { type: mime }), project.id + ".webm");
+        else if (!canceled)
+          setError("浏览器没有生成有效录制数据，请重试或使用 MP4 导出。");
       };
       finishRecording.current = (cancel = false) => {
         if (stopped) return;
@@ -379,13 +402,20 @@ export function Player({ project }: { project: AnimationProject }) {
         canceled = cancel;
         if (recorder.state !== "inactive") recorder.stop();
       };
-      recorder.start(250);
       setRecording(true);
       setExportOpen(false);
+      recorder.start(250);
+      recordingVideo.current?.requestFrame?.();
+      renderer.current?.render(0, subtitleRef.current);
+      if (stopped) return;
       await a.play();
       publish();
     } catch (e) {
       finishRecording.current?.(true);
+      recordingVideo.current?.stop();
+      recordingVideo.current = null;
+      a.releaseMediaStream();
+      setRecording(false);
       setError("录制未能开始：" + String(e));
     }
   }
@@ -675,10 +705,9 @@ export function Player({ project }: { project: AnimationProject }) {
                   })}
                 </svg>
                 <span>
-                  完整音轨 ·{" "}
-                  {project.audio
-                    ? project.audio.split(".").pop()?.toUpperCase() + " / 音轨"
-                    : "未设置"}
+                  {audioTracks.length
+                    ? `${audioTracks.length} 条音轨 · 同步混音`
+                    : "未设置音轨"}
                 </span>
               </div>
               <div className="track-label">字幕</div>
@@ -728,6 +757,60 @@ export function Player({ project }: { project: AnimationProject }) {
               <kbd>F</kbd> 全屏
             </span>
           </div>
+          {audioTracks.length > 0 && (
+            <section className="track-mixer" aria-label="音轨混音">
+              {audioTracks.map((track) => {
+                const control = trackControls[track.id] ?? {
+                  gain: track.gain ?? 1,
+                  muted: track.muted ?? false,
+                };
+                const update = (change: Partial<typeof control>) => {
+                  const next = { ...control, ...change };
+                  transport.current?.setTrack(track.id, next);
+                  setTrackControls((previous) => ({
+                    ...previous,
+                    [track.id]: next,
+                  }));
+                };
+                return (
+                  <div className="track-mixer-row" key={track.id}>
+                    <span>
+                      {track.name}
+                      <small>
+                        {track.kind === "generated" ? "实时生成" : "音频文件"} ·{" "}
+                        {track.start ?? 0}s 起
+                      </small>
+                    </span>
+                    <button
+                      aria-label={`${track.name}静音`}
+                      aria-pressed={control.muted}
+                      disabled={recording}
+                      onClick={() => update({ muted: !control.muted })}
+                    >
+                      {control.muted ? (
+                        <VolumeX size={16} />
+                      ) : (
+                        <Volume2 size={16} />
+                      )}
+                    </button>
+                    <input
+                      aria-label={`${track.name}音量`}
+                      type="range"
+                      min="0"
+                      max="4"
+                      step="0.01"
+                      value={control.gain}
+                      disabled={recording}
+                      onChange={(event) =>
+                        update({ gain: Number(event.target.value) })
+                      }
+                    />
+                    <output>{Math.round(control.gain * 100)}%</output>
+                  </div>
+                );
+              })}
+            </section>
+          )}
         </div>
         <aside className="inspector">
           <div className="inspector-header">

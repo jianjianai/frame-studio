@@ -24,6 +24,8 @@
     "animation:new": "node scripts/new-animation.mjs",
     "audio:mix": "node scripts/mix-audio.mjs",
     "music:build": "node scripts/music/render-scores.mjs",
+    "project:scope": "node scripts/project-scope.mjs",
+    "frame": "node scripts/render.mjs --frame-mode",
     "project:check": "node scripts/check-projects.mjs"
   },
   "dependencies": {

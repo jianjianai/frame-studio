@@ -51,12 +51,12 @@ function fixture(
   const meta = { ...metadata(), ...changes };
   write(
     root,
-    "src/projects/story/project.ts",
+    "projects/story/project.ts",
     `const project={...${JSON.stringify(meta)},load:()=>import('./scene')};export default project;`,
   );
-  write(root, "src/projects/story/scene.ts", code);
-  write(root, "public/films/story/poster.svg", "<svg/>");
-  write(root, "production/story/README.md", "# Actual production notes");
+  write(root, "projects/story/scene.ts", code);
+  write(root, "projects/story/public/poster.svg", "<svg/>");
+  write(root, "projects/story/README.md", "# Actual production notes");
 }
 const codes = (root: string) =>
   checkProjects(root).issues.map((issue) => issue.code);
@@ -67,12 +67,10 @@ describe("static project registry metadata", () => {
       fixture(root);
       write(
         root,
-        "src/projects/story/project.ts",
+        "projects/story/project.ts",
         `import type { AnimationProject } from '../../engine/types'; const identity=${JSON.stringify(metadata())} as const; const project={...identity,load:()=>import('./scene')} satisfies AnimationProject; export default project;`,
       );
-      const item = readProject(
-        path.join(root, "src/projects/story/project.ts"),
-      );
+      const item = readProject(path.join(root, "projects/story/project.ts"));
       expect(item.meta.id).toBe("story");
       expect(item.loadPath).toBe("./scene");
     }));
@@ -83,16 +81,16 @@ describe("static project registry metadata", () => {
         `const x=(()=>{throw new Error('must not run')})();export default x;`,
         `const x=y;const y=x;export default x;`,
       ]) {
-        write(root, "src/projects/story/project.ts", text);
+        write(root, "projects/story/project.ts", text);
         expect(() =>
-          readProject(path.join(root, "src/projects/story/project.ts")),
+          readProject(path.join(root, "projects/story/project.ts")),
         ).toThrow();
       }
     }));
   it("reports syntax errors instead of silently omitting a broken project", () =>
     withRoot((root) => {
       fixture(root);
-      write(root, "src/projects/story/project.ts", "export default {");
+      write(root, "projects/story/project.ts", "export default {");
       expect(codes(root)).toContain("STATIC_METADATA");
     }));
   it("finds newly registered projects without fixed totals or loading renderers", () =>
@@ -100,7 +98,7 @@ describe("static project registry metadata", () => {
       fixture(root);
       write(
         root,
-        "src/projects/second/project.ts",
+        "projects/second/project.ts",
         `export default {...${JSON.stringify(metadata("second"))},renderer:'three',load:()=>import('./scene')}`,
       );
       const records = readProjectCatalog(root);
@@ -138,7 +136,7 @@ describe("project engineering checks", () => {
     withRoot((root) => {
       fixture(root, { id: "different" });
       expect(codes(root)).toContain("PROJECT_ID");
-      fs.unlinkSync(path.join(root, "src/projects/story/scene.ts"));
+      fs.unlinkSync(path.join(root, "projects/story/scene.ts"));
       expect(codes(root)).toContain("SCENE_MISSING");
     }));
   it("validates duration, fps, explicit status and subtitle order", () =>
@@ -188,7 +186,7 @@ describe("project engineering checks", () => {
       ])
         expect(() => localAsset(root, ref)).toThrow();
       expect(localAsset(root, "films/story/poster.svg")).toBe(
-        path.join(root, "public/films/story/poster.svg"),
+        path.join(root, "projects/story/public/poster.svg"),
       );
     }));
   it("detects missing local imports and private cross-film dependencies", () =>
@@ -198,7 +196,7 @@ describe("project engineering checks", () => {
         {},
         `import {x} from './missing'; import {y} from '../other/private'; export function createScene(){}`,
       );
-      write(root, "src/projects/other/private.ts", "export const y=1");
+      write(root, "projects/other/private.ts", "export const y=1");
       expect(codes(root)).toEqual(
         expect.arrayContaining(["IMPORT_MISSING", "CROSS_PROJECT_IMPORT"]),
       );
@@ -214,7 +212,7 @@ const note='Date.now()';export function createScene(){return 1}`,
       expect(checkProjects(root).errors).toBe(0);
       write(
         root,
-        "src/projects/story/scene.ts",
+        "projects/story/scene.ts",
         `export function createScene(){Math.random();Date.now();performance.now();requestAnimationFrame(()=>{});setInterval(()=>{},1);new Audio();new AudioContext();}`,
       );
       expect(codes(root)).toEqual(
@@ -239,7 +237,7 @@ const note='Date.now()';export function createScene(){return 1}`,
   it("checks catalog bytes and licensing records without claiming to verify legal rights", () =>
     withRoot((root) => {
       fixture(root, { audio: "films/story/audio.wav" });
-      write(root, "public/films/story/audio.wav", "test");
+      write(root, "projects/story/public/audio.wav", "test");
       write(
         root,
         "public/assets.json",
@@ -259,11 +257,11 @@ const note='Date.now()';export function createScene(){return 1}`,
   it("warns about missing engineering indexes by default and rejects them in strict mode", () =>
     withRoot((root) => {
       fixture(root);
-      fs.unlinkSync(path.join(root, "production/story/README.md"));
+      fs.unlinkSync(path.join(root, "projects/story/README.md"));
       expect(checkProjects(root).passed).toBe(true);
       expect(checkProjects(root, { strict: true }).passed).toBe(false);
-      write(root, "production/story/README.md", "# Source and scripts");
-      expect(checkProjects(root, { strict: true }).passed).toBe(true);
+      write(root, "projects/story/README.md", "# Source and scripts");
+      expect(checkProjects(root, { strict: true }).issues).toEqual([]);
     }));
   it("detects credited local documents that do not exist", () =>
     withRoot((root) => {
@@ -280,9 +278,9 @@ const note='Date.now()';export function createScene(){return 1}`,
   it("is a read-only check, including CLI JSON and strict exit codes", () =>
     withRoot((root) => {
       fixture(root);
-      fs.unlinkSync(path.join(root, "production/story/README.md"));
+      fs.unlinkSync(path.join(root, "projects/story/README.md"));
       const before = fs.readFileSync(
-        path.join(root, "src/projects/story/project.ts"),
+        path.join(root, "projects/story/project.ts"),
       );
       const run = spawnSync(
         process.execPath,
@@ -292,7 +290,7 @@ const note='Date.now()';export function createScene(){return 1}`,
       expect(run.status).toBe(1);
       expect(JSON.parse(run.stdout).warnings).toBeGreaterThan(0);
       expect(
-        fs.readFileSync(path.join(root, "src/projects/story/project.ts")),
+        fs.readFileSync(path.join(root, "projects/story/project.ts")),
       ).toEqual(before);
       expect(fs.existsSync(path.join(root, "exports"))).toBe(false);
     }));
@@ -312,31 +310,36 @@ describe("safe complete project scaffold", () => {
       );
       expect(run.status, run.stderr).toBe(0);
       const meta = readProject(
-        path.join(root, "src/projects/new-story/project.ts"),
+        path.join(root, "projects/new-story/project.ts"),
       ).meta;
       expect(meta.status).toBe("draft");
       expect(meta.poster).toBe("films/new-story/poster.svg");
       expect(
-        fs.readFileSync(path.join(root, "public", meta.poster), "utf8"),
+        fs.readFileSync(
+          path.join(root, "projects/new-story/public/poster.svg"),
+          "utf8",
+        ),
       ).toContain("DRAFT");
       expect(
         fs.readFileSync(
-          path.join(root, "production/new-story/README.md"),
+          path.join(root, "projects/new-story/README.md"),
           "utf8",
         ),
       ).toContain('A "quoted" 标题 · 工程说明');
-      expect(checkProjects(root, { strict: true }).passed).toBe(true);
+      expect(checkProjects(root, { strict: true }).issues).toEqual([]);
       expect(
-        fs.existsSync(path.join(root, "tests/e2e/new-story.spec.ts")),
+        fs.existsSync(
+          path.join(root, "projects/new-story/tests/e2e/scene.spec.ts"),
+        ),
       ).toBe(true);
       expect(
-        fs.existsSync(path.join(root, "src/projects/new-story/scene.ts")),
+        fs.existsSync(path.join(root, "projects/new-story/scene.ts")),
       ).toBe(true);
       expect(fs.existsSync(path.join(root, "public/assets.json"))).toBe(false);
     }));
   it("preserves existing production material and rejects invalid command options", () =>
     withRoot((root) => {
-      write(root, "production/new-story/README.md", "keep");
+      write(root, "projects/new-story/README.md", "keep");
       const run = spawnSync(
         process.execPath,
         [createScript, "new-story", "Title"],
@@ -345,7 +348,7 @@ describe("safe complete project scaffold", () => {
       expect(run.status).not.toBe(0);
       expect(
         fs.readFileSync(
-          path.join(root, "production/new-story/README.md"),
+          path.join(root, "projects/new-story/README.md"),
           "utf8",
         ),
       ).toBe("keep");
@@ -360,14 +363,17 @@ describe("safe complete project scaffold", () => {
     }));
   it("never overwrites an existing per-film test", () =>
     withRoot((root) => {
-      write(root, "tests/e2e/new-story.spec.ts", "keep-test");
+      write(root, "projects/new-story/tests/e2e/scene.spec.ts", "keep-test");
       expect(
         spawnSync(process.execPath, [createScript, "new-story", "Title"], {
           cwd: root,
         }).status,
       ).not.toBe(0);
       expect(
-        fs.readFileSync(path.join(root, "tests/e2e/new-story.spec.ts"), "utf8"),
+        fs.readFileSync(
+          path.join(root, "projects/new-story/tests/e2e/scene.spec.ts"),
+          "utf8",
+        ),
       ).toBe("keep-test");
     }));
   it("serializes competing creation of the same id", async () => {
@@ -384,10 +390,10 @@ describe("safe complete project scaffold", () => {
       const result = await Promise.all([launch(), launch()]);
       expect(result.filter(([code]) => code === 0)).toHaveLength(1);
       expect(
-        fs.existsSync(path.join(root, "src/projects/same-story/scene.ts")),
+        fs.existsSync(path.join(root, "projects/same-story/scene.ts")),
       ).toBe(true);
       expect(
-        fs.existsSync(path.join(root, "public/films/same-story/poster.svg")),
+        fs.existsSync(path.join(root, "projects/same-story/public/poster.svg")),
       ).toBe(true);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -427,10 +433,10 @@ describe("engineering rules do not impose creation policy", () => {
       fixture(root);
       write(
         root,
-        "production/story/README.md",
+        "projects/story/README.md",
         "# 工程说明\n<!-- production:pending -->\nTODO: document helper functions",
       );
-      expect(checkProjects(root, { strict: true }).passed).toBe(true);
+      expect(checkProjects(root, { strict: true }).issues).toEqual([]);
     }));
   it("keeps repository rules and the scaffold template free of creative workflow and quality thresholds", () => {
     for (const file of [
@@ -469,7 +475,7 @@ describe("poster writes follow the declared path and protect other files", () =>
       fixture(root);
       write(root, "public/posters/other.webp", "KEEP");
       const output = await writeProjectPoster(root, "story", await makePNG());
-      expect(output).toBe(path.join(root, "public/films/story/poster.svg"));
+      expect(output).toBe(path.join(root, "projects/story/public/poster.svg"));
       expect(fs.readFileSync(output, "utf8")).toContain(
         "data:image/png;base64,",
       );
@@ -488,12 +494,14 @@ describe("poster writes follow the declared path and protect other files", () =>
     try {
       fixture(root, { poster: "films/story/poster.webp" });
       const before = fs.readFileSync(
-        path.join(root, "src/projects/story/project.ts"),
+        path.join(root, "projects/story/project.ts"),
       );
       const output = await writeProjectPoster(root, "story", await makePNG());
-      expect((await sharp(fs.readFileSync(output)).metadata()).format).toBe("webp");
+      expect((await sharp(fs.readFileSync(output)).metadata()).format).toBe(
+        "webp",
+      );
       expect(
-        fs.readFileSync(path.join(root, "src/projects/story/project.ts")),
+        fs.readFileSync(path.join(root, "projects/story/project.ts")),
       ).toEqual(before);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -505,7 +513,7 @@ describe("poster writes follow the declared path and protect other files", () =>
       fixture(root);
       write(
         root,
-        "src/projects/other/project.ts",
+        "projects/other/project.ts",
         `export default {...${JSON.stringify({ ...metadata("other"), poster: "films/story/poster.svg" })},load:()=>import('./scene')};`,
       );
       const png = await makePNG();
@@ -514,7 +522,7 @@ describe("poster writes follow the declared path and protect other files", () =>
       );
       expect(
         fs.readFileSync(
-          path.join(root, "public/films/story/poster.svg"),
+          path.join(root, "projects/story/public/poster.svg"),
           "utf8",
         ),
       ).toBe("<svg/>");

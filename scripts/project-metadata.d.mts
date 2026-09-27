@@ -10,6 +10,7 @@ export interface StaticProjectMeta {
   fps: number;
   poster: string;
   audio?: string;
+  audioTracks?: import("../src/engine/types").AudioTrack[];
   research?: string;
   tags: string[];
   credits: string[];
@@ -21,6 +22,7 @@ export interface StaticProject {
   directory: string;
   meta: StaticProjectMeta;
   loadPath?: string;
+  audioLoadPath?: string;
 }
 export function validProjectId(id: unknown): boolean;
 export function sourceFile(file: string): ReturnType<typeof parse>;

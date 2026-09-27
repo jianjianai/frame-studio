@@ -1,13 +1,17 @@
 import { updateWaveforms } from "./waveforms.mjs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { projectPath } from "./project-paths.mjs";
+import { randomUUID } from "node:crypto";
 import sharp from "sharp";
 import { optimize } from "svgo";
 const args = process.argv.slice(2);
-const source = args[0];
+const [id, source] = args;
+const publicDir = projectPath(process.cwd(), id, "public");
+await fs.access(projectPath(process.cwd(), id, "project.ts"));
 if (!source) {
   console.error(
-    'Usage: pnpm assets:import "path/to/asset" [--license "license and source"]',
+    'Usage: pnpm assets:import <id> "path/to/asset" [--license "license and source"]',
   );
   process.exit(1);
 }
@@ -35,11 +39,17 @@ let name =
     .slice(0, 80) || "asset";
 let outExt =
   images.includes(ext) && ![".svg", ".gif"].includes(ext) ? ".webp" : ext;
-let target = "public/imports/" + name + outExt;
-await fs.mkdir("public/imports", { recursive: true });
+let target = projectPath(process.cwd(), id, "public/imports/" + name) + outExt;
+await fs.mkdir(projectPath(process.cwd(), id, "public/imports"), {
+  recursive: true,
+});
 try {
   await fs.access(target);
-  target = "public/imports/" + name + "-" + Date.now() + outExt;
+  target =
+    projectPath(process.cwd(), id, "public/imports/" + name) +
+    "-" +
+    randomUUID() +
+    outExt;
 } catch {}
 if (ext === ".gltf") {
   const data = JSON.parse(await fs.readFile(source, "utf8"));
@@ -57,7 +67,7 @@ if (outExt === ".webp")
 else if (ext === ".svg")
   await fs.writeFile(target, optimize(await fs.readFile(source, "utf8")).data);
 else await fs.copyFile(source, target);
-const indexPath = "public/assets.json";
+const indexPath = projectPath(process.cwd(), id, "public/assets.json");
 let catalog = [];
 try {
   catalog = JSON.parse(await fs.readFile(indexPath, "utf8"));
@@ -66,13 +76,17 @@ const li = args.indexOf("--license");
 const license = li >= 0 ? args[li + 1] : "未确认授权；正式发布前请核实来源";
 const item = {
   name: path.basename(target),
-  url: target.replace("public/", ""),
+  url:
+    "films/" +
+    id +
+    "/" +
+    path.relative(publicDir, target).replaceAll(path.sep, "/"),
   type,
   bytes: (await fs.stat(target)).size,
   license,
 };
 catalog.push(item);
 await fs.writeFile(indexPath, JSON.stringify(catalog, null, 2));
-await updateWaveforms();
+await updateWaveforms(id);
 console.log("Imported without modifying source: " + target);
 console.log("Use assetUrl(" + JSON.stringify(item.url) + ") in your scene.");

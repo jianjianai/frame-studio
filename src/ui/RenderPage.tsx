@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FrameRenderer } from "../engine/renderer";
 import type { AnimationProject } from "../engine/types";
 import type { StudioApi } from "../engine/debug";
+import { OfflineAudioRenderer } from "../engine/audio-graph";
 export function RenderPage({ project }: { project: AnimationProject }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState("");
@@ -13,6 +14,7 @@ export function RenderPage({ project }: { project: AnimationProject }) {
       : 1280;
     const height = Math.round((width * 9) / 16 / 2) * 2;
     const renderer = new FrameRenderer(canvas.current!, project);
+    const audio = new OfflineAudioRenderer(project);
     let canceled = false;
     let time = 0;
     const api: StudioApi = {
@@ -38,6 +40,7 @@ export function RenderPage({ project }: { project: AnimationProject }) {
         height,
       }),
       dataURL: () => canvas.current!.toDataURL("image/png"),
+      audioChunk: (start, duration) => audio.pcm(start, duration),
     };
     window.__FRAME_STUDIO__ = api;
     renderer

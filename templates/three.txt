@@ -1,6 +1,6 @@
 import * as THREE from 'three';
-import type { Scene, SceneOptions } from '../../engine/types';
-import { disposeObject } from '../../engine/three-assets';
+import type { Scene, SceneOptions } from '../../src/engine/types';
+import { disposeObject } from '../../src/engine/three-assets';
 export function createScene({ width, height }: SceneOptions): Scene {
  const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true }); renderer.setSize(width, height); const scene = new THREE.Scene(); scene.background = new THREE.Color('#e4ead9'); const camera = new THREE.PerspectiveCamera(40, width / height, .1, 100); camera.position.set(4, 3, 5); camera.lookAt(0, 0, 0); scene.add(new THREE.HemisphereLight(0xffffff, 0x74846f, 3)); const actor = new THREE.Mesh(new THREE.SphereGeometry(1, 32, 24), new THREE.MeshStandardMaterial({ color: '#6e926f', roughness: .5 })); scene.add(actor);
  return { canvas: renderer.domElement, render(time) { actor.position.y = Math.sin(time) * .3; renderer.render(scene, camera); }, dispose() { disposeObject(scene); renderer.dispose(); renderer.forceContextLoss(); } };

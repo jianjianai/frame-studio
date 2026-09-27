@@ -16,6 +16,7 @@ export interface StudioApi {
     height: number;
   };
   dataURL(): string;
+  audioChunk?(start: number, duration: number): Promise<string>;
 }
 declare global {
   interface Window {

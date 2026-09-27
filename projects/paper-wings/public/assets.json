@@ -1,0 +1,51 @@
+[
+  {
+    "name": "cloud.svg",
+    "url": "films/paper-wings/art/cloud.svg",
+    "type": "image",
+    "bytes": 237,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "foreground.svg",
+    "url": "films/paper-wings/art/foreground.svg",
+    "type": "image",
+    "bytes": 607,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "landscape.svg",
+    "url": "films/paper-wings/art/landscape.svg",
+    "type": "image",
+    "bytes": 20630,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "lighthouse.svg",
+    "url": "films/paper-wings/art/lighthouse.svg",
+    "type": "image",
+    "bytes": 749,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "mountains.svg",
+    "url": "films/paper-wings/art/mountains.svg",
+    "type": "image",
+    "bytes": 1245,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "paper-plane.svg",
+    "url": "films/paper-wings/art/paper-plane.svg",
+    "type": "image",
+    "bytes": 513,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "paper-wings.wav",
+    "url": "films/paper-wings/audio/paper-wings.wav",
+    "type": "audio",
+    "bytes": 6144078,
+    "license": "原创作曲与音效；GeneralUser GS 乐器采样，见 projects/paper-wings/production/music/GENERALUSER-LICENSE.txt"
+  }
+]

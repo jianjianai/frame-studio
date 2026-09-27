@@ -1,4 +1,4 @@
-import type { Scene, SceneOptions } from '../../engine/types';
+import type { Scene, SceneOptions } from '../../src/engine/types';
 export function createScene({ width, height }: SceneOptions): Scene {
  const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
  const ctx = canvas.getContext('2d')!;

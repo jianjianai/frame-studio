@@ -1,11 +1,11 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
-import path from "node:path";
+import { assetPath } from "../../scripts/project-paths.mjs";
 import { projectSchema } from "../../src/engine/types";
 import { activeSubtitle, toSrt } from "../../src/engine/subtitles";
-import paper from "../../src/projects/paper-wings/project";
-import rail from "../../src/projects/sunny-rail/project";
-import seed from "../../src/projects/tiny-seed/project";
+import paper from "../../projects/paper-wings/project";
+import rail from "../../projects/sunny-rail/project";
+import seed from "../../projects/tiny-seed/project";
 for (const p of [paper, rail, seed])
   describe(p.id, () => {
     it("has valid metadata and timeline markers", () => {
@@ -16,7 +16,7 @@ for (const p of [paper, rail, seed])
       );
     });
     it("has a complete local audio track matching its duration", () => {
-      const b = fs.readFileSync(path.join("public", p.audio!));
+      const b = fs.readFileSync(assetPath(process.cwd(), p.audio!));
       expect(b.toString("ascii", 0, 4)).toBe("RIFF");
       // WAV may contain LIST/JUNK metadata before data; 44 bytes is not a fixed header.
       let channels = 0,

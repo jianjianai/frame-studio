@@ -27,3 +27,8 @@ id_ed25519
 .pnpm-store/
 coverage/
 *.log
+
+# Each film owns its generated files
+projects/*/exports/
+projects/*/.cache/
+projects/.cache/

@@ -22,7 +22,7 @@ export interface ProjectCheckReport {
   passed: boolean;
   limitation: string;
 }
-export function localAsset(root: string, reference: unknown): string;
+export function localAsset(root: string, reference: unknown, owner?: string): string;
 export function checkProjects(
   root?: string,
   options?: { ids?: string[]; strict?: boolean },

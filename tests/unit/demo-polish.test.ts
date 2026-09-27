@@ -8,7 +8,7 @@ import { cameraCurve, type CameraKey } from "../../src/engine/camera-curve";
 import {
   trainProgress,
   arcLengthLookup,
-} from "../../src/projects/sunny-rail/motion.mjs";
+} from "../../projects/sunny-rail/motion.mjs";
 import {
   allScores,
   scoreEvents,
@@ -150,7 +150,11 @@ describe("authored instrumental scores", () => {
       expect(midi).toEqual(
         scoreMidi(allScores().find((s) => s.id === score.id)!),
       );
-      expect(fs.readFileSync(`production/music/${score.id}.mid`)).toEqual(midi);
+      expect(
+        fs.readFileSync(
+          `projects/${score.id}/production/music/${score.id}.mid`,
+        ),
+      ).toEqual(midi);
     });
 });
 function pcm(bytes: Buffer) {
@@ -178,9 +182,17 @@ function pcm(bytes: Buffer) {
   return { sampleRate, channels, bits, offset, frames: size / 4 };
 }
 describe("actual delivered 48 kHz stereo masters", () => {
-  const report = JSON.parse(
-    fs.readFileSync("production/music/render-report.json", "utf8"),
-  ) as {
+  const report = {
+    tracks: allScores().flatMap(
+      (score) =>
+        JSON.parse(
+          fs.readFileSync(
+            `projects/${score.id}/production/music/render-report.json`,
+            "utf8",
+          ),
+        ).tracks,
+    ),
+  } as {
     tracks: {
       id: string;
       integratedLUFS: number;
@@ -193,7 +205,9 @@ describe("actual delivered 48 kHz stereo masters", () => {
       score.id +
         " matches measured, unclipped, non-silent PCM and has a quiet tail",
       () => {
-        const bytes = fs.readFileSync(`public/audio/${score.id}.wav`),
+        const bytes = fs.readFileSync(
+            `projects/${score.id}/public/audio/${score.id}.wav`,
+          ),
           info = pcm(bytes),
           r = report.tracks.find((r) => r.id === score.id)!;
         expect(info.sampleRate).toBe(48000);
@@ -238,32 +252,49 @@ it("asset rebuild preserves mastered audio, curated licensing and unrelated impo
   );
   const root = process.cwd();
   try {
-    fs.mkdirSync(path.join(temporary, "public/audio"), { recursive: true });
-    fs.mkdirSync(path.join(temporary, "public/imports"), { recursive: true });
+    for (const score of allScores())
+      fs.mkdirSync(path.join(temporary, "projects", score.id, "public/audio"), {
+        recursive: true,
+      });
+    fs.mkdirSync(path.join(temporary, "projects/paper-wings/public/imports"), {
+      recursive: true,
+    });
     const originals = new Map<string, Buffer>();
     for (const score of allScores()) {
       const bytes = fs.readFileSync(
-        path.join(root, "public/audio", score.id + ".wav"),
+        path.join(
+          root,
+          "projects",
+          score.id,
+          "public/audio",
+          score.id + ".wav",
+        ),
       );
       originals.set(score.id, bytes);
       fs.writeFileSync(
-        path.join(temporary, "public/audio", score.id + ".wav"),
+        path.join(
+          temporary,
+          "projects",
+          score.id,
+          "public/audio",
+          score.id + ".wav",
+        ),
         bytes,
       );
     }
     fs.writeFileSync(
-      path.join(temporary, "public/ASSET-LICENSES.md"),
+      path.join(temporary, "projects/paper-wings/public/ASSET-LICENSES.md"),
       "KEEP-CURATED-LICENSE",
     );
     fs.writeFileSync(
-      path.join(temporary, "public/imports/retained.svg"),
+      path.join(temporary, "projects/paper-wings/public/imports/retained.svg"),
       "<svg/>",
     );
     fs.writeFileSync(
-      path.join(temporary, "public/assets.json"),
+      path.join(temporary, "projects/paper-wings/public/assets.json"),
       JSON.stringify([
         {
-          url: "imports/retained.svg",
+          url: "films/paper-wings/imports/retained.svg",
           name: "retained.svg",
           type: "image",
           bytes: 6,
@@ -273,29 +304,42 @@ it("asset rebuild preserves mastered audio, curated licensing and unrelated impo
     );
     execFileSync(
       process.execPath,
-      [path.join(root, "scripts/prepare-assets.mjs")],
+      [
+        path.join(root, "scripts/prepare-assets.mjs"),
+        "--project",
+        "paper-wings",
+      ],
       { cwd: temporary, timeout: 25000, windowsHide: true, stdio: "pipe" },
     );
     for (const [id, bytes] of originals)
       expect(
         createHash("sha256")
           .update(
-            fs.readFileSync(path.join(temporary, "public/audio", id + ".wav")),
+            fs.readFileSync(
+              path.join(temporary, "projects", id, "public/audio", id + ".wav"),
+            ),
           )
           .digest("hex"),
       ).toBe(createHash("sha256").update(bytes).digest("hex"));
     expect(
-      fs.readFileSync(path.join(temporary, "public/ASSET-LICENSES.md"), "utf8"),
+      fs.readFileSync(
+        path.join(temporary, "projects/paper-wings/public/ASSET-LICENSES.md"),
+        "utf8",
+      ),
     ).toBe("KEEP-CURATED-LICENSE");
     const catalog = JSON.parse(
-      fs.readFileSync(path.join(temporary, "public/assets.json"), "utf8"),
+      fs.readFileSync(
+        path.join(temporary, "projects/paper-wings/public/assets.json"),
+        "utf8",
+      ),
     ) as { url: string; license: string }[];
-    expect(catalog.find((a) => a.url === "imports/retained.svg")?.license).toBe(
-      "retained-license",
-    );
     expect(
-      catalog.find((a) => a.url === "audio/paper-wings.wav")?.license,
-    ).toContain("GeneralUser");
+      catalog.find((a) => a.url === "films/paper-wings/imports/retained.svg")
+        ?.license,
+    ).toBe("retained-license");
+    expect(
+      catalog.find((a) => a.url === "films/paper-wings/art/cloud.svg")?.license,
+    ).toContain("Original");
   } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
   }

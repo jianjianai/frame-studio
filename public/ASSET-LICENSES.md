@@ -1,3 +1,5 @@
+> 当前路径：插画位于 projects/paper-wings/public/art/；音频位于 projects/<id>/public/audio/；各作品的音乐源文件与许可位于 projects/<id>/production/music/。以下保留原始归属说明。
+
 # 素材说明
 
 art/ 中的演示插画、三个 Demo 的场景、角色动作与摄影机设计由本项目原创制作；播放无需远程素材服务。vendor/ 为 Three.js 附带的 Draco 与 Basis 解码器，沿用其目录内原有许可证。

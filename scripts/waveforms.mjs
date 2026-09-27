@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { projectPath, assetPath } from "./project-paths.mjs";
 /** Read actual RIFF chunks. FFmpeg WAV files often contain LIST metadata before the PCM data. */
 export function waveformFromWav(buffer, bins = 180) {
   if (
@@ -48,20 +49,28 @@ export function waveformFromWav(buffer, bins = 180) {
   }
   return output;
 }
-export async function updateWaveforms() {
-  const entries = JSON.parse(await fs.readFile("public/assets.json", "utf8"));
+export async function updateWaveforms(id) {
+  const entries = JSON.parse(
+    await fs.readFile(
+      projectPath(process.cwd(), id, "public/assets.json"),
+      "utf8",
+    ),
+  );
   const result = {};
   for (const item of entries) {
     if (item.type !== "audio" || !item.url.toLowerCase().endsWith(".wav"))
       continue;
     try {
       result[item.url] = waveformFromWav(
-        await fs.readFile("public/" + item.url),
+        await fs.readFile(assetPath(process.cwd(), item.url, id)),
       );
     } catch (e) {
-      console.warn("[waveform] " + item.url + ": " + e.message);
+      throw new Error("[waveform] " + item.url + ": " + e.message);
     }
   }
-  await fs.writeFile("public/waveforms.json", JSON.stringify(result));
+  await fs.writeFile(
+    projectPath(process.cwd(), id, "public/waveforms.json"),
+    JSON.stringify(result),
+  );
   return result;
 }

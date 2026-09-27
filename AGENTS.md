@@ -1,36 +1,35 @@
 # FRAME · 工程协作约定
 
-本文件只约束代码、文件布局、工具使用和协作修改，不规定动画制作方式、创作流程、交付标准或音乐水准。单次任务中的内容要求不得自动加入工程规范。
+本文件只约束代码、文件布局、工具与协作修改，不规定动画内容、制作方式、交付或音乐水准。
 
-## 开始修改
+## 修改范围
 
-工作区：`C:\Users\28018\Desktop\动画`。所有工程复用本仓库，依赖统一由 pnpm 管理。先读 `docs/NEW-PROJECT-STANDARD.md` 和 `docs/AUTHORING.md`，再看目标模块说明；执行 `git status --short --branch`、查看当前 HEAD 及相关 diff。
+工作区：`C:\Users\28018\Desktop\动画`。先读 `docs/NEW-PROJECT-STANDARD.md`、`docs/AUTHORING.md` 和目标 `projects/<id>/README.md`，检查 Git 状态、HEAD 和相关 diff。
 
-只改本任务需要的文件。共享文件修改前重新读取，保留他人未提交内容；不要顺手全仓格式化。并行优先独立 git worktree、构建目录和测试端口。不擅自 stash/reset/clean、删除他人目录、结束所有 Node/浏览器进程或关闭他人服务。
+**视频制作任务只允许修改 `projects/<id>/`。** 每个视频的源码、素材、音轨、代码音频、说明、制作源文件、专用脚本、测试和导出结果全部放在这个目录。不得修改其他视频，也不得改公共引擎、播放器、根配置、依赖或仓库规范；需要公共能力时提出工作台维护需求。只有用户明确要求的工作台公共功能维护任务可以修改公共目录，本次隔离、音频和导出改造属于此类维护。
 
-## 目录和注册
+工程共享 pnpm 依赖，可以只读调用 `src/engine/` 的公开接口。不得导入其他工程私有文件。新增依赖由工作台维护任务通过 pnpm 更新 package.json 与锁文件。
 
-- 工程代码：`src/projects/<id>/`；`project.ts` 元数据与 `scene.ts` 接口一一对应，id 与目录一致。
-- 新运行资源：`public/films/<id>/`；工程说明和非运行源文件：`production/<id>/`，说明入口 `README.md`。
-- 工程专用脚本：`scripts/projects/<id>/`；公共代码/工具：`src/engine/`、`scripts/`。
-- 测试：`tests/unit/`、`tests/e2e/`；临时和生成结果：`exports/<id>/`、`.cache/`、`.logs/`，不提交 Git。
+## 新建和接口
 
-已有资源目录可以保留，不为规范批量搬迁。新增使用 `pnpm animation:new <id> "标题" --renderer pixi|three|canvas`，完整准备依赖后再注册，不能先留下缺少 scene.ts 的 project.ts。元数据不执行网络或文件写入。自动发现负责列表和路由，不逐工程修改公共 UI 或写死数量。
+新增使用 `pnpm animation:new <id> "标题" --renderer pixi|three|canvas`。脚手架先准备完整目录再注册，拒绝覆盖已有目录。自动发现 `projects/*/project.ts`，不改公共列表或路由。
 
-## 代码与资源接口
+`project.ts` 保持静态元数据；`load: () => import('./scene')`，可选 `loadAudio: () => import('./audio')`。场景接口保持 `createScene({width,height,quality}) -> {canvas,render(time),dispose()}`。画面和声音共用绝对时间，场景不自建动画或音频时钟；随机数据可确定性重建。
 
-保持 `createScene({width,height,quality}) -> {canvas,render(time),dispose()}`。公共播放器调度绝对时间，场景不得自建动画循环/音频时钟；随机状态可确定性重建。GSAP/ticker/骨骼等库适配该时间接口，不限制采用哪种库实现。
+音频支持 `audioTracks` 的多条文件/代码音轨。生成器使用公共播放器提供的上下文和调度时间，必须支持任意片段、变速与释放；正常播放不需要预先合成音频文件。
 
-`dispose` 和初始化失败路径回收本实例资源，不误删共享缓存。场景不 import Node 或工程处理脚本，不依赖其他工程的私有模块。资源路径在 public 下，通过 `assetUrl()`/元数据加载，防止路径穿越和外部运行资源依赖；密钥与个人配置不入库。
+运行资源放 `projects/<id>/public/`，浏览器 URL 为 `films/<id>/...`，通过 `assetUrl()` 使用。不得跨项目引用资源或通过路径穿越、符号链接越界。`dispose` 和初始化失败路径只释放本实例资源。
 
-## 脚本与验证
+## 工具与检查
 
-检查命令只读；生成命令声明目标和覆盖行为，只写目标工程。共享索引保留无关条目。失败返回非零，不把旧缓存当新结果。单工程封面命令是 `pnpm posters --project <id>`；全量须明确 `pnpm posters --all`。
+生成工具只能写目标项目目录，导出到 `projects/<id>/exports/`，临时文件在本项目 `.cache/` 或导出目录并清理。浏览器下载使用浏览器选择的保存位置。海报更新 `pnpm posters --project <id>`；全量必须明确 `--all`。检查命令只读，失败返回非零。
 
-运行 `pnpm project:check`、相关测试及必要的 `pnpm verify`。严格模式 `pnpm project:check <id> --strict` 只把工程警告提升为失败，不评判内容。公共测试从项目元数据计算数量，不能从 UI 反推预期。设置 `FRAME_TEST_PORT` 避免冲突，不复用未知旧服务。
+项目任务运行 `pnpm project:check <id> --strict`、相关测试和 `pnpm project:scope <id>`。后者检查暂存、未暂存与未跟踪改动；可用 `--base <commit>` 检查相对基线提交的改动。公共维护运行 `pnpm verify`。这是工程与工具边界，不是操作系统权限沙箱；任意外部程序的写权限需要另行配置系统隔离。
 
-依赖通过 pnpm 变更，同步 package.json 和 pnpm-lock.yaml；不提交 node_modules/dist。涉及资源导入时保留第三方来源与许可证文件，不分发未经授权的源文件。
+公共测试在 `tests/`，工程专属测试在 `projects/<id>/tests/`，自动发现。浏览器测试设置 `FRAME_TEST_PORT`，不复用未知服务。并行工作使用独立 checkout、构建目录与端口。
 
-## 提交
+## 保留现有工作与提交
 
-存在并行改动时不用 `git add .` / `git add -A`，按明确清单暂存并检查 diff。只提交本轮代码、必要配置、测试与文档；不捎带他人的工程，不强推。文件移动/删除时同步修正引用。测试失败如实记录，测试源码与提交源码不一致时重新核对。
+共享文件修改前重新读取，保留他人未提交内容。只改本任务文件，不全仓格式化，不擅自 stash/reset/clean、删除他人目录或结束他人进程。需要 WSL 编译时先复制到 Linux 文件系统，完成后只清理本次创建的临时文件。
+
+按明确文件清单暂存，检查 diff，不使用 `git add .` / `git add -A` 捎带他人更改，不强推。移动/删除同步修正引用。失败检查如实记录，不把历史缓存当新结果。资源保留来源与许可证，密钥和个人配置不入库。

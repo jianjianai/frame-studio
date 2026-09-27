@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { chromium } from "@playwright/test";
 import { defineConfig } from "@playwright/test";
+import { readProjectCatalog } from "./scripts/project-metadata.mjs";
 const executablePath = [
   process.env.FRAME_BROWSER,
   chromium.executablePath(),
@@ -13,7 +14,35 @@ if (!Number.isInteger(testPort) || testPort < 1024 || testPort > 65535)
   throw new Error("FRAME_TEST_PORT must be an integer from 1024 to 65535");
 const testURL = "http://127.0.0.1:" + testPort;
 export default defineConfig({
-  testDir: "./tests/e2e",
+  projects: [
+    {
+      name: "studio",
+      testDir: "./tests/e2e",
+      testIgnore: ["**/audio.spec.ts", "**/browser-export.spec.ts"],
+    },
+    {
+      name: "capture",
+      testDir: "./tests/e2e",
+      testMatch: ["**/audio.spec.ts", "**/browser-export.spec.ts"],
+      use: {
+        launchOptions: {
+          executablePath,
+          args: [
+            "--enable-webgl",
+            "--ignore-gpu-blocklist",
+            "--disable-gpu",
+            "--enable-unsafe-swiftshader",
+          ],
+        },
+      },
+    },
+    ...readProjectCatalog()
+      .filter(({ directory }) => existsSync(`projects/${directory}/tests/e2e`))
+      .map(({ directory }) => ({
+        name: directory,
+        testDir: `./projects/${directory}/tests/e2e`,
+      })),
+  ],
   timeout: 60000,
   workers: 1,
   fullyParallel: false,

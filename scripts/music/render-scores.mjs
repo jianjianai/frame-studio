@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
@@ -8,8 +8,9 @@ import {
   SpessaSynthProcessor,
   SpessaLog,
 } from "spessasynth_core";
-import { allScores, scoreEvents, scoreMidi } from "./scores.mjs";
-import { trainProgress } from "../../src/projects/sunny-rail/motion.mjs";
+import { scoreEvents, scoreMidi } from "../../src/engine/score.mjs";
+import { projectPath } from "../project-paths.mjs";
+
 import { updateWaveforms } from "../waveforms.mjs";
 const root = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -21,9 +22,20 @@ const REV = "684543d5e5efaef08d02be50dcda8d552478fa60";
 const BANK_HASH =
   "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe";
 const source = `https://raw.githubusercontent.com/mrbumpy409/GeneralUser-GS/${REV}`;
-const cache = path.join(root, ".cache/soundfonts");
-const archive = path.join(root, "production/music");
-const exportDir = path.join(root, "exports/demo-polish/audio");
+const [id, ...extra] = process.argv.slice(2);
+if (!["paper-wings", "sunny-rail", "tiny-seed"].includes(id) || extra.length)
+  throw new Error("Usage: pnpm music:build <id>");
+const folder = projectPath(root, id);
+const cache = projectPath(root, id, ".cache/soundfonts");
+const archive = projectPath(root, id, "production/music");
+const exportDir = projectPath(root, id, "exports/audio");
+const scoreModule = await import(
+  pathToFileURL(path.join(folder, "score.mjs")).href
+);
+const scores = [Object.values(scoreModule)[0]()];
+const { foley } = await import(
+  pathToFileURL(path.join(folder, "scripts/foley.mjs")).href
+);
 const sha = (b) => createHash("sha256").update(b).digest("hex");
 const clamp = (v, a = 0, b = 1) => Math.max(a, Math.min(b, v));
 const smooth = (v) => {
@@ -70,165 +82,6 @@ function pcmWave(channels, sr = SR) {
       );
   return b;
 }
-function foley(score) {
-  const n = Math.round(score.duration * SR),
-    out = [new Float32Array(n), new Float32Array(n)];
-  let seed =
-    score.id === "paper-wings" ? 1029 : score.id === "sunny-rail" ? 2851 : 6371;
-  const rnd = () => {
-    seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
-    return seed / 2147483648 - 1;
-  };
-  const pan = (i, v, p) => {
-    if (i < 0 || i >= n) return;
-    out[0][i] += v * Math.sqrt((1 - clamp(p, -1, 1)) / 2);
-    out[1][i] += v * Math.sqrt((1 + clamp(p, -1, 1)) / 2);
-  };
-  const burst = (at, duration, gain, p = 0, cutoff = 1100) => {
-    let low = 0;
-    const alpha = 1 - Math.exp((-2 * Math.PI * cutoff) / SR),
-      start = Math.round(at * SR),
-      count = Math.round(duration * SR);
-    for (let j = 0; j < count; j++) {
-      const x = j / count;
-      low += alpha * (rnd() - low);
-      pan(start + j, low * gain * Math.sin(Math.PI * x) ** 1.5, p);
-    }
-  };
-  const tap = (at, gain = 0.04, p = 0, pitch = 620) => {
-    const start = Math.round(at * SR);
-    for (let j = 0; j < SR * 0.065; j++) {
-      const t = j / SR;
-      const v =
-        (Math.sin(2 * Math.PI * pitch * t) * Math.exp(-t * 95) +
-          rnd() * 0.23 * Math.exp(-t * 150)) *
-        gain *
-        (1 - Math.exp(-t * 1800));
-      pan(start + j, v, p);
-    }
-  };
-  if (score.id === "paper-wings") {
-    let lp = 0,
-      lp2 = 0;
-    for (let i = 0; i < n; i++) {
-      const t = i / SR;
-      lp += (rnd() - lp) * 0.019;
-      lp2 += (lp - lp2) * 0.07;
-      const wind =
-        (0.022 + 0.02 * Math.sin(t * 0.42) ** 2) *
-        smooth(t) *
-        smooth((32 - t) / 2);
-      const sea =
-        smooth(phase(t, 16.4, 19)) *
-        (1 - smooth(phase(t, 28.7, 32))) *
-        (0.018 + 0.025 * Math.sin(t * 0.85) ** 2);
-      pan(i, lp2 * (wind + sea), 0.22 * Math.sin(t * 0.2));
-    }
-    [
-      [1.1, 0.6, 0.1, -0.6],
-      [7.5, 0.8, 0.13, -0.2],
-      [17.4, 1.1, 0.15, 0.6],
-      [23.1, 0.7, 0.09, 0.5],
-      [27.8, 0.35, 0.07, 0.15],
-    ].forEach((a) => burst(...a));
-    [0, 1, 2, 3].forEach((i) =>
-      tap(28.4 + i * 0.026, 0.012, 0.12, 800 + i * 380),
-    );
-    // Short original bird calls, quiet and distant; no sampled field recording is implied.
-    for (const at of [3.3, 3.58, 19.6, 20.0])
-      for (let j = 0; j < SR * 0.16; j++) {
-        const t = j / SR,
-          f = 1700 * t + 900 * t * t,
-          env = Math.sin((Math.PI * t) / 0.16) ** 2;
-        pan(
-          Math.round(at * SR) + j,
-          Math.sin(2 * Math.PI * f) * env * 0.014,
-          at < 10 ? -0.55 : 0.55,
-        );
-      }
-  } else if (score.id === "sunny-rail") {
-    const progress = trainProgress;
-    let old = 0,
-      low = 0;
-    for (let i = 0; i < n; i++) {
-      const t = i / SR,
-        q = progress(t),
-        speed = (q - progress(Math.max(0, t - 0.01))) * 100;
-      low += (rnd() - low) * 0.1;
-      pan(
-        i,
-        low *
-          0.028 *
-          clamp(speed / 0.0348) *
-          smooth(phase(t, 0, 2)) *
-          (1 - smooth(phase(t, 33, 36))),
-        Math.sin(q * Math.PI * 2) * 0.3,
-      );
-      const count = Math.floor(q * 124);
-      if (count > old) {
-        tap(
-          t,
-          0.012 + clamp(speed / 0.0348) * 0.012,
-          Math.sin(q * 6.283) * 0.3,
-          470,
-        );
-        old = count;
-      }
-    }
-    burst(0.72, 0.9, 0.085, -0.18, 1600);
-    burst(31.4, 1.0, 0.07, 0.2, 1450);
-    // A two-pipe steam whistle, breath envelope and a slight settling pitch, not a sustained sine beep.
-    for (const at of [0.72, 1.36])
-      for (let j = 0; j < SR * 0.42; j++) {
-        const t = j / SR,
-          env = smooth(t / 0.065) * smooth((0.42 - t) / 0.12),
-          f = 392 * t - 1.6 * (1 - Math.exp(-t * 12));
-        pan(
-          Math.round(at * SR) + j,
-          (Math.sin(2 * Math.PI * f) +
-            0.48 * Math.sin(2 * Math.PI * f * 1.5) +
-            0.14 * rnd()) *
-            env *
-            0.018,
-          -0.1,
-        );
-      }
-  } else {
-    let low = 0;
-    for (let i = 0; i < n; i++) {
-      const t = i / SR,
-        rain = smooth(phase(t, 5.0, 6.4)) * (1 - smooth(phase(t, 10.5, 12)));
-      low += (rnd() - low) * 0.19;
-      pan(i, low * 0.042 * rain, (i % 2) * 0.12 - 0.06);
-      const landed =
-        smooth(phase(t, 26.1, 26.7)) * (1 - smooth(phase(t, 28.2, 29.2)));
-      const bee =
-        smooth(phase(t, 24, 25.5)) *
-        (1 - smooth(phase(t, 29.5, 32))) *
-        (1 - landed * 0.88);
-      const buzz =
-        (Math.sin(2 * Math.PI * (182 * t + 0.4 * Math.sin(t * 3))) +
-          0.25 * Math.sin(2 * Math.PI * 364 * t)) *
-        0.0038 *
-        bee;
-      pan(i, buzz, Math.sin((t - 24) * 0.73) * 0.65);
-    }
-    for (let k = 0; k < 68; k++) {
-      const at = 5.4 + k * 0.087 + (rnd() + 1) * 0.03;
-      tap(
-        at,
-        0.007 + (rnd() + 1) * 0.004,
-        rnd() * 0.65,
-        1400 + (rnd() + 1) * 900,
-      );
-    }
-    tap(5.8, 0.05, -0.06, 170);
-    burst(14.4, 0.75, 0.045, -0.12, 700);
-    burst(19.9, 0.6, 0.06, 0.08, 1300);
-    burst(30.6, 1.4, 0.09, 0.55, 1700);
-  }
-  return out;
-}
 async function bank() {
   await fs.mkdir(cache, { recursive: true });
   await fs.mkdir(archive, { recursive: true });
@@ -267,12 +120,6 @@ async function bank() {
 }
 SpessaLog.setLogLevel(false, false, false);
 const sf = await bank();
-const ids = process.argv.slice(2);
-const scores = allScores().filter((s) => !ids.length || ids.includes(s.id));
-if (!scores.length || ids.some((id) => !allScores().some((s) => s.id === id)))
-  throw new Error(
-    "Use only paper-wings, sunny-rail, tiny-seed, or no arguments.",
-  );
 await fs.mkdir(exportDir, { recursive: true });
 const reports = [];
 for (const score of scores) {
@@ -352,7 +199,7 @@ for (const score of scores) {
     ]),
   );
   const norm = `loudnorm=I=-18:LRA=11:TP=-1.8:measured_I=${first.input_i}:measured_LRA=${first.input_lra}:measured_TP=${first.input_tp}:measured_thresh=${first.input_thresh}:offset=${first.target_offset}:linear=true:print_format=json`;
-  const output = path.join(root, "public/audio", `${score.id}.wav`);
+  const output = projectPath(root, id, `public/audio/${score.id}.wav`);
   run([
     "-hide_banner",
     "-y",
@@ -442,17 +289,26 @@ await fs.writeFile(
     2,
   ),
 );
-let catalog = JSON.parse(await fs.readFile("public/assets.json", "utf8"));
+let catalog = JSON.parse(
+  await fs.readFile(projectPath(root, id, "public/assets.json"), "utf8"),
+);
 for (const score of scores) {
-  const item = catalog.find((a) => a.url === `audio/${score.id}.wav`);
+  const item = catalog.find(
+    (a) => a.url === `films/${score.id}/audio/${score.id}.wav`,
+  );
   if (item) {
-    item.bytes = (await fs.stat(`public/audio/${score.id}.wav`)).size;
+    item.bytes = (
+      await fs.stat(projectPath(root, id, `public/audio/${score.id}.wav`))
+    ).size;
     item.license =
-      "原创作曲与音效；GeneralUser GS 乐器采样，见 production/music/GENERALUSER-LICENSE.txt";
+      "原创作曲与音效；GeneralUser GS 乐器采样，见各项目 production/music/GENERALUSER-LICENSE.txt";
   }
 }
-await fs.writeFile("public/assets.json", JSON.stringify(catalog, null, 2));
-await updateWaveforms();
+await fs.writeFile(
+  projectPath(root, id, "public/assets.json"),
+  JSON.stringify(catalog, null, 2),
+);
+await updateWaveforms(id);
 console.log(
   "Scores, MIDI sources, music/foley stems, 48 kHz masters and measured loudness report written.",
 );

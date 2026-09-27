@@ -2,17 +2,22 @@ import { updateWaveforms } from "./waveforms.mjs";
 import fs from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { projectPath } from "./project-paths.mjs";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 const args = process.argv.slice(2);
-const manifest = args[0];
+const [id, manifest] = args;
+const folder = projectPath(process.cwd(), id);
+await fs.access(path.join(folder, "project.ts"));
+const scoped = (file) =>
+  projectPath(process.cwd(), id, path.relative(folder, file));
 if (!manifest || manifest.startsWith("--")) {
-  console.error("Usage: pnpm audio:mix path/to/mix.json [--force]");
+  console.error("Usage: pnpm audio:mix <id> path/to/mix.json [--force]");
   process.exit(1);
 }
 let temporary;
 try {
-  const base = path.dirname(path.resolve(manifest));
+  const base = path.dirname(scoped(path.resolve(manifest)));
   const spec = JSON.parse(await fs.readFile(manifest, "utf8"));
   const numeric = (value, min, max, name) => {
     if (
@@ -35,7 +40,8 @@ try {
     spec.tracks.length > 32
   )
     throw new Error("Use 1..32 audio tracks");
-  const output = path.resolve(base, spec.output);
+  const output = scoped(path.resolve(base, spec.output));
+  scoped(output + ".mix.json");
   if (existsSync(output) && !args.includes("--force"))
     throw new Error("Output already exists. Use --force explicitly.");
   await fs.mkdir(path.dirname(output), { recursive: true });
@@ -46,7 +52,9 @@ try {
     const track = spec.tracks[i];
     if (typeof track.file !== "string")
       throw new Error("track.file is required");
-    const file = path.resolve(base, track.file);
+    const file = scoped(path.resolve(base, track.file));
+    if (file === output)
+      throw new Error("Mix output must not overwrite a source track");
     const stat = await fs.stat(file);
     if (!stat.isFile()) throw new Error("Not a regular audio file: " + file);
     command.push("-i", file);
@@ -121,14 +129,14 @@ try {
   });
   await fs.rename(temporary, output);
   temporary = undefined;
-  const relative = path.relative(path.resolve("public"), output);
+  const relative = path.relative(path.join(folder, "public"), output);
   if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
-    const index = "public/assets.json";
+    const index = scoped(path.join(folder, "public/assets.json"));
     let items = [];
     try {
       items = JSON.parse(await fs.readFile(index, "utf8"));
     } catch {}
-    const url = relative.replaceAll(path.sep, "/");
+    const url = "films/" + id + "/" + relative.replaceAll(path.sep, "/");
     items = items.filter((a) => a.url !== url);
     items.push({
       name: path.basename(output),
@@ -142,7 +150,7 @@ try {
     });
     await fs.writeFile(index, JSON.stringify(items, null, 2));
   }
-  await updateWaveforms();
+  await updateWaveforms(id);
   await fs.writeFile(
     output + ".mix.json",
     JSON.stringify(

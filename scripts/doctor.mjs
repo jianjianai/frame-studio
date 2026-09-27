@@ -1,3 +1,5 @@
+import { assetCatalog } from "./project-assets.mjs";
+import { assetPath } from "./project-paths.mjs";
 import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { browserOptions } from "./browser.mjs";
@@ -41,15 +43,15 @@ check("FFmpeg", () => command(process.env.FFMPEG_PATH || "ffmpeg"));
 check("FFprobe", () => command(process.env.FFPROBE_PATH || "ffprobe"));
 check("Chromium browser", () => browserOptions().executablePath);
 check("Asset index", () => {
-  const a = JSON.parse(fs.readFileSync("public/assets.json", "utf8"));
+  const a = assetCatalog(process.cwd());
   for (const item of a)
-    if (!fs.existsSync("public/" + item.url))
+    if (!fs.existsSync(assetPath(process.cwd(), item.url)))
       throw new Error("Missing " + item.url);
   return a.length + " files";
 });
 check("Project folders", () =>
   fs
-    .readdirSync("src/projects", { withFileTypes: true })
+    .readdirSync("projects", { withFileTypes: true })
     .filter((d) => d.isDirectory())
     .map((d) => d.name)
     .join(", "),

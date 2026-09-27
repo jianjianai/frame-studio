@@ -1061,6 +1061,40 @@ img {
   color: #93a580;
   margin-right: 6px;
 }
+.track-mixer {
+  margin-top: 16px;
+  border: 1px solid var(--line, #ddd);
+  border-radius: 10px;
+  padding: 12px;
+}
+.track-mixer-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px;
+}
+.track-mixer-row > span {
+  flex: 1;
+  min-width: 0;
+}
+.track-mixer-row small {
+  display: block;
+  opacity: 0.65;
+  font-size: 11px;
+  margin-top: 4px;
+}
+.track-mixer-row input {
+  width: min(120px, 25%);
+}
+.track-mixer-row output {
+  width: 45px;
+  font-size: 12px;
+}
+.track-mixer-row button {
+  display: grid;
+  place-items: center;
+  padding: 6px;
+}
 .audio-track {
   height: 31px;
   background: #e8e4d9;

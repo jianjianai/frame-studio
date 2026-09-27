@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { assetPath } from "./project-paths.mjs";
+import { assetCatalog } from "./project-assets.mjs";
 import {
   readProject,
   sourceFile,
@@ -16,7 +18,7 @@ const inside = (parent, file) => {
     (!rel.startsWith(".." + path.sep) && rel !== ".." && !path.isAbsolute(rel))
   );
 };
-export function localAsset(root, reference) {
+export function localAsset(root, reference, owner) {
   if (
     typeof reference !== "string" ||
     !reference.trim() ||
@@ -27,23 +29,26 @@ export function localAsset(root, reference) {
     throw new Error(
       "Use a plain public-relative local path, without URL, traversal, query or fragment",
     );
-  const base = path.resolve(root, "public"),
-    file = path.resolve(base, reference);
-  if (
-    !inside(base, file) ||
-    !fs.existsSync(file) ||
-    !fs.statSync(file).isFile()
-  )
+  const file = assetPath(root, reference, owner);
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile())
     throw new Error("Local asset is missing: " + reference);
-  if (!inside(fs.realpathSync(base), fs.realpathSync(file)))
-    throw new Error("Asset symlink escapes public/: " + reference);
   return file;
 }
 function codeFiles(directory) {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((item) => {
     const file = path.join(directory, item.name);
     if (item.isSymbolicLink()) return [];
-    if (item.isDirectory()) return codeFiles(file);
+    if (item.isDirectory())
+      return [
+        "scripts",
+        "tests",
+        "public",
+        "production",
+        "exports",
+        ".cache",
+      ].includes(item.name)
+        ? []
+        : codeFiles(file);
     return /\.(?:[cm]?[jt]sx?)$/.test(item.name) &&
       !/\.d\.[cm]?ts$/.test(item.name)
       ? [file]
@@ -75,7 +80,7 @@ export function checkProjects(root = process.cwd(), options = {}) {
       ...(line ? { line } : {}),
       message,
     });
-  const projectRoot = path.join(root, "src/projects");
+  const projectRoot = path.join(root, "projects");
   const directories = fs.existsSync(projectRoot)
     ? fs
         .readdirSync(projectRoot, { withFileTypes: true })
@@ -85,6 +90,7 @@ export function checkProjects(root = process.cwd(), options = {}) {
   const selected = options.ids?.length ? options.ids : directories;
   let catalog = [];
   try {
+    catalog = assetCatalog(root);
     if (fs.existsSync(path.join(root, "public/assets.json")))
       catalog = JSON.parse(
         fs.readFileSync(path.join(root, "public/assets.json"), "utf8"),
@@ -140,6 +146,71 @@ export function checkProjects(root = process.cwd(), options = {}) {
       continue;
     }
     const { meta, loadPath } = record;
+    if (meta.audioTracks !== undefined) {
+      const tracks = meta.audioTracks;
+      const ids = new Set();
+      if (
+        !Array.isArray(tracks) ||
+        tracks.length > 32 ||
+        (meta.audio && tracks.length)
+      )
+        report(
+          "error",
+          "AUDIO_TRACKS",
+          file,
+          "Use up to 32 audioTracks; do not also set audio",
+        );
+      for (const track of Array.isArray(tracks) ? tracks : []) {
+        if (
+          !track ||
+          !["file", "generated"].includes(track.kind) ||
+          typeof track.id !== "string" ||
+          !track.id ||
+          ids.has(track.id) ||
+          typeof track.name !== "string" ||
+          !track.name ||
+          !Number.isFinite(track.start ?? 0) ||
+          (track.start ?? 0) < 0 ||
+          (track.start ?? 0) >= meta.duration ||
+          !Number.isFinite(track.offset ?? 0) ||
+          (track.offset ?? 0) < 0 ||
+          !Number.isFinite(track.duration ?? meta.duration) ||
+          (track.duration ?? meta.duration) <= 0 ||
+          (track.start ?? 0) +
+            (track.duration ?? meta.duration - (track.start ?? 0)) >
+            meta.duration ||
+          !Number.isFinite(track.gain ?? 1) ||
+          (track.gain ?? 1) < 0 ||
+          (track.gain ?? 1) > 4 ||
+          (track.muted !== undefined && typeof track.muted !== "boolean")
+        ) {
+          report(
+            "error",
+            "AUDIO_TRACKS",
+            file,
+            "Invalid or duplicate audio track",
+          );
+          continue;
+        }
+        ids.add(track.id);
+        if (track.kind === "file") {
+          try {
+            localAsset(root, track.src, directory);
+          } catch (error) {
+            report("error", "LOCAL_ASSET", file, error.message);
+          }
+        } else if (
+          !["./audio", "./audio.ts"].includes(record.audioLoadPath) ||
+          !fs.existsSync(path.join(folder, "audio.ts"))
+        )
+          report(
+            "error",
+            "AUDIO_GENERATOR",
+            file,
+            "Generated audio requires loadAudio: () => import('./audio') and audio.ts",
+          );
+      }
+    }
     projects.push({
       id: meta.id,
       directory,
@@ -213,7 +284,7 @@ export function checkProjects(root = process.cwd(), options = {}) {
     for (const key of ["poster", "audio", "research"]) {
       if (key !== "poster" && meta[key] === undefined) continue;
       try {
-        localAsset(root, meta[key]);
+        localAsset(root, meta[key], directory);
       } catch (error) {
         report("error", "LOCAL_ASSET", file, key + ": " + error.message);
       }
@@ -316,15 +387,15 @@ export function checkProjects(root = process.cwd(), options = {}) {
         } catch {}
       }
     }
-    const engineering = path.join(root, "production", directory, "README.md");
+    const engineering = path.join(folder, "README.md");
     if (!fs.existsSync(engineering))
       report(
         "warning",
         "ENGINEERING_ENTRY",
         file,
-        "New directory convention: add production/" +
+        "Add projects/" +
           directory +
-          "/README.md to index source files, dependencies, script inputs/outputs and tests; existing directories can remain in place",
+          "/README.md to index source files, dependencies, script inputs/outputs and tests",
       );
     for (const codeFile of codeFiles(folder)) {
       let source;
@@ -399,6 +470,16 @@ export function checkProjects(root = process.cwd(), options = {}) {
           ? node.source
           : undefined;
         if (spec?.type === "StringLiteral") {
+          if (
+            /^(?:node:|fs$|path$|child_process$|os$|worker_threads$)/.test(
+              spec.value,
+            )
+          )
+            emit(
+              "NODE_RUNTIME_IMPORT",
+              node,
+              "Browser project code cannot import Node APIs",
+            );
           if (/^(?:https?:)?\/\//.test(spec.value))
             emit(
               "REMOTE_IMPORT",
@@ -418,6 +499,15 @@ export function checkProjects(root = process.cwd(), options = {}) {
                 "CROSS_PROJECT_IMPORT",
                 node,
                 "Do not depend on another film's private source; use a reviewed engine/shared module",
+              );
+            else if (
+              !inside(folder, resolved) &&
+              !inside(path.join(root, "src/engine"), resolved)
+            )
+              emit(
+                "PRIVATE_PLATFORM_IMPORT",
+                node,
+                "Projects may only import their own files and public src/engine modules",
               );
           }
         }

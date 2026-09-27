@@ -16,14 +16,14 @@ describe("safe project scaffolding", () => {
         );
         expect(result.status).toBe(0);
         const manifest = readFileSync(
-          path.join(dir, "src/projects/new-story/project.ts"),
+          path.join(dir, "projects/new-story/project.ts"),
           "utf8",
         );
         expect(manifest).toContain("新的故事");
         expect(manifest).toContain(renderer);
         expect(
           readFileSync(
-            path.join(dir, "src/projects/new-story/scene.ts"),
+            path.join(dir, "projects/new-story/scene.ts"),
             "utf8",
           ),
         ).toContain("render(time)");
@@ -35,7 +35,7 @@ describe("safe project scaffolding", () => {
         expect(again.status).not.toBe(0);
         expect(
           readFileSync(
-            path.join(dir, "src/projects/new-story/project.ts"),
+            path.join(dir, "projects/new-story/project.ts"),
             "utf8",
           ),
         ).toBe(manifest);
