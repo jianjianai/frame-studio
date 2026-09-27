@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { createServer } from "vite";
-import sharp from "sharp";
+import { writeProjectPoster } from "./poster-output.mjs";
 import { launchBrowser } from "./browser.mjs";
 const args = process.argv.slice(2);
 const val = (key, fallback) => {
@@ -13,11 +13,23 @@ const val = (key, fallback) => {
   return i >= 0 ? args[i + 1] : fallback;
 };
 const posters = args.includes("--posters");
+const posterProject = val("--project");
+if (
+  posters &&
+  ((!posterProject && !args.includes("--all")) ||
+    (posterProject && args.includes("--all")))
+) {
+  throw new Error(
+    "Use pnpm posters --project <id>, or pnpm posters --all explicitly",
+  );
+}
+if (posterProject && !/^[a-z][a-z0-9-]*$/.test(posterProject))
+  throw new Error("Invalid poster project id");
 const id = args.find((a) => !a.startsWith("--"));
 const root = process.cwd();
 if (!posters && (!id || !/^[a-z][a-z0-9-]*$/.test(id))) {
   console.error(
-    "Usage: pnpm render <id> [--width 1920] [--fps 30] [--start 0] [--end N] [--out exports/name.mp4] [--no-subtitles] [--force]\n       pnpm render --posters",
+    "Usage: pnpm render <id> [--width 1920] [--fps 30] [--start 0] [--end N] [--out exports/name.mp4] [--no-subtitles] [--force]\n       pnpm render --posters --project <id> | --all",
   );
   process.exit(1);
 }
@@ -57,14 +69,20 @@ try {
     return page;
   };
   if (posters) {
-    await fs.mkdir("public/posters", { recursive: true });
     const folders = (
       await fs.readdir("src/projects", { withFileTypes: true })
     ).filter(
       (e) =>
         e.isDirectory() && existsSync("src/projects/" + e.name + "/project.ts"),
     );
-    for (const folder of folders) {
+    if (
+      posterProject &&
+      !folders.some((folder) => folder.name === posterProject)
+    )
+      throw new Error("Unknown poster project: " + posterProject);
+    for (const folder of folders.filter(
+      (folder) => !posterProject || folder.name === posterProject,
+    )) {
       const page = await renderPage(folder.name);
       const duration = await page.evaluate(
         () => window.__FRAME_STUDIO__.duration,
@@ -77,10 +95,12 @@ try {
         window.__FRAME_STUDIO__.frame(t, false);
         return window.__FRAME_STUDIO__.dataURL().split(",")[1];
       }, at);
-      await sharp(Buffer.from(data, "base64"))
-        .webp({ quality: 92 })
-        .toFile("public/posters/" + folder.name + ".webp");
-      console.log("[poster] " + folder.name + " at " + at + "s");
+      const output = await writeProjectPoster(
+        root,
+        folder.name,
+        Buffer.from(data, "base64"),
+      );
+      console.log("[poster] " + folder.name + " at " + at + "s -> " + output);
       await page.close();
     }
   } else {

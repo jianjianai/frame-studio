@@ -17,13 +17,14 @@
     "render": "node scripts/render.mjs",
     "assets": "node scripts/prepare-assets.mjs",
     "format": "prettier --write src scripts tests templates/*.txt package.json tsconfig.json vite.config.ts vitest.config.ts playwright.config.ts README.md AGENTS.md docs/*.md --ignore-unknown",
-    "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e",
+    "verify": "pnpm project:check && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e",
     "posters": "node scripts/render.mjs --posters",
     "env:check": "node scripts/doctor.mjs",
     "assets:import": "node scripts/import-asset.mjs",
     "animation:new": "node scripts/new-animation.mjs",
     "audio:mix": "node scripts/mix-audio.mjs",
-    "music:build": "node scripts/music/render-scores.mjs"
+    "music:build": "node scripts/music/render-scores.mjs",
+    "project:check": "node scripts/check-projects.mjs"
   },
   "dependencies": {
     "flubber": "0.4.2",
@@ -36,6 +37,7 @@
     "zod": "4.6.5"
   },
   "devDependencies": {
+    "@babel/parser": "7.28.5",
     "@playwright/test": "1.63.0",
     "@types/flubber": "0.4.0",
     "@types/node": "26.6.3",

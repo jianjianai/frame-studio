@@ -8,6 +8,8 @@ GitHub 私有仓库：[jianjianai/frame-studio](https://github.com/jianjianai/fr
 
 源码、pnpm 锁文件和动画必需的本地素材纳入版本管理；依赖目录、构建产物、导出视频、测试报告及敏感配置不提交。测试和构建在本地执行，当前未配置 GitHub Actions 工作流。
 
+新增工程先读 **[工程与文件修改规范](docs/NEW-PROJECT-STANDARD.md)**；当前并行改动的审查结果见 **[工程规范审查](docs/PROJECT-AUDIT-2026-09-28.md)**。
+
 ## 打开工作台
 
 双击 **启动工作台.cmd**。或者在此目录打开终端：
@@ -53,12 +55,15 @@ pnpm animation:new my-film "我的动画" --renderer pixi
 pnpm assets:import "D:/assets/character.png" --license "作者/授权来源"
 pnpm audio:mix mix.json                 # 配乐、旁白、音效偏移/增益/裁切/淡入淡出混音
 pnpm music:build                       # 重建三个 Demo 的采样乐器配乐与动作音效
-pnpm posters                           # 从动画实际画面重新生成封面
+pnpm posters --project my-film         # 只重建目标作品的实际画面封面
+pnpm posters --all                     # 明确全量重建（会覆盖所有作品封面）
+pnpm project:check                     # 静态工程约束与存量迁移提示
+pnpm project:check my-film --strict    # 将目标工程的结构警告也视为失败
 pnpm typecheck
 pnpm test
 pnpm build
 pnpm test:e2e                          # 自动启动构建产物的预览服务器
-pnpm verify                            # 类型、单元、构建、浏览器验收
+pnpm verify                            # 工程约束、类型、单元、构建、浏览器验收
 pnpm format                            # 格式化源码与文档
 ```
 
@@ -109,11 +114,12 @@ scripts/                   创建、导入、资产重建、自检、逐帧输�
 scripts/browser.mjs        共用自动化浏览器选择
 scripts/render.mjs         可验证的离线 MP4 与封面渲染
 scripts/new-animation.mjs  安全的新建工程脚本
-templates/                 三种渲染器的最小起步模板
+templates/                 三种场景模板、工程说明、倒拖测试模板
+production/<id>/README.md  工程文件、依赖、脚本输入输出和测试命令索引
 tests/unit/ tests/e2e/     自动化测试
 exports/                  本地生成视频，不加入源码版本管理
-docs/AUTHORING.md          场景与时间轴协议
-AGENTS.md                  后续 AI 制作必须阅读的项目约定
+docs/AUTHORING.md          工程接入与接口说明
+AGENTS.md                  代码与文件修改约定
 ```
 
 ## 部署
@@ -122,9 +128,9 @@ pnpm build 输出 dist/。将其部署到普通 HTTP 静态站点即可在线播
 
 默认只监听 127.0.0.1。需要局域网访问时，明确使用 pnpm dev --host 0.0.0.0，并自行确认 Windows 防火墙范围。不要把 Vite 开发服务器直接暴露到公网。
 
-## 制作边界
+## 工具范围
 
-这套工程解决“每次重新搭底层”和“单文件无法组织复杂作品”的问题，不自动解决美术和导演问题。正式影片仍需要分镜、角色设计、优质素材、运动表演、镜头节奏和音效设计。先制作 10–20 秒样片，关闭字幕验收动作叙事，再扩成完整短片。
+这套工程提供复用的渲染、播放和文件处理工具。工程规范只管代码和文件组织，不限制动画制作方式、交付或音乐水准。
 
 尚未做成 AE/Blender 一样的可视化制作软件：没有拖放关键帧编辑、多人协作、云端渲染队列、内置生成式素材服务或 AI 配音账号。此项目使用代码制作，浏览器播放/验收；后续按真实需要添加，不为“全家桶”堆叠闲置依赖。
 

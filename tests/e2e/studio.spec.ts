@@ -1,7 +1,14 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs/promises";
+import { readFileSync } from "node:fs";
+import { readProjectCatalog } from "../../scripts/project-metadata.mjs";
 import path from "node:path";
 import type { StudioApi } from "../../src/engine/debug";
+const projectCatalog = readProjectCatalog().map((record) => record.meta);
+const projectCount = projectCatalog.length;
+const assetCatalog = JSON.parse(readFileSync("public/assets.json", "utf8")) as {
+  type: string;
+}[];
 const state = (page: import("@playwright/test").Page) =>
   page.evaluate(() => window.__FRAME_STUDIO__!.getState());
 async function ready(page: import("@playwright/test").Page, id: string) {
@@ -22,7 +29,7 @@ test("library search, renderer filters, real posters and asset navigation", asyn
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   await page.goto("/");
-  await expect(page.getByTestId("project-card")).toHaveCount(3);
+  await expect(page.getByTestId("project-card")).toHaveCount(projectCount);
   await page.waitForFunction(() =>
     [...document.querySelectorAll(".animation-card img")].every(
       (i) =>
@@ -31,13 +38,23 @@ test("library search, renderer filters, real posters and asset navigation", asyn
     ),
   );
   await page.getByRole("button", { name: "3D 场景", exact: true }).click();
-  await expect(page.getByTestId("project-card")).toHaveCount(1);
+  await expect(page.getByTestId("project-card")).toHaveCount(
+    projectCatalog.filter((project) => project.renderer === "three").length,
+  );
   await page.getByRole("button", { name: /全部作品/ }).click();
   await page.getByRole("textbox", { name: "搜索动画" }).fill("种子");
-  await expect(page.getByTestId("project-card")).toHaveCount(1);
+  await expect(page.getByTestId("project-card")).toHaveCount(
+    projectCatalog.filter((project) =>
+      [project.title, project.subtitle, ...project.tags]
+        .join(" ")
+        .includes("种子"),
+    ).length,
+  );
   await page.getByRole("link", { name: "素材库", exact: true }).click();
-  await expect(page.locator(".asset-card")).toHaveCount(9);
-  await expect(page.locator("audio")).toHaveCount(3);
+  await expect(page.locator(".asset-card")).toHaveCount(assetCatalog.length);
+  await expect(page.locator("audio")).toHaveCount(
+    assetCatalog.filter((a) => a.type === "audio").length,
+  );
   await page.getByRole("link", { name: "制作指南", exact: true }).click();
   await expect(page.getByText("把下一个故事，放进来。")).toBeVisible();
   expect(errors).toEqual([]);
@@ -162,7 +179,7 @@ test("responsive library and player fit a narrow phone viewport", async ({
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto("/");
-  await expect(page.getByTestId("project-card")).toHaveCount(3);
+  await expect(page.getByTestId("project-card")).toHaveCount(projectCount);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

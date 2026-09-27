@@ -1,0 +1,24 @@
+import { test, expect } from '@playwright/test';
+import '../../src/engine/debug';
+
+test('__ID__: direct and reverse seeks reconstruct the same frame', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto('/?debug=1#/film/__ID__');
+  await page.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  const result = await page.evaluate(() => {
+    const api = window.__FRAME_STUDIO__!;
+    const a = api.duration * 0.2, b = api.duration * 0.7;
+    api.frame(a, false); const first = api.dataURL();
+    api.frame(b, false); const middle = api.dataURL();
+    api.frame(a, false); const reverse = api.dataURL();
+    return { first, middle, reverse };
+  });
+  expect(result.first.length).toBeGreaterThan(1000);
+  expect(result.middle).not.toBe(result.first);
+  expect(result.reverse).toBe(result.first);
+  expect(errors).toEqual([]);
+  // Extend the test when changing time mapping, playback or resource lifecycle.
+  // This template only verifies the Scene interface.
+});
