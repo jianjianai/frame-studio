@@ -103,6 +103,8 @@ export interface GeneratedAudioOptions {
   rate: number;
 }
 export interface GeneratedAudioModule {
+  /** Optional preparation before playback starts; never start nodes or a separate clock here. */
+  prepareAudio?(context: BaseAudioContext): void | Promise<void>;
   createAudio(options: GeneratedAudioOptions): { dispose(): void };
 }
 export function projectAudioTracks(

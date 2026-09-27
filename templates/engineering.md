@@ -6,7 +6,8 @@
 - `audio.ts`：可选实时生成音轨示例，在元数据配置 audioTracks 和 loadAudio 后启用。
 - `public/`：运行素材，URL 为 `films/{{PROJECT_ID}}/`，assets.json 和 waveforms.json 属于本项目。
 - `production/`：原始源文件、参数与来源/许可证。
-- `production/brief.md`：本任务要求、镜头与声音选择、实际验证记录，可按任务需要填写。
+- `production/brief.md`：需求与镜头、声音设计说明，可按任务需要填写。
+- [records/](records/README.md)：独立保存修改记录、验证报告和审查结论，不追加到本文。
 - `scripts/`：专属工具；`tests/`：单元/浏览器测试。
 - `exports/`、`.cache/`：忽略的生成结果和临时文件。
 

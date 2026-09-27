@@ -42,10 +42,10 @@
     "license": "项目原创 / Original project asset"
   },
   {
-    "name": "paper-wings.wav",
-    "url": "films/paper-wings/audio/paper-wings.wav",
-    "type": "audio",
-    "bytes": 6144078,
-    "license": "原创作曲与音效；GeneralUser GS 乐器采样，见 projects/paper-wings/production/music/GENERALUSER-LICENSE.txt"
+    "name": "GeneralUser GS 2.0.3",
+    "url": "films/paper-wings/music/GeneralUser-GS.sf2",
+    "type": "soundfont",
+    "bytes": 32319396,
+    "license": "Chris Collins / GeneralUser GS v2.0.3；完整许可见本项目 public/music/GENERALUSER-LICENSE.txt"
   }
 ]

@@ -1,6 +1,6 @@
 # 音轨、旁白与代码生成声音
 
-播放器直接支持多音轨，无需先合成完整混音文件。文件音轨和代码生成音轨可以同时播放，统一使用公共时间轴。
+播放器直接支持多音轨，无需先合成完整混音文件。已有音乐、旁白、录音和音效素材直接配置文件音轨，由浏览器加载、解码、裁切、调音和混合；代码生成声音使用生成接口，乐器采样则加载原素材并按乐谱播放。各类音轨共用公共时间轴。
 
 在项目 `project.ts` 配置：
 
@@ -41,4 +41,10 @@ pnpm audio:mix my-film projects/my-film/production/mix.json
 
 默认拒绝覆盖，明确加 `--force` 可替换指定输出。工具只更新该项目的素材和波形索引。FFmpeg 可通过 FFMPEG_PATH 指定。
 
-三个现有 Demo 保留原来的已提交音频。`pnpm music:build <id>` 可选重建指定作品的采样音乐、MIDI 和动作音效；只写该项目目录。它需要采样库及 FFmpeg，不是新实时音频接口的必需步骤。
+## 现有 Demo 的原采样配乐
+
+三个 Demo 均已接入生成音轨，`audio.ts` 提供入口，`music/score.mjs` 保存乐谱，`music/foley.mjs` 保存动作音效。两轨可独立调节。乐器部分继续使用原 GeneralUser GS 2.0.3 采样库、原乐谱和 spessasynth_core 4.3.22。素材与完整许可随各项目 public/music 保存，浏览器读取素材，在后台线程处理乐谱和声音；不使用新的合成音色替换。动作音效保留原代码与固定种子，不依赖预合成整曲 WAV。
+
+`src/engine/procedural-audio.ts` 的 `createPcmAudio({ music: () => stereoPcm, foley: () => stereoPcm })` 是短片辅助接口：默认 48 kHz，生成器返回左右两个 Float32Array 或它们的 Promise。导出其 `prepareAudio` 和 `createAudio` 即可接入播放器。可选的 `prepareAudio(context)` 在公共时钟开始前准备数据；只缓存 AudioBuffer，不缓存节点、上下文或独立计时器。每个模块实例首次使用时生成一次，跨播放、跳转及离线导出复用，修改代码后重新载入生成器。
+
+此辅助器缓存完整短片的双声道数据，48 kHz 每轨每秒约 384 KB；长片或流式音源应自行实现按片段生成的 createAudio。旧 MIDI、事件快照与测量报告保存在各项目 records 中。运行所需的原采样和许可在 public/music；createSampledScoreAudio 负责素材加载、摘要核对、后台采样与内存缓存。

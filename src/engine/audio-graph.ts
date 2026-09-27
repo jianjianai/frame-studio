@@ -34,6 +34,7 @@ export async function prepareAudio(
     : undefined;
   if (tracks.some((t) => t.kind === "generated") && !generated)
     throw new Error("缺少代码音轨生成器");
+  await generated?.prepareAudio?.(context);
   return { tracks, buffers, generated };
 }
 export function trackSegment(

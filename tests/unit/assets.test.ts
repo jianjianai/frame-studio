@@ -11,12 +11,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { waveformFromWav } from "../../scripts/waveforms.mjs";
+import { testWav } from "../helpers/wav";
 const root = process.cwd();
 describe("actual PCM waveforms", () => {
   it("indexes every bin with finite real sound levels", () => {
-    const values = waveformFromWav(
-      readFileSync("projects/paper-wings/public/audio/paper-wings.wav"),
-    );
+    const values = waveformFromWav(testWav());
     expect(values).toHaveLength(180);
     expect(values.every((n) => Number.isFinite(n) && n >= 0 && n <= 1)).toBe(
       true,
@@ -24,9 +23,7 @@ describe("actual PCM waveforms", () => {
     expect(Math.max(...values)).toBeGreaterThan(0.1);
   });
   it("handles metadata chunks before the PCM data", () => {
-    const original = readFileSync(
-      "projects/paper-wings/public/audio/paper-wings.wav",
-    );
+    const original = testWav();
     const metadata = Buffer.alloc(12);
     metadata.write("LIST", 0);
     metadata.writeUInt32LE(4, 4);
@@ -40,7 +37,7 @@ describe("actual PCM waveforms", () => {
     expect(waveformFromWav(withMetadata)).toEqual(waveformFromWav(original));
   });
   it("rejects truncated or unsupported audio instead of fabricating a waveform", () => {
-    const data = readFileSync("projects/tiny-seed/public/audio/tiny-seed.wav");
+    const data = testWav();
     expect(() => waveformFromWav(data.subarray(0, 100))).toThrow();
     const other = Buffer.from(data);
     other.writeUInt16LE(3, 20);

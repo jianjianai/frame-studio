@@ -1,13 +1,5 @@
-> 当前路径：插画位于 projects/paper-wings/public/art/；音频位于 projects/<id>/public/audio/；各作品的音乐源文件与许可位于 projects/<id>/production/music/。以下保留原始归属说明。
+# 公共素材与作品归属
 
-# 素材说明
+公共 vendor/ 中的 Draco 与 Basis 解码器来自 Three.js，沿用目录内许可证。作品的插画、场景、乐谱与动作音效归属见各 projects/<id>/production/ASSET-LICENSES.md。
 
-art/ 中的演示插画、三个 Demo 的场景、角色动作与摄影机设计由本项目原创制作；播放无需远程素材服务。vendor/ 为 Three.js 附带的 Draco 与 Basis 解码器，沿用其目录内原有许可证。
-
-## 三个 Demo 的新配乐
-
-`audio/paper-wings.wav`、`audio/sunny-rail.wav`、`audio/tiny-seed.wav` 的旋律、编配和动作音效为本项目制作。乐器声音通过 GeneralUser GS v2.0.3 采样库离线渲染，不属于本项目原创采样，也不是真人现场演奏。
-
-乐谱、MIDI、重建说明和完整许可保存在 `production/music/`。GeneralUser GS 许可允许音乐创作，但作者对部分历史采样最初来源的说明与不确定性也完整保留在 `GENERALUSER-LICENSE.txt`，不将这些采样标成无条件自有素材。采样库只作本地构建缓存，不随网页资源打包。
-
-三个母带为 48kHz、16-bit、双声道完整混音；配乐与音效分轨位于本地 `exports/demo-polish/audio/`。
+三个 Demo 继续使用原 GeneralUser GS v2.0.3 乐器采样，采样素材与完整许可在各项目 public/music/，由浏览器按原乐谱处理播放。动作音效代码保留在各自 music/。历史母带、来源说明和测量记录的归档入口在 records/legacy-music/ 及各项目 records/，当前许可不因目录迁移而省略。

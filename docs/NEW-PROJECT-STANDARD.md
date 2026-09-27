@@ -7,12 +7,14 @@
 ```text
 projects/<id>/
   AGENTS.md                 仅允许修改本项目的约定
-  README.md                 工程入口、依赖、脚本与验证
+  README.md                 工程入口、依赖、脚本与测试用法
   project.ts                静态元数据
   scene.ts                  场景入口
   audio.ts                  可选的浏览器音频生成器
+  music/                    可选的程序乐谱、音色和音效源码
   public/                   浏览器运行素材、音轨、封面、独立索引
   production/               原始材料、MIDI、参数、来源与许可
+  records/                  修改记录、验证报告、审查结论
   scripts/                  工程专属处理脚本
   tests/unit/ tests/e2e/     工程专属测试，自动发现
   exports/ .cache/           生成结果与临时文件，不提交
@@ -66,6 +68,8 @@ pnpm frame my-film --frame 150
 公共维护运行 `pnpm verify`；项目任务执行结构检查、本工程测试和修改边界检查。严格模式只提升工程警告，不评判内容。测试依据源元数据，不写死工程数。独立使用 `FRAME_TEST_PORT`，不复用未知服务，不结束他人进程。
 
 ## 5. 协作与依赖
+
+过程文档与工程说明分开：仓库公共维护的修改记录、报告和审查放根 `records/`；工程专属记录放自己的 `records/`。README 和 production/brief.md 保留稳定说明、需求与设计，不追加历次验证结果，必要时链接记录目录。已有历史记录只代表当时状态。
 
 开始前读根 AGENTS.md、接口说明与项目 README，检查 Git 状态和 HEAD。共享文件修改前重新读取，只改必要内容。未经授权不重置、清理或暂存他人的改动。
 

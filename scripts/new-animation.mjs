@@ -83,7 +83,13 @@ try {
       "utf8",
     ),
   ]);
-  for (const name of ["public", "production", "scripts", "tests/e2e"])
+  for (const name of [
+    "public",
+    "production",
+    "records",
+    "scripts",
+    "tests/e2e",
+  ])
     await fs.mkdir(path.join(stage, name), { recursive: true });
   const meta = {
     id,
@@ -158,7 +164,11 @@ try {
   );
   await fs.writeFile(
     path.join(stage, "production/brief.md"),
-    "# 制作记录\n\n## 本次任务\n记录用户要求与已确认的选择；未确认的内容标为待定。\n\n## 镜头和声音\n记录镜头时间、画面变化、音轨及资源来源。\n\n## 实际验证\n记录检查命令、结果与需要继续确认的事项。\n",
+    "# 制作说明\n\n## 本次任务\n记录用户要求与已确认的选择；未确认的内容标为待定。\n\n## 镜头和声音\n记录镜头时间、画面变化、音轨及资源来源。\n\n修改记录、验证报告和审查结论统一放在 [records](../records/README.md)。\n",
+  );
+  await fs.writeFile(
+    path.join(stage, "records/README.md"),
+    "# 项目过程记录\n\n本目录独立保存本视频的修改记录、验证报告和审查结论，建议按 YYYY-MM-DD-topic.md 命名。只记录实际发生的工作与检查，不把计划当作结果。\n\n工程说明见 [README](../README.md)，需求与设计见 [制作说明](../production/brief.md)。\n",
   );
   await fs.writeFile(path.join(stage, "public/assets.json"), "[]\n");
   await fs.writeFile(path.join(stage, "public/waveforms.json"), "{}\n");

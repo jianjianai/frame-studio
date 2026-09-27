@@ -147,6 +147,7 @@ export default function App() {
 function Gallery() {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
+  const featured = findProject("sunny-rail") ?? projects[0];
   const shown = projects.filter(
     (p) =>
       (filter === "all" || p.renderer === filter) &&
@@ -169,50 +170,60 @@ function Gallery() {
           <Sparkles size={16} /> 制作新动画 <ArrowUpRight size={16} />
         </a>
       </header>
-      <section className="hero-banner">
-        <div className="hero-copy">
-          <span className="eyebrow">
-            <i /> FRAME / ENGINE DEMOS
-          </span>
-          <h2>
-            让故事，
-            <br />
-            <em>真正动起来。</em>
-          </h2>
-          <p>
-            不再从一张空白 HTML 开始。
-            <br />
-            在同一个工作台，让素材、动作、镜头与声音相遇。
-          </p>
-          <a href="#/film/sunny-rail" className="hero-link">
-            <span>
-              <Play size={17} fill="currentColor" />
-            </span>{" "}
-            播放《日光快线》
-            <ArrowRight size={17} />
-          </a>
-          <div className="hero-footnote">
-            36 SEC <b>—</b> THREE.JS <b>—</b> ORIGINAL DEMO
+      {featured && (
+        <section className="hero-banner">
+          <div className="hero-copy">
+            <span className="eyebrow">
+              <i /> FRAME / ENGINE DEMOS
+            </span>
+            <h2>
+              让故事，
+              <br />
+              <em>真正动起来。</em>
+            </h2>
+            <p>
+              不再从一张空白 HTML 开始。
+              <br />
+              在同一个工作台，让素材、动作、镜头与声音相遇。
+            </p>
+            <a href={"#/film/" + featured.id} className="hero-link">
+              <span>
+                <Play size={17} fill="currentColor" />
+              </span>{" "}
+              播放《{featured.title}》
+              <ArrowRight size={17} />
+            </a>
+            <div className="hero-footnote">
+              {featured.duration} SEC <b>—</b>{" "}
+              {featured.renderer === "three"
+                ? "THREE.JS"
+                : featured.renderer.toUpperCase()}{" "}
+              <b>—</b> ORIGINAL DEMO
+            </div>
           </div>
-        </div>
-        <a
-          className="hero-art"
-          href="#/film/sunny-rail"
-          aria-label="播放日光快线"
-        >
-          <img
-            src={assetUrl("posters/sunny-rail.webp")}
-            alt="微缩岛屿上的橙色列车、车站与风车"
-          />
-          <span className="art-label">
-            <span>ISLAND EXPRESS</span>
-            <small>A SMALL WORLD, IN MOTION.</small>
-          </span>
-          <span className="art-corner">
-            <ArrowUpRight size={24} />
-          </span>
-        </a>
-      </section>
+          <a
+            className="hero-art"
+            href={"#/film/" + featured.id}
+            aria-label={"播放" + featured.title}
+          >
+            <img
+              src={assetUrl(featured.poster)}
+              alt={featured.title + " · 作品封面"}
+            />
+            <span className="art-label">
+              <span>
+                {featured.id === "sunny-rail"
+                  ? "ISLAND EXPRESS"
+                  : featured.title}
+              </span>
+              <small>A SMALL WORLD, IN MOTION.</small>
+            </span>
+            <span className="art-corner">
+              <ArrowUpRight size={24} />
+            </span>
+          </a>
+        </section>
+      )}
       <div className="library-toolbar">
         <div className="filter-tabs">
           {[
@@ -300,7 +311,7 @@ function Gallery() {
 interface Asset {
   name: string;
   url: string;
-  type: "image" | "audio" | "video" | "model";
+  type: "image" | "audio" | "video" | "model" | "soundfont";
   bytes: number;
   license: string;
 }
@@ -345,6 +356,7 @@ function AssetLibrary() {
           ["all", "全部素材"],
           ["image", "插画与图像"],
           ["audio", "音乐与音效"],
+          ["soundfont", "乐器采样"],
           ["model", "3D 模型"],
           ["video", "视频"],
         ].map(([k, label]) => (
@@ -371,6 +383,8 @@ function AssetLibrary() {
                     <Music2 size={34} />
                     <audio controls preload="metadata" src={assetUrl(a.url)} />
                   </>
+                ) : a.type === "soundfont" ? (
+                  <Music2 size={34} />
                 ) : a.type === "video" ? (
                   <video controls preload="metadata" src={assetUrl(a.url)} />
                 ) : (

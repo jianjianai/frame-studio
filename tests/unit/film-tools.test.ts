@@ -98,6 +98,15 @@ describe("AI-facing film commands", () => {
       expect(
         fs.existsSync(path.join(root, "projects/my-film/production/brief.md")),
       ).toBe(true);
+      expect(
+        fs.existsSync(path.join(root, "projects/my-film/records/README.md")),
+      ).toBe(true);
+      const context = JSON.parse(
+        run(["context", "my-film", "--json"], root).stdout,
+      );
+      expect(context.recordDirectory).toBe(
+        path.join(root, "projects/my-film/records"),
+      );
       expect(fs.readFileSync(path.join(root, "shared.txt"), "utf8")).toBe(
         "unchanged",
       );

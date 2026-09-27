@@ -10,9 +10,24 @@ import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import sharp from "sharp";
+import { testWav } from "../helpers/wav";
 let server: ViteDevServer, origin: string;
 test.beforeAll(async () => {
   server = await createServer({
+    plugins: [
+      {
+        name: "owned-audio-fixture",
+        configureServer(server) {
+          server.middlewares.use(
+            "/films/audio-fixture.wav",
+            (_request, response) => {
+              response.setHeader("Content-Type", "audio/wav");
+              response.end(testWav());
+            },
+          );
+        },
+      },
+    ],
     logLevel: "error",
     server: { host: "127.0.0.1", port: 0, strictPort: false },
   });
@@ -401,7 +416,7 @@ test("real Web Audio mixes files and generated tracks with trim, timing, mute an
       id: "file",
       name: "文件",
       kind: "file",
-      src: original.audio,
+      src: "films/audio-fixture.wav",
       gain: 0.3,
     };
     const synthTrack = {
@@ -492,7 +507,12 @@ test("transport caches decoded audio, reschedules generated voices and disposes 
       audio: undefined,
       duration: 2,
       audioTracks: [
-        { id: "file", name: "文件", kind: "file", src: original.audio },
+        {
+          id: "file",
+          name: "文件",
+          kind: "file",
+          src: "films/audio-fixture.wav",
+        },
         { id: "code", name: "代码", kind: "generated" },
       ],
       loadAudio: async () => ({
@@ -558,4 +578,207 @@ test("transport caches decoded audio, reschedules generated voices and disposes 
     looped: true,
     state: "closed",
   });
+});
+
+test("migrated demos load instrument samples and generate both tracks without premixed files and retain exact seek/export samples", async ({
+  page,
+}) => {
+  const mediaRequests: string[] = [];
+  page.on("request", (request) => {
+    if (/\.(wav|mp3|ogg)(?:\?|$)/i.test(request.url()))
+      mediaRequests.push(request.url());
+  });
+  await page.goto(origin + "/?render=tiny-seed&width=320");
+  await page.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
+  for (const id of ["paper-wings", "sunny-rail", "tiny-seed"]) {
+    const result = await page.evaluate(async (id) => {
+      const graphURL = "/src/engine/audio-graph.ts";
+      const { OfflineAudioRenderer, prepareAudio, scheduleAudio } =
+        await import(graphURL);
+      const { default: project } = await import(`/projects/${id}/project.ts`);
+      if (
+        project.audio ||
+        project.audioTracks.length !== 2 ||
+        project.audioTracks.some(
+          (t: { kind: string }) => t.kind !== "generated",
+        )
+      )
+        throw new Error("Demo still uses a premixed file track");
+      const renderer = new OfflineAudioRenderer(project);
+      const full = await renderer.render(7.125, 2);
+      const later = await renderer.render(8.125, 1);
+      const earlier = await renderer.render(7.125, 1);
+      const solo = async (muted: string) => {
+        const r = new OfflineAudioRenderer(
+          project,
+          new Map([[muted, { gain: 1, muted: true }]]),
+        );
+        try {
+          return await r.render(7.125, 2);
+        } finally {
+          r.dispose();
+        }
+      };
+      const music = await solo("foley"),
+        foley = await solo("music");
+      let chunkError = 0,
+        mixError = 0,
+        musicEnergy = 0,
+        foleyEnergy = 0;
+      for (let channel = 0; channel < 2; channel++) {
+        const all = full.getChannelData(channel),
+          a = earlier.getChannelData(channel),
+          b = later.getChannelData(channel);
+        const m = music.getChannelData(channel),
+          f = foley.getChannelData(channel);
+        for (let i = 0; i < all.length; i++) {
+          chunkError = Math.max(
+            chunkError,
+            Math.abs(all[i] - (i < a.length ? a[i] : b[i - a.length])),
+          );
+          mixError = Math.max(mixError, Math.abs(all[i] - m[i] - f[i]));
+          musicEnergy += m[i] ** 2;
+          foleyEnergy += f[i] ** 2;
+        }
+      }
+      const fastContext = new OfflineAudioContext(2, 48000, 48000);
+      const prepared = await prepareAudio(project, fastContext);
+      const graph = scheduleAudio(
+        prepared,
+        fastContext,
+        fastContext.destination,
+        project.duration,
+        7.125,
+        2,
+        0,
+        2,
+      );
+      const fast = await fastContext.startRendering();
+      graph.dispose();
+      let rateError = 0;
+      for (let i = 64; i < 47936; i++)
+        rateError = Math.max(
+          rateError,
+          Math.abs(fast.getChannelData(0)[i] - full.getChannelData(0)[i * 2]),
+        );
+      let peak = 0,
+        energy = 0,
+        samples = 0,
+        tailEnergy = 0;
+      for (let start = 0; start < project.duration; start += 8) {
+        const part = await renderer.render(
+          start,
+          Math.min(8, project.duration - start),
+        );
+        for (let channel = 0; channel < 2; channel++)
+          for (const [i, value] of part.getChannelData(channel).entries()) {
+            peak = Math.max(peak, Math.abs(value));
+            energy += value * value;
+            samples++;
+            if (start + i / 48000 >= project.duration - 0.15)
+              tailEnergy += value * value;
+          }
+      }
+      renderer.dispose();
+      return {
+        chunkError,
+        mixError,
+        rateError,
+        musicEnergy,
+        foleyEnergy,
+        peak,
+        rms: Math.sqrt(energy / samples),
+        tailRms: Math.sqrt(tailEnergy / 14400),
+      };
+    }, id);
+    await test
+      .info()
+      .attach(id + "-sampled-audio.json", {
+        body: JSON.stringify(result),
+        contentType: "application/json",
+      });
+    expect(result.chunkError).toBeLessThan(1e-6);
+    expect(result.mixError).toBeLessThan(1e-6);
+    expect(result.rateError).toBeLessThan(0.002);
+    expect(result.musicEnergy).toBeGreaterThan(10);
+    expect(result.foleyEnergy).toBeGreaterThan(0.0001);
+    expect(result.peak).toBeLessThan(0.95);
+    expect(result.rms).toBeGreaterThan(0.015);
+    expect(result.tailRms).toBeLessThan(0.003);
+  }
+  expect(mediaRequests).toEqual([]);
+});
+
+test("PCM preparation runs once across realtime and offline contexts; stopped voices are independent", async ({
+  page,
+}) => {
+  await page.goto(origin + "/?render=tiny-seed&width=320");
+  await page.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
+  const result = await page.evaluate(async () => {
+    const moduleURL = "/src/engine/procedural-audio.ts";
+    const { createPcmAudio } = await import(moduleURL);
+    let generated = 0;
+    const audio = createPcmAudio({
+      tone: () => {
+        generated++;
+        return [
+          new Float32Array(48000).fill(0.1),
+          new Float32Array(48000).fill(0.2),
+        ];
+      },
+    });
+    const live = new AudioContext();
+    try {
+      await audio.prepareAudio(live);
+      const voice = audio.createAudio({
+        trackId: "tone",
+        context: live,
+        destination: live.destination,
+        when: live.currentTime + 10,
+        offset: 0,
+        duration: 0.5,
+        rate: 1,
+      });
+      voice.dispose();
+      voice.dispose();
+      const offline = new OfflineAudioContext(2, 48000, 48000);
+      await audio.prepareAudio(offline);
+      const other = audio.createAudio({
+        trackId: "tone",
+        context: offline,
+        destination: offline.destination,
+        when: 0.125,
+        offset: 0.25,
+        duration: 0.5,
+        rate: 2,
+      });
+      const rendered = await offline.startRendering();
+      other.dispose();
+      const samples = rendered.getChannelData(0);
+      const beyond = audio.createAudio({
+        trackId: "tone",
+        context: offline,
+        destination: offline.destination,
+        when: 0,
+        offset: 2,
+        duration: 1,
+        rate: 1,
+      });
+      beyond.dispose();
+      return {
+        generated,
+        before: samples[5000],
+        during: samples[10000],
+        after: samples[19000],
+        right: rendered.getChannelData(1)[10000],
+      };
+    } finally {
+      await live.close();
+    }
+  });
+  expect(result.generated).toBe(1);
+  expect(result.before).toBe(0);
+  expect(result.after).toBe(0);
+  expect(result.during).toBeCloseTo(0.1, 6);
+  expect(result.right).toBeCloseTo(0.2, 6);
 });

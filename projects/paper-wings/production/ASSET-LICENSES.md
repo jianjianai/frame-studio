@@ -1,13 +1,7 @@
-> 本记录随目录迁移保留原始素材归属说明。当前项目运行资源位于本项目 public/，音乐源文件与许可位于本目录 music/。
+# 风的邮差 · 素材来源
 
-# 素材说明
+本作品的场景、角色、动作与摄影机设计为项目原创。本作品 public/art 中的插画亦为项目原创。
 
-art/ 中的演示插画、三个 Demo 的场景、角色动作与摄影机设计由本项目原创制作；播放无需远程素材服务。vendor/ 为 Three.js 附带的 Draco 与 Basis 解码器，沿用其目录内原有许可证。
+原有配乐的旋律、编配与动作音效代码在本项目 music/。乐器声音继续使用 Chris Collins 的 GeneralUser GS v2.0.3 采样库，由 spessasynth_core 4.3.22 在浏览器中按乐谱生成，不将乐器采样宣称为项目原创或真人演奏。
 
-## 三个 Demo 的新配乐
-
-`audio/paper-wings.wav`、`audio/sunny-rail.wav`、`audio/tiny-seed.wav` 的旋律、编配和动作音效为本项目制作。乐器声音通过 GeneralUser GS v2.0.3 采样库离线渲染，不属于本项目原创采样，也不是真人现场演奏。
-
-乐谱、MIDI、重建说明和完整许可保存在 `production/music/`。GeneralUser GS 许可允许音乐创作，但作者对部分历史采样最初来源的说明与不确定性也完整保留在 `GENERALUSER-LICENSE.txt`，不将这些采样标成无条件自有素材。采样库只作本地构建缓存，不随网页资源打包。
-
-三个母带为 48kHz、16-bit、双声道完整混音；配乐与音效分轨位于本地 `projects/paper-wings/exports/audio/`。
+采样库随本项目 public/music 分发，完整 [GeneralUser GS 许可原文](../public/music/GENERALUSER-LICENSE.txt) 必须与素材一起保留，其中包含作者对部分历史样本来源的说明。原 MIDI、事件快照、归属说明和测量报告保存在本项目 records 中，历史母带测量不代表新浏览器实现已经验证。

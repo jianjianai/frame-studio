@@ -12,7 +12,10 @@ const project: AnimationProject = {
     accent: "#edaa7e",
   poster: "films/paper-wings/poster.webp",
   posterTime: 25,
-    audio: "films/paper-wings/audio/paper-wings.wav",
+    audioTracks: [
+      { id: "music", name: "采样配乐", kind: "generated", gain: 1 },
+      { id: "foley", name: "动作音效", kind: "generated", gain: 1 },
+    ],
     tags: ["2D 分层插画", "视差镜头", "路径运动"],
     status: "demo",
     beats: [
@@ -66,5 +69,6 @@ const project: AnimationProject = {
     ],
   },
   load: () => import("./scene"),
+  loadAudio: () => import("./audio"),
 };
 export default project;

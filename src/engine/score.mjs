@@ -1,5 +1,5 @@
 // Original, explicitly voiced miniatures. Beat positions are a score, not a random-note loop.
-// Instrument samples are supplied separately by GeneralUser GS; see each project's production/music/README.md.
+// Original instrument samples are loaded by soundfont-audio.ts; each project owns its sources.
 const pitches = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
 export function midiNote(value) {
   if (Number.isInteger(value) && value >= 0 && value <= 127) return value;
@@ -137,14 +137,9 @@ export function scoreMidi(score) {
     bytes.push(...vlq(e.tick - last), ...e.data);
     last = e.tick;
   }
-  const header = Buffer.alloc(14);
-  header.write("MThd");
-  header.writeUInt32BE(6, 4);
-  header.writeUInt16BE(0, 8);
-  header.writeUInt16BE(1, 10);
-  header.writeUInt16BE(480, 12);
-  const track = Buffer.alloc(8);
-  track.write("MTrk");
-  track.writeUInt32BE(bytes.length, 4);
-  return Buffer.concat([header, track, Buffer.from(bytes)]);
+  const output = new Uint8Array(22 + bytes.length);
+  output.set([77, 84, 104, 100, 0, 0, 0, 6, 0, 0, 0, 1, 1, 224, 77, 84, 114, 107]);
+  new DataView(output.buffer).setUint32(18, bytes.length);
+  output.set(bytes, 22);
+  return output;
 }

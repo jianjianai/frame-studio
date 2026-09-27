@@ -13,7 +13,7 @@ pnpm project:check my-film --strict
 pnpm project:scope my-film
 ```
 
-自动注册 `projects/*/project.ts`。工程私有模块、脚本、测试都在本目录；可以只读调用 `../../src/engine/` 接口。`public/` 是运行素材，`production/` 是非运行源文件与许可，`exports/` 是忽略的导出结果。`assetUrl('films/my-film/image.webp')` 对应 `projects/my-film/public/image.webp`。
+自动注册 `projects/*/project.ts`。工程私有模块、脚本、测试都在本目录；可以只读调用 `../../src/engine/` 接口。`public/` 是运行素材，`production/` 是非运行源文件与许可，`records/` 单独保存修改记录、验证报告与审查结论，`exports/` 是忽略的导出结果。`assetUrl('films/my-film/image.webp')` 对应 `projects/my-film/public/image.webp`。
 
 `tests/unit/` 与 `tests/e2e/` 位于项目目录，Vitest/Playwright 自动发现；无需修改公共测试列表。独立测试端口通过 `FRAME_TEST_PORT` 配置。
 
@@ -73,6 +73,8 @@ export function createAudio(options: GeneratedAudioOptions) {
   };
 }
 ```
+
+可选导出 `prepareAudio(context): void | Promise<void>`，在播放时钟启动前准备和缓存生成数据；此阶段不得启动声音节点或独立时钟。短片可用 `createPcmAudio` 生成一次并在内存复用，详见 [AUDIO.md](AUDIO.md)。
 
 生成器必须支持任意 offset 独立重建，不能依赖上一段运行历史。实时播放使用 AudioContext；浏览器和命令导出都使用 OfflineAudioContext。命令每段最多 10 秒，浏览器以最多 1 秒音频片段和视频交错编码。滤波、混响等需要历史的效果必须根据源时间重建预滚动状态或解析状态，避免分段交界变化。随机噪声使用固定种子/源时间。不要在模块导入时播放声音或访问文件系统。
 

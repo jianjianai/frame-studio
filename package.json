@@ -23,7 +23,6 @@
     "assets:import": "node scripts/import-asset.mjs",
     "animation:new": "node scripts/new-animation.mjs",
     "audio:mix": "node scripts/mix-audio.mjs",
-    "music:build": "node scripts/music/render-scores.mjs",
     "project:scope": "node scripts/project-scope.mjs",
     "frame": "node scripts/render.mjs --frame-mode",
     "project:check": "node scripts/check-projects.mjs",
@@ -37,6 +36,7 @@
     "pixi.js": "8.21.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "spessasynth_core": "4.3.22",
     "three": "0.186.1",
     "zod": "4.6.5"
   },
@@ -51,7 +51,6 @@
     "@vitejs/plugin-react": "6.1.1",
     "prettier": "3.9.9",
     "sharp": "0.35.4",
-    "spessasynth_core": "4.3.22",
     "svgo": "4.1.0",
     "typescript": "7.0.2",
     "vite": "8.3.1",

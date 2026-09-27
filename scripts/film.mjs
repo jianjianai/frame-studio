@@ -51,6 +51,7 @@ export function inspectProject(root, id) {
     assets: JSON.parse(read("public/assets.json") ?? "[]"),
     writeBoundary: `projects/${id}/`,
     outputDirectory: projectPath(root, id, "exports"),
+    recordDirectory: projectPath(root, id, "records"),
     files: {
       instructions: read("AGENTS.md"),
       readme: read("README.md"),
@@ -109,13 +110,13 @@ export function runFilm(args, root = process.cwd()) {
           "Scene.render(time) and generated audio must support arbitrary absolute time; seed randomness",
           "Use context/inspect/check for facts; storyboard/frame for visual review; never equate structural checks with content acceptance",
           "Use a short render to verify timing and audio before a full export; do not repeat full renders without a reason",
-          "Record input/output/overwrite behavior of private scripts and actual validation results in the project README",
+          "Keep private script usage in the project README; put change logs, validation reports and reviews in recordDirectory, separate from README and production/brief.md",
         ];
       }
       console.log(
         json
           ? JSON.stringify(report, null, 2)
-          : `# ${report.metadata.title} (${report.id})\n\nWrite only: ${report.writeBoundary}\n\n${report.files.instructions ?? ""}\n${report.files.readme ?? ""}\n${report.files.brief ?? ""}\n\n${report.workflow?.map((s) => "- " + s).join("\n") ?? ""}\n\nMetadata:\n${JSON.stringify(report.metadata, null, 2)}\n\nCommands:\n${Object.values(report.commands).join("\n")}`,
+          : `# ${report.metadata.title} (${report.id})\n\nWrite only: ${report.writeBoundary}\nRecords: ${report.recordDirectory}\n\n${report.files.instructions ?? ""}\n${report.files.readme ?? ""}\n${report.files.brief ?? ""}\n\n${report.workflow?.map((s) => "- " + s).join("\n") ?? ""}\n\nMetadata:\n${JSON.stringify(report.metadata, null, 2)}\n\nCommands:\n${Object.values(report.commands).join("\n")}`,
       );
     }
     return 0;

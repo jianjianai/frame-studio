@@ -9,6 +9,7 @@ export function inspectProject(
   metadata: Record<string, unknown>;
   writeBoundary: string;
   outputDirectory: string;
+  recordDirectory: string;
   [key: string]: unknown;
 };
 export function runFilm(args: string[], root?: string): number;

@@ -9,12 +9,13 @@ import {
   trainProgress,
   arcLengthLookup,
 } from "../../projects/sunny-rail/motion.mjs";
-import {
-  allScores,
-  scoreEvents,
-  scoreMidi,
-  midiNote,
-} from "../../scripts/music/scores.mjs";
+import { scoreEvents, scoreMidi, midiNote } from "../../src/engine/score.mjs";
+
+import { paperWings } from "../../projects/paper-wings/music/score.mjs";
+import { sunnyRail } from "../../projects/sunny-rail/music/score.mjs";
+import { tinySeed } from "../../projects/tiny-seed/music/score.mjs";
+import { testWav } from "../helpers/wav";
+const allScores = () => [paperWings(), sunnyRail(), tinySeed()];
 
 const keys: CameraKey[] = [
   [0, 1],
@@ -143,110 +144,41 @@ describe("authored instrumental scores", () => {
       const events = scoreEvents(score);
       for (let i = 1; i < events.length; i++)
         expect(events[i].t).toBeGreaterThanOrEqual(events[i - 1].t);
-      const midi = scoreMidi(score);
+      const midi = Buffer.from(scoreMidi(score));
       expect(midi.subarray(0, 4).toString()).toBe("MThd");
       expect(midi.subarray(14, 18).toString()).toBe("MTrk");
       expect(midi.readUInt32BE(18)).toBe(midi.length - 22);
       expect(midi).toEqual(
-        scoreMidi(allScores().find((s) => s.id === score.id)!),
+        Buffer.from(scoreMidi(allScores().find((s) => s.id === score.id)!)),
       );
       expect(
         fs.readFileSync(
-          `projects/${score.id}/production/music/${score.id}.mid`,
+          `projects/${score.id}/records/legacy-music/${score.id}.mid`,
         ),
       ).toEqual(midi);
     });
 });
-function pcm(bytes: Buffer) {
-  let sampleRate = 0,
-    channels = 0,
-    bits = 0,
-    offset = 0,
-    size = 0;
-  for (let i = 12; i + 8 <= bytes.length;) {
-    const tag = bytes.subarray(i, i + 4).toString(),
-      len = bytes.readUInt32LE(i + 4);
-    if (tag === "fmt ") {
-      expect(bytes.readUInt16LE(i + 8)).toBe(1);
-      channels = bytes.readUInt16LE(i + 10);
-      sampleRate = bytes.readUInt32LE(i + 12);
-      bits = bytes.readUInt16LE(i + 22);
-    }
-    if (tag === "data") {
-      offset = i + 8;
-      size = len;
-      break;
-    }
-    i += 8 + len + (len % 2);
-  }
-  return { sampleRate, channels, bits, offset, frames: size / 4 };
-}
-describe("actual delivered 48 kHz stereo masters", () => {
-  const report = {
-    tracks: allScores().flatMap(
-      (score) =>
-        JSON.parse(
-          fs.readFileSync(
-            `projects/${score.id}/production/music/render-report.json`,
-            "utf8",
-          ),
-        ).tracks,
-    ),
-  } as {
-    tracks: {
-      id: string;
-      integratedLUFS: number;
-      truePeakDBTP: number;
-      sha256: string;
-    }[];
-  };
-  for (const score of allScores())
-    it(
-      score.id +
-        " matches measured, unclipped, non-silent PCM and has a quiet tail",
-      () => {
-        const bytes = fs.readFileSync(
-            `projects/${score.id}/public/audio/${score.id}.wav`,
-          ),
-          info = pcm(bytes),
-          r = report.tracks.find((r) => r.id === score.id)!;
-        expect(info.sampleRate).toBe(48000);
-        expect(info.channels).toBe(2);
-        expect(info.bits).toBe(16);
-        expect(info.frames / info.sampleRate).toBe(score.duration);
-        expect(createHash("sha256").update(bytes).digest("hex")).toBe(r.sha256);
-        expect(r.integratedLUFS).toBeGreaterThan(-18.8);
-        expect(r.integratedLUFS).toBeLessThan(-17.2);
-        expect(r.truePeakDBTP).toBeLessThan(-1.5);
-        let energy = 0,
-          tail = 0,
-          peak = 0,
-          l2 = 0,
-          r2 = 0,
-          lr = 0;
-        for (let i = 0; i < info.frames; i += 8) {
-          const l = bytes.readInt16LE(info.offset + i * 4) / 32768,
-            r = bytes.readInt16LE(info.offset + i * 4 + 2) / 32768;
-          energy += l * l + r * r;
-          l2 += l * l;
-          r2 += r * r;
-          lr += l * r;
-          peak = Math.max(peak, Math.abs(l), Math.abs(r));
-          if (i >= info.frames - info.sampleRate * 0.15) tail += l * l + r * r;
-        }
-        expect(peak).toBeLessThan(0.9);
-        expect(Math.sqrt(energy / ((info.frames / 8) * 2))).toBeGreaterThan(
-          0.015,
-        );
-        expect(lr / Math.sqrt(l2 * r2)).toBeGreaterThan(-0.1);
-        expect(
-          Math.sqrt(tail / (((info.sampleRate * 0.15) / 8) * 2)),
-        ).toBeLessThan(0.003);
-      },
+it("retains the original score and instrument bank without a premixed runtime file", () => {
+  for (const score of allScores()) {
+    const base = `projects/${score.id}`;
+    const archived = JSON.parse(
+      fs.readFileSync(
+        `${base}/records/legacy-music/${score.id}.score.json`,
+        "utf8",
+      ),
     );
+    expect(score.notes).toEqual(archived.notes);
+    expect(score.instruments).toEqual(archived.instruments);
+    expect(score.cues).toEqual(archived.cues);
+    const bank = fs.readFileSync(`${base}/public/music/GeneralUser-GS.sf2`);
+    expect(createHash("sha256").update(bank).digest("hex")).toBe(
+      "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe",
+    );
+    expect(fs.existsSync(`${base}/public/audio/${score.id}.wav`)).toBe(false);
+  }
 });
 
-it("asset rebuild preserves mastered audio, curated licensing and unrelated imports", () => {
+it("asset rebuild preserves imported audio, curated licensing and unrelated imports", () => {
   const temporary = fs.mkdtempSync(
     path.join(os.tmpdir(), "frame-demo-assets-"),
   );
@@ -261,15 +193,7 @@ it("asset rebuild preserves mastered audio, curated licensing and unrelated impo
     });
     const originals = new Map<string, Buffer>();
     for (const score of allScores()) {
-      const bytes = fs.readFileSync(
-        path.join(
-          root,
-          "projects",
-          score.id,
-          "public/audio",
-          score.id + ".wav",
-        ),
-      );
+      const bytes = testWav();
       originals.set(score.id, bytes);
       fs.writeFileSync(
         path.join(

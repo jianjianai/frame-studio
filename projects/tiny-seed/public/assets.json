@@ -1,9 +1,9 @@
 [
   {
-    "name": "tiny-seed.wav",
-    "url": "films/tiny-seed/audio/tiny-seed.wav",
-    "type": "audio",
-    "bytes": 6912078,
-    "license": "原创作曲与音效；GeneralUser GS 乐器采样，见 projects/tiny-seed/production/music/GENERALUSER-LICENSE.txt"
+    "name": "GeneralUser GS 2.0.3",
+    "url": "films/tiny-seed/music/GeneralUser-GS.sf2",
+    "type": "soundfont",
+    "bytes": 32319396,
+    "license": "Chris Collins / GeneralUser GS v2.0.3；完整许可见本项目 public/music/GENERALUSER-LICENSE.txt"
   }
 ]

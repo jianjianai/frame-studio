@@ -6,6 +6,8 @@
 
 ## 打开工作台
 
+使用与接口文档保留在 `docs/`；修改记录、验证报告和审查文档独立归档到 [records/](records/README.md)。视频专属记录位于各自的 `projects/<id>/records/`。
+
 双击 **启动工作台.cmd**，或运行：
 
 ```powershell
@@ -25,14 +27,18 @@ projects/
     AGENTS.md README.md
     project.ts scene.ts  元数据与场景
     audio.ts             可选的浏览器音频生成器
+    music/               本项目的程序乐谱、音色与音效源码
     public/              音轨、封面、素材、项目索引
     production/          原始材料、MIDI、参数、来源与许可
+    records/             本视频修改记录、报告和审查
     scripts/ tests/      项目专属脚本和测试
     exports/ .cache/     忽略的输出与临时文件
 src/engine/              公共时钟、声音、字幕、渲染器
 src/ui/                  通用播放器与导出入口
 scripts/ templates/      公共工具与模板
 public/                  公共字体与模型解码器
+docs/                    使用指南、接口与工程规范
+records/                 公共维护记录、报告和审查
 ```
 
 视频制作任务只能改 `projects/<id>/`。根配置、共享依赖、公共 UI 与引擎由工作台维护任务修改。`pnpm project:scope <id>` 检查修改边界；生成工具限制写入目标目录并检查路径穿越和符号链接。它不改变外部编辑器的系统文件权限。
@@ -94,7 +100,6 @@ pnpm assets:import my-film "D:/assets/character.png" --license "来源与许可"
 pnpm posters --project my-film
 pnpm posters --all                      # 显式全量覆盖封面
 pnpm audio:mix my-film projects/my-film/production/mix.json
-pnpm music:build sunny-rail             # 可选，重建指定 Demo 的旧采样配乐
 pnpm assets --project paper-wings       # 可选，只重建该项目插画
 pnpm project:check my-film --strict
 pnpm project:scope my-film
@@ -116,4 +121,4 @@ pnpm verify
 
 `pnpm build` 输出 `dist/`，包含各工程运行资源，可部署为静态站点。`pnpm preview` 用于本机验收。源码、锁文件和必要素材纳入 Git；依赖、构建、视频和缓存不提交。
 
-三个 Demo 的既有采样音乐源文件、测量报告、MIDI 与 GeneralUser GS 许可已分别保存到各自的 `production/music/`。GitHub 私有仓库：[jianjianai/frame-studio](https://github.com/jianjianai/frame-studio)。历史验收记录中的旧路径只代表当时布局，现行入口以本页及各项目 README 为准。
+三个 Demo 均使用原采样配乐与动作音效两条音轨，源码在各自 `music/`。原乐器素材和许可在本项目 `public/music/`，由浏览器加载处理，无需预合成整首 WAV；已有音频素材可直接作为文件音轨播放。原 MIDI、乐谱快照归档在各项目 `records/legacy-music/`，历史测量报告在 `records/`。GitHub 私有仓库：[jianjianai/frame-studio](https://github.com/jianjianai/frame-studio)。历史验收记录中的旧路径只代表当时布局，现行入口以本页及各项目 README 为准。
