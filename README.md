@@ -25,7 +25,7 @@ pnpm dev
 
 | 作品           | 片长  | 渲染方式                   | 验证重点                                         |
 | -------------- | ----- | -------------------------- | ------------------------------------------------ |
-| 风的邮差       | 32 秒 | PixiJS + GSAP              | 分层插画、纸飞机路径、视差跟拍、遮挡、灯塔抵达   |
+| 风的邮差       | 32 秒 | PixiJS + 连续摄影机        | 分层插画、纸飞机路径、视差跟拍、遮挡、灯塔抵达   |
 | 日光快线       | 36 秒 | Three.js                   | 微缩岛屿、列车、车轮、风车、柔和阴影与摄影机轨迹 |
 | 一颗种子的四季 | 36 秒 | Canvas 2D + GSAP + Flubber | 矢量形变、根系与茎叶生长、花朵与蜜蜂动作         |
 
@@ -52,6 +52,7 @@ pnpm dev                               # 开发预览，热更新
 pnpm animation:new my-film "我的动画" --renderer pixi
 pnpm assets:import "D:/assets/character.png" --license "作者/授权来源"
 pnpm audio:mix mix.json                 # 配乐、旁白、音效偏移/增益/裁切/淡入淡出混音
+pnpm music:build                       # 重建三个 Demo 的采样乐器配乐与动作音效
 pnpm posters                           # 从动画实际画面重新生成封面
 pnpm typecheck
 pnpm test
@@ -63,7 +64,7 @@ pnpm format                            # 格式化源码与文档
 
 注意：pnpm 本身也有 doctor/import 等内置命令，因此项目自检、导入工具分别使用 env:check 与 assets:import，避免同名命令被覆盖。
 
-pnpm assets 会重新生成演示插画、音乐、波形与模型解码器，不会删除后续导入素材的索引。正常使用已提交的素材即可，不必每次重建。
+pnpm assets 会重新生成演示插画、波形与模型解码器，不会删除后续导入素材的索引，也不会覆盖精修配乐。三个 Demo 的配乐单独使用 pnpm music:build 重建；正常播放使用已提交的素材即可，不必重新生成。
 
 ## 输出视频
 
@@ -127,7 +128,7 @@ pnpm build 输出 dist/。将其部署到普通 HTTP 静态站点即可在线播
 
 尚未做成 AE/Blender 一样的可视化制作软件：没有拖放关键帧编辑、多人协作、云端渲染队列、内置生成式素材服务或 AI 配音账号。此项目使用代码制作，浏览器播放/验收；后续按真实需要添加，不为“全家桶”堆叠闲置依赖。
 
-当前演示配乐为离线合成的完整音轨，不是播放时独立运行的蜂鸣器。正式影片可直接替换经过授权的配乐、旁白和音效混音。素材来源参见 public/ASSET-LICENSES.md。
+三个 Demo 已分别编写室内乐、轻爵士与三拍子配乐，以 GeneralUser GS 采样乐器离线演奏，和动作音效混成 48kHz 双声道音轨；每首有独立乐句、配器发展与尾声，不是真人乐团录音。可编辑乐谱、MIDI、分轨、测量报告与采样许可见 production/music/README.md，精修记录见 docs/DEMO-POLISH.md。播放不依赖远程音色库。正式影片仍可替换为具有明确授权的音乐与旁白。素材来源参见 public/ASSET-LICENSES.md。
 
 ## 官方参考
 

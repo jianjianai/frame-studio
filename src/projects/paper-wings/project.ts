@@ -5,7 +5,7 @@ const project: AnimationProject = {
     title: "风的邮差",
     subtitle: "一封信，越过山海。",
     description:
-      "纸飞机从山间小镇起飞，掠过树林、桥梁与海湾，最终抵达灯塔。用分层插画、连续跟拍和前景遮挡检验二维叙事。",
+      "纸飞机离开山间小镇，穿过树林与海湾，在灯塔下折回信封、落入信箱。钢琴与木管展开旅程，海风、投递与亮灯共同完成结尾。",
     renderer: "pixi",
     duration: 32,
     fps: 30,
@@ -60,8 +60,8 @@ const project: AnimationProject = {
     ],
     credits: [
       "插画与动作：本项目原创",
-      "演示配乐：项目内离线合成，可替换正式音乐",
-      "PixiJS + GSAP；无外部运行时素材链接",
+      "原创室内乐配乐：钢琴、竖琴、长笛、弦乐与大提琴；GeneralUser GS 乐器采样",
+      "PixiJS + 连续摄影机；风、海浪与投递动作音效同轴混音",
     ],
   },
   load: () => import("./scene"),

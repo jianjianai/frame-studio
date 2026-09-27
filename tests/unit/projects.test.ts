@@ -18,11 +18,33 @@ for (const p of [paper, rail, seed])
     it("has a complete local audio track matching its duration", () => {
       const b = fs.readFileSync(path.join("public", p.audio!));
       expect(b.toString("ascii", 0, 4)).toBe("RIFF");
-      expect(b.readUInt16LE(22)).toBe(2);
-      const duration = b.readUInt32LE(40) / b.readUInt32LE(28);
+      // WAV may contain LIST/JUNK metadata before data; 44 bytes is not a fixed header.
+      let channels = 0,
+        byteRate = 0,
+        dataOffset = 0,
+        dataSize = 0;
+      for (let offset = 12; offset + 8 <= b.length;) {
+        const kind = b.toString("ascii", offset, offset + 4);
+        const size = b.readUInt32LE(offset + 4);
+        if (kind === "fmt ") {
+          channels = b.readUInt16LE(offset + 10);
+          byteRate = b.readUInt32LE(offset + 16);
+        }
+        if (kind === "data") {
+          dataOffset = offset + 8;
+          dataSize = size;
+          break;
+        }
+        offset += 8 + size + (size % 2);
+      }
+      expect(channels).toBe(2);
+      expect(byteRate).toBeGreaterThan(0);
+      expect(dataSize).toBeGreaterThan(0);
+      expect(dataOffset + dataSize).toBeLessThanOrEqual(b.length);
+      const duration = dataSize / byteRate;
       expect(duration).toBe(p.duration);
       let peak = 0;
-      for (let i = 44; i < b.length; i += 128)
+      for (let i = dataOffset; i + 1 < dataOffset + dataSize; i += 128)
         peak = Math.max(peak, Math.abs(b.readInt16LE(i)));
       expect(peak).toBeGreaterThan(1000);
       expect(peak).toBeLessThan(32767);

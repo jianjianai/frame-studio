@@ -110,156 +110,14 @@ await save(
     '<path d="M90 950Q210 650 99 357M165 720L-50 515M142 640L310 481" fill="none" stroke="#254c4a" stroke-width="29"/><g fill="#305b52"><ellipse cx="40" cy="373" rx="170" ry="89"/><ellipse cx="180" cy="312" rx="155" ry="100"/><ellipse cx="320" cy="474" rx="120" ry="75"/><ellipse cx="18" cy="514" rx="160" ry="105"/></g><path d="M1590 980Q1540 704 1694 427" fill="none" stroke="#254c4a" stroke-width="24"/><g fill="#305b52"><ellipse cx="1710" cy="387" rx="177" ry="112"/><ellipse cx="1560" cy="507" rx="107" ry="73"/></g>',
   ),
 );
-// Commit self-contained original music, not a browser oscillator that runs independently of the video clock.
-function makeMusic(duration, bpm, motif, chordRoots, style) {
-  const sr = 24000,
-    n = Math.ceil(duration * sr),
-    left = new Float32Array(n),
-    right = new Float32Array(n);
-  let randomSeed = 92;
-  const rnd = () => {
-    randomSeed = (randomSeed * 1664525 + 1013904223) >>> 0;
-    return (randomSeed / 4294967296) * 2 - 1;
-  };
-  const note = (start, midi, length, gain, pan = 0, kind = "pluck") => {
-    const offset = Math.floor(start * sr),
-      count = Math.floor(length * sr),
-      f = 440 * Math.pow(2, (midi - 69) / 12);
-    for (let i = 0; i < count && offset + i < n; i++) {
-      const t = i / sr;
-      const env =
-        (1 - Math.exp(-t * 100)) *
-        Math.exp(-t * (kind === "pad" ? 1.0 : kind === "bass" ? 4 : 3.2)) *
-        Math.min(1, (length - t) / 0.09);
-      let v =
-        kind === "pad"
-          ? (Math.sin(2 * Math.PI * f * t) +
-              0.25 * Math.sin(2 * Math.PI * f * 1.003 * t)) *
-            0.4
-          : Math.sin(2 * Math.PI * f * t) +
-            0.28 * Math.sin(2 * Math.PI * f * 2 * t) * Math.exp(-t * 6) +
-            0.09 * Math.sin(2 * Math.PI * f * 3 * t) * Math.exp(-t * 10);
-      v *= env * gain;
-      left[offset + i] += v * Math.sqrt((1 - pan) / 2);
-      right[offset + i] += v * Math.sqrt((1 + pan) / 2);
-    }
-  };
-  const percussion = (at, kick) => {
-    const offset = Math.floor(at * sr),
-      len = Math.floor(sr * 0.2);
-    for (let i = 0; i < len && offset + i < n; i++) {
-      const t = i / sr;
-      const v = kick
-        ? Math.sin(2 * Math.PI * (49 * t + 1.6 * (1 - Math.exp(-t * 35)))) *
-          Math.exp(-t * 23) *
-          0.16
-        : rnd() * Math.exp(-t * 65) * 0.018;
-      left[offset + i] += v;
-      right[offset + i] += v;
-    }
-  };
-  const beat = 60 / bpm;
-  const beats = Math.floor(duration / beat);
-  for (let b = 0; b < beats - 2; b++) {
-    const at = b * beat + 0.2,
-      bar = Math.floor(b / 4),
-      root = chordRoots[bar % chordRoots.length];
-    if (b % 4 === 0)
-      for (const interval of [0, 7, 12, 16])
-        note(at, root + interval, beat * 4, 0.028, (interval - 8) / 20, "pad");
-    if (b % 2 === 0) note(at, root - 12, beat * 1.75, 0.12, 0, "bass");
-    const step = motif[b % motif.length];
-    if (step !== null)
-      note(
-        at,
-        root + 24 + step,
-        beat * 1.4,
-        style === "seed" ? 0.09 : 0.115,
-        Math.sin(b) * 0.3,
-      );
-    if (style !== "seed" || b > 12) {
-      percussion(at, b % 2 === 0);
-      if (style === "rail") percussion(at + beat / 2, false);
-    }
-    if (b % 4 === 3) note(at + beat * 0.5, root + 31, beat, 0.045, 0.6);
-  }
-  // Small stereo room, gentle mastering and a composed ending.
-  for (const [d, feedback] of [
-    [0.13, 0.19],
-    [0.23, 0.13],
-    [0.37, 0.08],
-  ]) {
-    const delay = Math.floor(d * sr);
-    for (let i = delay; i < n; i++) {
-      left[i] += right[i - delay] * feedback;
-      right[i] += left[i - delay] * feedback;
-    }
-  }
-  const finalRoot = chordRoots[0];
-  for (const interval of [0, 7, 12, 19, 24])
-    note(duration - 2.8, finalRoot + interval, 2.8, 0.06, 0, "pad");
-  let peak = 0.001;
-  for (let i = 0; i < n; i++) {
-    const fade = Math.min(1, i / (sr * 0.35), (n - i) / (sr * 1.1));
-    left[i] *= fade;
-    right[i] *= fade;
-    peak = Math.max(peak, Math.abs(left[i]), Math.abs(right[i]));
-  }
-  const buffer = Buffer.alloc(44 + n * 4);
-  buffer.write("RIFF", 0);
-  buffer.writeUInt32LE(buffer.length - 8, 4);
-  buffer.write("WAVEfmt ", 8);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(2, 22);
-  buffer.writeUInt32LE(sr, 24);
-  buffer.writeUInt32LE(sr * 4, 28);
-  buffer.writeUInt16LE(4, 32);
-  buffer.writeUInt16LE(16, 34);
-  buffer.write("data", 36);
-  buffer.writeUInt32LE(n * 4, 40);
-  for (let i = 0; i < n; i++) {
-    buffer.writeInt16LE(
-      Math.round(Math.max(-1, Math.min(1, (left[i] / peak) * 0.72)) * 32767),
-      44 + i * 4,
+// Music is authored separately. Rebuilding illustrations must not overwrite the mastered scores.
+for (const id of ["paper-wings", "sunny-rail", "tiny-seed"]) {
+  await fs.access(path.join(root, "public/audio", id + ".wav")).catch(() => {
+    throw new Error(
+      "Missing demo master: " + id + ". Run pnpm music:build first.",
     );
-    buffer.writeInt16LE(
-      Math.round(Math.max(-1, Math.min(1, (right[i] / peak) * 0.72)) * 32767),
-      46 + i * 4,
-    );
-  }
-  return buffer;
+  });
 }
-await save(
-  "audio/paper-wings.wav",
-  makeMusic(
-    32,
-    96,
-    [4, 7, 9, 7, 4, 2, 0, null, 2, 4, 7, 4, 2, 0, -1, null],
-    [48, 45, 53, 55],
-    "paper",
-  ),
-);
-await save(
-  "audio/sunny-rail.wav",
-  makeMusic(
-    36,
-    112,
-    [0, 4, 7, 9, 7, 4, 2, 4, 0, 2, 4, 7, 4, 2, 0, null],
-    [48, 53, 45, 55],
-    "rail",
-  ),
-);
-await save(
-  "audio/tiny-seed.wav",
-  makeMusic(
-    36,
-    84,
-    [0, null, 7, 4, 9, null, 7, 4, 2, null, 4, 7, 4, null, 2, 0],
-    [50, 46, 53, 48],
-    "seed",
-  ),
-);
 for (const filename of await fs.readdir(path.join(root, "public/art"))) {
   if (!filename.endsWith(".svg")) continue;
   const file = path.join(root, "public/art", filename);
@@ -292,7 +150,12 @@ for (const dir of ["art", "audio"])
       url: dir + "/" + name,
       type: dir === "art" ? "image" : "audio",
       bytes: stat.size,
-      license: "项目原创 / Original project asset",
+      license:
+        dir === "audio" &&
+        ["paper-wings.wav", "sunny-rail.wav", "tiny-seed.wav"].includes(name)
+          ? "原创作曲与音效；GeneralUser GS 乐器采样，见 production/music/GENERALUSER-LICENSE.txt"
+          : (existingImports.find((a) => a.url === dir + "/" + name)?.license ??
+            "项目原创 / Original project asset"),
     });
   }
 await save(
@@ -306,10 +169,7 @@ await save(
     2,
   ),
 );
-await save(
-  "ASSET-LICENSES.md",
-  "# 素材说明\n\nart/ 中的插画与 audio/ 中的配乐由本项目脚本原创生成；无远程素材依赖。配乐仅用于工程演示，正式短片可替换完整的授权音乐/旁白/音效混音。vendor/ 为 Three.js 附带的 Draco 与 Basis 解码器，沿用其目录内原有许可证。\n",
-);
+// ASSET-LICENSES.md is a curated source record; do not replace it during asset rebuilds.
 console.log(
   "Prepared " + catalog.length + " original assets and local model decoders.",
 );

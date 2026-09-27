@@ -1,0 +1,70 @@
+{
+  "engine": "spessasynth_core 4.3.22",
+  "soundBank": {
+    "name": "GeneralUser GS 2.0.3",
+    "revision": "684543d5e5efaef08d02be50dcda8d552478fa60",
+    "sha256": "9575028c7a1f589f5770fccc8cff2734566af40cd26ed836944e9a5152688cfe"
+  },
+  "tracks": [
+    {
+      "id": "paper-wings",
+      "duration": 32,
+      "sampleRate": 48000,
+      "channels": 2,
+      "bitDepth": 16,
+      "notes": 169,
+      "instruments": [
+        "Grand piano",
+        "Concert harp",
+        "Flute",
+        "Chamber strings",
+        "Cello",
+        "Celesta"
+      ],
+      "integratedLUFS": -17.98,
+      "truePeakDBTP": -5.99,
+      "loudnessRangeLU": 7.9,
+      "sha256": "28b6769cacc786d201c976690693333e8b670aec3170dd152eca58f18b75b116"
+    },
+    {
+      "id": "sunny-rail",
+      "duration": 36,
+      "sampleRate": 48000,
+      "channels": 2,
+      "bitDepth": 16,
+      "notes": 437,
+      "instruments": [
+        "Jazz piano",
+        "Nylon guitar",
+        "Upright bass",
+        "Vibraphone",
+        "Clarinet",
+        "Brush kit"
+      ],
+      "integratedLUFS": -18,
+      "truePeakDBTP": -2.68,
+      "loudnessRangeLU": 1.6,
+      "sha256": "5d4661777a84c67752181d36a125c1f813377927dd50204382816476a7e72dcc"
+    },
+    {
+      "id": "tiny-seed",
+      "duration": 36,
+      "sampleRate": 48000,
+      "channels": 2,
+      "bitDepth": 16,
+      "notes": 150,
+      "instruments": [
+        "Intimate piano",
+        "Harp",
+        "Cello",
+        "Soft strings",
+        "Celesta",
+        "Flute"
+      ],
+      "integratedLUFS": -18,
+      "truePeakDBTP": -5.52,
+      "loudnessRangeLU": 6.3,
+      "sha256": "e31d6d2a9db1c48cc117a1eaa2057c41d0ce3a78c353cd50d68fd76d996a5974"
+    }
+  ]
+}

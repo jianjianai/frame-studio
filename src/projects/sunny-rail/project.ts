@@ -5,7 +5,7 @@ const project: AnimationProject = {
     title: "日光快线",
     subtitle: "把一座小岛，装进一段旅程。",
     description:
-      "一辆橙色列车穿行在微缩岛屿上，经过车站、树林和风车。检验真实三维场景、轮轴动作、灯光阴影以及连续摄影机轨迹。",
+      "橙色列车伴着轻爵士驶过微缩岛屿。摄影机沿轨道外侧跟随，车轮、车厢、汽笛与轨缝节奏共同讲述一次从出发到归站的小旅行。",
     renderer: "three",
     duration: 36,
     fps: 30,
@@ -60,8 +60,8 @@ const project: AnimationProject = {
     ],
     credits: [
       "微缩场景、列车模型与动作：本项目原创",
-      "演示配乐：原创节奏与旋律的离线合成音轨",
-      "Three.js；支持扩展 glTF / GLB 模型与骨骼动画",
+      "原创轻爵士配乐：钢琴、尼龙吉他、低音提琴、颤音琴、单簧管与刷鼓；GeneralUser GS 乐器采样",
+      "Three.js；弧长车距、可见轮辐、外侧跟拍与真实距离驱动的轨缝音效",
     ],
   },
   load: () => import("./scene"),

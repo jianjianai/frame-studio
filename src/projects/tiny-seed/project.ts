@@ -5,7 +5,7 @@ const project: AnimationProject = {
     title: "一颗种子的四季",
     subtitle: "把看不见的生长，变成看得见的故事。",
     description:
-      "一颗种子落入土壤，雨水唤醒根系，茎叶舒展，花朵吸引蜜蜂，又把新种子交还给风。检验矢量形变、生长动画与动作因果。",
+      "一颗种子在雨中扎根、向阳开花，蜜蜂短暂停留，绒球成熟后把新种子交还给风。镜头从土壤近景跟随到花朵，以三拍子室内乐讲述生命循环的艺术寓言。",
     renderer: "canvas",
     duration: 36,
     fps: 30,
@@ -60,8 +60,8 @@ const project: AnimationProject = {
     ],
     credits: [
       "矢量画面、花卉与角色动作：本项目原创",
-      "演示配乐：项目内离线合成，可替换正式音乐",
-      "Canvas 2D + GSAP + Flubber；支持任意时刻精确重绘",
+      "原创三拍子配乐：钢琴、竖琴、大提琴、弦乐、长笛与钢片琴；GeneralUser GS 乐器采样",
+      "Canvas 2D + GSAP + Flubber；雨滴、根系、花瓣、蜜蜂与种子启程的连续近景",
     ],
   },
   load: () => import("./scene"),

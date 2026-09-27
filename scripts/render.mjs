@@ -70,8 +70,9 @@ try {
         () => window.__FRAME_STUDIO__.duration,
       );
       const at =
-        { "paper-wings": 15, "sunny-rail": 3, "tiny-seed": 25 }[folder.name] ??
-        duration * 0.5;
+        { "paper-wings": 25, "sunny-rail": 10.5, "tiny-seed": 26.8 }[
+          folder.name
+        ] ?? duration * 0.5;
       const data = await page.evaluate((t) => {
         window.__FRAME_STUDIO__.frame(t, false);
         return window.__FRAME_STUDIO__.dataURL().split(",")[1];

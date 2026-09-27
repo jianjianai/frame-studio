@@ -23,6 +23,7 @@ id_rsa
 id_ed25519
 
 # Local tooling output
+.cache/
 .pnpm-store/
 coverage/
 *.log

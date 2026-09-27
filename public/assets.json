@@ -45,21 +45,21 @@
     "name": "paper-wings.wav",
     "url": "audio/paper-wings.wav",
     "type": "audio",
-    "bytes": 3072044,
-    "license": "项目原创 / Original project asset"
+    "bytes": 6144078,
+    "license": "原创作曲与音效；GeneralUser GS 乐器采样，见 production/music/GENERALUSER-LICENSE.txt"
   },
   {
     "name": "sunny-rail.wav",
     "url": "audio/sunny-rail.wav",
     "type": "audio",
-    "bytes": 3456044,
-    "license": "项目原创 / Original project asset"
+    "bytes": 6912078,
+    "license": "原创作曲与音效；GeneralUser GS 乐器采样，见 production/music/GENERALUSER-LICENSE.txt"
   },
   {
     "name": "tiny-seed.wav",
     "url": "audio/tiny-seed.wav",
     "type": "audio",
-    "bytes": 3456044,
-    "license": "项目原创 / Original project asset"
+    "bytes": 6912078,
+    "license": "原创作曲与音效；GeneralUser GS 乐器采样，见 production/music/GENERALUSER-LICENSE.txt"
   }
 ]

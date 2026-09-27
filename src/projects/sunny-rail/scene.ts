@@ -1,9 +1,10 @@
 import * as THREE from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { RoomEnvironment } from "three/addons/environments/RoomEnvironment.js";
-import { gsap } from "gsap";
+import { cameraCurve } from "../../engine/camera-curve";
+import { trainProgress, arcLengthLookup } from "./motion.mjs";
 import { disposeObject } from "../../engine/three-assets";
-import { clamp, easeInOut, phase, seeded } from "../../engine/math";
+import { clamp, phase, smooth, seeded } from "../../engine/math";
 import type { Scene, SceneOptions } from "../../engine/types";
 export function createScene({ width, height, quality }: SceneOptions): Scene {
   const renderer = new THREE.WebGLRenderer({
@@ -16,7 +17,7 @@ export function createScene({ width, height, quality }: SceneOptions): Scene {
   renderer.setPixelRatio(1);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer.toneMappingExposure = 0.92;
+  renderer.toneMappingExposure = 0.95;
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   const scene = new THREE.Scene();
@@ -26,13 +27,13 @@ export function createScene({ width, height, quality }: SceneOptions): Scene {
   const room = new RoomEnvironment();
   const env = pmrem.fromScene(room, 0.045);
   scene.environment = env.texture;
-  scene.environmentIntensity = 0.55;
+  scene.environmentIntensity = 0.42;
   room.dispose();
   pmrem.dispose();
   const camera = new THREE.PerspectiveCamera(36, width / height, 0.1, 130);
-  const hemi = new THREE.HemisphereLight("#fff6df", "#869789", 1.2);
+  const hemi = new THREE.HemisphereLight("#fff6df", "#708878", 1.0);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight("#ffe2b7", 2.6);
+  const sun = new THREE.DirectionalLight("#ffe2b7", 2.4);
   sun.position.set(-8, 18, 12);
   sun.castShadow = true;
   sun.shadow.mapSize.setScalar(
@@ -49,7 +50,7 @@ export function createScene({ width, height, quality }: SceneOptions): Scene {
   const cream = material("#e6d8ba");
   const green = material("#8dac89");
   const greenDark = material("#486d63");
-  const orange = material("#d88351");
+  const orange = material("#dc7e47", 0.52);
   const roof = material("#477677");
   const dark = material("#334f56");
   const railMat = material("#8c9c97", 0.4, 0.65);
@@ -303,6 +304,19 @@ export function createScene({ width, height, quality }: SceneOptions): Scene {
           group,
         );
         wheel.rotation.x = Math.PI / 2;
+        // Raised brass spokes turn with the axle; movement is visible, not merely a numeric rotation.
+        for (let k = 0; k < 6; k++) {
+          const spoke = mesh(
+            new THREE.BoxGeometry(0.033, 0.024, 0.38),
+            gold,
+            0,
+            z > 0 ? -0.058 : 0.058,
+            0,
+            wheel,
+          );
+          spoke.rotation.y = (k * Math.PI) / 3;
+          spoke.castShadow = false;
+        }
         wheels.push(wheel);
         const hub = mesh(
           new THREE.CylinderGeometry(0.11, 0.11, 0.12, 16),
@@ -367,6 +381,113 @@ export function createScene({ width, height, quality }: SceneOptions): Scene {
     return group;
   };
   const train = [makeTrain(true), makeTrain(false), makeTrain(false)];
+  const arc = arcLengthLookup(track);
+  const couplers = [1, 2].map(() =>
+    mesh(new THREE.CylinderGeometry(0.034, 0.034, 1, 8), dark),
+  );
+  const up = new THREE.Vector3(0, 1, 0),
+    coupleA = new THREE.Vector3(),
+    coupleB = new THREE.Vector3();
+  const lampMaterial = new THREE.MeshStandardMaterial({
+    color: "#fff0b5",
+    emissive: "#ffc877",
+    emissiveIntensity: 0.6,
+    roughness: 0.25,
+  });
+  const headlight = mesh(
+    new THREE.CylinderGeometry(0.13, 0.13, 0.07, 24),
+    lampMaterial,
+    1.02,
+    1.14,
+    0,
+    train[0],
+  );
+  headlight.rotation.z = Math.PI / 2;
+  // Character scale and gestures make departure and return more than an orbit of geometry.
+  const conductor = new THREE.Group();
+  conductor.position.set(-0.46, 1.08, 0.48);
+  train[0].add(conductor);
+  const coat = material("#365e6c");
+  const skin = material("#dcad7e");
+  mesh(new THREE.CapsuleGeometry(0.083, 0.14, 3, 8), coat, 0, 0, 0, conductor);
+  mesh(new THREE.SphereGeometry(0.095, 12, 8), skin, 0, 0.18, 0, conductor);
+  mesh(
+    new THREE.CylinderGeometry(0.115, 0.115, 0.045, 12),
+    roof,
+    0,
+    0.25,
+    0,
+    conductor,
+  );
+  const waving = new THREE.Group();
+  waving.position.set(-0.08, 0.06, 0.01);
+  conductor.add(waving);
+  box(0.065, 0.21, 0.065, coat, 0, 0.07, 0, waving, 0.025);
+  mesh(new THREE.SphereGeometry(0.046, 10, 8), skin, 0, 0.19, 0, waving);
+  for (const car of train) {
+    for (const z of [-0.49, 0.49]) {
+      box(1.45, 0.028, 0.024, gold, 0, 0.83, z, car, 0.009);
+    }
+  }
+  const pennants: THREE.Group[] = [];
+  for (const x of [-3.65, 1.45]) {
+    box(0.042, 1.55, 0.042, dark, x, 0.89, 3.65);
+    const flag = new THREE.Group();
+    flag.position.set(x, 1.58, 3.65);
+    scene.add(flag);
+    const geom = new THREE.BufferGeometry().setFromPoints([
+      new THREE.Vector3(0, 0, 0),
+      new THREE.Vector3(0.37, -0.08, 0),
+      new THREE.Vector3(0, -0.19, 0),
+    ]);
+    geom.setIndex([0, 1, 2]);
+    geom.computeVertexNormals();
+    const mat = material("#de9668");
+    mat.side = THREE.DoubleSide;
+    mesh(geom, mat, 0, 0, 0, flag);
+    pennants.push(flag);
+  }
+  const riverGlints: THREE.Mesh[] = [];
+  for (let i = 0; i < 9; i++) {
+    const g = mesh(
+      new THREE.PlaneGeometry(0.26 + (i % 3) * 0.1, 0.035),
+      new THREE.MeshBasicMaterial({
+        color: "#e6ead1",
+        transparent: true,
+        opacity: 0.55,
+        depthWrite: false,
+      }),
+      -0.3 + i * 0.27,
+      0.143,
+      1.55,
+      scene,
+    );
+    g.rotation.x = -Math.PI / 2;
+    g.castShadow = false;
+    riverGlints.push(g);
+  }
+  for (let i = 0; i < 14; i++) {
+    const x = 2.8 + random() * 1.7,
+      z = 1.1 + random() * 0.9;
+    mesh(
+      new THREE.CylinderGeometry(0.012, 0.017, 0.23, 5),
+      greenDark,
+      x,
+      0.23,
+      z,
+    );
+    for (let k = 0; k < 5; k++) {
+      const a = k * Math.PI * 0.4;
+      const petal = mesh(
+        new THREE.SphereGeometry(0.052, 7, 5),
+        i % 2 ? gold : orange,
+        x + Math.cos(a) * 0.052,
+        0.36,
+        z + Math.sin(a) * 0.052,
+      );
+      petal.scale.y = 0.4;
+    }
+  }
   const steam: THREE.Mesh[] = [];
   for (let i = 0; i < 8; i++) {
     const m = mesh(
@@ -402,104 +523,123 @@ export function createScene({ width, height, quality }: SceneOptions): Scene {
     }
     clouds.push(group);
   }
-  const cam = { x: 17, y: 12, z: 20, tx: 0, ty: 1, tz: 0 };
-  const timeline = gsap
-    .timeline({ paused: true })
-    .to(
-      cam,
-      {
-        x: 11,
-        y: 6.6,
-        z: 14,
-        tx: 1,
-        ty: 1.2,
-        tz: 0,
-        duration: 9,
-        ease: "sine.inOut",
-      },
-      0,
-    )
-    .to(
-      cam,
-      {
-        x: 15,
-        y: 9,
-        z: -10,
-        tx: 0,
-        ty: 1,
-        tz: -0.6,
-        duration: 10,
-        ease: "sine.inOut",
-      },
-      9,
-    )
-    .to(
-      cam,
-      {
-        x: -12,
-        y: 10,
-        z: -11,
-        tx: -1,
-        ty: 1,
-        tz: 0,
-        duration: 9,
-        ease: "sine.inOut",
-      },
-      19,
-    )
-    .to(
-      cam,
-      {
-        x: 17,
-        y: 12,
-        z: 20,
-        tx: 0,
-        ty: 1,
-        tz: 0,
-        duration: 8,
-        ease: "sine.inOut",
-      },
-      28,
-    );
   return {
     canvas: renderer.domElement,
     render(time) {
-      const t = clamp(time, 0, 36);
-      timeline.seek(t, true);
-      const progress = easeInOut(phase(t, 0.5, 35)),
-        theta = progress * Math.PI * 2;
+      const t = clamp(time, 0, 36),
+        progress = trainProgress(t),
+        distance = progress * arc.total;
+      const theta = arc.parameter(distance);
       train.forEach((group, i) => {
-        const a = theta - i * 0.285,
+        const a = arc.parameter(distance - i * 2.08),
           p = track(a),
           tangent = track(a + 0.001).sub(p);
         group.position.copy(p);
-        group.rotation.y = -Math.atan2(tangent.z, tangent.x);
+        group.rotation.set(0, -Math.atan2(tangent.z, tangent.x), 0);
+        group.rotateZ(Math.atan2(tangent.y, Math.hypot(tangent.x, tangent.z)));
       });
-      wheels.forEach(
-        (w) => (w.rotation.y = (-progress * Math.PI * 2 * 7.4) / 0.25),
+      couplers.forEach((link, i) => {
+        coupleA
+          .set(-0.95, 0.43, 0)
+          .applyQuaternion(train[i].quaternion)
+          .add(train[i].position);
+        coupleB
+          .set(0.91, 0.43, 0)
+          .applyQuaternion(train[i + 1].quaternion)
+          .add(train[i + 1].position);
+        link.position.copy(coupleA).add(coupleB).multiplyScalar(0.5);
+        const delta = coupleB.clone().sub(coupleA);
+        link.scale.y = delta.length();
+        link.quaternion.setFromUnitVectors(up, delta.normalize());
+      });
+      wheels.forEach((w) => (w.rotation.y = -distance / 0.25));
+      rotor.rotation.z = -t * 0.48;
+      const wave = 1 - smooth(phase(t, 2, 4)) + smooth(phase(t, 31, 34));
+      waving.rotation.z = -0.35 - Math.sin(t * 5) * 0.52 * wave;
+      waving.rotation.x = 0.38;
+      pennants.forEach(
+        (flag, i) => (flag.rotation.y = Math.sin(t * 2 + i) * 0.16),
       );
-      rotor.rotation.z = -t * 0.65;
-      clouds.forEach((c, i) =>
+      riverGlints.forEach((m, i) => {
+        m.position.x = -0.3 + i * 0.27 + Math.sin(t * 0.8 + i) * 0.12;
+        (m.material as THREE.MeshBasicMaterial).opacity =
+          0.2 + (Math.sin(t * 1.6 + i) + 1) * 0.2;
+      });
+      clouds.forEach((c, i) => {
         c.position.set(
-          -6 + i * 6 + Math.sin(t * 0.15 + i) * 0.6,
-          6.5 + (i % 2) * 0.7,
-          -4 + i * 1.6,
-        ),
-      );
-      steam.forEach((m, i) => {
-        const life = (((t * 1.2 + i / 8) % 1) + 1) % 1;
-        const a = theta - life * 0.13;
-        const p = track(a);
-        m.position.set(p.x, p.y + 1.9 + life * 1.25, p.z);
-        m.scale.setScalar(0.5 + life * 1.9);
-        (m.material as THREE.MeshStandardMaterial).opacity = (1 - life) * 0.36;
+          -4 + i * 4.7 + Math.sin(t * 0.11 + i) * 0.65,
+          8.5 + (i % 2) * 0.6,
+          -5 + i * 0.8,
+        );
+        c.scale.setScalar(0.8);
       });
-      camera.position.set(cam.x, cam.y, cam.z);
-      camera.lookAt(cam.tx, cam.ty, cam.tz);
+      steam.forEach((m, i) => {
+        const period = 1.76,
+          birth = t - ((((t - i * 0.22) % period) + period) % period),
+          age = t - birth;
+        m.visible = birth > 1.35 && birth < 33.1;
+        if (!m.visible) return;
+        const a = arc.parameter(trainProgress(birth) * arc.total),
+          p = track(a),
+          d = track(a + 0.001)
+            .sub(p)
+            .normalize();
+        m.position.set(
+          p.x + d.x * 0.68 + age * 0.18,
+          p.y + 1.78 + age * 0.72,
+          p.z + d.z * 0.68 - age * 0.15,
+        );
+        m.scale.setScalar(0.27 + age * 0.74);
+        (m.material as THREE.MeshStandardMaterial).opacity =
+          smooth(age / 0.13) * (1 - age / period) * 0.36;
+      });
+      // A continuous exterior crane follows the train. It never interpolates a chord through the mountain.
+      const radius = cameraCurve(t, [
+        [0, 23.5],
+        [5, 18.5],
+        [10, 14.8],
+        [14, 15.6],
+        [18, 18.1],
+        [24, 16.9],
+        [28, 18.5],
+        [36, 24.5],
+      ]);
+      const elevation = cameraCurve(t, [
+        [0, 12.2],
+        [6, 7.1],
+        [10, 5.8],
+        [14, 6.7],
+        [19, 8.2],
+        [25, 7],
+        [30, 9.1],
+        [36, 12.4],
+      ]);
+      const lead = cameraCurve(t, [
+        [0, 0.61],
+        [7, 0.36],
+        [17, 0.25],
+        [25, 0.38],
+        [36, 0.61],
+      ]);
+      const weight = cameraCurve(t, [
+        [0, 0.18],
+        [6, 0.58],
+        [14, 0.65],
+        [23, 0.58],
+        [29, 0.42],
+        [36, 0.16],
+      ]);
+      const p = track(theta);
+      camera.position.set(
+        Math.sin(theta + lead) * radius,
+        elevation,
+        Math.cos(theta + lead) * radius,
+      );
+      camera.lookAt(p.x * weight, 1.05, p.z * weight);
+      lampMaterial.emissiveIntensity = 0.45 + smooth(phase(t, 29, 33)) * 0.4;
       renderer.render(scene, camera);
     },
     dispose() {
-      timeline.kill();
       disposeObject(scene);
       env.dispose();
       renderer.dispose();
