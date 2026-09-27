@@ -4,6 +4,10 @@
 
 本项目目录：C:\Users\28018\Desktop\动画。
 
+GitHub 私有仓库：[jianjianai/frame-studio](https://github.com/jianjianai/frame-studio)，主分支为 `main`。远端使用 HTTPS，不在仓库中保存访问令牌。
+
+源码、pnpm 锁文件和动画必需的本地素材纳入版本管理；依赖目录、构建产物、导出视频、测试报告及敏感配置不提交。测试和构建在本地执行，当前未配置 GitHub Actions 工作流。
+
 ## 打开工作台
 
 双击 **启动工作台.cmd**。或者在此目录打开终端：

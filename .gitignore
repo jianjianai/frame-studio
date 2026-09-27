@@ -6,3 +6,23 @@ playwright-report/
 .logs/
 .DS_Store
 *.local
+
+# Local configuration and credentials
+.env
+.env.*
+!.env.example
+!.env.sample
+.secrets/
+.credentials/
+*.github_fine_grained_tok
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa
+id_ed25519
+
+# Local tooling output
+.pnpm-store/
+coverage/
+*.log
