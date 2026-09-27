@@ -4,6 +4,8 @@
 
 | 记录 | 内容 |
 | --- | --- |
+| [2026-09-28-audio-seek-optimization.md](2026-09-28-audio-seek-optimization.md) | 后段预加载、过期请求撤销和分批状态推进；未运行回归 |
+| [2026-09-28-streaming-audio.md](2026-09-28-streaming-audio.md) | 首次播放改为按需分段生成配乐，保留原采样与混音设置；未运行回归 |
 | [2026-09-28-browser-audio-migration.md](2026-09-28-browser-audio-migration.md) | 原采样接入浏览器、音乐目录迁移与首页封面修复；按要求未运行最终回归 |
 | [VERIFICATION.md](VERIFICATION.md) | 初始工作台交付验证 |
 | [DEMO-POLISH.md](DEMO-POLISH.md) | 三个 Demo 的精修修改记录 |

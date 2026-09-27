@@ -74,9 +74,13 @@ export function createAudio(options: GeneratedAudioOptions) {
 }
 ```
 
-可选导出 `prepareAudio(context): void | Promise<void>`，在播放时钟启动前准备和缓存生成数据；此阶段不得启动声音节点或独立时钟。短片可用 `createPcmAudio` 生成一次并在内存复用，详见 [AUDIO.md](AUDIO.md)。
+可选导出 `prepareAudio(context): void | Promise<void>`，在播放时钟启动前加载素材并初始化生成器；此阶段不得启动声音节点或独立时钟。
 
-生成器必须支持任意 offset 独立重建，不能依赖上一段运行历史。实时播放使用 AudioContext；浏览器和命令导出都使用 OfflineAudioContext。命令每段最多 10 秒，浏览器以最多 1 秒音频片段和视频交错编码。滤波、混响等需要历史的效果必须根据源时间重建预滚动状态或解析状态，避免分段交界变化。随机噪声使用固定种子/源时间。不要在模块导入时播放声音或访问文件系统。
+分段生成器还可导出 `prepareSegment({trackId, context, offset, duration, rate, signal})`：实时播放只需准备首段缓冲，后续在 `createAudio` 中根据公共音频时间按需补充；OfflineAudioContext 必须先准备完整的请求片段再返回。播放器在播放、跳转和变速后等待准备完成才推进公共时钟；暂停状态下也可预先准备所选位置，但不能启动声音。可选 `signal` 用于撤销过期位置的请求，生成器取消本请求即可，不得销毁其他会话仍需的资源。异步生成失败通过 `createAudio` 参数中的 `onError(error)` 通知播放器，不能让画面继续走而音频缺失。导出 `disposeAudio(context)` 释放所属播放/导出会话的后台线程和缓存；每次 `createAudio` 的 `dispose()` 仍须立即停止本次声音节点及后续调度。
+
+原采样乐谱可用 `createSampledScoreAudio` 边生成边播放；`createPcmAudio` 仍适合体积小、生成成本低的整段声音，详见 [AUDIO.md](AUDIO.md)。
+
+生成器必须支持任意 offset 独立重建，不能依赖调用方按顺序请求。实时播放使用 AudioContext；浏览器和命令导出都使用 OfflineAudioContext。命令每段最多 10 秒，浏览器以最多 1 秒音频片段和视频交错编码。滤波、混响等需要历史的效果必须根据源时间重建预滚动状态或解析状态，避免分段交界变化；允许在生成器内部顺序推进并缓存，冷跳转到后段时先重建前面的状态。随机噪声使用固定种子/源时间。不要在模块导入时播放声音或访问文件系统。
 
 浏览器 WebM 离线混合当前每轨/总音量和静音设置。命令 MP4 使用元数据中的每轨设置、总增益 1，不读取浏览器临时调音。两者复用相同的音轨裁切、定位与生成接口。
 

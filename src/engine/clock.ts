@@ -16,15 +16,15 @@ export class Clock {
   time(): number {
     const raw =
       this.anchorTime +
-      (this.playing ? (this.now() - this.anchorNow) * this.rate : 0);
+      (this.playing ? Math.max(0, this.now() - this.anchorNow) * this.rate : 0);
     return this.loop && this.playing
       ? ((raw % this.duration) + this.duration) % this.duration
       : clamp(raw, 0, this.duration);
   }
-  play(): void {
+  play(delay = 0): void {
     if (this.playing) return;
     if (this.anchorTime >= this.duration) this.anchorTime = 0;
-    this.anchorNow = this.now();
+    this.anchorNow = this.now() + delay;
     this.playing = true;
   }
   pause(): void {

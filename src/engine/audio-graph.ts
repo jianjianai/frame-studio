@@ -34,7 +34,18 @@ export async function prepareAudio(
     : undefined;
   if (tracks.some((t) => t.kind === "generated") && !generated)
     throw new Error("缺少代码音轨生成器");
-  await generated?.prepareAudio?.(context);
+  const release = () => generated?.disposeAudio?.(context);
+  signal?.addEventListener("abort", release, { once: true });
+  try {
+    signal?.throwIfAborted();
+    await generated?.prepareAudio?.(context);
+    signal?.throwIfAborted();
+  } catch (error) {
+    release();
+    throw error;
+  } finally {
+    signal?.removeEventListener("abort", release);
+  }
   return { tracks, buffers, generated };
 }
 export function trackSegment(
@@ -57,6 +68,37 @@ export function trackSegment(
       }
     : undefined;
 }
+/** Only generated tracks need a source-time buffer before scheduling. */
+export function prepareAudioSegment(
+  prepared: PreparedAudio,
+  context: BaseAudioContext,
+  projectDuration: number,
+  from: number,
+  length: number,
+  rate = 1,
+  overrides = new Map<string, { gain: number; muted: boolean }>(),
+  signal?: AbortSignal,
+): void | Promise<void> {
+  signal?.throwIfAborted();
+  if (!prepared.generated?.prepareSegment) return;
+  return Promise.all(
+    prepared.tracks.map(async (track) => {
+      const control = overrides.get(track.id) ?? track;
+      if (track.kind !== "generated" || control.muted || control.gain === 0)
+        return;
+      const segment = trackSegment(track, projectDuration, from, length);
+      if (!segment) return;
+      await prepared.generated!.prepareSegment!({
+        trackId: track.id,
+        context,
+        offset: segment.offset,
+        duration: segment.duration,
+        rate,
+        signal,
+      });
+    }),
+  ).then(() => {});
+}
 /** One scheduling graph for realtime playback and offline export. */
 export function scheduleAudio(
   prepared: PreparedAudio,
@@ -68,6 +110,7 @@ export function scheduleAudio(
   when: number,
   rate = 1,
   overrides = new Map<string, { gain: number; muted: boolean }>(),
+  onError?: (error: Error) => void,
 ) {
   const cleanups: (() => void)[] = [];
   const dispose = () => {
@@ -111,6 +154,7 @@ export function scheduleAudio(
           offset: segment.offset,
           duration: segment.duration,
           rate,
+          onError,
         });
         cleanups.push(() => voice.dispose());
       }
@@ -124,6 +168,7 @@ export function scheduleAudio(
 /** Bounded chunks prevent film-sized WAV transfers through the browser bridge. */
 export class OfflineAudioRenderer {
   private prepared?: Promise<PreparedAudio>;
+  private sessionContext?: OfflineAudioContext;
   private abort = new AbortController();
   constructor(
     private project: AnimationProject,
@@ -132,7 +177,13 @@ export class OfflineAudioRenderer {
   ) {}
   dispose() {
     this.abort.abort();
+    const context = this.sessionContext;
+    if (context)
+      void this.prepared
+        ?.then((prepared) => prepared.generated?.disposeAudio?.(context))
+        .catch(() => {});
     this.prepared = undefined;
+    this.sessionContext = undefined;
   }
   async render(start: number, duration: number): Promise<AudioBuffer> {
     this.abort.signal.throwIfAborted();
@@ -149,6 +200,7 @@ export class OfflineAudioRenderer {
       Math.round(duration * 48000),
       48000,
     );
+    if (!this.prepared) this.sessionContext = context;
     this.prepared ??= prepareAudio(
       this.project,
       context,
@@ -159,21 +211,33 @@ export class OfflineAudioRenderer {
     });
     const prepared = await this.prepared;
     this.abort.signal.throwIfAborted();
-    const master = context.createGain();
-    master.gain.value = this.volume;
-    master.connect(context.destination);
-    const graph = scheduleAudio(
+    await prepareAudioSegment(
       prepared,
       context,
-      master,
       this.project.duration,
       start,
       duration,
-      0,
       1,
       this.controls,
+      this.abort.signal,
     );
+    this.abort.signal.throwIfAborted();
+    const master = context.createGain();
+    master.gain.value = this.volume;
+    master.connect(context.destination);
+    let graph: { dispose(): void } | undefined;
     try {
+      graph = scheduleAudio(
+        prepared,
+        context,
+        master,
+        this.project.duration,
+        start,
+        duration,
+        0,
+        1,
+        this.controls,
+      );
       const buffer = await context.startRendering();
       this.abort.signal.throwIfAborted();
       for (let channel = 0; channel < buffer.numberOfChannels; channel++)
@@ -181,7 +245,7 @@ export class OfflineAudioRenderer {
           if (!Number.isFinite(sample)) throw new Error("音轨包含无效采样");
       return buffer;
     } finally {
-      graph.dispose();
+      graph?.dispose();
       master.disconnect();
     }
   }

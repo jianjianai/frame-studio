@@ -37,6 +37,7 @@ import type { StudioApi } from "../engine/debug";
 interface Playback {
   time: number;
   playing: boolean;
+  buffering: boolean;
   rate: number;
   loop: boolean;
   volume: number;
@@ -97,6 +98,7 @@ export function Player({ project }: { project: AnimationProject }) {
   const saved = useRef<Playback>({
     time: 0,
     playing: false,
+    buffering: false,
     rate: 1,
     loop: false,
     volume: 0.65,
@@ -110,6 +112,7 @@ export function Player({ project }: { project: AnimationProject }) {
       const value = {
         time: a.clock.time(),
         playing: a.clock.playing,
+        buffering: a.buffering,
         rate: a.clock.rate,
         loop: a.clock.loop,
         volume: a.volume,
@@ -130,10 +133,11 @@ export function Player({ project }: { project: AnimationProject }) {
   };
   const toggle = async () => {
     const a = transport.current;
-    if (!a || loading || exporting || starting) return;
+    if (!a || loading || exporting) return;
     setError("");
-    if (a.clock.playing) {
+    if (a.clock.playing || a.buffering) {
       a.pause();
+      setStarting(false);
       publish();
       return;
     }
@@ -163,7 +167,12 @@ export function Player({ project }: { project: AnimationProject }) {
       frames = 0,
       fpsAt = performance.now();
     const output = new FrameRenderer(canvas.current!, project);
-    const sound = new AudioTransport(project);
+    const sound = new AudioTransport(project, (error) => {
+      if (!canceled) {
+        setError("播放已暂停：" + error.message);
+        publish();
+      }
+    });
     for (const [id, control] of Object.entries(trackControlsRef.current))
       if (sound.controls.has(id)) sound.setTrack(id, control);
     renderer.current = output;
@@ -223,6 +232,7 @@ export function Player({ project }: { project: AnimationProject }) {
         setLoading(false);
         api.ready = true;
         publish();
+        sound.preload();
         const tick = (now: number) => {
           if (canceled) return;
           try {
@@ -292,6 +302,7 @@ export function Player({ project }: { project: AnimationProject }) {
         ...saved.current,
         time: sound.clock.time(),
         playing: false,
+        buffering: false,
       };
       void sound.dispose();
       output.dispose();
@@ -419,7 +430,12 @@ export function Player({ project }: { project: AnimationProject }) {
                   : quality === "draft"
                     ? "640 × 360"
                     : "1280 × 720"}{" "}
-                <b>·</b> {fps ? fps + " FPS" : "已暂停"}
+                <b>·</b>{" "}
+                {view.buffering
+                  ? "正在准备声音"
+                  : fps
+                    ? fps + " FPS"
+                    : "已暂停"}
               </span>
             </div>
             <div className="stage-viewport">
@@ -449,11 +465,16 @@ export function Player({ project }: { project: AnimationProject }) {
               {!loading && !error && !view.playing && view.time < 0.05 && (
                 <button
                   className="center-play"
-                  aria-label="开始播放"
-                  disabled={starting}
+                  aria-label={
+                    starting || view.buffering ? "取消播放" : "开始播放"
+                  }
                   onClick={() => void toggle()}
                 >
-                  <Play fill="currentColor" size={32} />
+                  {starting || view.buffering ? (
+                    <LoaderCircle className="spin" size={32} />
+                  ) : (
+                    <Play fill="currentColor" size={32} />
+                  )}
                 </button>
               )}
               {exporting && (
@@ -483,11 +504,13 @@ export function Player({ project }: { project: AnimationProject }) {
                 <button
                   className="play-button"
                   data-testid="play-toggle"
-                  aria-label={view.playing ? "暂停" : "播放"}
-                  disabled={loading || starting || exporting}
+                  aria-label={
+                    view.playing || starting || view.buffering ? "暂停" : "播放"
+                  }
+                  disabled={loading || exporting}
                   onClick={() => void toggle()}
                 >
-                  {starting ? (
+                  {starting || view.buffering ? (
                     <LoaderCircle className="spin" size={20} />
                   ) : view.playing ? (
                     <Pause fill="currentColor" size={19} />

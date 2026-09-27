@@ -101,11 +101,20 @@ export interface GeneratedAudioOptions {
   offset: number;
   duration: number;
   rate: number;
+  onError?: (error: Error) => void;
 }
+export type GeneratedAudioSegmentOptions = Pick<
+  GeneratedAudioOptions,
+  "trackId" | "context" | "offset" | "duration" | "rate"
+> & { signal?: AbortSignal };
 export interface GeneratedAudioModule {
   /** Optional preparation before playback starts; never start nodes or a separate clock here. */
   prepareAudio?(context: BaseAudioContext): void | Promise<void>;
+  /** Prepare the initial live buffer or the entire requested offline segment. */
+  prepareSegment?(options: GeneratedAudioSegmentOptions): void | Promise<void>;
   createAudio(options: GeneratedAudioOptions): { dispose(): void };
+  /** Release resources held for this playback/export session. */
+  disposeAudio?(context: BaseAudioContext): void;
 }
 export function projectAudioTracks(
   project: Pick<AnimationProject, "audio" | "audioTracks">,

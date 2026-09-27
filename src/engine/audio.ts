@@ -1,5 +1,10 @@
 import { Clock } from "./clock";
-import { prepareAudio, scheduleAudio, type PreparedAudio } from "./audio-graph";
+import {
+  prepareAudio,
+  prepareAudioSegment,
+  scheduleAudio,
+  type PreparedAudio,
+} from "./audio-graph";
 import { projectAudioTracks, type AnimationProject } from "./types";
 export class AudioTransport {
   readonly clock: Clock;
@@ -11,11 +16,18 @@ export class AudioTransport {
   private loadPromise?: Promise<void>;
   private closed = false;
   private generation = 0;
+  private requestedPlay = false;
   private abort = new AbortController();
+  private preparation?: AbortController;
+  private preloadEnabled = false;
   readonly controls = new Map<string, { gain: number; muted: boolean }>();
+  buffering = false;
   volume = 0.65;
   muted = false;
-  constructor(private project: AnimationProject) {
+  constructor(
+    private project: AnimationProject,
+    private onError?: (error: Error) => void,
+  ) {
     this.clock = new Clock(project.duration, () =>
       this.context ? this.context.currentTime : performance.now() / 1000,
     );
@@ -25,8 +37,7 @@ export class AudioTransport {
         muted: track.muted ?? false,
       });
   }
-  async unlock(): Promise<void> {
-    if (this.closed) return;
+  private createContext(): void {
     if (!this.context) {
       const saved = this.clock.time();
       this.context = new AudioContext();
@@ -35,11 +46,13 @@ export class AudioTransport {
       this.clock.seek(saved);
       this.applyGain();
     }
-    await this.context.resume();
+  }
+  private async load(): Promise<void> {
     if (this.closed) return;
+    this.createContext();
     this.loadPromise ??= prepareAudio(
       this.project,
-      this.context,
+      this.context!,
       this.abort.signal,
     )
       .then((prepared) => {
@@ -51,36 +64,84 @@ export class AudioTransport {
       });
     await this.loadPromise;
   }
+  async unlock(): Promise<void> {
+    if (this.closed) return;
+    this.createContext();
+    await this.context!.resume();
+    await this.load();
+  }
+  /** Prepare the selected position while paused; never resume the audio context. */
+  preload(): void {
+    this.preloadEnabled = true;
+    if (this.closed || this.requestedPlay || !this.controls.size) return;
+    this.preparation?.abort();
+    const request = (this.preparation = new AbortController());
+    const offset = this.clock.time();
+    void this.load()
+      .then(() => {
+        if (
+          this.closed ||
+          request.signal.aborted ||
+          this.requestedPlay ||
+          !this.prepared
+        )
+          return;
+        return prepareAudioSegment(
+          this.prepared,
+          this.context!,
+          this.clock.duration,
+          offset,
+          this.clock.duration - offset,
+          this.clock.rate,
+          this.controls,
+          request.signal,
+        );
+      })
+      .catch(() => {
+        // Playback will retry initialization and report actionable errors itself.
+      });
+  }
   async play(): Promise<void> {
+    if (this.closed) return;
     const generation = ++this.generation;
-    await this.unlock();
-    if (this.closed || generation !== this.generation) return;
-    this.clock.play();
+    this.preparation?.abort();
+    this.requestedPlay = true;
+    this.buffering = true;
+    this.clock.pause();
+    if (this.clock.time() >= this.clock.duration) this.clock.seek(0);
+    this.stopSource();
     try {
-      this.syncSource();
+      await this.unlock();
+      if (this.closed || generation !== this.generation) return;
+      await this.startSource(generation);
     } catch (error) {
+      if (this.closed || generation !== this.generation) return;
       this.pause();
       throw error;
     }
   }
   pause(): void {
     this.generation++;
+    this.preparation?.abort();
+    this.requestedPlay = false;
+    this.buffering = false;
     this.clock.pause();
     this.stopSource();
   }
   seek(time: number): void {
     this.clock.seek(time);
-    if (this.clock.playing) this.syncSource();
+    if (this.requestedPlay) this.restart();
+    else if (this.preloadEnabled) this.preload();
   }
   setRate(rate: number): void {
     this.clock.setRate(rate);
-    if (this.clock.playing) this.syncSource();
+    if (this.requestedPlay) this.restart();
   }
   setLoop(loop: boolean): void {
     const time = this.clock.time();
     this.clock.loop = loop;
     this.clock.seek(time);
-    if (this.clock.playing) this.syncSource();
+    if (this.requestedPlay) this.restart();
   }
   setTrack(
     id: string,
@@ -92,7 +153,7 @@ export class AudioTransport {
     if (!Number.isFinite(control.gain) || control.gain < 0 || control.gain > 4)
       throw new Error("无效音轨音量");
     this.controls.set(id, control);
-    if (this.clock.playing) this.syncSource();
+    if (this.requestedPlay) this.restart();
   }
   setVolume(v: number): void {
     this.volume = Math.min(1, Math.max(0, v));
@@ -120,41 +181,113 @@ export class AudioTransport {
     this.graph?.dispose();
     this.graph = undefined;
   }
-  private syncSource(): void {
+  private report(error: unknown, generation: number): void {
+    if (this.closed || generation !== this.generation) return;
+    this.pause();
+    this.onError?.(error instanceof Error ? error : new Error(String(error)));
+  }
+  private restart(): void {
+    const generation = ++this.generation;
+    this.preparation?.abort();
+    this.clock.pause();
     this.stopSource();
-    if (!this.context || !this.prepared || !this.gain || !this.clock.playing)
+    if (this.clock.time() >= this.clock.duration) {
+      if (this.clock.loop) this.clock.seek(0);
+      else {
+        this.pause();
+        return;
+      }
+    }
+    if (!this.prepared) {
+      const pending = this.play();
+      // play() only rejects for the current request and already pauses on failure.
+      void pending.catch((error) => {
+        if (!this.closed)
+          this.onError?.(
+            error instanceof Error ? error : new Error(String(error)),
+          );
+      });
       return;
+    }
+    try {
+      const pending = this.startSource(generation);
+      if (pending)
+        void pending.catch((error) => this.report(error, generation));
+    } catch (error) {
+      this.report(error, generation);
+    }
+  }
+  private startSource(generation: number): void | Promise<void> {
+    if (!this.context || !this.prepared || !this.gain) return;
+    const request = (this.preparation = new AbortController());
     const offset = this.clock.time(),
       length = this.clock.duration - offset;
-    if (length <= 0) return;
-    const when = this.context.currentTime;
-    this.graph = scheduleAudio(
+    const pending = prepareAudioSegment(
       this.prepared,
       this.context,
-      this.gain,
       this.clock.duration,
       offset,
       length,
-      when,
       this.clock.rate,
       this.controls,
+      request.signal,
     );
-    const boundary = this.context.createBufferSource();
-    boundary.buffer = this.context.createBuffer(1, 1, this.context.sampleRate);
-    boundary.loop = true;
-    boundary.connect(this.gain);
-    boundary.onended = () => {
-      if (!this.closed && this.clock.playing && this.clock.loop)
-        this.syncSource();
+    const start = () => {
+      if (this.closed || generation !== this.generation || !this.requestedPlay)
+        return;
+      this.buffering = false;
+      // Give native sources a small common scheduling lead; picture uses the same anchor.
+      const lead = this.prepared!.generated?.prepareSegment ? 0.04 : 0;
+      const when = this.context!.currentTime + lead;
+      this.clock.play(lead);
+      this.graph = scheduleAudio(
+        this.prepared!,
+        this.context!,
+        this.gain!,
+        this.clock.duration,
+        offset,
+        length,
+        when,
+        this.clock.rate,
+        this.controls,
+        (error) => this.report(error, generation),
+      );
+      const boundary = this.context!.createBufferSource();
+      boundary.buffer = this.context!.createBuffer(
+        1,
+        1,
+        this.context!.sampleRate,
+      );
+      boundary.loop = true;
+      boundary.connect(this.gain!);
+      boundary.onended = () => {
+        if (
+          this.closed ||
+          generation !== this.generation ||
+          !this.requestedPlay
+        )
+          return;
+        if (this.clock.loop) this.restart();
+        else {
+          this.pause();
+          this.clock.seek(this.clock.duration);
+        }
+      };
+      boundary.start(when);
+      boundary.stop(when + length / this.clock.rate);
+      this.boundary = boundary;
     };
-    boundary.start(when);
-    boundary.stop(when + length / this.clock.rate);
-    this.boundary = boundary;
+    if (pending) {
+      this.buffering = true;
+      return pending.then(start);
+    }
+    start();
   }
   async dispose(): Promise<void> {
     this.closed = true;
-    this.abort.abort();
     this.pause();
+    this.abort.abort();
+    if (this.context) this.prepared?.generated?.disposeAudio?.(this.context);
     this.prepared = undefined;
     this.gain?.disconnect();
     if (this.context && this.context.state !== "closed")

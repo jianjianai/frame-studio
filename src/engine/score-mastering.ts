@@ -111,4 +111,56 @@ export function masterScoreTracks(music: StereoPcm, foley: StereoPcm) {
   for (const track of [music, foley])
     for (const channel of track)
       for (let i = 0; i < length; i++) channel[i] *= gain;
+  return gain;
+}
+
+/** Stateful version of the same filters; source-frame fades do not restart at chunk edges. */
+export function createScoreMastering(
+  length: number,
+  musicScale: number,
+  masterGain: number,
+) {
+  const coefficients = [
+    biquad("highpass", 38, 0.707),
+    biquad("lowpass", 16500, 0.707),
+    biquad("peaking", 270, 0.7, -1),
+  ];
+  const states = Array.from({ length: 4 }, () =>
+    coefficients.map(() => [0, 0, 0, 0]),
+  );
+  return (music: StereoPcm, foley: StereoPcm, start: number) => {
+    for (const [trackIndex, track] of [music, foley].entries()) {
+      for (let channel = 0; channel < 2; channel++) {
+        const samples = track[channel];
+        if (trackIndex === 0)
+          for (let i = 0; i < samples.length; i++) samples[i] *= musicScale;
+        for (const [stage, [b0, b1, b2, a1, a2]] of coefficients.entries()) {
+          const state = states[trackIndex * 2 + channel][stage];
+          let [x1, x2, y1, y2] = state;
+          for (let i = 0; i < samples.length; i++) {
+            const x = samples[i],
+              y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            samples[i] = y;
+            x2 = x1;
+            x1 = x;
+            y2 = y1;
+            y1 = y;
+          }
+          state[0] = x1;
+          state[1] = x2;
+          state[2] = y1;
+          state[3] = y2;
+        }
+        for (let i = 0; i < samples.length; i++) {
+          const frame = start + i;
+          samples[i] *= Math.min(
+            1,
+            frame / (sampleRate * 0.035),
+            (length - 1 - frame) / (sampleRate * 0.8),
+          );
+          samples[i] *= masterGain;
+        }
+      }
+    }
+  };
 }

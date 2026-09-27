@@ -593,8 +593,12 @@ test("migrated demos load instrument samples and generate both tracks without pr
   for (const id of ["paper-wings", "sunny-rail", "tiny-seed"]) {
     const result = await page.evaluate(async (id) => {
       const graphURL = "/src/engine/audio-graph.ts";
-      const { OfflineAudioRenderer, prepareAudio, scheduleAudio } =
-        await import(graphURL);
+      const {
+        OfflineAudioRenderer,
+        prepareAudio,
+        prepareAudioSegment,
+        scheduleAudio,
+      } = await import(graphURL);
       const { default: project } = await import(`/projects/${id}/project.ts`);
       if (
         project.audio ||
@@ -643,6 +647,14 @@ test("migrated demos load instrument samples and generate both tracks without pr
       }
       const fastContext = new OfflineAudioContext(2, 48000, 48000);
       const prepared = await prepareAudio(project, fastContext);
+      await prepareAudioSegment(
+        prepared,
+        fastContext,
+        project.duration,
+        7.125,
+        2,
+        2,
+      );
       const graph = scheduleAudio(
         prepared,
         fastContext,
@@ -655,6 +667,7 @@ test("migrated demos load instrument samples and generate both tracks without pr
       );
       const fast = await fastContext.startRendering();
       graph.dispose();
+      prepared.generated?.disposeAudio?.(fastContext);
       let rateError = 0;
       for (let i = 64; i < 47936; i++)
         rateError = Math.max(
@@ -691,12 +704,10 @@ test("migrated demos load instrument samples and generate both tracks without pr
         tailRms: Math.sqrt(tailEnergy / 14400),
       };
     }, id);
-    await test
-      .info()
-      .attach(id + "-sampled-audio.json", {
-        body: JSON.stringify(result),
-        contentType: "application/json",
-      });
+    await test.info().attach(id + "-sampled-audio.json", {
+      body: JSON.stringify(result),
+      contentType: "application/json",
+    });
     expect(result.chunkError).toBeLessThan(1e-6);
     expect(result.mixError).toBeLessThan(1e-6);
     expect(result.rateError).toBeLessThan(0.002);
