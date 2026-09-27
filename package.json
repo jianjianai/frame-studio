@@ -1,0 +1,52 @@
+{
+  "name": "frame-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@12.4.2",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "render": "node scripts/render.mjs",
+    "assets": "node scripts/prepare-assets.mjs",
+    "format": "prettier --write src scripts tests templates/*.txt package.json tsconfig.json vite.config.ts vitest.config.ts playwright.config.ts README.md AGENTS.md docs/*.md --ignore-unknown",
+    "verify": "pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e",
+    "posters": "node scripts/render.mjs --posters",
+    "env:check": "node scripts/doctor.mjs",
+    "assets:import": "node scripts/import-asset.mjs",
+    "animation:new": "node scripts/new-animation.mjs",
+    "audio:mix": "node scripts/mix-audio.mjs"
+  },
+  "dependencies": {
+    "flubber": "0.4.2",
+    "gsap": "3.15.0",
+    "lucide-react": "1.48.0",
+    "pixi.js": "8.21.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "three": "0.186.1",
+    "zod": "4.6.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0",
+    "@types/flubber": "0.4.0",
+    "@types/node": "26.6.3",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@types/three": "0.186.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "prettier": "3.9.9",
+    "sharp": "0.35.4",
+    "svgo": "4.1.0",
+    "typescript": "7.0.2",
+    "vite": "8.3.1",
+    "vitest": "5.0.2"
+  }
+}

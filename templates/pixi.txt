@@ -1,0 +1,7 @@
+import { Application, Graphics } from 'pixi.js';
+import type { Scene, SceneOptions } from '../../engine/types';
+export async function createScene({ width, height }: SceneOptions): Promise<Scene> {
+ const app = new Application(); await app.init({ width, height, autoStart: false, sharedTicker: false, antialias: true, preserveDrawingBuffer: true, background: '#e4ead9' });
+ const actor = new Graphics().circle(0, 0, height * .07).fill('#6e926f'); app.stage.addChild(actor);
+ return { canvas: app.canvas as HTMLCanvasElement, render(time) { actor.position.set(width * .5 + Math.sin(time) * width * .15, height * .5); app.renderer.render(app.stage); }, dispose() { app.destroy(true, { children: true }); } };
+}

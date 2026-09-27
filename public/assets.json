@@ -1,0 +1,65 @@
+[
+  {
+    "name": "cloud.svg",
+    "url": "art/cloud.svg",
+    "type": "image",
+    "bytes": 237,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "foreground.svg",
+    "url": "art/foreground.svg",
+    "type": "image",
+    "bytes": 607,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "landscape.svg",
+    "url": "art/landscape.svg",
+    "type": "image",
+    "bytes": 20630,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "lighthouse.svg",
+    "url": "art/lighthouse.svg",
+    "type": "image",
+    "bytes": 749,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "mountains.svg",
+    "url": "art/mountains.svg",
+    "type": "image",
+    "bytes": 1245,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "paper-plane.svg",
+    "url": "art/paper-plane.svg",
+    "type": "image",
+    "bytes": 513,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "paper-wings.wav",
+    "url": "audio/paper-wings.wav",
+    "type": "audio",
+    "bytes": 3072044,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "sunny-rail.wav",
+    "url": "audio/sunny-rail.wav",
+    "type": "audio",
+    "bytes": 3456044,
+    "license": "项目原创 / Original project asset"
+  },
+  {
+    "name": "tiny-seed.wav",
+    "url": "audio/tiny-seed.wav",
+    "type": "audio",
+    "bytes": 3456044,
+    "license": "项目原创 / Original project asset"
+  }
+]
