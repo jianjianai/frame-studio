@@ -4,6 +4,7 @@
 
 | 记录 | 内容 |
 | --- | --- |
+| [2026-09-28-project-speech.md](2026-09-28-project-speech.md) | 项目独立语音配置、公共合成器、角色对白、CLI/MCP 试听与验证 |
 | [2026-09-28-studio-launcher.md](2026-09-28-studio-launcher.md) | 修复工作台启动误调用旧公共素材生成步骤，验证实际启动与作品加载 |
 | [2026-09-28-asset-transfer.md](2026-09-28-asset-transfer.md) | 素材二进制上传、断点续传、URL 拉取、认证下载与 CLI/MCP 共用实现 |
 | [2026-09-28-mcp-usability.md](2026-09-28-mcp-usability.md) | 结构化检查、操作锁反馈与恢复、图片兼容回读、完整项目权限 |

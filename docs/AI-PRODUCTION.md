@@ -143,6 +143,8 @@ exposePcmGenerator(({ startFrame, frames, sampleRate, trackId }, signal) => {
 
 ## 旁白与字幕
 
+公共 Edge、OpenAI/兼容接口、Azure 及项目自定义合成器已统一接入，完整说明见 [项目语音合成](SPEECH.md)。最快开始：`pnpm film speech my-film init --provider edge`，然后 `pnpm film speech my-film say --text "你好"`。每个项目保存自己的 `production/speech.json`、角色声线和私有 `.env`。
+
 `film narrate my-film --input production/narration.json` 接受：
 
 ```json
@@ -161,6 +163,6 @@ exposePcmGenerator(({ startFrame, frames, sampleRate, trackId }, signal) => {
 }
 ```
 
-已有音频逐句测量；需要合成时，在配置显式指定 `provider: "scripts/narration-provider.mjs"`。该项目模块导出 `synthesize({text,voice,settings,signal}) -> Uint8Array`，返回 WAV；可声明 providerDependencies 参与缓存版本。使用现有依赖与用户配置的凭据，基座不内置在线账户、不自动选择付费服务。模块作为可信项目代码执行，其网络与文件权限不是由此接口隔离。
+已有音频逐句测量；需要合成时使用项目 speech.json 或在清单显式选择公共提供器。旧 `provider: "scripts/narration-provider.mjs"` 继续兼容：模块导出 `synthesize({text,voice,settings,signal}) -> Uint8Array`，返回 WAV，可声明 providerDependencies 参与缓存版本。基座不内置在线账户，不自动切换付费服务。自定义模块作为可信项目代码执行，Worker 不提供操作系统权限隔离。
 
-缓存键包括文本、声线、参数、提供器文件版本和原音频内容。只重做失效句子，测量超出预算、句子重叠或混音时长错误则失败。输出版本化 public/narration/<hash>/voice.wav、captions.srt、timeline.json，返回可直接并入 project.ts 的 audioTrack 与 subtitles；不擅自重写镜头时间。生成物保存后普通播放不依赖在线服务。
+缓存键包括文本、声线、参数、模型/服务地址、提供器版本和原音频内容。只重做失效句子，超出预算或混音时长错误则失败；默认拒绝重叠，需要时显式 allowOverlap。mode: sequential 可按实测时长排列对白，默认 absolute 保留逐句 start。输出版本化 public/narration/<hash>/voice.wav、captions.srt、timeline.json，返回可直接并入 project.ts 的 audioTrack 与 subtitles；不擅自重写镜头时间。生成物保存后普通播放不依赖在线服务。

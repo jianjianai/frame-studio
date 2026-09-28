@@ -42,6 +42,9 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film test-e2e <id> [--json]            单项目浏览器测试
   pnpm film review-note <id> --review <uuid> --input note.json [--json]
   pnpm film narrate <id> --input production/narration.json [--json]
+  pnpm film speech <id> init --provider edge|openai|azure|custom [--voice <voice>] [--json]
+  pnpm film speech <id> status|voices [--provider <name> --locale zh-CN] [--json]
+  pnpm film speech <id> say --text "语音试听" [--provider <name> --speaker <role> --voice <voice>] [--json]
   pnpm film workspace <id> [--json]          建立可编辑的独立工作副本与 Git 基线
   pnpm film job <id> start --kind export --input options.json [--json]
   pnpm film job <id> status|cancel --id <job-id> [--json]
@@ -75,6 +78,14 @@ export function inspectProject(root, id) {
     writeBoundary: `projects/${id}/`,
     outputDirectory: projectPath(root, id, "exports"),
     recordDirectory: projectPath(root, id, "records"),
+    speech: {
+      configPath: "production/speech.json",
+      configured: fs.existsSync(
+        projectPath(root, id, "production/speech.json"),
+      ),
+      reference: "speech",
+      statusTool: "frame_speech_status",
+    },
     files: {
       instructions: read("AGENTS.md"),
       readme: read("README.md"),
@@ -92,6 +103,7 @@ export function inspectProject(root, id) {
       review: `pnpm film review ${id} --start 0 --end ${Math.min(meta.duration, 6)} --json`,
       export: `pnpm film export ${id} --json`,
       history: `pnpm film history ${id} --json`,
+      speech: `pnpm film speech ${id} status --json`,
     },
   };
 }
@@ -202,6 +214,7 @@ export function runFilm(args, root = process.cwd()) {
     return 0;
   }
   const routes = {
+    speech: ["speech-cli.mjs", ...rest],
     asset: ["asset-cli.mjs", ...rest],
     operation: ["project-operation.mjs", ...rest],
     job: ["job-cli.mjs", ...rest],

@@ -6,6 +6,7 @@ import { reviewSegment, verifyDelivery } from "./production-media.mjs";
 import { projectPath } from "./project-paths.mjs";
 import { exportProduction } from "./production-export.mjs";
 import { produceNarration } from "./narration.mjs";
+import { speechSamplePlan } from "./speech.mjs";
 import { checkPlayback } from "./playback-check.mjs";
 const { values, positionals } = parseArgs({
   allowPositionals: true,
@@ -37,7 +38,15 @@ try {
       onLog: (value) => process.stderr.write(value),
     });
   else if (values.kind === "narrate")
-    result = await produceNarration(root, id, options.input);
+    result = await produceNarration(root, id, options.input, {
+      ...(options.text !== undefined
+        ? { plan: speechSamplePlan(options) }
+        : {}),
+      onProgress: ({ completed, total, cached }) =>
+        process.stderr.write(
+          `Speech ${completed}/${total}${cached ? " cached" : " synthesized"}\n`,
+        ),
+    });
   else if (values.kind === "review")
     result = await reviewSegment(root, id, {
       ...options,

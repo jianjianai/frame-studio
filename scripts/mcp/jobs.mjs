@@ -183,6 +183,12 @@ export class Jobs {
             completed: Number(match[1]),
             total: Number(match[2]),
           };
+        for (const match of state.log.matchAll(/Speech (\d+)\/(\d+)/g))
+          state.progress = {
+            completed: Number(match[1]),
+            total: Number(match[2]),
+            unit: "sentences",
+          };
         this.persist(state);
       };
       child.stdout.on("data", log);

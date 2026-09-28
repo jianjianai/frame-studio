@@ -12,6 +12,12 @@ import { runProcess } from "../project-execution.mjs";
 import { inspectProjectScope } from "../project-scope-report.mjs";
 import { imageResult } from "./image-result.mjs";
 import {
+  initSpeech,
+  speechStatus,
+  listSpeechVoices,
+  readSpeech,
+} from "../speech.mjs";
+import {
   AssetTransfers,
   CHUNK_BYTES,
   MAX_ASSET_BYTES,
@@ -37,6 +43,7 @@ const refs = {
   "scene-types": "src/engine/types.ts",
   mcp: "docs/MCP.md",
   assets: "docs/ASSET-TRANSFER.md",
+  speech: "docs/SPEECH.md",
 };
 export const jsonResult = (value, isError = false) => ({
   content: [{ type: "text", text: JSON.stringify(value) }],
@@ -604,13 +611,91 @@ export function createFrameServer({
   );
   register(
     "frame_narrate",
-    "Build content-keyed sentence audio, measured subtitles and timeline from a project-local JSON plan. Provider calls occur only if that plan explicitly configures a local provider module.",
-    { project, input: filePath },
-    ({ project: id, input }) => {
-      workspace.file(id, input);
-      return jsonResult(jobs.start(id, "narrate", { input }));
+    "Synthesize project speech using Edge, OpenAI/compatible, Azure or a custom adapter. Provide either input (project-local JSON plan) or text (one-line audition), never both. Poll frame_job, then use frame_read_speech to hear audio; no automatic provider fallback or metadata rewriting.",
+    {
+      project,
+      input: filePath.optional(),
+      text: z.string().min(1).max(4096).optional(),
+      provider: z.string().min(1).max(100).optional(),
+      speaker: z.string().min(1).max(64).optional(),
+      voice: z.string().min(1).max(200).optional(),
+    },
+    ({ project: id, ...options }) => {
+      if (Boolean(options.input) === (options.text !== undefined))
+        fail("INVALID_ARGUMENT", "Provide exactly one of input or text");
+      if (options.input) {
+        if (options.provider || options.speaker || options.voice)
+          fail(
+            "INVALID_ARGUMENT",
+            "Put provider, speaker and voice in the input plan",
+          );
+        workspace.file(id, options.input);
+      }
+      return jsonResult(jobs.start(id, "narrate", options));
     },
     { write: true, openWorld: true },
+  );
+  register(
+    "frame_speech_status",
+    "Inspect per-project speech providers, speaker mappings and credential presence without contacting any speech service. Never returns secret values.",
+    { project },
+    ({ project: id }) => jsonResult(speechStatus(workspace, id)),
+  );
+  register(
+    "frame_init_speech",
+    "Create project speech configuration and a sample narration plan without overwriting existing files. Does not contact providers or incur synthesis charges.",
+    {
+      project,
+      provider: z.enum(["edge", "openai", "azure", "custom"]).default("edge"),
+      voice: z.string().min(1).max(200).optional(),
+    },
+    ({ project: id, ...options }) =>
+      jsonResult(initSpeech(workspace, id, options)),
+    { write: true },
+  );
+  register(
+    "frame_list_voices",
+    "List voices for a project's provider; Edge/Azure query the service, OpenAI returns a documented static list, custom compatible services define their own voices. Supports locale filter and pagination.",
+    {
+      project,
+      provider: z.string().min(1).max(64).optional(),
+      locale: z.string().min(2).max(32).optional(),
+      limit: z.number().int().min(1).max(200).default(100),
+      offset: z.number().int().nonnegative().default(0),
+    },
+    async ({ project: id, ...options }) =>
+      jsonResult(await listSpeechVoices(workspace, id, options)),
+    { openWorld: true },
+  );
+  register(
+    "frame_read_speech",
+    "Read a versioned narration bundle. inlineAudio=true returns native WAV audio (up to 6 MiB); only an audio-capable client can listen. Default returns metadata/download link, not a listening review.",
+    {
+      project,
+      version: z.string().regex(/^[a-f0-9]{64}$/),
+      name: z
+        .enum(["voice.wav", "captions.srt", "timeline.json"])
+        .default("voice.wav"),
+      inlineAudio: z.boolean().default(false),
+    },
+    ({ project: id, version, ...options }) => {
+      const { description, data } = readSpeech(workspace, id, version, options);
+      if (data && options.name === "voice.wav")
+        return {
+          content: [
+            {
+              type: "audio",
+              mimeType: "audio/wav",
+              data: data.toString("base64"),
+            },
+          ],
+          structuredContent: description,
+        };
+      return jsonResult({
+        ...description,
+        ...(data ? { content: data.toString("utf8") } : {}),
+      });
+    },
   );
   register(
     "frame_check_playback",

@@ -12,6 +12,8 @@
 
 ## 接手项目
 
+语音合成与人物对白见 [SPEECH.md](SPEECH.md)：`film speech <id> init|status|voices|say`，以及 `film narrate <id> --input production/narration.json`。每个项目可选择公共合成器或自己的适配器；MCP 对应 frame_speech_status、frame_init_speech、frame_list_voices、frame_narrate、frame_read_speech。
+
 在仓库根目录运行：
 
 ```powershell

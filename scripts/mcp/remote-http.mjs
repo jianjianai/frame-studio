@@ -10,6 +10,7 @@ import { Jobs } from "./jobs.mjs";
 import { RemoteAuth, AuthError, json } from "./remote-auth.mjs";
 import { FrameError } from "./workspace.mjs";
 import { AssetTransfers, CHUNK_BYTES } from "../asset-transfer.mjs";
+import { describeSpeech } from "../speech.mjs";
 
 const types = {
   ".mp4": "video/mp4",
@@ -59,6 +60,18 @@ export async function startRemoteServer(config) {
     return ++value.count <= limit;
   };
   const artifactFile = (project, relative) => {
+    const speech =
+      /^public\/narration\/([a-f0-9]{64})\/(voice\.wav|captions\.srt|timeline\.json)$/.exec(
+        relative,
+      );
+    if (speech) {
+      const item = describeSpeech(workspace, project, speech[1], speech[2]);
+      return {
+        file: item.path,
+        stat: fs.statSync(item.path),
+        mime: item.mimeType,
+      };
+    }
     if (
       !relative.startsWith("exports/") ||
       !types[path.extname(relative).toLowerCase()]

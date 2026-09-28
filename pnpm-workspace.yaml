@@ -1,3 +1,4 @@
 allowBuilds:
   esbuild: true
+  msedge-tts: false
   sharp: true

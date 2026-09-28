@@ -107,9 +107,24 @@ try {
     result = compareReviews(root, id, values.a, values.b);
   else if (command === "review-note")
     result = recordReview(root, id, values.review, payload());
-  else if (command === "narrate")
-    result = await produceNarration(root, id, values.input);
-  else if (command === "workspace") result = createProjectWorkspace(root, id);
+  else if (command === "narrate") {
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    process.once("SIGINT", cancel);
+    process.once("SIGTERM", cancel);
+    try {
+      result = await produceNarration(root, id, values.input, {
+        signal: controller.signal,
+        onProgress: ({ completed, total, cached }) =>
+          process.stderr.write(
+            `Speech ${completed}/${total}${cached ? " cached" : " synthesized"}\n`,
+          ),
+      });
+    } finally {
+      process.removeListener("SIGINT", cancel);
+      process.removeListener("SIGTERM", cancel);
+    }
+  } else if (command === "workspace") result = createProjectWorkspace(root, id);
   else if (command === "playback")
     result = await checkPlayback(root, id, {
       start: number("start"),
