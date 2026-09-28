@@ -755,6 +755,16 @@ header {
   background: none;
   font-size: 18px;
 }
+.content > .error {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: 700px;
+  width: calc(100% - 40px);
+  z-index: 100;
+  box-shadow: 0 6px 30px #263b3220;
+}
 .modal-backdrop {
   position: fixed;
   inset: 0;

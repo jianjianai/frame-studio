@@ -20,13 +20,15 @@ export class Assets {
     const { fileSha256 } = await import("../scripts/production-input.mjs");
     const sha = fileSha256(file),
       dest = path.join(this.data, "blobs", sha);
-    if (!fs.existsSync(dest))
-      fs.copyFileSync(file, dest, fs.constants.COPYFILE_EXCL);
-    const id = randomUUID();
-    return this.db.one(
-      "INSERT INTO assets(id,name,sha,bytes,mime,license,tags) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
-      [id, name, sha, bytes, mime, license, tags],
-    );
+    return this.db.lock("blob:" + sha, async () => {
+      if (!fs.existsSync(dest))
+        fs.copyFileSync(file, dest, fs.constants.COPYFILE_EXCL);
+      const id = randomUUID();
+      return this.db.one(
+        "INSERT INTO assets(id,name,sha,bytes,mime,license,tags) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
+        [id, name, sha, bytes, mime, license, tags],
+      );
+    });
   }
   async list({ unused = false, deleted = false, search = "" } = {}) {
     return this.db.all(
@@ -128,6 +130,27 @@ export class Assets {
         ok: true,
         note: "Project file retained to preserve possible dynamic code references",
       };
+    });
+  }
+  async purge(id) {
+    const asset = await this.get(id);
+    return this.db.lock("blob:" + asset.sha, async () => {
+      const deleted = await this.db.one(
+        "DELETE FROM assets WHERE id=$1 AND deleted=true AND NOT EXISTS(SELECT 1 FROM asset_refs WHERE asset=$1) RETURNING sha",
+        [id],
+      );
+      if (!deleted)
+        throw problem(
+          409,
+          "Only unassigned recycled assets can be permanently deleted",
+        );
+      if (
+        !(await this.db.one("SELECT id FROM assets WHERE sha=$1 LIMIT 1", [
+          deleted.sha,
+        ]))
+      )
+        fs.rmSync(path.join(this.data, "blobs", deleted.sha), { force: true });
+      return { ok: true };
     });
   }
 }

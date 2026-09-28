@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { command } from "./process.mjs";
 import { copyTree, treeHash, confined, problem } from "./security.mjs";
+import { applyProject } from "./apply-project.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets) {
     this.db = db;
@@ -39,13 +40,19 @@ export class Tasks {
     const id = randomUUID();
     const insert = async () => {
       if (repo) await this.repos.writable(repo);
-      if(kind==='tools-update' && await this.db.one("SELECT id FROM tasks WHERE kind='tools-update' AND state IN ('queued','running') LIMIT 1")) throw problem(409,'Another tool upgrade is running');
+      if (
+        kind === "tools-update" &&
+        (await this.db.one(
+          "SELECT id FROM tasks WHERE kind='tools-update' AND state IN ('queued','running') LIMIT 1",
+        ))
+      )
+        throw problem(409, "Another tool upgrade is running");
       return this.db.one(
         "INSERT INTO tasks(id,repo,project,kind,input,chat) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
         [id, repo || null, project || null, kind, input, chat],
       );
     };
-    return this.db.lock(repo || 'tools-update', insert);
+    return this.db.lock(repo || "tools-update", insert);
   }
   async get(id) {
     const row = await this.db.one("SELECT * FROM tasks WHERE id=$1", [id]);
@@ -106,11 +113,11 @@ export class Tasks {
       baseUrl: config.baseUrl || null,
     };
     fs.writeFileSync(path.join(run, "task.json"), JSON.stringify(payload));
-    await command("chmod", ["-R", "a+rwX", run]);
+    await command("chown", ["-R", "1000:1000", run]);
     const session = t.chat || t.id,
       sessionDir = path.join(this.data, "sessions", session);
     fs.mkdirSync(sessionDir, { recursive: true });
-    await command("chmod", ["a+rwx", sessionDir]);
+    await command("chown", ["-R", "1000:1000", sessionDir]);
     const env = {};
     const flags = [];
     if (config.apiKey) {
@@ -140,7 +147,6 @@ export class Tasks {
       container,
       "--label",
       "frame.task=" + t.id,
-      "--init",
       "--memory",
       "4g",
       "--cpus",
@@ -197,26 +203,14 @@ export class Tasks {
         const { dir } = await this.repos.project(t.repo, t.project, {
           exists: false,
         });
-        if (treeHash(dir) !== t.fingerprint)
-          throw new Error(
-            "Source changed. Task copy retained; resolve conflict before applying.",
-          );
         const source = confined(run, "projects/" + t.project);
-        if (!fs.existsSync(path.join(source, "project.ts")))
-          throw new Error("Task did not produce project.ts");
-        // Validate links before moving any original data, and retain a recoverable backup.
-        treeHash(source);
-        const stage = dir + ".frame-" + t.id;
-        copyTree(source, stage);
-        if (fs.existsSync(dir))
-          fs.renameSync(dir, path.join(run, "original-project"));
-        try {
-          fs.renameSync(stage, dir);
-        } catch (e) {
-          if (fs.existsSync(path.join(run, "original-project")))
-            fs.renameSync(path.join(run, "original-project"), dir);
-          throw e;
-        }
+        applyProject({
+          source,
+          destination: dir,
+          run,
+          id: t.id,
+          fingerprint: t.fingerprint,
+        });
       });
     if (t.chat && result.upstream)
       await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
@@ -256,7 +250,17 @@ export class Tasks {
       );
       for (const t of running) {
         try {
-          if(t.state==='running' && Date.now()-new Date(t.started).getTime()>3600000){await command('docker',['stop','-t','5',t.container]).catch(()=>{});throw new Error('Task exceeded the one hour execution limit; completed output is retained.');}
+          if (
+            t.state === "running" &&
+            Date.now() - new Date(t.started).getTime() > 3600000
+          ) {
+            await command("docker", ["stop", "-t", "5", t.container]).catch(
+              () => {},
+            );
+            throw new Error(
+              "Task exceeded the one hour execution limit; completed output is retained.",
+            );
+          }
           if (t.state === "cancelling")
             await command("docker", ["stop", "-t", "5", t.container]).catch(
               () => {},
@@ -272,7 +276,7 @@ export class Tasks {
           const log = await command(
             "docker",
             ["logs", "--tail", "1500", t.container],
-            { max: 1024 * 1024, combined:true },
+            { max: 1024 * 1024, combined: true },
           ).catch((e) => e.message);
           if (log !== this.logs.get(t.id)) {
             const old = this.logs.get(t.id) || "";
@@ -283,7 +287,7 @@ export class Tasks {
           }
           if (!state.Running) {
             await this.complete(t, state.ExitCode);
-            await command("docker", ["rm", t.container]);
+            await command("docker", ["rm", t.container]).catch(() => {});
             this.logs.delete(t.id);
           }
         } catch (e) {

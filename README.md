@@ -2,6 +2,8 @@
 
 代码驱动的浏览器动画工作台，使用 pnpm 管理依赖。工作区：`C:\Users\28018\Desktop\动画`。
 
+服务器版本支持登录、内容仓库、素材库、中文语音、MCP/CLI 与持续运行的 AI 会话。Docker / Dockge 部署、GHCR 更新和首次配置见 [服务器工作台](docs/SERVER.md)。原有本地制作与播放流程继续可用。
+
 先读 [工程规范](docs/NEW-PROJECT-STANDARD.md) 和 [接口说明](docs/AUTHORING.md)。当前三个作品已迁移到独立目录，画面与既有配乐保持原样。
 
 ## 打开工作台

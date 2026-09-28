@@ -29,7 +29,7 @@
     "film": "node -- scripts/film.mjs",
     "mcp": "node scripts/mcp.mjs",
     "mcp:remote": "node -- scripts/mcp-remote.mjs",
-    "test:mcp": "node --test tests/mcp/*.test.mjs",
+    "test:mcp": "node --test --test-concurrency=1 tests/mcp/*.test.mjs",
     "platform": "node scripts/platform-cli.mjs",
     "server": "node server/app.mjs",
     "build:studio": "vite build --config studio/vite.config.mjs",

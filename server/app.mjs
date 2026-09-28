@@ -76,13 +76,11 @@ export async function createApp({
   await app.register(rateLimit, { global: false });
   app.setErrorHandler((err, req, res) => {
     const status = err.name === "ZodError" ? 400 : err.statusCode || 500;
-    res
-      .code(status)
-      .send({
-        error: status === 500 ? "Operation failed" : err.message,
-        details:
-          status === 400 && err.name === "ZodError" ? err.issues : undefined,
-      });
+    res.code(status).send({
+      error: status === 500 ? "Operation failed" : err.message,
+      details:
+        status === 400 && err.name === "ZodError" ? err.issues : undefined,
+    });
     if (status === 500)
       req.log.error({ message: err.message }, "Operation failed");
   });
@@ -171,13 +169,20 @@ export async function createApp({
   );
   app.post("/api/upload", async (req) => {
     const file = path.join(data, "uploads", randomUUID());
-    let metadata={},fields={};
+    let metadata = {},
+      fields = {};
     try {
       for await (const part of req.parts()) {
-        if(part.type==='file') {await pipeline(part.file,fs.createWriteStream(file,{flags:'wx'})); if(part.file.truncated) throw problem(413,'File too large');metadata={name:part.filename,mime:part.mimetype};}
-        else fields[part.fieldname]=part.value;
+        if (part.type === "file") {
+          await pipeline(
+            part.file,
+            fs.createWriteStream(file, { flags: "wx" }),
+          );
+          if (part.file.truncated) throw problem(413, "File too large");
+          metadata = { name: part.filename, mime: part.mimetype };
+        } else fields[part.fieldname] = part.value;
       }
-      if(!metadata.name)throw problem(400,'File required');
+      if (!metadata.name) throw problem(400, "File required");
       return await assets.register(file, {
         ...metadata,
         license: String(fields.license || ""),
@@ -203,23 +208,33 @@ export async function createApp({
       throw problem(400, "Invalid model");
     const part = await req.file();
     if (!part) throw problem(400, "File required");
-    const buffer = await part.toBuffer();
     const target = String(part.fields.path?.value || part.filename);
-    const response = await fetch(
-      (process.env.FRAME_SPEECH_URL || "http://speech:8000") +
-        "/models/" +
-        req.params.id +
-        "/file?path=" +
-        encodeURIComponent(target),
-      {
-        method: "PUT",
-        body: buffer,
-        headers: { "Content-Type": "application/octet-stream" },
-        signal: AbortSignal.timeout(180000),
-      },
-    );
-    if (!response.ok) throw problem(502, await response.text());
-    return response.json();
+    const temporary = path.join(data, "uploads", randomUUID());
+    try {
+      await pipeline(
+        part.file,
+        fs.createWriteStream(temporary, { flags: "wx" }),
+      );
+      if (part.file.truncated) throw problem(413, "Model file too large");
+      const response = await fetch(
+        (process.env.FRAME_SPEECH_URL || "http://speech:8000") +
+          "/models/" +
+          req.params.id +
+          "/file?path=" +
+          encodeURIComponent(target),
+        {
+          method: "PUT",
+          body: fs.createReadStream(temporary),
+          duplex: "half",
+          headers: { "Content-Type": "application/octet-stream" },
+          signal: AbortSignal.timeout(180000),
+        },
+      );
+      if (!response.ok) throw problem(502, await response.text());
+      return response.json();
+    } finally {
+      fs.rmSync(temporary, { force: true });
+    }
   });
   const types = {
     ".png": "image/png",
@@ -301,6 +316,16 @@ export async function createApp({
           async (args) => {
             try {
               const value = await op.fn(args);
+              if (name === "artifact_read" && value.dataBase64)
+                return {
+                  content: [
+                    {
+                      type: "image",
+                      mimeType: value.mimeType,
+                      data: value.dataBase64,
+                    },
+                  ],
+                };
               return {
                 content: [{ type: "text", text: JSON.stringify(value) }],
               };

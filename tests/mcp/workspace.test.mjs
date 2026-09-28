@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import { Workspace, sha256 } from "../../scripts/mcp/workspace.mjs";
 import { fixture, memoryClient, call } from "./helpers.mjs";
 
@@ -217,6 +218,24 @@ test("a leftover transaction without a lock still blocks new writes", (t) => {
 });
 test("MCP schemas, tool errors, create and independent scope failures are observable", async (t) => {
   const f = setup(t);
+  // Scope failures must be independent of the parent checkout's dirty state.
+  const git = (args) =>
+    execFileSync("git", args, { cwd: f.root, stdio: "pipe" });
+  git(["init"]);
+  git([
+    "-c",
+    "user.name=Test",
+    "-c",
+    "user.email=test@localhost",
+    "commit",
+    "--allow-empty",
+    "-m",
+    "Fixture",
+  ]);
+  fs.writeFileSync(
+    f.root + "/outside-project.txt",
+    "deliberate external change",
+  );
   const session = await memoryClient(f.root);
   t.after(() => session.close());
   const { client } = session;

@@ -88,10 +88,34 @@ function Empty({ children }) {
     </div>
   );
 }
-function readableAgentEvents(events){
-  const output=[];for(const line of events.filter(e=>e.kind==='log').map(e=>e.data.text).join('').split('\n')){
-    if(!line.trim())continue;try{const v=JSON.parse(line);if(v.type==='item.completed'&&v.item?.type==='agent_message')output.push(v.item.text);else if(v.type==='item.started'&&v.item?.type==='command_execution')output.push('执行：'+v.item.command);else if(v.type==='assistant')for(const c of v.message?.content||[])if(c.type==='text')output.push(c.text);else if(c.type==='tool_use')output.push('使用工具：'+c.name);else if(v.type==='error')output.push(v.message||v.error?.message||'AI 返回错误');}catch{if(!line.startsWith('{'))output.push(line);}
-  }return output.join('\n\n');
+function readableAgentEvents(events) {
+  const output = [];
+  for (const line of events
+    .filter((e) => e.kind === "log")
+    .map((e) => e.data.text)
+    .join("")
+    .split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      const v = JSON.parse(line);
+      if (v.type === "item.completed" && v.item?.type === "agent_message")
+        output.push(v.item.text);
+      else if (
+        v.type === "item.started" &&
+        v.item?.type === "command_execution"
+      )
+        output.push("执行：" + v.item.command);
+      else if (v.type === "assistant") {
+        for (const c of v.message?.content || [])
+          if (c.type === "text") output.push(c.text);
+          else if (c.type === "tool_use") output.push("使用工具：" + c.name);
+      } else if (v.type === "error")
+        output.push(v.message || v.error?.message || "AI 返回错误");
+    } catch {
+      if (!line.startsWith("{")) output.push(line);
+    }
+  }
+  return output.join("\n\n");
 }
 function App() {
   const [signed, setSigned] = useState(null),
@@ -744,7 +768,27 @@ function GitPanel({ repo, run }) {
       <p>
         {s?.remote || "本地内容仓库"} · {s?.branch}
       </p>
-      {!s?.remote&&<form className="row" onSubmit={e=>{e.preventDefault();const url=new FormData(e.currentTarget).get('url');run(async()=>{await api('repositories_remote',{repo,url});await load();});}}><input name="url" type="url" placeholder="https://github.com/owner/repository" required/><Button>关联 GitHub 仓库</Button></form>}
+      {!s?.remote && (
+        <form
+          className="row"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const url = new FormData(e.currentTarget).get("url");
+            run(async () => {
+              await api("repositories_remote", { repo, url });
+              await load();
+            });
+          }}
+        >
+          <input
+            name="url"
+            type="url"
+            placeholder="https://github.com/owner/repository"
+            required
+          />
+          <Button>关联 GitHub 仓库</Button>
+        </form>
+      )}
       <div className="row">
         <Button
           onClick={() =>
@@ -968,21 +1012,64 @@ function AssetsPage({ run, repo, project, selectors, setNotice }) {
               <small>
                 {a.license} {a.tags && " · " + a.tags}
               </small>
+              <details>
+                <summary>编辑名称和标签</summary>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const values = Object.fromEntries(
+                      new FormData(e.currentTarget),
+                    );
+                    run(async () => {
+                      await api("assets_update", { id: a.id, ...values });
+                      await load();
+                    });
+                  }}
+                >
+                  <Field label="名称">
+                    <input name="name" defaultValue={a.name} required />
+                  </Field>
+                  <Field label="标签">
+                    <input name="tags" defaultValue={a.tags} />
+                  </Field>
+                  <Button>保存资料</Button>
+                </form>
+              </details>
               {a.mime.startsWith("audio/") && !a.deleted && (
                 <audio controls src={"/api/assets/" + a.id + "/file"} />
               )}
               <div className="row">
                 {a.deleted ? (
-                  <Button
-                    onClick={() =>
-                      run(async () => {
-                        await api("assets_trash", { id: a.id, deleted: false });
-                        await load();
-                      })
-                    }
-                  >
-                    恢复
-                  </Button>
+                  <>
+                    <Button
+                      onClick={() =>
+                        run(async () => {
+                          await api("assets_trash", {
+                            id: a.id,
+                            deleted: false,
+                          });
+                          await load();
+                        })
+                      }
+                    >
+                      恢复
+                    </Button>
+                    <Button
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            "永久删除这份未关联素材？此操作无法撤销。",
+                          )
+                        )
+                          run(async () => {
+                            await api("assets_purge", { id: a.id });
+                            await load();
+                          });
+                      }}
+                    >
+                      永久删除
+                    </Button>
+                  </>
                 ) : (
                   <>
                     <Button
@@ -1063,7 +1150,8 @@ function SpeechPage({ run, repo, project, selectors, setNotice }) {
     ),
     [result, setResult] = useState(null),
     [models, setModels] = useState([]),
-    [show, setShow] = useState(false);
+    [show, setShow] = useState(false),
+    [editing, setEditing] = useState(null);
   const load = async () => {
     const e = await api("engines_list");
     setEngines(e);
@@ -1083,7 +1171,13 @@ function SpeechPage({ run, repo, project, selectors, setNotice }) {
           <h1>为故事，找到合适的声音。</h1>
           <p>本地中文合成与外部引擎，在同一个工作室中试听。</p>
         </div>
-        <Button icon={Plus} onClick={() => setShow(!show)}>
+        <Button
+          icon={Plus}
+          onClick={() => {
+            setEditing(null);
+            setShow(!show);
+          }}
+        >
           添加外部引擎
         </Button>
       </div>
@@ -1094,7 +1188,11 @@ function SpeechPage({ run, repo, project, selectors, setNotice }) {
             e.preventDefault();
             const f = Object.fromEntries(new FormData(e.currentTarget));
             run(async () => {
-              await api("engines_save", f);
+              await api("engines_save", {
+                ...f,
+                ...(editing ? { id: editing.id } : {}),
+                enabled: f.enabled === "true",
+              });
               setShow(false);
               await load();
             });
@@ -1110,18 +1208,46 @@ function SpeechPage({ run, repo, project, selectors, setNotice }) {
             <Field key={name} label={label}>
               <input
                 name={name}
+                key={(editing?.id || "new") + name}
+                defaultValue={
+                  name === "name"
+                    ? editing?.name
+                    : name === "apiKey"
+                      ? ""
+                      : editing?.config?.[name] || ""
+                }
                 type={name === "apiKey" ? "password" : "text"}
                 placeholder={placeholder}
                 required={name !== "apiKey"}
               />
             </Field>
           ))}
+          <Field label="状态">
+            <select
+              name="enabled"
+              defaultValue={String(editing?.enabled ?? true)}
+              key={editing?.id || "new"}
+            >
+              <option value="true">启用</option>
+              <option value="false">停用</option>
+            </select>
+          </Field>
           <Button className="primary">保存引擎</Button>
         </form>
       )}
       <div className="two-columns">
         <div className="panel">
           <h2>语音试听</h2>
+          <Button
+            className="text-button"
+            disabled={!engine}
+            onClick={() => {
+              setEditing(engines.find((e) => e.id === engine));
+              setShow(true);
+            }}
+          >
+            编辑所选引擎
+          </Button>
           <Field label="语音引擎">
             <select value={engine} onChange={(e) => setEngine(e.target.value)}>
               {engines.map((e) => (
@@ -1192,6 +1318,38 @@ function SpeechPage({ run, repo, project, selectors, setNotice }) {
                 </span>
               </div>
               <small>{m.voices?.join(" · ") || "暂无声线"}</small>
+              <div className="row">
+                <Button
+                  disabled={!m.ready || !m.voices?.length}
+                  onClick={() =>
+                    run(async () => {
+                      const v = await api("engines_save", {
+                        name: "Kokoro · " + m.id,
+                        url: "http://speech:8000/v1",
+                        model: m.id,
+                        voice: m.voices[0],
+                      });
+                      await load();
+                      setEngine(v.id);
+                      setNotice("已添加本地语音引擎");
+                    })
+                  }
+                >
+                  添加为语音引擎
+                </Button>
+                {m.id !== "builtin" && (
+                  <Button
+                    onClick={() =>
+                      run(async () => {
+                        await api("models_delete", { id: m.id });
+                        setModels(await api("models_list"));
+                      })
+                    }
+                  >
+                    删除模型
+                  </Button>
+                )}
+              </div>
             </div>
           ))}
           <form
@@ -1272,12 +1430,17 @@ function ChatsPage({
     const update = async () => {
       const active = tasks.filter((t) => t.chat === chat);
       const entries = await Promise.all(
-        active
-          .slice(0, 10)
-          .map(async (t) => [
-            t.id,
-            (await api("task_get", { id: t.id })).events,
-          ]),
+        active.slice(0, 10).map(async (t) => {
+          let after = 0;
+          const events = [];
+          for (;;) {
+            const page = (await api("task_get", { id: t.id, after })).events;
+            events.push(...page);
+            if (page.length < 100) break;
+            after = Number(page.at(-1).id);
+          }
+          return [t.id, events];
+        }),
       );
       setStream(Object.fromEntries(entries));
     };
@@ -1359,7 +1522,10 @@ function ChatsPage({
                       </span>
                       {t.error && <p className="error">{t.error}</p>}
                       <pre>
-                        {readableAgentEvents(stream[t.id] || []) || (t.state==='succeeded'?'创作已完成。':'AI 正在准备工作…')}
+                        {readableAgentEvents(stream[t.id] || []) ||
+                          (t.state === "succeeded"
+                            ? "创作已完成。"
+                            : "AI 正在准备工作…")}
                       </pre>
                       <button
                         className="text-button"

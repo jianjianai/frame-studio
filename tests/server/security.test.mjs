@@ -1,11 +1,85 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import {passwordHash,passwordMatches,vault,confined,treeHash,allowedGitUrl,copyTree} from '../../server/security.mjs';
-test('password digests are salted, verify correct passwords and reject invalid inputs',()=>{const a=passwordHash('a sufficiently long password');assert.notEqual(a,passwordHash('a sufficiently long password'));assert.equal(passwordMatches('a sufficiently long password',a),true);assert.equal(passwordMatches('different',a),false);assert.equal(passwordMatches(null,a),false);});
-test('encrypted credentials reject ciphertext modification',()=>{const v=vault('ab'.repeat(32)),encoded=v.encrypt({apiKey:'private-value'});assert(!encoded.includes('private-value'));assert.deepEqual(v.decrypt(encoded),{apiKey:'private-value'});const modified=Buffer.from(encoded,'base64');modified[20]^=1;assert.throws(()=>v.decrypt(modified.toString('base64')));});
-test('project paths reject traversal, credential paths, symlinks and hardlinks',()=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'frame-security-'));try{for(const bad of ['../x','/tmp/x','x\\y','x/../../z','.git/config','.env','sub/.env.production','a//b','c:foo'])assert.throws(()=>confined(root,bad));fs.writeFileSync(root+'/ok.txt','data');fs.linkSync(root+'/ok.txt',root+'/hard.txt');assert.throws(()=>confined(root,'hard.txt'));fs.unlinkSync(root+'/hard.txt');fs.symlinkSync(root+'/ok.txt',root+'/link.txt');assert.throws(()=>confined(root,'link.txt'));assert.throws(()=>copyTree(root,root+'-copy'));}finally{fs.rmSync(root,{recursive:true,force:true});fs.rmSync(root+'-copy',{recursive:true,force:true});}});
-test('fingerprints detect material edits but exclude export output',()=>{const root=fs.mkdtempSync(path.join(os.tmpdir(),'frame-hash-'));try{fs.writeFileSync(root+'/scene.ts','one');const a=treeHash(root);fs.mkdirSync(root+'/exports');fs.writeFileSync(root+'/exports/file','noise');assert.equal(treeHash(root),a);fs.writeFileSync(root+'/scene.ts','two');assert.notEqual(treeHash(root),a);}finally{fs.rmSync(root,{recursive:true,force:true});}});
-test('Git remote only accepts credential-free GitHub HTTPS URLs',()=>{assert.equal(allowedGitUrl('https://github.com/example/film.git'),'https://github.com/example/film.git');for(const bad of ['file:///etc','https://user:secret@github.com/a/b','--upload-pack=bad','https://localhost/a/b','https://github.com/a/b?x=1'])assert.throws(()=>allowedGitUrl(bad));});
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  passwordHash,
+  passwordMatches,
+  vault,
+  confined,
+  treeHash,
+  allowedGitUrl,
+  copyTree,
+} from "../../server/security.mjs";
+test("password digests are salted, verify correct passwords and reject invalid inputs", () => {
+  const a = passwordHash("a sufficiently long password");
+  assert.notEqual(a, passwordHash("a sufficiently long password"));
+  assert.equal(passwordMatches("a sufficiently long password", a), true);
+  assert.equal(passwordMatches("different", a), false);
+  assert.equal(passwordMatches(null, a), false);
+});
+test("encrypted credentials reject ciphertext modification", () => {
+  const v = vault("ab".repeat(32)),
+    encoded = v.encrypt({ apiKey: "private-value" });
+  assert(!encoded.includes("private-value"));
+  assert.deepEqual(v.decrypt(encoded), { apiKey: "private-value" });
+  const modified = Buffer.from(encoded, "base64");
+  modified[20] ^= 1;
+  assert.throws(() => v.decrypt(modified.toString("base64")));
+});
+test("project paths reject traversal, credential paths, symlinks and hardlinks", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "frame-security-"));
+  try {
+    for (const bad of [
+      "../x",
+      "/tmp/x",
+      "x\\y",
+      "x/../../z",
+      ".git/config",
+      ".env",
+      "sub/.env.production",
+      "a//b",
+      "c:foo",
+    ])
+      assert.throws(() => confined(root, bad));
+    fs.writeFileSync(root + "/ok.txt", "data");
+    fs.linkSync(root + "/ok.txt", root + "/hard.txt");
+    assert.throws(() => confined(root, "hard.txt"));
+    fs.unlinkSync(root + "/hard.txt");
+    fs.symlinkSync(root + "/ok.txt", root + "/link.txt");
+    assert.throws(() => confined(root, "link.txt"));
+    assert.throws(() => copyTree(root, root + "-copy"));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(root + "-copy", { recursive: true, force: true });
+  }
+});
+test("fingerprints detect material edits but exclude export output", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "frame-hash-"));
+  try {
+    fs.writeFileSync(root + "/scene.ts", "one");
+    const a = treeHash(root);
+    fs.mkdirSync(root + "/exports");
+    fs.writeFileSync(root + "/exports/file", "noise");
+    assert.equal(treeHash(root), a);
+    fs.writeFileSync(root + "/scene.ts", "two");
+    assert.notEqual(treeHash(root), a);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+test("Git remote only accepts credential-free GitHub HTTPS URLs", () => {
+  assert.equal(
+    allowedGitUrl("https://github.com/example/film.git"),
+    "https://github.com/example/film.git",
+  );
+  for (const bad of [
+    "file:///etc",
+    "https://user:secret@github.com/a/b",
+    "--upload-pack=bad",
+    "https://localhost/a/b",
+    "https://github.com/a/b?x=1",
+  ])
+    assert.throws(() => allowedGitUrl(bad));
+});

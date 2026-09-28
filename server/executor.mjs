@@ -55,6 +55,8 @@ try {
       "public",
       "package.json",
       "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      ".npmrc",
       "tsconfig.json",
       "index.html",
       "vite.config.ts",
@@ -68,7 +70,7 @@ try {
     await run("git", ["config", "user.name", "FRAME"]);
     await run("git", ["config", "user.email", "frame@localhost"]);
     const skip = [
-      "node_modules/",
+      "node_modules",
       ".cache/",
       "projects/*/.cache/",
       "projects/*/.history/",
@@ -77,6 +79,26 @@ try {
       "result.json",
     ];
     fs.writeFileSync(work + "/.gitignore", skip.join("\n") + "\n");
+    const baseline = [
+      "src",
+      "scripts",
+      "templates",
+      "docs",
+      "public",
+      "projects",
+      "package.json",
+      "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      ".npmrc",
+      ".gitignore",
+      "tsconfig.json",
+      "index.html",
+      "vite.config.ts",
+      "vitest.config.ts",
+      "AGENTS.md",
+    ].filter((name) => fs.existsSync(work + "/" + name));
+    await run("git", ["add", "--", ...baseline]);
+    await run("git", ["commit", "-qm", "Initialize isolated task workspace"]);
     let value = { status: "passed" };
     if (task.kind === "agent") {
       const p = task.input.provider;
@@ -93,7 +115,9 @@ try {
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           ...(task.model ? ["-m", task.model] : []),
-          ...(task.baseUrl ? ['-c','openai_base_url='+JSON.stringify(task.baseUrl)] : []),
+          ...(task.baseUrl
+            ? ["-c", "openai_base_url=" + JSON.stringify(task.baseUrl)]
+            : []),
           "-",
         ];
       } else

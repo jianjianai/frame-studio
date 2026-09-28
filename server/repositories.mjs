@@ -96,6 +96,14 @@ export class Repositories {
         );
       }
       fs.mkdirSync(path.join(root, "projects"), { recursive: true });
+      for (const [key, value] of Object.entries({
+        "filter.lfs.clean": "git-lfs clean -- %f",
+        "filter.lfs.smudge": "git-lfs smudge -- %f",
+        "filter.lfs.process": "git-lfs filter-process",
+        "filter.lfs.required": "true",
+      }))
+        await this.git(root, ["config", "--local", key, value]);
+      if (url) await this.git(root, ["lfs", "pull"], true);
       const info = path.join(root, ".git/info/exclude");
       fs.appendFileSync(
         info,

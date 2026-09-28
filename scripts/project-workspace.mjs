@@ -50,7 +50,7 @@ export function createProjectWorkspace(root, id) {
     fs.unlinkSync(path.join(snapshot.root, ".owner.json"));
     fs.appendFileSync(
       path.join(snapshot.root, ".git/info/exclude"),
-      "\nnode_modules/\n.cache/\n.history/\n",
+      "\nnode_modules\n.cache/\n.history/\n",
     );
     const tracked = [
       "src",

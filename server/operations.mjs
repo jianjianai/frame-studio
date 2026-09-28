@@ -42,9 +42,30 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
     { repo: uuid },
     (a) => repos.status(a.repo),
   );
-  add('repositories_remote','Connect a local content repository to an existing GitHub repository',{repo:uuid,url:z.string().url()},async a=>db.lock(a.repo,async()=>{
-    await repos.writable(a.repo);const {allowedGitUrl}=await import('./security.mjs');allowedGitUrl(a.url);const r=await repos.get(a.repo);const remotes=await repos.git(r.root,['remote']);await repos.git(r.root,['remote',remotes.split('\n').includes('origin')?'set-url':'add','origin',a.url]);await db.pool.query('UPDATE repos SET url=$2 WHERE id=$1',[a.repo,a.url]);return repos.status(a.repo);
-  }));
+  add(
+    "repositories_remote",
+    "Connect a local content repository to an existing GitHub repository",
+    { repo: uuid, url: z.string().url() },
+    async (a) =>
+      db.lock(a.repo, async () => {
+        await repos.writable(a.repo);
+        const { allowedGitUrl } = await import("./security.mjs");
+        allowedGitUrl(a.url);
+        const r = await repos.get(a.repo);
+        const remotes = await repos.git(r.root, ["remote"]);
+        await repos.git(r.root, [
+          "remote",
+          remotes.split("\n").includes("origin") ? "set-url" : "add",
+          "origin",
+          a.url,
+        ]);
+        await db.pool.query("UPDATE repos SET url=$2 WHERE id=$1", [
+          a.repo,
+          a.url,
+        ]);
+        return repos.status(a.repo);
+      }),
+  );
   add(
     "repositories_sync",
     "Fetch, fast-forward pull, commit content files, or push including LFS",
@@ -190,6 +211,31 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
     tasks.cancel(a.id),
   );
   add(
+    "artifact_read",
+    "Read a completed task PNG for visual inspection; JSON and subtitles return as text",
+    { id: uuid, path: z.string().max(1024) },
+    async (a) => {
+      const task = await tasks.get(a.id);
+      if (
+        task.state !== "succeeded" ||
+        !task.result?.artifacts?.some((f) => f.path === a.path)
+      )
+        throw problem(404, "Artifact not available");
+      const file = confined(path.join(data, "runs", a.id), a.path),
+        st = fs.statSync(file);
+      if (st.size > 6 * 1024 * 1024)
+        throw problem(413, "Use a smaller frame or download the artifact");
+      if (/\.png$/.test(file))
+        return {
+          mimeType: "image/png",
+          dataBase64: fs.readFileSync(file).toString("base64"),
+        };
+      if (/\.(json|srt)$/.test(file))
+        return { text: fs.readFileSync(file, "utf8") };
+      throw problem(400, "Use PNG for AI visual inspection");
+    },
+  );
+  add(
     "assets_list",
     "List material library, optionally only unassigned assets or recycle bin",
     {
@@ -229,6 +275,12 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
       ]);
       return assets.get(a.id);
     },
+  );
+  add(
+    "assets_purge",
+    "Permanently delete an unassigned recycled asset and release unshared blob storage",
+    { id: uuid },
+    (a) => assets.purge(a.id),
   );
   add(
     "upload_begin",
