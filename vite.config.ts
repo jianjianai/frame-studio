@@ -4,7 +4,7 @@ import { projectAssets } from "./scripts/project-assets.mjs";
 export default defineConfig({
   base: "./",
   plugins: [react(), projectAssets({ project: process.env.FRAME_PROJECT })],
-  worker: { format: "es" },
+  worker: { format: "iife" },
   server: {
     host: "127.0.0.1",
     port: 5173,

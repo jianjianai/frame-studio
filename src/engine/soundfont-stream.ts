@@ -1,6 +1,7 @@
 import type { Score } from "./score.mjs";
 import type { StereoPcm } from "./procedural-audio";
 import type { GeneratedAudioOptions } from "./types";
+import SoundfontWorker from "./soundfont.worker?worker&inline";
 import {
   SCORE_SAMPLE_RATE,
   SCORE_CHUNK_SECONDS,
@@ -51,10 +52,8 @@ export class ScoreStream {
         this.source.score;
       return new Promise<void>((resolve, reject) => {
         this.rejectReady = reject;
-        const worker = (this.worker = new Worker(
-          new URL("./soundfont.worker.ts", import.meta.url),
-          { type: "module" },
-        ));
+        // Blob-backed workers also work in the server's opaque-origin preview sandbox.
+        const worker = (this.worker = new SoundfontWorker());
         worker.onmessage = ({ data }: MessageEvent<ScoreWorkerResponse>) => {
           if (data.type === "error") return this.fail(new Error(data.message));
           if (data.type === "ready") {

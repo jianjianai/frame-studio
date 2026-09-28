@@ -125,7 +125,7 @@ export async function createApp({
     await db.one("SELECT 1");
     return {
       status: "ok",
-      version: "2.0.0",
+      version: "2.0.1",
       revision: process.env.FRAME_REVISION || "development",
     };
   });
@@ -301,7 +301,7 @@ export async function createApp({
   });
   const mcp = createMcpHandler(
     () => {
-      const server = new McpServer({ name: "frame-studio", version: "2.0.0" });
+      const server = new McpServer({ name: "frame-studio", version: "2.0.1" });
       for (const [name, op] of Object.entries(actions.registry)) {
         if (
           name.startsWith("settings_") ||
