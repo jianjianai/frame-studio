@@ -28,6 +28,10 @@
 
 对真实既有作品进行上线后的 sandbox 实播时发现，浏览器拒绝不透明源 iframe 创建外部 URL 音频 Worker。公共音频线程改用 Vite 的内联经典 Blob Worker（IIFE），保持 iframe 的权限隔离。新增 `tests/e2e/server-preview.spec.ts` 已通过：iframe 的 origin 为 null，同时采样配乐进入 running，时间推进到 0.77 秒，无错误。修正后 TypeScript、99 项单元测试与 6 项音频浏览器专项通过；线上继续以实际声音播放状态验收。
 
+## 2.0.2 严格 CSP 验证
+
+将线上完整 CSP 加入浏览器测试后，进一步定位到音色引擎的 WebAssembly 实例化被禁止。预览仅增加 `wasm-unsafe-eval`，不允许通用 JavaScript eval，也不授予 iframe same-origin。携带实际 CSP 的采样音频实播测试通过：origin=null，audioState=running，time=0.819s，无异常。最终部署使用 2.0.2。
+
 ## 发布约束
 
 GitHub Actions 托管作业因账户账单/额度被平台拒绝启动（run 36459685356）。保留发布工作流，当前采用服务器受控构建、推送 GHCR、Dockge 拉取 GHCR 版本的路径。镜像需要携带最终 Git revision，部署后核对健康检查与实际镜像身份。
