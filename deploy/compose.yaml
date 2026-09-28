@@ -1,0 +1,79 @@
+name: frame
+services:
+  studio:
+    image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-2.0.0}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://frame:${POSTGRES_PASSWORD}@postgres:5432/frame
+      FRAME_MASTER_KEY: ${FRAME_MASTER_KEY}
+      FRAME_ADMIN_PASSWORD: ${FRAME_ADMIN_PASSWORD}
+      FRAME_PUBLIC_URL: https://frame.nerviloom.com
+      FRAME_DATA: /data
+      FRAME_HOST_DATA: /opt/stacks/frame/data
+      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-2.0.0}
+      FRAME_SPEECH_URL: http://speech:8000
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal, caddy]
+    labels:
+      caddy: frame.nerviloom.com
+      caddy.reverse_proxy: "{{upstreams 3000}}"
+      caddy.encode: zstd gzip
+    depends_on:
+      postgres: { condition: service_healthy }
+      speech: { condition: service_started }
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: frame
+      POSTGRES_USER: frame
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes: [postgres:/var/lib/postgresql]
+    networks: [internal]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U frame]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  speech:
+    image: ghcr.io/jianjianai/frame-speech:${FRAME_VERSION:-2.0.0}
+    restart: unless-stopped
+    environment: { OMP_NUM_THREADS: "2", MKL_NUM_THREADS: "2" }
+    volumes: [models:/models]
+    networks: [internal]
+    mem_limit: 4g
+    cpus: 2
+    healthcheck:
+      test:
+        [
+          CMD,
+          python,
+          -c,
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "2" } }
+networks:
+  internal:
+  caddy:
+    external: true
+    name: caddy_caddy
+volumes:
+  postgres:
+  models:

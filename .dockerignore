@@ -1,0 +1,15 @@
+.git
+node_modules
+dist
+studio-dist
+**/.cache
+**/.history
+**/exports
+test-results
+playwright-report
+.env
+.env.*
+.secrets
+.credentials
+*.log
+records
