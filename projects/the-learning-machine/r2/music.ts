@@ -71,26 +71,80 @@ export function synthSample(kind:Instrument,key:number,sampleRate:number):Float3
 }
 function sample(context:BaseAudioContext,instrument:Instrument,key:number){let map=cache.get(context);if(!map){map=new Map();cache.set(context,map);}const id=instrument+':'+key;let b=map.get(id);if(!b){const data=synthSample(instrument,key,context.sampleRate);b=context.createBuffer(1,data.length,context.sampleRate);b.getChannelData(0).set(data);map.set(id,b);}return b;}
 export function prepareAudio(context:BaseAudioContext){for(const n of notes)sample(context,n.instrument,n.key);}
-// Native AudioBuffer nodes use the shared AudioContext clock. There is no worker queue,
-// polling clock or stateful reverb to stall a cold seek. Delays are explicit source-time taps.
+// Delays are explicit source-time taps. The realtime scheduler reads the shared
+// AudioContext clock; offline rendering schedules the complete requested segment.
 const automationTimes=Array.from(new Set([0,151.8,DURATION,...voiceCues.flatMap(([a,b])=>[Math.max(0,a-.08),a,b,Math.min(DURATION,b+.2)])])).sort((a,b)=>a-b);
 export function envelopePoints(trackId:string):[number,number][]{
  const minimum=trackId==='music'?.76:trackId==='drums'?.94:.96;
  return automationTimes.map(t=>{let g=1;for(const[a,b]of voiceCues){if(t<a-.08||t>b+.2)continue;const u=t<a?(t-(a-.08))/.08:t<=b?1:1-(t-b)/.2;g=Math.min(g,1-(1-minimum)*Math.max(0,Math.min(1,u)));}return[t,g*Math.max(0,Math.min(1,(DURATION-t)/(DURATION-151.8)))];});
 }
 export function envelopeAt(trackId:string,t:number):number{const points=envelopePoints(trackId);if(t<=0)return points[0]![1];if(t>=DURATION)return 0;let i=1;while(points[i]![0]<t)i++;const a=points[i-1]!,b=points[i]!;return a[1]+(b[1]-a[1])*(t-a[0])/(b[0]-a[0]);}
-export function createAudio({trackId,context,destination,when,offset,duration:segment,rate}:GeneratedAudioOptions){
- const bus=context.createGain(),nodes:AudioNode[]=[bus],sources:AudioBufferSourceNode[]=[];const end=Math.min(offset+segment,DURATION);
- bus.connect(destination);bus.gain.setValueAtTime(envelopeAt(trackId,offset),when);
- for(const[t,v]of envelopePoints(trackId)){if(t>offset&&t<end)bus.gain.linearRampToValueAtTime(v,when+(t-offset)/rate);}
- bus.gain.linearRampToValueAtTime(envelopeAt(trackId,end),when+(end-offset)/rate);
- for(const n of notes){if(n.track!==trackId)continue;const b=sample(context,n.instrument,n.key);const taps=n.instrument==='pluck'?[[0,1,n.pan],[.118,.22,-n.pan],[.257,.1,n.pan]]:[[0,1,n.pan]];
-  for(const [delay,level,pan]of taps){const sr=context.sampleRate,at=Math.round((n.at+delay!)*sr)/sr,from=Math.max(at,Math.round(offset*sr)/sr),until=Math.min(at+b.duration,Math.round(end*sr)/sr,DURATION);if(until<=from)continue;
-   const src=context.createBufferSource(),gain=context.createGain(),panner=context.createStereoPanner();src.buffer=b;src.playbackRate.value=rate;panner.pan.value=pan!;
-   gain.gain.value=n.velocity*level!*(trackId==='music'?.39:trackId==='drums'?.31:.4);
-   src.connect(gain);gain.connect(panner);panner.connect(bus);src.start(when+(from-offset)/rate,from-at,until-from);sources.push(src);nodes.push(src,gain,panner);
+const scoreEvents=notes.flatMap(note=>{
+ const taps=note.instrument==='pluck'?[[0,1,note.pan],[.118,.22,-note.pan],[.257,.1,note.pan]]:[[0,1,note.pan]];
+ return taps.map(([delay,level,pan])=>({note,at:note.at+delay!,level:level!,pan:pan!}));
+}).sort((a,b)=>a.at-b.at);
+
+export function createAudio({trackId,context,destination,when,offset,duration:segment,rate,onError}:GeneratedAudioOptions){
+ const bus=context.createGain(),end=Math.min(offset+segment,DURATION),sr=context.sampleRate;
+ const offline=typeof (context as OfflineAudioContext).startRendering==='function';
+ // Keep the graph bounded regardless of the remaining film length. Include tails
+ // from before a seek, and extend source-time lookahead when playing faster.
+ const events=scoreEvents.filter(e=>e.note.track===trackId&&e.at<end&&e.at+duration[e.note.instrument]>offset);
+ const active=new Map<AudioBufferSourceNode,()=>void>();
+ const wakeBuffer=offline?undefined:context.createBuffer(1,1,sr);
+ let cursor=0,disposed=false,wake:AudioBufferSourceNode|undefined;
+ const dispose=()=>{
+  if(disposed)return;
+  disposed=true;
+  if(wake){wake.onended=null;try{wake.stop();}catch{/* Not started. */}wake.disconnect();wake=undefined;}
+  for(const [source,release]of active){
+   source.onended=null;
+   try{source.stop();}catch{/* A failed start or an already ended source. */}
+   release();
   }
- }
- let disposed=false;return{dispose(){if(disposed)return;disposed=true;for(const src of sources){try{src.stop();}catch{/* already ended */}}for(const node of nodes)node.disconnect();}};
+  bus.disconnect();
+ };
+ const schedule=(initial=false)=>{
+  if(disposed)return;
+  const horizon=offline?end:Math.min(end,offset+(Math.max(0,context.currentTime-when)+2)*rate);
+  while(cursor<events.length&&events[cursor]!.at<horizon){
+   const {note,at:eventTime,level,pan}=events[cursor++]!;
+   const b=sample(context,note.instrument,note.key),at=Math.round(eventTime*sr)/sr;
+   const from=Math.max(at,Math.round(offset*sr)/sr),until=Math.min(at+b.duration,Math.round(end*sr)/sr,DURATION);
+   if(until<=from)continue;
+   const start=Math.max(when,when+(from-offset)/rate);
+   if(!offline&&!initial&&start<context.currentTime-.02)
+    throw new Error('配乐缓冲不足，请暂停后重新播放。');
+   const src=context.createBufferSource(),gain=context.createGain(),panner=context.createStereoPanner();
+   const release=()=>{src.onended=null;src.disconnect();gain.disconnect();panner.disconnect();active.delete(src);};
+   active.set(src,release);
+   src.onended=release;
+   src.buffer=b;src.playbackRate.value=rate;panner.pan.value=pan;
+   gain.gain.value=note.velocity*level*(trackId==='music'?.39:trackId==='drums'?.31:.4);
+   src.connect(gain);gain.connect(panner);panner.connect(bus);
+   src.start(start,from-at,until-from);
+  }
+ };
+ // A silent one-frame source wakes the scheduler on the same audio clock. It is
+ // cancelled with this graph and cannot advance playback or run while suspended.
+ const arm=()=>{
+  if(disposed||cursor===events.length)return;
+  const source=context.createBufferSource();wake=source;
+  source.buffer=wakeBuffer!;source.connect(bus);
+  source.onended=()=>{
+   source.onended=null;source.disconnect();wake=undefined;
+   if(disposed)return;
+   try{schedule();arm();}catch(error){dispose();onError?.(error instanceof Error?error:new Error(String(error)));}
+  };
+  source.start(context.currentTime+.1);
+ };
+ try{
+  bus.connect(destination);bus.gain.setValueAtTime(envelopeAt(trackId,offset),when);
+  for(const[t,v]of envelopePoints(trackId)){if(t>offset&&t<end)bus.gain.linearRampToValueAtTime(v,when+(t-offset)/rate);}
+  bus.gain.linearRampToValueAtTime(envelopeAt(trackId,end),when+(end-offset)/rate);
+  schedule(true);
+  if(!offline)arm();
+  return{dispose};
+ }catch(error){dispose();throw error;}
 }
 export function disposeAudio(context:BaseAudioContext){cache.delete(context);}
