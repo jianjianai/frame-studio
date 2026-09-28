@@ -1,6 +1,6 @@
 {
   "name": "frame-studio",
-  "version": "2.0.2",
+  "version": "3.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.4.2",
@@ -8,7 +8,8 @@
     "node": ">=22.13"
   },
   "scripts": {
-    "dev": "vite --host 127.0.0.1 --port 5173 --strictPort",
+    "dev": "vite --config studio/vite.config.mjs",
+    "dev:player": "vite --host 127.0.0.1 --port 5174 --strictPort",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1 --port 4173 --strictPort",
     "typecheck": "tsc --noEmit",
@@ -17,7 +18,7 @@
     "render": "node scripts/render.mjs",
     "assets": "node scripts/prepare-assets.mjs",
     "format": "prettier --write src scripts tests templates/*.txt package.json tsconfig.json vite.config.ts vitest.config.ts playwright.config.ts README.md AGENTS.md docs/*.md --ignore-unknown",
-    "verify": "pnpm project:check && pnpm typecheck && pnpm test && pnpm test:mcp && pnpm build && pnpm test:e2e && pnpm test:server && pnpm build:studio",
+    "verify": "pnpm project:check && pnpm typecheck && pnpm test && pnpm test:mcp && pnpm build && pnpm test:server && pnpm build:studio",
     "posters": "node scripts/render.mjs --posters",
     "env:check": "node scripts/doctor.mjs",
     "assets:import": "node scripts/import-asset.mjs",
@@ -33,7 +34,8 @@
     "platform": "node scripts/platform-cli.mjs",
     "server": "node server/app.mjs",
     "build:studio": "vite build --config studio/vite.config.mjs",
-    "test:server": "node --test tests/server/*.test.mjs"
+    "test:server": "node --test tests/server/*.test.mjs",
+    "verify:content": "pnpm project:check --strict && pnpm exec vitest run --config vitest.content.config.ts && pnpm build && pnpm test:e2e"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

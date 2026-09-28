@@ -71,8 +71,22 @@ export function projectConfig(root, id, outDir) {
     configFile: false,
     logLevel: "error",
     base: "./",
-    plugins: [react(), projectAssets({ project: id })],
-    worker: { format: "es" },
+    plugins: [
+      react(),
+      projectAssets({ project: id }),
+      {
+        name: "work-preview-entry",
+        transformIndexHtml: {
+          order: "pre",
+          handler(html) {
+            return process.env.FRAME_WORK_PREVIEW === "1"
+              ? html.replace("/src/main.tsx", "/src/work-preview.tsx")
+              : html;
+          },
+        },
+      },
+    ],
+    worker: { format: "iife" },
     cacheDir: projectPath(root, id, ".cache/vite"),
     build: { target: "es2022", outDir, emptyOutDir: false },
     server: {

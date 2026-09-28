@@ -2,7 +2,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { command } from "./process.mjs";
-import { copyTree, treeHash, confined, problem } from "./security.mjs";
+import {
+  copyTree,
+  treeHash,
+  confined,
+  problem,
+  token,
+  hash,
+} from "./security.mjs";
 import { applyProject } from "./apply-project.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets) {
@@ -120,6 +127,17 @@ export class Tasks {
     await command("chown", ["-R", "1000:1000", sessionDir]);
     const env = {};
     const flags = [];
+    if (t.kind === "agent") {
+      const value = token();
+      await this.db.pool.query(
+        "INSERT INTO agent_tokens(hash,task) VALUES($1,$2)",
+        [hash(value), t.id],
+      );
+      env.FRAME_AGENT_TOKEN = value;
+      env.FRAME_AGENT_URL =
+        process.env.FRAME_AGENT_URL || process.env.FRAME_PUBLIC_URL;
+      flags.push("-e", "FRAME_AGENT_TOKEN", "-e", "FRAME_AGENT_URL");
+    }
     if (config.apiKey) {
       const name =
         t.input.provider === "codex" ? "CODEX_API_KEY" : "ANTHROPIC_API_KEY";
@@ -240,6 +258,21 @@ export class Tasks {
       [t.id, result],
     );
     await this.db.event(t.id, "result", result);
+    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
+    if (t.repo && t.kind === "agent") {
+      await this.db.pool.query(
+        "UPDATE works SET updated=now() WHERE repo=$1 AND project=$2",
+        [t.repo, t.project],
+      );
+      // A completed creation turn publishes a fresh player preview without a second user action.
+      await this.create({
+        repo: t.repo,
+        project: t.project,
+        kind: "build",
+      }).catch((e) =>
+        this.db.event(t.id, "preview-error", { message: e.message }),
+      );
+    }
   }
   async tick() {
     if (this.ticking || this.closed) return;

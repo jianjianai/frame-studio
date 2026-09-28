@@ -34,6 +34,8 @@ export interface StudioApi {
     diagnostics: Record<string, unknown>;
   }>;
   setRate?(rate: number): void;
+  setLoop?(loop: boolean): void;
+  setVolume?(volume: number): void;
   setTrack?(
     id: string,
     control: Partial<{ gain: number; muted: boolean }>,

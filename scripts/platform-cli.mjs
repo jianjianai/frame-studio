@@ -2,7 +2,7 @@ import fs from "node:fs";
 const [name, input = "{}"] = process.argv.slice(2);
 if (!name || name === "help") {
   console.log(
-    "FRAME server CLI: FRAME_URL=https://frame.example FRAME_TOKEN=... pnpm platform <operation> <JSON | @file | ->\nList operations: pnpm platform actions\nExample: pnpm platform repositories_list",
+    'FRAME works CLI: FRAME_URL=https://frame.example FRAME_TOKEN=... pnpm platform <operation> <JSON | @file | ->\nList operations: pnpm platform actions\nStart: pnpm platform works_list\nCreate: pnpm platform works_create \'{"title":"我的作品"}\'\nThen use works_context, works_files/read/write, works_use_asset, works_speech, works_task, works_browser with the work UUID.',
   );
 } else {
   const base = process.env.FRAME_URL,

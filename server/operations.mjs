@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { workOperations } from "./work-operations.mjs";
 import {
   hash,
   token,
@@ -625,7 +626,17 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
     { id: project },
     (a) => local("/models/" + a.id, { method: "DELETE" }),
   );
+  const works = workOperations({
+    add,
+    registry,
+    db,
+    data,
+    repos,
+    assets,
+    tasks,
+  });
   return {
+    works,
     registry,
     async call(name, args) {
       const op = registry[name];

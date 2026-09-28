@@ -1,6 +1,6 @@
-import { Component, type ReactNode } from "react";
+import { Component, type ReactNode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import App from "./App";
+import { Player } from "./ui/Player";
 import { findProject } from "./projects";
 import { RenderPage } from "./ui/RenderPage";
 import "./styles.css";
@@ -26,6 +26,23 @@ class ErrorBoundary extends Component<
 }
 const renderId = new URLSearchParams(location.search).get("render");
 const renderProject = renderId ? findProject(renderId) : undefined;
+function StandalonePreview() {
+  const selected = () =>
+    new URLSearchParams(location.search).get("work") ||
+    location.hash.match(/^#\/film\/([^/]+)$/)?.[1];
+  const [id, setId] = useState(selected);
+  useEffect(() => {
+    const change = () => setId(selected());
+    window.addEventListener("hashchange", change);
+    return () => window.removeEventListener("hashchange", change);
+  }, []);
+  const project = id ? findProject(id) : undefined;
+  return project ? (
+    <Player key={id} project={project} />
+  ) : (
+    <p>请在 FRAME 作品库中打开作品。</p>
+  );
+}
 if (renderId) document.body.classList.add("render-mode");
 createRoot(document.getElementById("root")!).render(
   <ErrorBoundary>
@@ -36,7 +53,7 @@ createRoot(document.getElementById("root")!).render(
         <p role="alert">Unknown project: {renderId}</p>
       )
     ) : (
-      <App />
+      <StandalonePreview />
     )}
   </ErrorBoundary>,
 );

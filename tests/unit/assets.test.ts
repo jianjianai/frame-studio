@@ -51,8 +51,8 @@ describe("local asset imports", () => {
     writeFileSync(path.join(dir, "projects/story/project.ts"), "");
     writeFileSync(path.join(dir, "projects/story/public/assets.json"), "[]");
     const source = path.join(dir, "original.svg");
-    const original = readFileSync(
-      path.join(root, "projects/paper-wings/public/art/paper-plane.svg"),
+    const original = Buffer.from(
+      '<svg xmlns="http://www.w3.org/2000/svg"><path d="M0 0L20 10L0 20Z"/></svg>',
     );
     writeFileSync(source, original);
     try {

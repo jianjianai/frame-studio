@@ -23,6 +23,8 @@ export interface ExportProgress {
 export interface BrowserExportOptions {
   width: number;
   fps: number;
+  start?: number;
+  end?: number;
   subtitles: boolean;
   signal: AbortSignal;
   controls?: Map<string, { gain: number; muted: boolean }>;
@@ -41,6 +43,8 @@ export async function exportWebm(
     duration: project.duration,
     width: options.width,
     fps: options.fps,
+    start: options.start,
+    end: options.end,
   });
   const { signal } = options;
   signal.throwIfAborted();
@@ -116,10 +120,12 @@ export async function exportWebm(
         await trial.start();
         const trialFrames = Math.min(3, plan.frames);
         if (sound)
-          await sound.add(await audio.render(0, trialFrames / plan.fps));
+          await sound.add(
+            await audio.render(plan.start, trialFrames / plan.fps),
+          );
         for (let frame = 0; frame < trialFrames; frame++) {
           signal.throwIfAborted();
-          renderer.render(frame / plan.fps, options.subtitles);
+          renderer.render(plan.start + frame / plan.fps, options.subtitles);
           await video.add(frame / plan.fps, 1 / plan.fps);
         }
         video.close();
@@ -158,12 +164,15 @@ export async function exportWebm(
       if (sound && frame % plan.fps === 0) {
         const samples = Math.min(48000, totalSamples - audioSamples);
         await sound.add(
-          await audio.render(audioSamples / 48000, samples / 48000),
+          await audio.render(
+            plan.start + audioSamples / 48000,
+            samples / 48000,
+          ),
         );
         audioSamples += samples;
       }
       signal.throwIfAborted();
-      renderer.render(frame / plan.fps, options.subtitles);
+      renderer.render(plan.start + frame / plan.fps, options.subtitles);
       await video.add(frame / plan.fps, 1 / plan.fps);
       progress("rendering", frame + 1);
       // Yield to cancellation/progress without using the display refresh clock.

@@ -95,6 +95,15 @@ export class Repositories {
           `# ${name}\n\nFRAME animation projects.\n`,
         );
       }
+      if (
+        url &&
+        (fs.existsSync(path.join(root, "server/app.mjs")) ||
+          fs.existsSync(path.join(root, "studio/main.jsx")))
+      )
+        throw problem(
+          400,
+          "请选择只存放作品内容的 GitHub 仓库。平台源码仓库不能作为内容库。",
+        );
       fs.mkdirSync(path.join(root, "projects"), { recursive: true });
       for (const [key, value] of Object.entries({
         "filter.lfs.clean": "git-lfs clean -- %f",

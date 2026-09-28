@@ -5,21 +5,22 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
-import { repo, call } from "./helpers.mjs";
+import { repo, call, fixture } from "./helpers.mjs";
 
 for (const entry of ["scripts/mcp.mjs", "scripts/film.mjs"]) {
   test(
     "real stdio SDK discovery and calls: " + entry,
     { timeout: 20000 },
     async () => {
+      const f = fixture({ browser: true });
       const transport = new StdioClientTransport({
         command: process.execPath,
         args: [
-          path.join(repo, entry),
+          path.join(f.root, entry),
           ...(entry.endsWith("film.mjs") ? ["mcp"] : []),
           "--read-only",
           "--project",
-          "tiny-seed",
+          "test-film",
         ],
         cwd: path.dirname(repo),
         stderr: "pipe",
@@ -37,7 +38,7 @@ for (const entry of ["scripts/mcp.mjs", "scripts/film.mjs"]) {
         const result = await call(client, "frame_list_projects");
         assert.deepEqual(
           result.projects.map((item) => item.id),
-          ["tiny-seed"],
+          ["test-film"],
         );
         const resources = await client.listResources();
         assert.ok(
@@ -57,7 +58,7 @@ for (const entry of ["scripts/mcp.mjs", "scripts/film.mjs"]) {
         );
         const prompt = await client.getPrompt({
           name: "frame_edit_animation",
-          arguments: { project: "tiny-seed", request: "调整镜头" },
+          arguments: { project: "test-film", request: "调整镜头" },
         });
         assert.ok(prompt.messages[0].content.text.includes("调整镜头"));
         assert.ok(prompt.messages[0].content.text.includes("frame_edit_files"));
@@ -67,12 +68,13 @@ for (const entry of ["scripts/mcp.mjs", "scripts/film.mjs"]) {
           ).content.includes("Scene"),
         );
         const context = await call(client, "frame_project_context", {
-          project: "tiny-seed",
+          project: "test-film",
         });
         assert.equal(context.metadata.renderer, "canvas");
         assert.equal(diagnostics, "");
       } finally {
         await client.close();
+        f.close();
       }
     },
   );

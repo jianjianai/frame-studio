@@ -5,7 +5,7 @@ import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
 import { assetPath, projectPath } from "../../scripts/project-paths.mjs";
 import { projectSchema } from "../../src/engine/types";
-import paper from "../../projects/paper-wings/project";
+import paper from "../helpers/project";
 const script = path.resolve("scripts/project-scope.mjs");
 
 describe("single project boundaries", () => {

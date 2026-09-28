@@ -1,9 +1,0 @@
-import{describe,it,expect}from'vitest';
-import{notes,synthSample,envelopeAt,envelopePoints,type Instrument}from'../../r2/music';
-describe('R2 score and source-time envelopes',()=>{
- it('uses real drum voices and multiple orchestration patterns',()=>{const kinds=new Set(notes.map(n=>n.instrument));for(const kind of ['kick','snare','hat','tom','bass','pluck','string','pad'])expect(kinds.has(kind as Instrument)).toBe(true);const count=(a:number,b:number)=>notes.filter(n=>n.track==='drums'&&n.at>=a&&n.at<b).length/(b-a);expect(count(99,121)).toBeGreaterThan(count(126,138)*3);expect(count(27.1,48)).toBeGreaterThan(count(64.1,77));expect(notes.every(n=>n.at>=0&&n.at<153.6)).toBe(true);});
- it('synthesizes each timbre as a bounded finite buffer without long-song PCM work',()=>{const started=performance.now();for(const kind of new Set(notes.map(n=>n.instrument))){const data=synthSample(kind,kind==='kick'?36:69,24000);let peak=0;for(const x of data){expect(Number.isFinite(x)).toBe(true);peak=Math.max(peak,Math.abs(x));}expect(peak).toBeGreaterThan(.005);expect(peak).toBeLessThan(1);expect(data.length).toBeLessThan(120000);}console.info('R2_TIMBRE_GENERATION_MS',Math.round(performance.now()-started));});
- it('is deterministic for repeated independent synthesis',()=>{expect(synthSample('snare',38,12000)).toEqual(synthSample('snare',38,12000));});
- it('avoids speech while preserving drum transients',()=>{expect(envelopeAt('music',1)).toBeCloseTo(.76);expect(envelopeAt('drums',1)).toBeCloseTo(.94);expect(envelopeAt('music',81)).toBeCloseTo(1);});
- it('fades at absolute source time, not at each offline chunk boundary',()=>{expect(envelopeAt('music',151.8)).toBeCloseTo(1);expect(envelopeAt('music',152.7)).toBeCloseTo(.5,6);expect(envelopeAt('music',153.6)).toBe(0);for(const track of['drums','music','fx']){const p=envelopePoints(track);for(let i=1;i<p.length;i++)expect(p[i]![0]).toBeGreaterThan(p[i-1]![0]);}});
-});

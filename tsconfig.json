@@ -31,6 +31,7 @@
     "projects/*/.cache",
     "projects/*/.history",
     "projects/*/test-results",
-    "projects/*/playwright-report"
+    "projects/*/playwright-report",
+    "tests/content"
   ]
 }
