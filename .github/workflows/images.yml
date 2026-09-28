@@ -35,7 +35,7 @@ jobs:
         run: |
           if [ -n "$REQUESTED" ]; then VERSION="$REQUESTED";
           elif [ "$GITHUB_REF_TYPE" = tag ]; then VERSION="${GITHUB_REF_NAME#v}";
-          else VERSION="2.0.0-preview-${GITHUB_SHA:0:8}"; fi
+          else VERSION="3.0.0-preview-${GITHUB_SHA:0:8}"; fi
           echo "value=$VERSION" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:

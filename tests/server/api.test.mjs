@@ -170,12 +170,100 @@ test(
         repo: repo.id,
         project: "hello",
       });
+      assert.equal(
+        (await call("assets_list", { unused: true })).length,
+        0,
+        "retained project bytes still count as a reference",
+      );
+      await assert.rejects(
+        actions.call("assets_trash", { id: asset.id, deleted: true }),
+        /attached/,
+      );
+      fs.unlinkSync(dir + "/" + ref.path);
       await call("assets_trash", { id: asset.id, deleted: true });
       await call("assets_purge", { id: asset.id });
       assert.equal(fs.existsSync(path.join(data, "blobs", asset.sha)), false);
+      assert.equal(fs.existsSync(dir + "/" + ref.path), false);
+      const work = await call("works_create", {
+        title: "独立作品",
+        duration: 2,
+      });
+      assert.notEqual(
+        work.repo,
+        repo.id,
+        "default storage is a dedicated content repository",
+      );
       assert.equal(
-        fs.readFileSync(dir + "/" + ref.path, "utf8"),
-        "test material",
+        fs.existsSync(path.join(data, "repos", work.repo, "package.json")),
+        false,
+      );
+      const source = await call("works_read", {
+        id: work.id,
+        path: "scene.ts",
+      });
+      const version = await call("works_checkpoint", {
+        id: work.id,
+        name: "初稿",
+      });
+      await call("works_write", {
+        id: work.id,
+        path: "scene.ts",
+        expectedSha256: source.sha256,
+        content: source.content + "\n// second version\n",
+      });
+      await call("works_restore", { id: work.id, version: version.id });
+      assert.equal(
+        (await call("works_read", { id: work.id, path: "scene.ts" })).content,
+        source.content,
+      );
+      assert.equal(
+        (await call("works_versions", { id: work.id })).length,
+        2,
+        "restore saves current version",
+      );
+      await call("works_update", {
+        id: work.id,
+        title: "改名的作品",
+        category: "科普",
+        status: "review",
+      });
+      const duplicate = await call("works_duplicate", {
+        id: work.id,
+        title: "作品副本",
+      });
+      assert.notEqual(duplicate.id, work.id);
+      assert.equal(duplicate.category, "科普");
+      assert.match(
+        (await call("works_read", { id: duplicate.id, path: "project.ts" }))
+          .content,
+        new RegExp(duplicate.project),
+      );
+      const workTask = await call("works_task", { id: work.id, kind: "build" });
+      await assert.rejects(
+        actions.call("works_trash", { id: work.id, deleted: true }),
+        /active task/,
+      );
+      await call("task_cancel", { id: workTask.id });
+      await call("works_trash", { id: work.id, deleted: true });
+      assert(
+        (await call("works_list", { deleted: true })).some(
+          (w) => w.id === work.id,
+        ),
+      );
+      await assert.rejects(
+        actions.call("works_write", {
+          id: work.id,
+          path: "scene.ts",
+          expectedSha256: source.sha256,
+          content: "bad",
+        }),
+        /Restore/,
+      );
+      await call("works_trash", { id: work.id, deleted: false });
+      assert(
+        (await call("works_list", { search: "改名" })).some(
+          (w) => w.id === work.id,
+        ),
       );
       const tok = await call("tokens_create", { name: "test" });
       const headers = {

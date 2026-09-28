@@ -37,20 +37,26 @@ describe("fixed frame grid", () => {
 
 describe("AI-facing film commands", () => {
   it("lists real metadata and emits standalone machine-readable context", () => {
-    const listed = run(["list", "--json"]);
-    expect(listed.status).toBe(0);
-    const expected = readProjectCatalog().map((p) => p.directory);
-    expect(
-      JSON.parse(listed.stdout).projects.map((p: { id: string }) => p.id),
-    ).toEqual(expected);
-    const context = run(["context", expected[0], "--json"]);
-    expect(context.status).toBe(0);
-    expect(JSON.parse(context.stdout)).toMatchObject({
-      schemaVersion: 1,
-      id: expected[0],
-      writeBoundary: `projects/${expected[0]}/`,
-    });
-    expect(JSON.parse(context.stdout).workflow.length).toBeGreaterThan(0);
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "frame-list-context-"));
+    try {
+      expect(run(["new", "context-fixture", "Fixture"], root).status).toBe(0);
+      const listed = run(["list", "--json"], root);
+      expect(listed.status).toBe(0);
+      const expected = readProjectCatalog(root).map((p) => p.directory);
+      expect(
+        JSON.parse(listed.stdout).projects.map((p: { id: string }) => p.id),
+      ).toEqual(expected);
+      const context = run(["context", expected[0], "--json"], root);
+      expect(context.status).toBe(0);
+      expect(JSON.parse(context.stdout)).toMatchObject({
+        schemaVersion: 1,
+        id: expected[0],
+        writeBoundary: `projects/${expected[0]}/`,
+      });
+      expect(JSON.parse(context.stdout).workflow.length).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
   it("rejects unknown commands, extra arguments, unknown projects and traversal", () => {
     for (const args of [

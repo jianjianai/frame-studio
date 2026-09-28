@@ -43,7 +43,13 @@ interface Playback {
   volume: number;
   muted: boolean;
 }
-export function Player({ project }: { project: AnimationProject }) {
+export function Player({
+  project,
+  embedded = false,
+}: {
+  project: AnimationProject;
+  embedded?: boolean;
+}) {
   const audioTracks = projectAudioTracks(project);
   const [trackControls, setTrackControls] = useState<
     Record<string, { gain: number; muted: boolean }>
@@ -242,6 +248,14 @@ export function Player({ project }: { project: AnimationProject }) {
         sound.setRate(rate);
         publish();
       },
+      setLoop(loop) {
+        sound.clock.loop = loop;
+        publish();
+      },
+      setVolume(volume) {
+        sound.setVolume(volume);
+        publish();
+      },
       setTrack(id, control) {
         sound.setTrack(id, control);
         setTrackControls((previous) => ({
@@ -274,6 +288,7 @@ export function Player({ project }: { project: AnimationProject }) {
       },
     };
     if (
+      embedded ||
       import.meta.env.DEV ||
       new URLSearchParams(location.search).has("debug")
     )
@@ -485,32 +500,34 @@ export function Player({ project }: { project: AnimationProject }) {
     [...project.beats].reverse().find((b) => view.time >= b.at) ??
     project.beats[0];
   return (
-    <div className="player-page">
-      <header className="player-heading">
-        <div>
-          <a href="#/" className="back-link">
-            <ArrowLeft size={15} /> 返回作品库
-          </a>
-          <div className="title-line">
-            <h1>{project.title}</h1>
-            <span className="pill">
-              {project.status === "draft"
-                ? "制作中"
-                : project.status === "film"
-                  ? "FILM"
-                  : "DEMO"}
-            </span>
+    <div className={"player-page" + (embedded ? " work-player" : "")}>
+      {!embedded && (
+        <header className="player-heading">
+          <div>
+            <a href="#/" className="back-link">
+              <ArrowLeft size={15} /> 返回作品库
+            </a>
+            <div className="title-line">
+              <h1>{project.title}</h1>
+              <span className="pill">
+                {project.status === "draft"
+                  ? "制作中"
+                  : project.status === "film"
+                    ? "FILM"
+                    : "DEMO"}
+              </span>
+            </div>
+            <p>{project.subtitle}</p>
           </div>
-          <p>{project.subtitle}</p>
-        </div>
-        <button
-          className="button primary"
-          disabled={loading || exporting}
-          onClick={() => setExportOpen(true)}
-        >
-          <Download size={16} /> 导出作品
-        </button>
-      </header>
+          <button
+            className="button primary"
+            disabled={loading || exporting}
+            onClick={() => setExportOpen(true)}
+          >
+            <Download size={16} /> 导出作品
+          </button>
+        </header>
+      )}
       <div className="studio-layout">
         <div className="editing-area">
           <div className="theater" ref={theater}>
@@ -890,76 +907,78 @@ export function Player({ project }: { project: AnimationProject }) {
             </section>
           )}
         </div>
-        <aside className="inspector">
-          <div className="inspector-header">
-            作品信息 <span>PROJECT</span>
-          </div>
-          <div className="info-block">
-            <span className="eyebrow">RENDER ENGINE</span>
-            <h3>
-              {project.renderer === "three"
-                ? "Three.js"
-                : project.renderer === "pixi"
-                  ? "PixiJS"
-                  : "Canvas + Flubber"}
-            </h3>
-            <p>{project.description}</p>
-            <div className="tags">
-              {project.tags.map((t) => (
-                <span key={t}>{t}</span>
+        {!embedded && (
+          <aside className="inspector">
+            <div className="inspector-header">
+              作品信息 <span>PROJECT</span>
+            </div>
+            <div className="info-block">
+              <span className="eyebrow">RENDER ENGINE</span>
+              <h3>
+                {project.renderer === "three"
+                  ? "Three.js"
+                  : project.renderer === "pixi"
+                    ? "PixiJS"
+                    : "Canvas + Flubber"}
+              </h3>
+              <p>{project.description}</p>
+              <div className="tags">
+                {project.tags.map((t) => (
+                  <span key={t}>{t}</span>
+                ))}
+              </div>
+            </div>
+            <div className="info-block">
+              <div className="info-row">
+                <span>片长</span>
+                <strong>{formatTime(project.duration)}</strong>
+              </div>
+              <div className="info-row">
+                <span>项目帧率</span>
+                <strong>{project.fps} fps</strong>
+              </div>
+              <div className="info-row">
+                <span>画面比例</span>
+                <strong>16 : 9</strong>
+              </div>
+              <label className="quality-label">
+                预览画质
+                <select
+                  aria-label="预览画质"
+                  value={quality}
+                  disabled={exporting}
+                  onChange={(e) => {
+                    transport.current?.pause();
+                    publish();
+                    setQuality(e.target.value as Quality);
+                  }}
+                >
+                  <option value="draft">流畅 · 360p</option>
+                  <option value="standard">标准 · 720p</option>
+                  <option value="high">精细 · 1080p</option>
+                </select>
+              </label>
+            </div>
+            <div className="info-block director">
+              <span className="eyebrow">当前镜头</span>
+              <h4>{currentBeat.title}</h4>
+              <p>{currentBeat.detail}</p>
+            </div>
+            <div className="info-block subtitle-preview">
+              <span className="eyebrow">中文字幕</span>
+              <p>
+                {activeSubtitle(project.subtitles, view.time) ||
+                  "当前没有字幕，让画面自己说话。"}
+              </p>
+            </div>
+            <div className="info-block credits">
+              <span className="eyebrow">素材与署名</span>
+              {project.credits.map((c) => (
+                <p key={c}>{c}</p>
               ))}
             </div>
-          </div>
-          <div className="info-block">
-            <div className="info-row">
-              <span>片长</span>
-              <strong>{formatTime(project.duration)}</strong>
-            </div>
-            <div className="info-row">
-              <span>项目帧率</span>
-              <strong>{project.fps} fps</strong>
-            </div>
-            <div className="info-row">
-              <span>画面比例</span>
-              <strong>16 : 9</strong>
-            </div>
-            <label className="quality-label">
-              预览画质
-              <select
-                aria-label="预览画质"
-                value={quality}
-                disabled={exporting}
-                onChange={(e) => {
-                  transport.current?.pause();
-                  publish();
-                  setQuality(e.target.value as Quality);
-                }}
-              >
-                <option value="draft">流畅 · 360p</option>
-                <option value="standard">标准 · 720p</option>
-                <option value="high">精细 · 1080p</option>
-              </select>
-            </label>
-          </div>
-          <div className="info-block director">
-            <span className="eyebrow">当前镜头</span>
-            <h4>{currentBeat.title}</h4>
-            <p>{currentBeat.detail}</p>
-          </div>
-          <div className="info-block subtitle-preview">
-            <span className="eyebrow">中文字幕</span>
-            <p>
-              {activeSubtitle(project.subtitles, view.time) ||
-                "当前没有字幕，让画面自己说话。"}
-            </p>
-          </div>
-          <div className="info-block credits">
-            <span className="eyebrow">素材与署名</span>
-            {project.credits.map((c) => (
-              <p key={c}>{c}</p>
-            ))}
-          </div>
-        </aside>
+          </aside>
+        )}
       </div>
       {exportOpen && (
         <div

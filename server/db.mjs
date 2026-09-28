@@ -15,6 +15,9 @@ export async function database(url, password) {
     CREATE TABLE IF NOT EXISTS events (id bigserial PRIMARY KEY, task uuid NOT NULL REFERENCES tasks(id), kind text NOT NULL, data jsonb NOT NULL, created timestamptz NOT NULL DEFAULT now());
     CREATE INDEX IF NOT EXISTS events_task ON events(task,id);
     CREATE TABLE IF NOT EXISTS engines (id uuid PRIMARY KEY, name text NOT NULL, config text NOT NULL, enabled boolean NOT NULL DEFAULT true, created timestamptz NOT NULL DEFAULT now());
+    CREATE TABLE IF NOT EXISTS works (id uuid PRIMARY KEY, repo uuid NOT NULL REFERENCES repos(id), project text NOT NULL, title text NOT NULL, category text NOT NULL DEFAULT '', status text NOT NULL DEFAULT 'draft', description text NOT NULL DEFAULT '', deleted boolean NOT NULL DEFAULT false, created timestamptz NOT NULL DEFAULT now(), updated timestamptz NOT NULL DEFAULT now(), UNIQUE(repo,project));
+    CREATE TABLE IF NOT EXISTS work_versions (id uuid PRIMARY KEY, work uuid NOT NULL REFERENCES works(id), name text NOT NULL, created timestamptz NOT NULL DEFAULT now());
+    CREATE TABLE IF NOT EXISTS agent_tokens (hash text PRIMARY KEY, task uuid NOT NULL REFERENCES tasks(id));
   `);
   const admin = await pool.query(
     "SELECT value FROM settings WHERE key='admin'",

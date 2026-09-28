@@ -32,6 +32,7 @@ coverage/
 *.log
 
 # Each film owns its generated files
+/projects/
 projects/*/exports/
 projects/*/.cache/
 projects/.cache/

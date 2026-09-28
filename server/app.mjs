@@ -23,6 +23,8 @@ import { Repositories } from "./repositories.mjs";
 import { Assets } from "./assets.mjs";
 import { Tasks } from "./tasks.mjs";
 import { operations } from "./operations.mjs";
+import { agentTools } from "./agent-tools.mjs";
+import { browserPreview } from "./browser-preview.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
@@ -104,6 +106,15 @@ export async function createApp({
       ? req.headers.authorization.slice(7)
       : null;
     let authenticated = false;
+    if (req.url === "/api/agent/action") {
+      if (bearer)
+        req.agentTask = await db.one(
+          "SELECT t.* FROM agent_tokens a JOIN tasks t ON t.id=a.task WHERE a.hash=$1 AND t.kind='agent' AND t.state='running'",
+          [hash(bearer)],
+        );
+      if (!req.agentTask) throw problem(401, "Active task credential required");
+      return;
+    }
     if (bearer)
       authenticated = !!(await db.one("SELECT id FROM tokens WHERE hash=$1", [
         hash(bearer),
@@ -125,10 +136,11 @@ export async function createApp({
     await db.one("SELECT 1");
     return {
       status: "ok",
-      version: "2.0.2",
+      version: "3.0.0",
       revision: process.env.FRAME_REVISION || "development",
     };
   });
+  agentTools({ app, db, data, assets, actions });
   app.post(
     "/api/login",
     { config: { rateLimit: { max: 8, timeWindow: "1 minute" } } },
@@ -159,6 +171,22 @@ export async function createApp({
   app.post("/api/action", async (req) =>
     actions.call(req.body?.name, req.body?.args),
   );
+  app.get("/api/works/:id/cover", async (req, res) => {
+    const w = await actions.works.get(req.params.id);
+    const { dir } = await repos.project(w.repo, w.project);
+    const file = actions.works.coverPath(dir);
+    if (!file) throw problem(404, "Cover unavailable");
+    res.type(
+      path.extname(file) === ".svg"
+        ? "image/svg+xml"
+        : path.extname(file) === ".png"
+          ? "image/png"
+          : path.extname(file) === ".jpg"
+            ? "image/jpeg"
+            : "image/webp",
+    );
+    return fs.createReadStream(file);
+  });
   app.get("/api/actions", async () =>
     Object.fromEntries(
       Object.entries(actions.registry).map(([name, op]) => [
@@ -237,6 +265,9 @@ export async function createApp({
     }
   });
   const types = {
+    ".svg": "image/svg+xml",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
     ".png": "image/png",
     ".jpg": "image/jpeg",
     ".webp": "image/webp",
@@ -268,19 +299,7 @@ export async function createApp({
   });
   app.post("/api/tasks/:id/preview", async (req) => {
     const t = await tasks.get(req.params.id);
-    if (t.kind !== "build" || t.state !== "succeeded")
-      throw problem(409, "Build a preview first");
-    const index = t.result?.artifacts?.find((a) =>
-      a.name.endsWith("index.html"),
-    );
-    if (!index) throw problem(404, "Preview missing");
-    const secret = token();
-    await db.setting("preview:" + hash(secret), {
-      task: t.id,
-      base: path.posix.dirname(index.path),
-      expires: Date.now() + 3600000,
-    });
-    return { url: "/preview/" + secret + "/index.html#/film/" + t.project };
+    return browserPreview(db, t);
   });
   app.get("/preview/:token/*", async (req, res) => {
     const p = await db.setting("preview:" + hash(req.params.token));
@@ -293,7 +312,7 @@ export async function createApp({
       throw problem(404, "Not found");
     res.header(
       "Content-Security-Policy",
-      "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'",
+      `sandbox allow-scripts${p.ai ? " allow-downloads" : ""}; default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'`,
     );
     res.header("Access-Control-Allow-Origin", "*");
     res.type(types[path.extname(file)] || "application/octet-stream");
@@ -301,13 +320,12 @@ export async function createApp({
   });
   const mcp = createMcpHandler(
     () => {
-      const server = new McpServer({ name: "frame-studio", version: "2.0.2" });
+      const server = new McpServer({ name: "frame-studio", version: "3.0.0" });
       for (const [name, op] of Object.entries(actions.registry)) {
         if (
-          name.startsWith("settings_") ||
-          name.startsWith("tokens_") ||
-          name === "password_change" ||
-          name === "tools_update"
+          !/^(works_|upload_|assets_(list|update|trash|purge)$|task_(get|cancel)$|artifact_read$|engines_list$)/.test(
+            name,
+          )
         )
           continue;
         server.registerTool(

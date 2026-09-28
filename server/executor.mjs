@@ -10,7 +10,11 @@ const run = (bin, args, options = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
       cwd: work,
-      env: { ...process.env, FRAME_PROJECT: task.project },
+      env: {
+        ...process.env,
+        FRAME_PROJECT: task.project,
+        ...(task.kind === "build" ? { FRAME_WORK_PREVIEW: "1" } : {}),
+      },
       stdio: ["pipe", "pipe", "pipe"],
       ...options,
     });
@@ -106,7 +110,7 @@ try {
       const marker = `/tools/${p}/current`;
       if (fs.existsSync(marker))
         bin = `/tools/${p}/${fs.readFileSync(marker, "utf8").trim()}/node_modules/.bin/${bin}`;
-      const prompt = `You are working on FRAME animation ${task.project}. Only edit projects/${task.project}/. Read AGENTS.md, docs/AUTHORING.md and the project README. Use pnpm --silent film context ${task.project} --json, frame/storyboard/render for previews, and validate before finishing. All changes stay in this project.\n\n${task.input.prompt}`;
+      const prompt = `You are creating one work in FRAME: ${task.project}. Only edit projects/${task.project}/. The surrounding engine and tools are the platform runtime, not another project to create or install. Read AGENTS.md, docs/AUTHORING.md and the work README. Use pnpm --silent film context ${task.project} --json, frame/storyboard/render for visual inspection. Use node scripts/work-tool.mjs help for searching global assets, copying assets into this work, and synthesizing narration with configured engines. These tools save material into the current work; wire returned URLs into scenes/audioTracks as needed. Never print credentials. Validate before finishing; a preview is built automatically after successful completion.\n\n${task.input.prompt}`;
       let args;
       if (p === "codex") {
         args = [
@@ -178,6 +182,7 @@ try {
       if (value.status === "failed" || value.passed === false)
         throw new Error("FRAME validation failed");
     }
+    if (task.kind === "build") value.previewVersion = 3;
     result(value);
   }
 } catch (e) {

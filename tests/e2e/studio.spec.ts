@@ -1,14 +1,7 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs/promises";
 import { expectSameFrame } from "../helpers/frame-match";
-import { assetCatalog as readAssets } from "../../scripts/project-assets.mjs";
-import { readProjectCatalog } from "../../scripts/project-metadata.mjs";
 import type { StudioApi } from "../../src/engine/debug";
-const projectCatalog = readProjectCatalog().map((record) => record.meta);
-const projectCount = projectCatalog.length;
-const assetCatalog = readAssets(process.cwd()) as {
-  type: string;
-}[];
 const state = (page: import("@playwright/test").Page) =>
   page.evaluate(() => window.__FRAME_STUDIO__!.getState());
 async function ready(page: import("@playwright/test").Page, id: string) {
@@ -23,41 +16,12 @@ async function frame(page: import("@playwright/test").Page, time: number) {
     return api.dataURL();
   }, time);
 }
-test("library search, renderer filters, real posters and asset navigation", async ({
+test("standalone player has no nested workbench navigation", async ({
   page,
 }) => {
-  const errors: string[] = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  await page.goto("/");
-  await expect(page.getByTestId("project-card")).toHaveCount(projectCount);
-  await page.waitForFunction(() =>
-    [...document.querySelectorAll(".animation-card img")].every(
-      (i) =>
-        (i as HTMLImageElement).complete &&
-        (i as HTMLImageElement).naturalWidth > 0,
-    ),
-  );
-  await page.getByRole("button", { name: "3D 场景", exact: true }).click();
-  await expect(page.getByTestId("project-card")).toHaveCount(
-    projectCatalog.filter((project) => project.renderer === "three").length,
-  );
-  await page.getByRole("button", { name: /全部作品/ }).click();
-  await page.getByRole("textbox", { name: "搜索动画" }).fill("种子");
-  await expect(page.getByTestId("project-card")).toHaveCount(
-    projectCatalog.filter((project) =>
-      [project.title, project.subtitle, ...project.tags]
-        .join(" ")
-        .includes("种子"),
-    ).length,
-  );
-  await page.getByRole("link", { name: "素材库", exact: true }).click();
-  await expect(page.locator(".asset-card")).toHaveCount(assetCatalog.length);
-  await expect(page.locator("audio")).toHaveCount(
-    assetCatalog.filter((a) => a.type === "audio").length,
-  );
-  await page.getByRole("link", { name: "制作指南", exact: true }).click();
-  await expect(page.getByText("把下一个故事，放进来。")).toBeVisible();
-  expect(errors).toEqual([]);
+  await ready(page, "tiny-seed");
+  await expect(page.locator(".sidebar")).toHaveCount(0);
+  await expect(page.locator("canvas")).toBeVisible();
 });
 for (const id of ["paper-wings", "sunny-rail", "tiny-seed"])
   test(
@@ -128,7 +92,12 @@ for (const id of ["paper-wings", "sunny-rail", "tiny-seed"])
         { timeout: 30000 },
       );
       expect((await state(page)).time).toBeLessThan(2);
-      await page.getByTestId("play-toggle").click();
+      // Stop through the console immediately. A UI click may wait several seconds
+      // for software WebGL on CI; quality changes must preserve the actual pause point.
+      const beforeQuality = await page.evaluate(() => {
+        window.__FRAME_STUDIO__!.pause();
+        return window.__FRAME_STUDIO__!.getState().time;
+      });
       await page
         .getByRole("combobox", { name: "预览画质" })
         .selectOption("draft");
@@ -137,7 +106,7 @@ for (const id of ["paper-wings", "sunny-rail", "tiny-seed"])
           window.__FRAME_STUDIO__?.ready &&
           window.__FRAME_STUDIO__.getState().width === 640,
       );
-      expect((await state(page)).time).toBeLessThan(2);
+      expect((await state(page)).time).toBeCloseTo(beforeQuality, 5);
       await page.screenshot({
         path: "test-results/" + id + "-player.png",
         fullPage: true,
@@ -174,7 +143,7 @@ test("switching between different rendering engines cleans up safely", async ({
   page.on("pageerror", (e) => errors.push(e.message));
   await ready(page, "sunny-rail");
   for (const id of ["paper-wings", "tiny-seed", "sunny-rail", "tiny-seed"]) {
-    await page.locator('.project-nav a[href="#/film/' + id + '"]').click();
+    await ready(page, id);
     await page.waitForFunction(
       (id) =>
         window.__FRAME_STUDIO__?.ready &&
@@ -185,21 +154,8 @@ test("switching between different rendering engines cleans up safely", async ({
   }
   expect(errors).toEqual([]);
 });
-test("responsive library and player fit a narrow phone viewport", async ({
-  page,
-}) => {
+test("standalone player fits a narrow phone viewport", async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/");
-  await expect(page.getByTestId("project-card")).toHaveCount(projectCount);
-  expect(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= innerWidth,
-    ),
-  ).toBe(true);
-  await page.screenshot({
-    path: "test-results/mobile-library.png",
-    fullPage: true,
-  });
   await ready(page, "tiny-seed");
   await page.evaluate(() => window.__FRAME_STUDIO__!.seek(25));
   expect(
