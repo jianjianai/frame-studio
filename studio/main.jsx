@@ -88,6 +88,11 @@ function Empty({ children }) {
     </div>
   );
 }
+function readableAgentEvents(events){
+  const output=[];for(const line of events.filter(e=>e.kind==='log').map(e=>e.data.text).join('').split('\n')){
+    if(!line.trim())continue;try{const v=JSON.parse(line);if(v.type==='item.completed'&&v.item?.type==='agent_message')output.push(v.item.text);else if(v.type==='item.started'&&v.item?.type==='command_execution')output.push('执行：'+v.item.command);else if(v.type==='assistant')for(const c of v.message?.content||[])if(c.type==='text')output.push(c.text);else if(c.type==='tool_use')output.push('使用工具：'+c.name);else if(v.type==='error')output.push(v.message||v.error?.message||'AI 返回错误');}catch{if(!line.startsWith('{'))output.push(line);}
+  }return output.join('\n\n');
+}
 function App() {
   const [signed, setSigned] = useState(null),
     [page, setPage] = useState("projects"),
@@ -739,6 +744,7 @@ function GitPanel({ repo, run }) {
       <p>
         {s?.remote || "本地内容仓库"} · {s?.branch}
       </p>
+      {!s?.remote&&<form className="row" onSubmit={e=>{e.preventDefault();const url=new FormData(e.currentTarget).get('url');run(async()=>{await api('repositories_remote',{repo,url});await load();});}}><input name="url" type="url" placeholder="https://github.com/owner/repository" required/><Button>关联 GitHub 仓库</Button></form>}
       <div className="row">
         <Button
           onClick={() =>
@@ -1353,10 +1359,7 @@ function ChatsPage({
                       </span>
                       {t.error && <p className="error">{t.error}</p>}
                       <pre>
-                        {(stream[t.id] || [])
-                          .filter((e) => e.kind === "log")
-                          .map((e) => e.data.text)
-                          .join("\n") || "AI 正在准备工作…"}
+                        {readableAgentEvents(stream[t.id] || []) || (t.state==='succeeded'?'创作已完成。':'AI 正在准备工作…')}
                       </pre>
                       <button
                         className="text-button"

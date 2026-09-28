@@ -93,6 +93,7 @@ try {
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           ...(task.model ? ["-m", task.model] : []),
+          ...(task.baseUrl ? ['-c','openai_base_url='+JSON.stringify(task.baseUrl)] : []),
           "-",
         ];
       } else

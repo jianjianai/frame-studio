@@ -42,6 +42,9 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
     { repo: uuid },
     (a) => repos.status(a.repo),
   );
+  add('repositories_remote','Connect a local content repository to an existing GitHub repository',{repo:uuid,url:z.string().url()},async a=>db.lock(a.repo,async()=>{
+    await repos.writable(a.repo);const {allowedGitUrl}=await import('./security.mjs');allowedGitUrl(a.url);const r=await repos.get(a.repo);const remotes=await repos.git(r.root,['remote']);await repos.git(r.root,['remote',remotes.split('\n').includes('origin')?'set-url':'add','origin',a.url]);await db.pool.query('UPDATE repos SET url=$2 WHERE id=$1',[a.repo,a.url]);return repos.status(a.repo);
+  }));
   add(
     "repositories_sync",
     "Fetch, fast-forward pull, commit content files, or push including LFS",

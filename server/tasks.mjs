@@ -115,7 +115,7 @@ export class Tasks {
     const flags = [];
     if (config.apiKey) {
       const name =
-        t.input.provider === "codex" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+        t.input.provider === "codex" ? "CODEX_API_KEY" : "ANTHROPIC_API_KEY";
       env[name] = config.apiKey;
       flags.push("-e", name);
       if (config.baseUrl) {
@@ -256,6 +256,7 @@ export class Tasks {
       );
       for (const t of running) {
         try {
+          if(t.state==='running' && Date.now()-new Date(t.started).getTime()>3600000){await command('docker',['stop','-t','5',t.container]).catch(()=>{});throw new Error('Task exceeded the one hour execution limit; completed output is retained.');}
           if (t.state === "cancelling")
             await command("docker", ["stop", "-t", "5", t.container]).catch(
               () => {},
