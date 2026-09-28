@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "transaction": "af3cf17d-047d-484d-8878-a7521c660d9e",
+  "time": "2026-09-28T09:51:21.897Z",
+  "changes": [
+    {
+      "path": "README.md",
+      "operation": "replace",
+      "beforeSha256": "f76e0e9d473f1f56939116b0ade42abe7e518bfd1ba7c09e2d2034f57c474f2d",
+      "afterSha256": "87fd3e3e60b77aef23c55b6e6fcd75cec6a59bac54ddb15711847c5e9454d91f"
+    },
+    {
+      "path": "production/brief.md",
+      "operation": "replace",
+      "beforeSha256": "cace8f4eac2d99d80715bd8ea97a7a4bcc483f5f201cb19c6e219f0d9cccbbc0",
+      "afterSha256": "e0f04963109d195787cf1bed0ae1fd257d2b6373f32ff2f762765d4b17844977"
+    },
+    {
+      "path": "tests/e2e/scene.spec.ts",
+      "operation": "replace",
+      "beforeSha256": "dda119e5ab0c52541c40daed139260a3fdb3eb0b4cea61e057bc8c3eb80dce56",
+      "afterSha256": "f28a857f8c9468aa54483f78bf4d9150af63dc1ab9753243937693fd97f332d0"
+    },
+    {
+      "path": "production/export-options.json",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "95f2fa67eeaf135d08d658c0f8318679efc3307185d0843a3fb9178dae408c85"
+    },
+    {
+      "path": "production/voice-master.json",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "c890f10155acc5941abe9f5b492d11389f10037369044b05e02bc0ac70644442"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

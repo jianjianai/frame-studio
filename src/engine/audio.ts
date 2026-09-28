@@ -24,6 +24,24 @@ export class AudioTransport {
   buffering = false;
   volume = 0.65;
   muted = false;
+  prepareMs = 0;
+  async preparePosition(signal?: AbortSignal): Promise<void> {
+    const began = performance.now();
+    await this.load();
+    signal?.throwIfAborted();
+    if (this.prepared && this.context)
+      await prepareAudioSegment(
+        this.prepared,
+        this.context,
+        this.clock.duration,
+        this.clock.time(),
+        this.clock.duration - this.clock.time(),
+        this.clock.rate,
+        this.controls,
+        signal,
+      );
+    this.prepareMs = performance.now() - began;
+  }
   constructor(
     private project: AnimationProject,
     private onError?: (error: Error) => void,

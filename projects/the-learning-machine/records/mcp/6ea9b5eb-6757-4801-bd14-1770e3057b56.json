@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "transaction": "6ea9b5eb-6757-4801-bd14-1770e3057b56",
+  "time": "2026-09-28T13:37:46.428Z",
+  "changes": [
+    {
+      "path": "tests/e2e/audio-runtime.spec.ts",
+      "operation": "replace",
+      "beforeSha256": "97a42da50c5c7652278d86a8b536ce5f4d6fb8c609c2413dfd5aaa2eefa7ca2a",
+      "afterSha256": "cf87ac8d67f6260f50a60b2cc87ef93fddbcefc5b7edc52f4255d4d104e85ecf"
+    },
+    {
+      "path": "tests/e2e/audio-preview.spec.ts",
+      "operation": "replace",
+      "beforeSha256": "7d47ae21eece3b0362092f7ede3a47b533639fd8ac353a077db50df082e9051e",
+      "afterSha256": "a191cb4d6f6a479bce7a7fed3322c7dc75b87a2199eb1d71b59841005d8a2379"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

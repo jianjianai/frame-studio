@@ -23,5 +23,14 @@
     "vite.config.ts",
     "vitest.config.ts",
     "playwright.config.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist",
+    "projects/*/exports",
+    "projects/*/.cache",
+    "projects/*/.history",
+    "projects/*/test-results",
+    "projects/*/playwright-report"
   ]
 }

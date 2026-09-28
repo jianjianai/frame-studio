@@ -66,7 +66,7 @@ describe("single project boundaries", () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
-  });
+  }, 15000); // Several Windows Git/Node startups can exceed the default 5 seconds.
 });
 
 it("rejects duplicate or out-of-range tracks and ambiguous legacy audio", () => {
@@ -83,6 +83,10 @@ it("rejects duplicate or out-of-range tracks and ambiguous legacy audio", () => 
       false,
     );
   expect(
-    projectSchema.safeParse({ ...paper, audioTracks: [track] }).success,
+    projectSchema.safeParse({
+      ...paper,
+      audio: "films/paper-wings/legacy.wav",
+      audioTracks: [track],
+    }).success,
   ).toBe(false);
 });

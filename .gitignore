@@ -1,5 +1,6 @@
 node_modules/
 dist/
+studio-dist/
 exports/
 test-results/
 playwright-report/
@@ -10,6 +11,8 @@ playwright-report/
 # Local configuration and credentials
 .env
 .env.*
+.evn
+.evn.*
 !.env.example
 !.env.sample
 .secrets/
@@ -32,3 +35,4 @@ coverage/
 projects/*/exports/
 projects/*/.cache/
 projects/.cache/
+projects/*/.history/

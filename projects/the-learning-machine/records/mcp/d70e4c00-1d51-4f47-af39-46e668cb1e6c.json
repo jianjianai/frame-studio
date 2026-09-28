@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "transaction": "d70e4c00-1d51-4f47-af39-46e668cb1e6c",
+  "time": "2026-09-28T13:36:31.702Z",
+  "changes": [
+    {
+      "path": "r3/geometry.ts",
+      "operation": "replace",
+      "beforeSha256": "aa080d8e169ce239e0b0657ac3d67441c6cce66dcb297124c3eebce4bf9b551c",
+      "afterSha256": "13df198ca115804b85a3b5b19e087e76f86c76a157a05575c186b9f77ffcc7fc"
+    },
+    {
+      "path": "r3/acts-futures.ts",
+      "operation": "replace",
+      "beforeSha256": "393c59084147cd3bbf2fb28f48ca7617c4ccba42fe887419511001f498d3cb5f",
+      "afterSha256": "4e40031a956fa492e74f162fecd9ad0c38d80041e038f8f1eca227092c974d39"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

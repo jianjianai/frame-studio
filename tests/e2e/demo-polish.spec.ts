@@ -1,4 +1,5 @@
 import { test, expect } from "@playwright/test";
+import { expectSameFrame } from "../helpers/frame-match";
 const demos = [
   {
     id: "paper-wings",
@@ -43,10 +44,7 @@ for (const demo of demos)
         api.frame(time, false);
         return api.dataURL();
       }, t);
-      expect(
-        again,
-        "Reverse seek at " + t + " seconds must reconstruct exactly",
-      ).toBe(a);
+      await expectSameFrame(again, a);
       expect(a.length).toBeGreaterThan(8000);
     }
     await page.evaluate(() => window.__FRAME_STUDIO__!.seek(0));

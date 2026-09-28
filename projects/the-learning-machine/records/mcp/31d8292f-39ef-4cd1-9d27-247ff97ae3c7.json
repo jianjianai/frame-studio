@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "transaction": "31d8292f-39ef-4cd1-9d27-247ff97ae3c7",
+  "time": "2026-09-28T13:50:40.220Z",
+  "changes": [
+    {
+      "path": "scripts/r3-build-audio.mjs",
+      "operation": "replace",
+      "beforeSha256": "cda3f84983d59a7b037831ae4e445b4b0f22bf491c29b25752fafd787d8f9873",
+      "afterSha256": "826a3d71ddd0741d3b74f07f2c6cbf87c7f2b5533eab90242bf3d0859f1d9a80"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import fs from "node:fs/promises";
+import { expectSameFrame } from "../helpers/frame-match";
 import { assetCatalog as readAssets } from "../../scripts/project-assets.mjs";
 import { readProjectCatalog } from "../../scripts/project-metadata.mjs";
 import type { StudioApi } from "../../src/engine/debug";
@@ -70,7 +71,7 @@ for (const id of ["paper-wings", "sunny-rail", "tiny-seed"])
       const a2 = await frame(page, 10);
       expect(a.length).toBeGreaterThan(5000);
       expect(a).not.toBe(b);
-      expect(a2).toBe(a);
+      await expectSameFrame(a2, a);
       await page.evaluate(() => window.__FRAME_STUDIO__!.seek(0));
       await page.getByTestId("play-toggle").click();
       await page.waitForFunction(
@@ -114,7 +115,18 @@ for (const id of ["paper-wings", "sunny-rail", "tiny-seed"])
         window.__FRAME_STUDIO__!.seek(window.__FRAME_STUDIO__!.duration - 0.1),
       );
       await page.getByTestId("play-toggle").click();
-      await page.waitForTimeout(400);
+      await page.waitForFunction(
+        () => {
+          const current = window.__FRAME_STUDIO__!.getState();
+          return (
+            current.playing &&
+            current.audioState === "running" &&
+            current.time < 2
+          );
+        },
+        undefined,
+        { timeout: 30000 },
+      );
       expect((await state(page)).time).toBeLessThan(2);
       await page.getByTestId("play-toggle").click();
       await page

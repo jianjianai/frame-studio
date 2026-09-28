@@ -1,0 +1,30 @@
+{
+  "source": "Emergent / Scott Buckley / CC BY 4.0",
+  "sourceRanges": [
+    [
+      24.4,
+      60.8
+    ],
+    [
+      84.4,
+      132.8
+    ],
+    [
+      144.4,
+      216.4
+    ]
+  ],
+  "crossfadeSeconds": 0.4,
+  "duration": 156,
+  "mixing": "section automation, narration ducking, short pause on claim/fact reversal, HP55Hz; no tempo alteration",
+  "musicPeak": 0.27030453264754806,
+  "foleyPeak": 0.054498947141142166,
+  "voiceSilencePaddingFrames": 4224,
+  "mixSamplePeak": 0.7972129727428351,
+  "outputs": {
+    "foley.wav": "27d08ff77a371ba97f6dd08c9d4f20717550d74e4fe038f80bad6e581a365bbf",
+    "score.wav": "201d4de70c37b80755b2e230daa08cfece4d5754bb55df2d4bb7e9a5039ac288",
+    "voice.wav": "50c4ac23ca4ded1fb3b744e8888836658c7a90dcb496d3a47465bc3475458e0a"
+  },
+  "listening": "not_run"
+}

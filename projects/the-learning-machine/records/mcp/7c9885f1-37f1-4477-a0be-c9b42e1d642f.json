@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "transaction": "7c9885f1-37f1-4477-a0be-c9b42e1d642f",
+  "time": "2026-09-28T11:11:58.259Z",
+  "changes": [
+    {
+      "path": "production/rebuild-narration.json",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "a453a263735a50a08b1368d8c270209d1ee3d72cc2a2c66b30181e3f599290a1"
+    },
+    {
+      "path": "production/rebuild-design.md",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "5daf83c9c921cf5ad9750db4e720dd658fe14f69499396debadc4128303ae7cc"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

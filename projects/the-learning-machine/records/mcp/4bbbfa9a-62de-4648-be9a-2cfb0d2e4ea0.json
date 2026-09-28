@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "transaction": "4bbbfa9a-62de-4648-be9a-2cfb0d2e4ea0",
+  "time": "2026-09-28T12:06:28.807Z",
+  "changes": [
+    {
+      "path": "r2/music.ts",
+      "operation": "replace",
+      "beforeSha256": "cc766305536a30bf9453610096e1ffb491543418f0d7b3c7e7366c021912e280",
+      "afterSha256": "a848eb12f1a1d25126216396cee5d12fcf9f3ce5202c9918d97a8a8f7a7c0ee6"
+    },
+    {
+      "path": "tests/e2e/scene.spec.ts",
+      "operation": "replace",
+      "beforeSha256": "e4de96ae2ba3d2594ed6cbc3ba0490c3c4af90ce8ab3f3656e3572e9d685fae3",
+      "afterSha256": "50b63e30427cdede7de696798ff4c05b89e61e3318d5e2bf84f9b51f43dd3bda"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

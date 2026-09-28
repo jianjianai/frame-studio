@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "transaction": "1501b71a-f5e5-4378-b7d6-8b32d961b998",
+  "time": "2026-09-28T11:17:45.651Z",
+  "changes": [
+    {
+      "path": "production/rebuild-narration.json",
+      "operation": "replace",
+      "beforeSha256": "c1881064a8e65407fe396ef7d2eeb2252d065aa4e02569532c9968a5488370ff",
+      "afterSha256": "4d76bfd72eaa7f576014af17ce4340d9384c330a37ef70514fbcd49a2a13e1ac"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

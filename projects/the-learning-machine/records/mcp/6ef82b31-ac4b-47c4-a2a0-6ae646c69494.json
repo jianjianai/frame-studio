@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "transaction": "6ef82b31-ac4b-47c4-a2a0-6ae646c69494",
+  "time": "2026-09-28T12:12:14.919Z",
+  "changes": [
+    {
+      "path": "production/export-options.json",
+      "operation": "replace",
+      "beforeSha256": "95f2fa67eeaf135d08d658c0f8318679efc3307185d0843a3fb9178dae408c85",
+      "afterSha256": "0b8ed5dcead5c0b6f47e8bc1e3c8100af7fd5c068e8da64b60f8299d787d914d"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

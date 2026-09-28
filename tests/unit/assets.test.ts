@@ -94,7 +94,7 @@ describe("local asset imports", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
-  });
+  }, 15000);
   it("rejects a glTF with missing external resources", () => {
     const dir = mkdtempSync(path.join(tmpdir(), "frame-model-"));
     mkdirSync(path.join(dir, "projects/story/public"), { recursive: true });

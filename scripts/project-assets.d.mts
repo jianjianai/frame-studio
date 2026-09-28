@@ -1,5 +1,5 @@
 import type { Plugin } from "vite";
-export function projectAssets(): Plugin;
+export function projectAssets(options?: { project?: string }): Plugin;
 export function assetCatalog(
   root: string,
   ids?: string[],

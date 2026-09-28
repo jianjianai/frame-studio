@@ -2,7 +2,17 @@
 
 本文说明工具用途和检查方式，不规定影片内容、风格或音乐标准。每次任务的要求记录在目标项目内，不追加为全仓规范。
 
+完整的命令行制作流程、局部编辑与版本恢复、单项目执行、声画审片、后台任务、分段导出及旁白入口见 [AI-PRODUCTION.md](AI-PRODUCTION.md)。新接手任务优先使用那里的命令配方，以下基础入口继续兼容。
+
+支持 MCP 的客户端可使用 [FRAME MCP](MCP.md) 完成项目上下文、带哈希校验的批量编辑、检查、PNG 回读与异步导出。统一启动入口是 pnpm --silent film mcp，直接客户端配置建议使用 node 与脚本绝对路径。
+
+外部客户端使用 [远程 MCP 接入](MCP-REMOTE.md)：`pnpm film mcp-remote init|check|serve`，支持内置 OAuth、Bearer token 和环境文件中的 Cloudflare Tunnel 配置。命令行制作功能独立可用。
+
+外部素材使用 [素材传输](ASSET-TRANSFER.md)：`pnpm film asset <id> upload <file> --license "来源许可"` 原样导入，添加 `--remote` 可上传到 `.env` 中配置的服务器；支持断点续传、URL 拉取、完整性校验和自动登记，不需要 MCP 客户端。
+
 ## 接手项目
+
+语音合成与人物对白见 [SPEECH.md](SPEECH.md)：`film speech <id> init|status|voices|say`，以及 `film narrate <id> --input production/narration.json`。每个项目可选择公共合成器或自己的适配器；MCP 对应 frame_speech_status、frame_init_speech、frame_list_voices、frame_narrate、frame_read_speech。
 
 在仓库根目录运行：
 
@@ -46,7 +56,7 @@ pnpm film poster my-film
 - poster 明确更新本工程封面。封面时刻由项目可选 `posterTime` 控制，默认片长中点，公共脚本没有作品专属时刻表。
 - 浏览器“逐帧导出 · WebM”可选择分辨率、帧率；独立场景使用 high 细节，逐帧编码，OfflineAudioContext 离线混音，最后封装。编码速度和预览 FPS 不改变帧序。当前混音设置作用于浏览器导出；命令使用元数据音量。
 
-输出默认在本项目 exports；`--out` 必须位于本项目。普通输出不覆盖，明确 `--force` 才替换。storyboard / frame 不需要 FFmpeg；命令视频需要 FFmpeg 与 FFprobe。浏览器要求支持 WebCodecs 的浏览器，缺少编码器会明确失败，不退回实时录屏；后台可能变慢，关闭或离开项目会取消。浏览器编码文件缓存上限 256 MiB，大型成片使用命令导出。
+输出默认在本项目 exports；`--out` 必须位于本项目。普通输出不覆盖，明确 `--force` 才替换。storyboard / frame 不需要 FFmpeg；命令视频需要 FFmpeg 与 FFprobe。浏览器先真实试编码，缺少可用编码器会明确失败，不退回实时录屏；后台可能变慢，关闭或离开项目会取消。浏览器内存模式上限 256 MiB，支持文件选择 API 时可勾选直接落盘；正式长片优先使用 `film export` 的分段恢复与完整媒体验证。
 
 ## 素材、检查和记录
 
@@ -54,10 +64,15 @@ pnpm film poster my-film
 pnpm film import my-film "D:/assets/voice.wav" --license "作者、来源和授权"
 pnpm film doctor
 pnpm film check my-film --strict --json
-pnpm film scope my-film --base <开始任务时的提交>
+pnpm film scope my-film --base <开始任务时的提交> --json
+pnpm film operation my-film --json
 ```
 
 import 只写本项目素材和索引；名称冲突时生成新文件。check 只检查文件、静态接口和时间范围，不代表画面或声音符合本次任务。单项目 context/check 不依赖其他项目元数据正常。scope 检查 Git 中提交以来及暂存、未暂存、未跟踪文件，发现越界即失败，不撤销修改；共享 checkout 无法识别作者，并行任务应使用独立 checkout。
+
+scope 的 JSON 报告分别列出本工程、其他工程和公共文件的变更数量与有限路径样本，使用 `--limit 5` 可进一步缩短输出。范围不通过退出 1，检查无法执行退出 2；其他项目的现有变更不等于当前项目结构错误，结构检查与预览仍可独立运行。
+
+项目被占用时，`operation` 返回关联任务、开始时间、进程存活状态和恢复条件。先查询或等待正在执行的任务；只有报告 `recoverable: true` 时才用 `pnpm film operation my-film --recover <返回的 lockId> --json` 恢复精确匹配的遗留锁。命令不会终止其他进程，也不会清除未完成的编辑事务或状态未知的崩溃任务。完整条件见 [MCP 操作与恢复说明](MCP.md#连续工作检查与图片兼容)。
 
 核对画面优先使用分镜拼图和关键帧；验证声音/同步时渲染所需短片段。只有本次任务需要时才全片导出或重复测试。项目测试只放本项目 tests；公共功能修改运行 `pnpm verify`。在项目 records/ 内单独保存修改记录、实际检查报告和审查结论，区分代码完成、导出完成和视觉/声音已核对。README 只保留使用说明与记录入口，production/brief.md 只保留需求和设计。仓库公共维护记录统一归档到根 records/，不与 docs/ 使用文档混放。
 

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 2,
+  "version": "3dd6182af8dc8b7bc08ec2e9e183685b1e9df00e5a23317f2932325d158d8a13",
+  "duration": 14.184,
+  "synthetic": true,
+  "voiceSha256": "60834ec0b51e6cec54230fe9af5d17950867720248e520a026204ed3695691b1",
+  "captionsSha256": "6397bad8cfbd189baa534c417a4a4b9fd91a28645c44a1f02b25df5b234395da",
+  "sentences": [
+    {
+      "id": "sample",
+      "text": "一台机器，为什么能够认出一只猫，写下一段代码，甚至战胜人类棋手？答案，不是它突然拥有了灵魂，而是人类改变了教机器解决问题的方法。",
+      "speaker": "narrator",
+      "provider": "edge",
+      "voice": "zh-CN-YunxiNeural",
+      "start": 0,
+      "end": 14.184,
+      "duration": 14.184,
+      "key": "50482cb59ae8ad79fbfb49664bb95dd8986d4499c08ac0655b23f414b07ffa8b"
+    }
+  ]
+}

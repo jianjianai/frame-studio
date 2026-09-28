@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "transaction": "7a346fd9-8e33-4f9a-9d64-9b56b502bdb9",
+  "time": "2026-09-28T10:13:38.118Z",
+  "changes": [
+    {
+      "path": "rigs-b.ts",
+      "operation": "replace",
+      "beforeSha256": "8b39ae87e58231e75c0f1de46d6d946c68359263553dfea1646b2f6e8fdf6cdd",
+      "afterSha256": "4ecfd9537c324ec9ef68fe3239537976b33549a95dd0dfe0fee1b613028894f5"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

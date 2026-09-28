@@ -1,0 +1,16 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import{fileURLToPath}from'node:url';
+import{createHash}from'node:crypto';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const file=path.join(root,'project.ts'),before=await fs.readFile(file);const expected=process.argv[2];
+if(createHash('sha256').update(before).digest('hex')!==expected)throw new Error('project.ts changed: SHA-256 mismatch');
+const result=JSON.parse(await fs.readFile(path.join(root,'exports/mcp/22513903-2442-44bc-afe3-26cd4091c63f/result.json'),'utf8'));
+if(result.status!=='passed'||result.sentences.length!==36||result.duration!==153.6)throw new Error('Wrong narration bundle');
+const pairs=[['一九五六年','1956年'],['二零一二年','2012年'],['二零一六年','2016年'],['二零一七年','2017年'],['二零二二年','2022年'],['阿尔法狗','AlphaGo'],['变换器架构','Transformer 架构'],['四比一','4比1']];
+const meta={id:'the-learning-machine',title:'AI 的三道题｜从写规则到学规律',subtitle:'同一只橘猫，串起七十年的变化。',description:'全面重制版 R2：153.6秒，36个旁白单元。规则遇到例外，样本与误差驱动学习，再走向深度视觉、决策、注意力、词元预测、多模态和核验。原创三维橘猫与因果动画，分段鼓点配乐。数值与模型图均为教学示意，不是真实模型观测。',renderer:'three',duration:153.6,fps:30,status:'film',accent:'#e4a457',poster:'films/the-learning-machine/poster.svg',posterTime:7.8,tags:['全面重制','AI发展','因果动画','悬念鼓点'],audioTracks:[{id:'voice',name:'解说 · AI合成',kind:'file',src:'films/the-learning-machine/narration/r2-master.wav',gain:1},{id:'drums',name:'节奏 · 碎拍/半拍/断拍',kind:'generated',gain:1},{id:'music',name:'音乐 · 悬念与和声',kind:'generated',gain:1},{id:'fx',name:'音效 · 动作/切点',kind:'generated',gain:1}],beats:[[0,'同一只猫，为什么认不出？','翻转同一对象，位置式规则失败。'],[9.6,'写规则','条件组合得到猫；遮挡破坏条件。'],[27.1,'从样本学','预测、误差、权重更新、新样本检验。'],[48,'组合特征','边缘到模式，以及批量并行计算。'],[64.1,'学习怎么选','候选、评估、搜索、落子。'],[77,'关联整句话','代词提问、加权信息、自造向量算例。'],[99,'预测下个词元','候选竞争、文本训练、指令反馈、多模态。'],[126,'答案需要核验','追溯引用，发现不存在的依据。'],[138,'下一题由人来问','同一只猫回归，提问和核验闭环。']].map(([at,title,detail])=>({at,title,detail})),subtitles:result.subtitles.map(s=>({...s,text:pairs.reduce((t,[a,b])=>t.replaceAll(a,b),s.text)})),credits:['R2 全面重制：原创叙事、角色、三维模型、动作、鼓点配乐与音效。','普通话旁白为 AI 合成声音 zh-CN-YunxiNeural，非真人克隆。','历史依据与教学简化说明见本项目制作资料中的 rebuild-design.md。','未使用参考片画面、台词、模型、音乐或品牌标志。','规则、学习、搜索长期并存；本片为主题式叙述而非完整年表。']};
+await fs.access(path.join(root,'public/narration/r2-master.wav'));
+await fs.writeFile(file,`import type{AnimationProject}from'../../src/engine/types';\nconst project:AnimationProject={...${JSON.stringify(meta,null,2)},load:()=>import('./scene'),loadAudio:()=>import('./audio')};\nexport default project;\n`);
+await fs.writeFile(path.join(root,'r2/voice-cues.ts'),`export const voiceCues:${'[number,number][]'}=${JSON.stringify(result.sentences.map(s=>[s.start,s.end]))};\n`);
+await fs.writeFile(path.join(root,'public/r2-captions.srt'),meta.subtitles.map((s,i)=>{const f=t=>{const n=Math.round(t*1000);return`${String(Math.floor(n/3600000)).padStart(2,'0')}:${String(Math.floor(n/60000)%60).padStart(2,'0')}:${String(Math.floor(n/1000)%60).padStart(2,'0')},${String(n%1000).padStart(3,'0')}`;};return`${i+1}\n${f(s.start)} --> ${f(s.end)}\n${s.text}\n`;}).join('\n'));
+console.log(JSON.stringify({activated:'R2',duration:meta.duration,voiceVersion:result.version,cues:36,tracks:4,sha256:createHash('sha256').update(await fs.readFile(file)).digest('hex')}));

@@ -46,6 +46,7 @@ function codeFiles(directory) {
         "production",
         "exports",
         ".cache",
+        ".history",
       ].includes(item.name)
         ? []
         : codeFiles(file);

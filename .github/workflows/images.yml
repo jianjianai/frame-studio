@@ -1,0 +1,50 @@
+name: Container images
+on:
+  push:
+    tags: ["v*"]
+    branches: ["codex/frame-server"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Image version (without v)
+        required: true
+permissions:
+  contents: read
+  packages: write
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: frame-studio
+            dockerfile: deploy/Dockerfile
+          - image: frame-speech
+            dockerfile: speech/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: version
+        env:
+          REQUESTED: ${{ inputs.version }}
+        run: |
+          if [ -n "$REQUESTED" ]; then VERSION="$REQUESTED";
+          elif [ "$GITHUB_REF_TYPE" = tag ]; then VERSION="${GITHUB_REF_NAME#v}";
+          else VERSION="2.0.0-preview-${GITHUB_SHA:0:8}"; fi
+          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          tags: |
+            ghcr.io/jianjianai/${{ matrix.image }}:${{ steps.version.outputs.value }}
+            ghcr.io/jianjianai/${{ matrix.image }}:sha-${{ github.sha }}
+          build-args: REVISION=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}

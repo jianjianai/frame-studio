@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "transaction": "6e8293c3-332c-410f-834e-d8c41e2e10e8",
+  "time": "2026-09-28T13:31:02.116Z",
+  "changes": [
+    {
+      "path": "r3/scene.ts",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "ef4b8f3e6fe7b49309b0568353057b869e2bb5fdf328c84d0ec1857ee572c09f"
+    },
+    {
+      "path": "scripts/activate-r3.mjs",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "a9a733d078d60d52af402cb961816d371f8c163f93a53ee63522418c252a2c31"
+    },
+    {
+      "path": "scene.ts",
+      "operation": "replace",
+      "beforeSha256": "ca916ffde747a20f9b2ff7c95c6c4bc14df4661a0c84b607e459d0c067efdd45",
+      "afterSha256": "cd014198b33d2fa1416be50a5fc92038686f068e4e994ddda75ab20e55db32d7"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

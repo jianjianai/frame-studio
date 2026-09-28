@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import { assetPath } from "../../scripts/project-paths.mjs";
-import { projectSchema } from "../../src/engine/types";
+import { projectAudioTracks, projectSchema } from "../../src/engine/types";
 import { activeSubtitle, toSrt } from "../../src/engine/subtitles";
 import paper from "../../projects/paper-wings/project";
 import rail from "../../projects/sunny-rail/project";
@@ -15,39 +15,23 @@ for (const p of [paper, rail, seed])
         true,
       );
     });
-    it("has a complete local audio track matching its duration", () => {
-      const b = fs.readFileSync(assetPath(process.cwd(), p.audio!));
-      expect(b.toString("ascii", 0, 4)).toBe("RIFF");
-      // WAV may contain LIST/JUNK metadata before data; 44 bytes is not a fixed header.
-      let channels = 0,
-        byteRate = 0,
-        dataOffset = 0,
-        dataSize = 0;
-      for (let offset = 12; offset + 8 <= b.length;) {
-        const kind = b.toString("ascii", offset, offset + 4);
-        const size = b.readUInt32LE(offset + 4);
-        if (kind === "fmt ") {
-          channels = b.readUInt16LE(offset + 10);
-          byteRate = b.readUInt32LE(offset + 16);
-        }
-        if (kind === "data") {
-          dataOffset = offset + 8;
-          dataSize = size;
-          break;
-        }
-        offset += 8 + size + (size % 2);
+    it("resolves the declared local files or generated audio entrypoint", async () => {
+      const tracks = projectAudioTracks(p);
+      expect(tracks.length).toBeGreaterThan(0);
+      for (const track of tracks) {
+        if (track.kind === "file")
+          expect(
+            fs.statSync(assetPath(process.cwd(), track.src, p.id)).size,
+          ).toBeGreaterThan(0);
       }
-      expect(channels).toBe(2);
-      expect(byteRate).toBeGreaterThan(0);
-      expect(dataSize).toBeGreaterThan(0);
-      expect(dataOffset + dataSize).toBeLessThanOrEqual(b.length);
-      const duration = dataSize / byteRate;
-      expect(duration).toBe(p.duration);
-      let peak = 0;
-      for (let i = dataOffset; i + 1 < dataOffset + dataSize; i += 128)
-        peak = Math.max(peak, Math.abs(b.readInt16LE(i)));
-      expect(peak).toBeGreaterThan(1000);
-      expect(peak).toBeLessThan(32767);
+      if (tracks.some((track) => track.kind === "generated")) {
+        expect(p.loadAudio).toBeTypeOf("function");
+        const audio = await p.loadAudio!();
+        expect(audio.createAudio).toBeTypeOf("function");
+        expect(audio.prepareSegment).toBeTypeOf("function");
+        expect(audio.disposeAudio).toBeTypeOf("function");
+      }
+      // PCM content and complete playback are verified by the browser audio tests.
     });
     it("exports subtitles that retain every cue", () => {
       const srt = toSrt(p.subtitles);

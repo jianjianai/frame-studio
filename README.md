@@ -2,6 +2,8 @@
 
 代码驱动的浏览器动画工作台，使用 pnpm 管理依赖。工作区：`C:\Users\28018\Desktop\动画`。
 
+服务器版本支持登录、内容仓库、素材库、中文语音、MCP/CLI 与持续运行的 AI 会话。Docker / Dockge 部署、GHCR 更新和首次配置见 [服务器工作台](docs/SERVER.md)。原有本地制作与播放流程继续可用。
+
 先读 [工程规范](docs/NEW-PROJECT-STANDARD.md) 和 [接口说明](docs/AUTHORING.md)。当前三个作品已迁移到独立目录，画面与既有配乐保持原样。
 
 ## 打开工作台
@@ -16,6 +18,8 @@ pnpm dev
 ```
 
 访问 **http://127.0.0.1:5173**。默认仅监听本机，端口冲突会报错。首次安装需要网络，安装后现有作品播放使用本地资源。
+
+启动直接读取各作品 `public/` 中的现有素材，不需要生成公共素材索引。`pnpm assets --project paper-wings` 仅用于手动重建该作品插画，不是启动步骤。
 
 ## 每个作品只修改自己的目录
 
@@ -47,6 +51,8 @@ records/                 公共维护记录、报告和审查
 
 ## 音轨和播放
 
+每个作品可以独立使用 Edge、OpenAI/兼容接口、Azure 或自己的语音合成器，支持角色声线、逐句缓存和字幕。运行 `pnpm film speech <id> init --provider edge` 后即可用 `pnpm film speech <id> say --text "你好"` 试听；完整 CLI/MCP 用法见 [项目语音合成](docs/SPEECH.md)。
+
 支持多条配乐、旁白、音效以及代码音轨，每轨有起始时间、源偏移、长度、音量和静音。所有音轨与画面共用一个时钟，支持暂停、拖动、逐帧、变速和循环。
 
 代码音轨通过项目 `audio.ts` 在浏览器直接生成播放，不要求预先合成 WAV。视频导出复用同一生成器。旧单音频字段继续兼容，三个现有 Demo 保留其原配乐；新建模板带有可启用的生成音轨示例。接口及示例见 [音频说明](docs/AUDIO.md)。
@@ -77,6 +83,12 @@ pnpm render tiny-seed --frame 150
 
 ## AI 制作入口
 
+AI 客户端可通过 [FRAME MCP 服务](docs/MCP.md)直接读取项目、按文件版本批量编辑、查看分镜图片并启动/取消导出。运行 pnpm --silent film mcp；可用 --project 限定项目，--read-only 提供只读接入。
+
+外部 AI 可通过 [远程 MCP](docs/MCP-REMOTE.md) 接入，支持内置 OAuth、Bearer token 和 `.env` 配置的 Cloudflare Tunnel。先运行 `pnpm film mcp-remote init`，填写自己的域名、项目范围、回调和隧道凭据，再执行 `check` 和 `serve`。
+
+Windows 可直接双击 **`启动MCP.cmd`**，自动检查配置并启动远程服务；首次缺少配置时会生成 `.env` 并提示填写。
+
 统一入口是 `pnpm film help`，完整用法见 [AI 工具工作流](docs/AI-WORKFLOW.md)。原命令继续兼容。
 
 ```powershell
@@ -93,6 +105,8 @@ context 只读输出项目入口、音轨、素材和修改边界。storyboard �
 浏览器编码依赖 WebCodecs；不支持时明确报错，不降级为实时录屏。浏览器编码文件缓存上限 256 MiB，大型成片使用命令导出。代码音频在浏览器与命令导出时都使用离线混音。
 
 ## 常用命令
+
+AI 制作的完整命令流程见 [AI-PRODUCTION](docs/AI-PRODUCTION.md)：局部修改与撤销、单项目验证、声画审片、正式分段导出、后台任务及旁白。无需 MCP 也可使用全部主要制作能力。
 
 ```powershell
 pnpm animation:new my-film "我的动画" --renderer pixi

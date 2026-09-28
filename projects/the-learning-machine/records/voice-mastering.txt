@@ -1,0 +1,96 @@
+[aist#0:0/pcm_s16le @ 0000008000c6b400] Guessed Channel Layout: stereo
+Input #0, wav, from 'projects/the-learning-machine/public/narration/d082336fe1d34e251643455768675effca94a97a184047c222eab1f83ee1dfe2/voice.wav':
+  Metadata:
+    encoder         : Lavf62.6.103
+  Duration: 00:04:24.00, bitrate: 1536 kb/s
+  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s16, 1536 kb/s
+Stream mapping:
+  Stream #0:0 -> #0:0 (pcm_s16le (native) -> pcm_s16le (native))
+Output #0, wav, to 'projects/the-learning-machine/public/narration/voice-master.wav':
+  Metadata:
+    ISFT            : Lavf62.6.103
+  Stream #0:0: Audio: pcm_s16le ([1][0][0][0] / 0x0001), 48000 Hz, stereo, s16, 1536 kb/s
+    Metadata:
+      encoder         : Lavc62.19.100 pcm_s16le
+size=     768KiB time=00:00:04.29 bitrate=1463.2kbits/s speed=8.53x elapsed=0:00:00.50    
+size=    1024KiB time=00:00:06.89 bitrate=1215.8kbits/s speed=6.69x elapsed=0:00:01.03    
+size=    1536KiB time=00:00:08.89 bitrate=1413.9kbits/s speed=5.78x elapsed=0:00:01.54    
+size=    1792KiB time=00:00:10.69 bitrate=1372.0kbits/s speed=5.22x elapsed=0:00:02.04    
+size=    2304KiB time=00:00:12.99 bitrate=1451.9kbits/s speed=5.05x elapsed=0:00:02.57    
+size=    2816KiB time=00:00:15.19 bitrate=1517.7kbits/s speed=4.93x elapsed=0:00:03.08    
+size=    3072KiB time=00:00:17.09 bitrate=1471.7kbits/s speed=4.74x elapsed=0:00:03.60    
+size=    3584KiB time=00:00:20.39 bitrate=1439.2kbits/s speed=4.95x elapsed=0:00:04.12    
+size=    4352KiB time=00:00:23.79 bitrate=1498.0kbits/s speed=5.13x elapsed=0:00:04.63    
+size=    5120KiB time=00:00:27.99 bitrate=1498.0kbits/s speed=5.43x elapsed=0:00:05.15    
+size=    5632KiB time=00:00:30.59 bitrate=1507.8kbits/s speed=5.41x elapsed=0:00:05.65    
+size=    6656KiB time=00:00:35.69 bitrate=1527.4kbits/s speed=5.77x elapsed=0:00:06.18    
+size=    6912KiB time=00:00:37.99 bitrate=1490.1kbits/s speed=5.68x elapsed=0:00:06.68    
+size=    8192KiB time=00:00:43.79 bitrate=1532.2kbits/s speed=6.08x elapsed=0:00:07.20    
+size=    8960KiB time=00:00:47.89 bitrate=1532.4kbits/s speed= 6.2x elapsed=0:00:07.72    
+size=    9728KiB time=00:00:52.69 bitrate=1512.2kbits/s speed= 6.4x elapsed=0:00:08.23    
+size=   10496KiB time=00:00:56.89 bitrate=1511.1kbits/s speed= 6.5x elapsed=0:00:08.75    
+size=   11264KiB time=00:01:00.79 bitrate=1517.7kbits/s speed=6.56x elapsed=0:00:09.26    
+size=   12288KiB time=00:01:06.99 bitrate=1502.4kbits/s speed=6.84x elapsed=0:00:09.78    
+size=   13312KiB time=00:01:11.39 bitrate=1527.3kbits/s speed=6.93x elapsed=0:00:10.30    
+size=   13824KiB time=00:01:13.99 bitrate=1530.4kbits/s speed=6.84x elapsed=0:00:10.82    
+size=   14080KiB time=00:01:15.59 bitrate=1525.7kbits/s speed=6.67x elapsed=0:00:11.33    
+size=   14848KiB time=00:01:19.39 bitrate=1531.9kbits/s speed= 6.7x elapsed=0:00:11.85    
+size=   15616KiB time=00:01:23.79 bitrate=1526.6kbits/s speed=6.77x elapsed=0:00:12.37    
+size=   16384KiB time=00:01:27.69 bitrate=1530.4kbits/s speed= 6.8x elapsed=0:00:12.88    
+size=   17152KiB time=00:01:31.99 bitrate=1527.3kbits/s speed=6.86x elapsed=0:00:13.40    
+size=   17408KiB time=00:01:34.29 bitrate=1512.3kbits/s speed=6.78x elapsed=0:00:13.90    
+size=   18432KiB time=00:01:38.99 bitrate=1525.2kbits/s speed=6.86x elapsed=0:00:14.44    
+size=   18944KiB time=00:01:41.79 bitrate=1524.5kbits/s speed=6.81x elapsed=0:00:14.95    
+size=   19712KiB time=00:01:46.09 bitrate=1522.0kbits/s speed=6.86x elapsed=0:00:15.47    
+size=   19968KiB time=00:01:47.69 bitrate=1518.8kbits/s speed=6.74x elapsed=0:00:15.98    
+size=   20736KiB time=00:01:51.99 bitrate=1516.7kbits/s speed=6.79x elapsed=0:00:16.50    
+size=   21248KiB time=00:01:54.19 bitrate=1524.2kbits/s speed=6.71x elapsed=0:00:17.02    
+size=   22016KiB time=00:01:58.79 bitrate=1518.1kbits/s speed=6.77x elapsed=0:00:17.53    
+size=   22784KiB time=00:02:02.59 bitrate=1522.4kbits/s speed=6.79x elapsed=0:00:18.05    
+size=   23808KiB time=00:02:07.19 bitrate=1533.3kbits/s speed=6.85x elapsed=0:00:18.57    
+size=   24576KiB time=00:02:12.39 bitrate=1520.6kbits/s speed=6.94x elapsed=0:00:19.09    
+size=   25600KiB time=00:02:16.89 bitrate=1531.9kbits/s speed=6.98x elapsed=0:00:19.60    
+size=   26368KiB time=00:02:21.49 bitrate=1526.6kbits/s speed=7.03x elapsed=0:00:20.12    
+size=   27136KiB time=00:02:26.09 bitrate=1521.6kbits/s speed=7.08x elapsed=0:00:20.64    
+size=   27904KiB time=00:02:29.79 bitrate=1526.0kbits/s speed=7.08x elapsed=0:00:21.17    
+size=   28928KiB time=00:02:35.29 bitrate=1525.9kbits/s speed=7.17x elapsed=0:00:21.67    
+size=   29696KiB time=00:02:39.79 bitrate=1522.3kbits/s speed= 7.2x elapsed=0:00:22.20    
+size=   30720KiB time=00:02:44.49 bitrate=1529.8kbits/s speed=7.24x elapsed=0:00:22.72    
+size=   31488KiB time=00:02:48.59 bitrate=1530.0kbits/s speed=7.26x elapsed=0:00:23.23    
+size=   32512KiB time=00:02:53.99 bitrate=1530.7kbits/s speed=7.32x elapsed=0:00:23.75    
+size=   33024KiB time=00:02:57.19 bitrate=1526.7kbits/s speed= 7.3x elapsed=0:00:24.26    
+size=   34048KiB time=00:03:02.19 bitrate=1530.9kbits/s speed=7.35x elapsed=0:00:24.79    
+size=   34560KiB time=00:03:05.69 bitrate=1524.6kbits/s speed=7.34x elapsed=0:00:25.30    
+size=   35328KiB time=00:03:09.39 bitrate=1528.0kbits/s speed=7.34x elapsed=0:00:25.81    
+size=   35840KiB time=00:03:12.49 bitrate=1525.2kbits/s speed=7.31x elapsed=0:00:26.33    
+size=   36864KiB time=00:03:16.89 bitrate=1533.7kbits/s speed=7.33x elapsed=0:00:26.85    
+size=   37632KiB time=00:03:21.29 bitrate=1531.5kbits/s speed=7.35x elapsed=0:00:27.37    
+size=   38400KiB time=00:03:24.99 bitrate=1534.5kbits/s speed=7.35x elapsed=0:00:27.88    
+size=   39424KiB time=00:03:30.49 bitrate=1534.3kbits/s speed=7.41x elapsed=0:00:28.40    
+size=   39936KiB time=00:03:34.29 bitrate=1526.6kbits/s speed=7.41x elapsed=0:00:28.92    
+size=   40704KiB time=00:03:37.69 bitrate=1531.7kbits/s speed=7.39x elapsed=0:00:29.44    
+size=   41216KiB time=00:03:40.89 bitrate=1528.5kbits/s speed=7.37x elapsed=0:00:29.95    
+size=   41984KiB time=00:03:44.99 bitrate=1528.6kbits/s speed=7.38x elapsed=0:00:30.48    
+size=   43008KiB time=00:03:49.49 bitrate=1535.2kbits/s speed=7.41x elapsed=0:00:30.98    
+size=   43520KiB time=00:03:52.39 bitrate=1534.1kbits/s speed=7.38x elapsed=0:00:31.50    
+size=   44288KiB time=00:03:57.09 bitrate=1530.2kbits/s speed=7.41x elapsed=0:00:32.01    
+size=   45312KiB time=00:04:01.89 bitrate=1534.5kbits/s speed=7.43x elapsed=0:00:32.54    
+size=   46080KiB time=00:04:06.29 bitrate=1532.6kbits/s speed=7.45x elapsed=0:00:33.05    
+size=   47104KiB time=00:04:11.59 bitrate=1533.7kbits/s speed=7.49x elapsed=0:00:33.57    
+size=   47872KiB time=00:04:16.49 bitrate=1528.9kbits/s speed=7.52x elapsed=0:00:34.08    
+size=   48896KiB time=00:04:20.99 bitrate=1534.7kbits/s speed=7.54x elapsed=0:00:34.60    
+[Parsed_loudnorm_0 @ 0000008000471b80] 
+{
+	"input_i" : "-23.78",
+	"input_tp" : "-4.47",
+	"input_lra" : "10.30",
+	"input_thresh" : "-34.53",
+	"output_i" : "-18.12",
+	"output_tp" : "-3.00",
+	"output_lra" : "9.50",
+	"output_thresh" : "-28.84",
+	"normalization_type" : "dynamic",
+	"target_offset" : "0.12"
+}
+[out#0/wav @ 0000008000cec5c0] video:0KiB audio:49500KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: 0.000154%
+size=   49500KiB time=00:04:24.00 bitrate=1536.0kbits/s speed=7.57x elapsed=0:00:34.87    

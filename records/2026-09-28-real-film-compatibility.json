@@ -1,0 +1,419 @@
+{
+  "checkedAt": "2026-09-28T03:34:47.614Z",
+  "scope": "Copies of original films; 0.5 second excerpts at 320x180 and 12 fps; no full rerender or subjective acceptance.",
+  "fixtureRemoved": true,
+  "results": [
+    {
+      "id": "birth-of-a-frame",
+      "sourceUnchanged": true,
+      "checks": {
+        "status": "passed",
+        "exitCode": 0,
+        "timedOut": false,
+        "output": ""
+      },
+      "review": {
+        "status": "passed",
+        "input": "8cf029b91b11e009946089d16a4573469a10885d4f4b55f4454969c42d858b90",
+        "frames": 2,
+        "audio": [
+          {
+            "track": null,
+            "status": "passed"
+          },
+          {
+            "track": "voice",
+            "status": "passed"
+          },
+          {
+            "track": "score",
+            "status": "passed"
+          },
+          {
+            "track": "foley",
+            "status": "passed"
+          }
+        ],
+        "runtime": {
+          "status": "passed",
+          "repeatFrame": {
+            "maxDelta": 0,
+            "changedChannels": 0,
+            "totalChannels": 230400
+          },
+          "diagnostics": {
+            "errors": [],
+            "input": "8cf029b91b11e009946089d16a4573469a10885d4f4b55f4454969c42d858b90"
+          }
+        },
+        "contentReview": {
+          "visual": "not_run",
+          "listening": "not_run",
+          "notes": []
+        }
+      },
+      "verify": {
+        "status": "passed",
+        "media": {
+          "status": "passed",
+          "probe": {
+            "streams": [
+              {
+                "index": 0,
+                "codec_name": "h264",
+                "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+                "profile": "High",
+                "codec_type": "video",
+                "codec_tag_string": "avc1",
+                "codec_tag": "0x31637661",
+                "width": 320,
+                "height": 180,
+                "coded_width": 320,
+                "coded_height": 192,
+                "has_b_frames": 2,
+                "pix_fmt": "yuv420p",
+                "level": 12,
+                "chroma_location": "left",
+                "field_order": "progressive",
+                "refs": 4,
+                "is_avc": "true",
+                "nal_length_size": "4",
+                "id": "0x1",
+                "r_frame_rate": "12/1",
+                "avg_frame_rate": "12/1",
+                "time_base": "1/12288",
+                "start_pts": 0,
+                "start_time": "0.000000",
+                "duration_ts": 6144,
+                "duration": "0.500000",
+                "bit_rate": "471120",
+                "bits_per_raw_sample": "8",
+                "nb_frames": "6",
+                "nb_read_frames": "6",
+                "extradata_size": 46,
+                "disposition": {
+                  "default": 1,
+                  "dub": 0,
+                  "original": 0,
+                  "comment": 0,
+                  "lyrics": 0,
+                  "karaoke": 0,
+                  "forced": 0,
+                  "hearing_impaired": 0,
+                  "visual_impaired": 0,
+                  "clean_effects": 0,
+                  "attached_pic": 0,
+                  "timed_thumbnails": 0,
+                  "non_diegetic": 0,
+                  "captions": 0,
+                  "descriptions": 0,
+                  "metadata": 0,
+                  "dependent": 0,
+                  "still_image": 0,
+                  "multilayer": 0
+                },
+                "tags": {
+                  "language": "und",
+                  "handler_name": "VideoHandler",
+                  "encoder": "Lavc62.19.100 libx264"
+                }
+              },
+              {
+                "index": 1,
+                "codec_name": "aac",
+                "codec_long_name": "AAC (Advanced Audio Coding)",
+                "profile": "LC",
+                "codec_type": "audio",
+                "codec_tag_string": "mp4a",
+                "codec_tag": "0x6134706d",
+                "sample_fmt": "fltp",
+                "sample_rate": "48000",
+                "channels": 2,
+                "channel_layout": "stereo",
+                "bits_per_sample": 0,
+                "initial_padding": 0,
+                "id": "0x2",
+                "r_frame_rate": "0/0",
+                "avg_frame_rate": "0/0",
+                "time_base": "1/48000",
+                "start_pts": 0,
+                "start_time": "0.000000",
+                "duration_ts": 24000,
+                "duration": "0.500000",
+                "bit_rate": "183207",
+                "nb_frames": "25",
+                "nb_read_frames": "24",
+                "extradata_size": 5,
+                "disposition": {
+                  "default": 1,
+                  "dub": 0,
+                  "original": 0,
+                  "comment": 0,
+                  "lyrics": 0,
+                  "karaoke": 0,
+                  "forced": 0,
+                  "hearing_impaired": 0,
+                  "visual_impaired": 0,
+                  "clean_effects": 0,
+                  "attached_pic": 0,
+                  "timed_thumbnails": 0,
+                  "non_diegetic": 0,
+                  "captions": 0,
+                  "descriptions": 0,
+                  "metadata": 0,
+                  "dependent": 0,
+                  "still_image": 0,
+                  "multilayer": 0
+                },
+                "tags": {
+                  "language": "und",
+                  "handler_name": "SoundHandler"
+                }
+              }
+            ],
+            "format": {
+              "filename": "C:\\Users\\28018\\.codex\\worktrees\\animation-mcp\\动画\\.cache\\mcp-tests\\5019cd4e-a079-46c3-a794-fa3aec99faf8\\projects\\birth-of-a-frame\\exports\\reviews\\197afd77-c6de-4b4d-bfd0-4f69dd6fa328\\clip.mp4",
+              "nb_streams": 2,
+              "nb_programs": 0,
+              "nb_stream_groups": 0,
+              "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+              "format_long_name": "QuickTime / MOV",
+              "start_time": "0.000000",
+              "duration": "0.500000",
+              "size": "43051",
+              "bit_rate": "688816",
+              "probe_score": 100,
+              "tags": {
+                "major_brand": "isom",
+                "minor_version": "512",
+                "compatible_brands": "isomiso2avc1mp41",
+                "encoder": "Lavf62.6.103"
+              }
+            }
+          },
+          "failures": [],
+          "decodedFrames": 6,
+          "fullDecode": "passed",
+          "audio": {
+            "status": "passed",
+            "integratedLufs": "-21.50",
+            "truePeakDb": "-14.34",
+            "loudnessRange": "0.00",
+            "silence": [],
+            "raw": "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'C:\\Users\\28018\\.codex\\worktrees\\animation-mcp\\动画\\.cache\\mcp-tests\\5019cd4e-a079-46c3-a794-fa3aec99faf8\\projects\\birth-of-a-frame\\exports\\reviews\\197afd77-c6de-4b4d-bfd0-4f69dd6fa328\\clip.mp4':\r\n  Metadata:\r\n    major_brand     : isom\r\n    minor_version   : 512\r\n    compatible_brands: isomiso2avc1mp41\r\n    encoder         : Lavf62.6.103\r\n  Duration: 00:00:00.50, start: 0.000000, bitrate: 688 kb/s\r\n  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x180, 471 kb/s, 12 fps, 12 tbr, 12288 tbn (default)\r\n    Metadata:\r\n      handler_name    : VideoHandler\r\n      encoder         : Lavc62.19.100 libx264\r\n  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 183 kb/s (default)\r\n    Metadata:\r\n      handler_name    : SoundHandler\r\nStream mapping:\r\n  Stream #0:1 -> #0:0 (aac (native) -> pcm_s16le (native))\r\nPress [q] to stop, [?] for help\r\nOutput #0, null, to 'pipe:':\r\n  Metadata:\r\n    major_brand     : isom\r\n    minor_version   : 512\r\n    compatible_brands: isomiso2avc1mp41\r\n    encoder         : Lavf62.6.103\r\n  Stream #0:0(und): Audio: pcm_s16le, 192000 Hz, stereo, s16, 6144 kb/s (default)\r\n    Metadata:\r\n      encoder         : Lavc62.19.100 pcm_s16le\r\n      handler_name    : SoundHandler\r\n[Parsed_loudnorm_0 @ 0000008000cc1480] \r\n{\r\n\t\"input_i\" : \"-21.50\",\r\n\t\"input_tp\" : \"-14.34\",\r\n\t\"input_lra\" : \"0.00\",\r\n\t\"input_thresh\" : \"-31.50\",\r\n\t\"output_i\" : \"-24.00\",\r\n\t\"output_tp\" : \"-16.84\",\r\n\t\"output_lra\" : \"0.00\",\r\n\t\"output_thresh\" : \"-34.00\",\r\n\t\"normalization_type\" : \"linear\",\r\n\t\"target_offset\" : \"-0.00\"\r\n}\r\n[out#0/null @ 0000008000d44f80] video:0KiB audio:384KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\r\nsize=N/A time=00:00:00.51 bitrate=N/A speed=30.5x elapsed=0:00:00.01    \r\n",
+            "listening": "not_run"
+          }
+        },
+        "version": {
+          "recorded": "8cf029b91b11e009946089d16a4573469a10885d4f4b55f4454969c42d858b90",
+          "current": "8cf029b91b11e009946089d16a4573469a10885d4f4b55f4454969c42d858b90",
+          "matches": true
+        }
+      }
+    },
+    {
+      "id": "borrowed-light",
+      "sourceUnchanged": true,
+      "checks": {
+        "status": "passed",
+        "exitCode": 0,
+        "timedOut": false,
+        "output": ""
+      },
+      "review": {
+        "status": "passed",
+        "input": "aa8d8c12a8f066855d0c7d44b1e705b360683456d920638caf67f153aa7e8c08",
+        "frames": 2,
+        "audio": [
+          {
+            "track": null,
+            "status": "passed"
+          },
+          {
+            "track": "music",
+            "status": "passed"
+          },
+          {
+            "track": "foley",
+            "status": "passed"
+          }
+        ],
+        "runtime": {
+          "status": "passed",
+          "repeatFrame": {
+            "maxDelta": 0,
+            "changedChannels": 0,
+            "totalChannels": 230400
+          },
+          "diagnostics": {
+            "errors": [],
+            "input": "aa8d8c12a8f066855d0c7d44b1e705b360683456d920638caf67f153aa7e8c08"
+          }
+        },
+        "contentReview": {
+          "visual": "not_run",
+          "listening": "not_run",
+          "notes": []
+        }
+      },
+      "verify": {
+        "status": "passed",
+        "media": {
+          "status": "passed",
+          "probe": {
+            "streams": [
+              {
+                "index": 0,
+                "codec_name": "h264",
+                "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+                "profile": "High",
+                "codec_type": "video",
+                "codec_tag_string": "avc1",
+                "codec_tag": "0x31637661",
+                "width": 320,
+                "height": 180,
+                "coded_width": 320,
+                "coded_height": 192,
+                "has_b_frames": 2,
+                "pix_fmt": "yuv420p",
+                "level": 12,
+                "chroma_location": "left",
+                "field_order": "progressive",
+                "refs": 4,
+                "is_avc": "true",
+                "nal_length_size": "4",
+                "id": "0x1",
+                "r_frame_rate": "12/1",
+                "avg_frame_rate": "12/1",
+                "time_base": "1/12288",
+                "start_pts": 0,
+                "start_time": "0.000000",
+                "duration_ts": 6144,
+                "duration": "0.500000",
+                "bit_rate": "269664",
+                "bits_per_raw_sample": "8",
+                "nb_frames": "6",
+                "nb_read_frames": "6",
+                "extradata_size": 46,
+                "disposition": {
+                  "default": 1,
+                  "dub": 0,
+                  "original": 0,
+                  "comment": 0,
+                  "lyrics": 0,
+                  "karaoke": 0,
+                  "forced": 0,
+                  "hearing_impaired": 0,
+                  "visual_impaired": 0,
+                  "clean_effects": 0,
+                  "attached_pic": 0,
+                  "timed_thumbnails": 0,
+                  "non_diegetic": 0,
+                  "captions": 0,
+                  "descriptions": 0,
+                  "metadata": 0,
+                  "dependent": 0,
+                  "still_image": 0,
+                  "multilayer": 0
+                },
+                "tags": {
+                  "language": "und",
+                  "handler_name": "VideoHandler",
+                  "encoder": "Lavc62.19.100 libx264"
+                }
+              },
+              {
+                "index": 1,
+                "codec_name": "aac",
+                "codec_long_name": "AAC (Advanced Audio Coding)",
+                "profile": "LC",
+                "codec_type": "audio",
+                "codec_tag_string": "mp4a",
+                "codec_tag": "0x6134706d",
+                "sample_fmt": "fltp",
+                "sample_rate": "48000",
+                "channels": 2,
+                "channel_layout": "stereo",
+                "bits_per_sample": 0,
+                "initial_padding": 0,
+                "id": "0x2",
+                "r_frame_rate": "0/0",
+                "avg_frame_rate": "0/0",
+                "time_base": "1/48000",
+                "start_pts": 0,
+                "start_time": "0.000000",
+                "duration_ts": 24000,
+                "duration": "0.500000",
+                "bit_rate": "190235",
+                "nb_frames": "25",
+                "nb_read_frames": "24",
+                "extradata_size": 5,
+                "disposition": {
+                  "default": 1,
+                  "dub": 0,
+                  "original": 0,
+                  "comment": 0,
+                  "lyrics": 0,
+                  "karaoke": 0,
+                  "forced": 0,
+                  "hearing_impaired": 0,
+                  "visual_impaired": 0,
+                  "clean_effects": 0,
+                  "attached_pic": 0,
+                  "timed_thumbnails": 0,
+                  "non_diegetic": 0,
+                  "captions": 0,
+                  "descriptions": 0,
+                  "metadata": 0,
+                  "dependent": 0,
+                  "still_image": 0,
+                  "multilayer": 0
+                },
+                "tags": {
+                  "language": "und",
+                  "handler_name": "SoundHandler"
+                }
+              }
+            ],
+            "format": {
+              "filename": "C:\\Users\\28018\\.codex\\worktrees\\animation-mcp\\动画\\.cache\\mcp-tests\\5019cd4e-a079-46c3-a794-fa3aec99faf8\\projects\\borrowed-light\\exports\\reviews\\2c5d3ff8-c5f0-4ea0-ae18-7d66eb2dc4fa\\clip.mp4",
+              "nb_streams": 2,
+              "nb_programs": 0,
+              "nb_stream_groups": 0,
+              "format_name": "mov,mp4,m4a,3gp,3g2,mj2",
+              "format_long_name": "QuickTime / MOV",
+              "start_time": "0.000000",
+              "duration": "0.500000",
+              "size": "30918",
+              "bit_rate": "494688",
+              "probe_score": 100,
+              "tags": {
+                "major_brand": "isom",
+                "minor_version": "512",
+                "compatible_brands": "isomiso2avc1mp41",
+                "encoder": "Lavf62.6.103"
+              }
+            }
+          },
+          "failures": [],
+          "decodedFrames": 6,
+          "fullDecode": "passed",
+          "audio": {
+            "status": "passed",
+            "integratedLufs": "-15.49",
+            "truePeakDb": "-5.98",
+            "loudnessRange": "0.00",
+            "silence": [],
+            "raw": "Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'C:\\Users\\28018\\.codex\\worktrees\\animation-mcp\\动画\\.cache\\mcp-tests\\5019cd4e-a079-46c3-a794-fa3aec99faf8\\projects\\borrowed-light\\exports\\reviews\\2c5d3ff8-c5f0-4ea0-ae18-7d66eb2dc4fa\\clip.mp4':\r\n  Metadata:\r\n    major_brand     : isom\r\n    minor_version   : 512\r\n    compatible_brands: isomiso2avc1mp41\r\n    encoder         : Lavf62.6.103\r\n  Duration: 00:00:00.50, start: 0.000000, bitrate: 494 kb/s\r\n  Stream #0:0[0x1](und): Video: h264 (High) (avc1 / 0x31637661), yuv420p(progressive), 320x180, 269 kb/s, 12 fps, 12 tbr, 12288 tbn (default)\r\n    Metadata:\r\n      handler_name    : VideoHandler\r\n      encoder         : Lavc62.19.100 libx264\r\n  Stream #0:1[0x2](und): Audio: aac (LC) (mp4a / 0x6134706D), 48000 Hz, stereo, fltp, 190 kb/s (default)\r\n    Metadata:\r\n      handler_name    : SoundHandler\r\nStream mapping:\r\n  Stream #0:1 -> #0:0 (aac (native) -> pcm_s16le (native))\r\nPress [q] to stop, [?] for help\r\nOutput #0, null, to 'pipe:':\r\n  Metadata:\r\n    major_brand     : isom\r\n    minor_version   : 512\r\n    compatible_brands: isomiso2avc1mp41\r\n    encoder         : Lavf62.6.103\r\n  Stream #0:0(und): Audio: pcm_s16le, 192000 Hz, stereo, s16, 6144 kb/s (default)\r\n    Metadata:\r\n      encoder         : Lavc62.19.100 pcm_s16le\r\n      handler_name    : SoundHandler\r\n[Parsed_loudnorm_0 @ 0000008000ce1480] \r\n{\r\n\t\"input_i\" : \"-15.49\",\r\n\t\"input_tp\" : \"-5.98\",\r\n\t\"input_lra\" : \"0.00\",\r\n\t\"input_thresh\" : \"-25.49\",\r\n\t\"output_i\" : \"-23.99\",\r\n\t\"output_tp\" : \"-14.49\",\r\n\t\"output_lra\" : \"0.00\",\r\n\t\"output_thresh\" : \"-33.99\",\r\n\t\"normalization_type\" : \"linear\",\r\n\t\"target_offset\" : \"-0.01\"\r\n}\r\n[out#0/null @ 0000008000d63dc0] video:0KiB audio:384KiB subtitle:0KiB other streams:0KiB global headers:0KiB muxing overhead: unknown\r\nsize=N/A time=00:00:00.51 bitrate=N/A speed=26.7x elapsed=0:00:00.01    \r\n",
+            "listening": "not_run"
+          }
+        },
+        "version": {
+          "recorded": "aa8d8c12a8f066855d0c7d44b1e705b360683456d920638caf67f153aa7e8c08",
+          "current": "aa8d8c12a8f066855d0c7d44b1e705b360683456d920638caf67f153aa7e8c08",
+          "matches": true
+        }
+      }
+    }
+  ]
+}

@@ -19,7 +19,7 @@ test.beforeAll(async () => {
         name: "owned-audio-fixture",
         configureServer(server) {
           server.middlewares.use(
-            "/films/audio-fixture.wav",
+            "/__frame_test__/audio-fixture.wav",
             (_request, response) => {
               response.setHeader("Content-Type", "audio/wav");
               response.end(testWav());
@@ -416,7 +416,7 @@ test("real Web Audio mixes files and generated tracks with trim, timing, mute an
       id: "file",
       name: "文件",
       kind: "file",
-      src: "films/audio-fixture.wav",
+      src: "__frame_test__/audio-fixture.wav",
       gain: 0.3,
     };
     const synthTrack = {
@@ -511,7 +511,7 @@ test("transport caches decoded audio, reschedules generated voices and disposes 
           id: "file",
           name: "文件",
           kind: "file",
-          src: "films/audio-fixture.wav",
+          src: "__frame_test__/audio-fixture.wav",
         },
         { id: "code", name: "代码", kind: "generated" },
       ],

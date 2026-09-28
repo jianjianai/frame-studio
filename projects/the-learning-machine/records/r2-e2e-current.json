@@ -1,0 +1,7 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "exitCode": 0,
+  "timedOut": false,
+  "output": "\nRunning 4 tests using 1 worker\n\nR2_NATIVE_PLAYBACK {\"state\":{\"time\":22.332,\"playing\":false,\"rate\":2,\"loop\":false,\"audioState\":\"running\",\"width\":1280,\"height\":720},\"diagnostics\":{\"ready\":true,\"actualTime\":22.321333333333335,\"renderMs\":1.599999999627471,\"renderCount\":480,\"scene\":{\"time\":22.321333333333335,\"act\":\"rules\",\"shot\":5,\"drawCalls\":87,\"triangles\":61730},\"audio\":{\"state\":\"running\",\"buffering\":false,\"prepareMs\":0,\"tracks\":{\"voice\":{\"gain\":0.9,\"muted\":false},\"drums\":{\"gain\":1.8,\"muted\":false},\"music\":{\"gain\":0.9,\"muted\":false},\"fx\":{\"gain\":1.1,\"muted\":false}},\"bufferedRanges\":null},\"errors\":[]}}\n  ok 1 projects\\the-learning-machine\\tests\\e2e\\audio-runtime.spec.ts:3:1 › R2 cold seek, sustained playback, pause, reverse seek and double speed (15.1s)\nR2_OFFLINE_CHUNK_MAX_ERROR 5.21540641784668e-8\n  ok 2 projects\\the-learning-machine\\tests\\e2e\\audio-runtime.spec.ts:11:1 › offline native score preserves late-tail audio when rendered in chunks (6.2s)\n  ok 3 projects\\the-learning-machine\\tests\\e2e\\scene.spec.ts:3:1 › R2 all nine acts and action moments reconstruct from arbitrary seeks (3.2s)\n  ok 4 projects\\the-learning-machine\\tests\\e2e\\scene.spec.ts:9:1 › every R2 cut and exact ending renders (3.8s)\n\n  4 passed (31.0s)\n"
+}
