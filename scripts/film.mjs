@@ -19,6 +19,10 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film render <id> [--start 0 --end 3] [--width 1920 --fps 30] [--force]
   pnpm film poster <id>                       更新本项目封面
   pnpm film import <id> <file> --license "来源与许可"
+  pnpm film asset <id> upload <file> --license "来源与许可" [--resume <upload-id>] [--remote] [--json]
+  pnpm film asset <id> fetch <https-url> --filename <name> --license "来源与许可" [--remote] [--json]
+  pnpm film asset <id> status|complete|abort --id <upload-id> [--remote] [--json]
+  pnpm film asset <id> prune|capabilities [--json]  清理本人过期缓存或查询传输限制
   pnpm film doctor                          环境检查（只读）
   pnpm film mcp [--project <id>] [--read-only]  启动 AI 编辑 MCP 服务
   pnpm film mcp-remote init|check|serve|revoke [--env-file .env]  OAuth/Bearer 远程接入
@@ -198,6 +202,7 @@ export function runFilm(args, root = process.cwd()) {
     return 0;
   }
   const routes = {
+    asset: ["asset-cli.mjs", ...rest],
     operation: ["project-operation.mjs", ...rest],
     job: ["job-cli.mjs", ...rest],
     workspace: ["production-cli.mjs", "workspace", ...rest],

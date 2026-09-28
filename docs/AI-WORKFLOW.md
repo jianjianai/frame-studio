@@ -8,6 +8,8 @@
 
 外部客户端使用 [远程 MCP 接入](MCP-REMOTE.md)：`pnpm film mcp-remote init|check|serve`，支持内置 OAuth、Bearer token 和环境文件中的 Cloudflare Tunnel 配置。命令行制作功能独立可用。
 
+外部素材使用 [素材传输](ASSET-TRANSFER.md)：`pnpm film asset <id> upload <file> --license "来源许可"` 原样导入，添加 `--remote` 可上传到 `.env` 中配置的服务器；支持断点续传、URL 拉取、完整性校验和自动登记，不需要 MCP 客户端。
+
 ## 接手项目
 
 在仓库根目录运行：

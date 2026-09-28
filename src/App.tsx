@@ -311,7 +311,7 @@ function Gallery() {
 interface Asset {
   name: string;
   url: string;
-  type: "image" | "audio" | "video" | "model" | "soundfont";
+  type: "image" | "audio" | "video" | "model" | "soundfont" | "font" | "midi";
   bytes: number;
   license: string;
 }
@@ -357,6 +357,8 @@ function AssetLibrary() {
           ["image", "插画与图像"],
           ["audio", "音乐与音效"],
           ["soundfont", "乐器采样"],
+          ["midi", "MIDI 乐谱"],
+          ["font", "字体"],
           ["model", "3D 模型"],
           ["video", "视频"],
         ].map(([k, label]) => (

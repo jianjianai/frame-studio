@@ -11,6 +11,12 @@ import { compareReviews, recordReview } from "../production-media.mjs";
 import { runProcess } from "../project-execution.mjs";
 import { inspectProjectScope } from "../project-scope-report.mjs";
 import { imageResult } from "./image-result.mjs";
+import {
+  AssetTransfers,
+  CHUNK_BYTES,
+  MAX_ASSET_BYTES,
+  decodeChunk,
+} from "../asset-transfer.mjs";
 
 const project = z.string().refine(validProjectId, "Invalid project id");
 const filePath = z.string().min(1).max(512);
@@ -30,6 +36,7 @@ const refs = {
   audio: "docs/AUDIO.md",
   "scene-types": "src/engine/types.ts",
   mcp: "docs/MCP.md",
+  assets: "docs/ASSET-TRANSFER.md",
 };
 export const jsonResult = (value, isError = false) => ({
   content: [{ type: "text", text: JSON.stringify(value) }],
@@ -43,6 +50,7 @@ export function createFrameServer({
   readOnly = false,
   timeoutMs = 600000,
   jobManager,
+  assetManager,
   decorateResult = (value) => value,
 }) {
   const workspace = new Workspace(root, {
@@ -51,6 +59,7 @@ export function createFrameServer({
     sessionId: jobManager?.workspace.sessionId,
   });
   const jobs = jobManager ?? new Jobs(workspace, { timeoutMs });
+  const assets = assetManager ?? new AssetTransfers(workspace);
   const writeTools = new Set();
   const reference = (name) => {
     const file = safePath(workspace.root, refs[name]);
@@ -138,6 +147,7 @@ export function createFrameServer({
       jsonResult({
         ...workspace.context(id),
         activeOperation: jobs.operation(id),
+        assetTransfers: assets.capabilities(),
       }),
   );
   register(
@@ -462,6 +472,120 @@ export function createFrameServer({
     },
     { write: true },
   );
+  const uploadMetadata = {
+    filename: z.string().min(1).max(120),
+    license: z.string().min(1).max(4000),
+    source: z.string().max(4000).optional(),
+    sha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .optional(),
+    requestId: jobId.optional(),
+  };
+  register(
+    "frame_upload_asset",
+    "Upload a small material (up to 1 MiB decoded) as canonical base64, verify and register it without changing its bytes. Reuse requestId to retry without duplication. For large files prefer the authenticated HTTP upload URL or frame_asset_upload chunks; do not invent attachment URLs or base64.",
+    {
+      project,
+      ...uploadMetadata,
+      dataBase64: z
+        .string()
+        .min(1)
+        .max(Math.ceil(CHUNK_BYTES / 3) * 4),
+    },
+    async ({ project: id, ...options }) =>
+      jsonResult(await assets.upload(id, options)),
+    { write: true },
+  );
+  register(
+    "frame_asset_upload",
+    "Resumable material transfer: begin needs filename/bytes/license and optional SHA-256; chunk needs uploadId/offset/dataBase64; status can waitMs up to 20000 for a URL download; complete verifies and registers; abort removes staged bytes; prune removes this authorization's expired receipts. Resume at receivedBytes. HTTP endpoints avoid base64 for large files. Each upload belongs to its creating authorization.",
+    {
+      project,
+      action: z.enum([
+        "begin",
+        "chunk",
+        "status",
+        "complete",
+        "abort",
+        "prune",
+      ]),
+      uploadId: jobId.optional(),
+      filename: uploadMetadata.filename.optional(),
+      license: uploadMetadata.license.optional(),
+      source: uploadMetadata.source,
+      sha256: uploadMetadata.sha256,
+      requestId: uploadMetadata.requestId,
+      bytes: z.number().int().min(12).max(MAX_ASSET_BYTES).optional(),
+      offset: z.number().int().nonnegative().optional(),
+      dataBase64: z
+        .string()
+        .min(1)
+        .max(Math.ceil(CHUNK_BYTES / 3) * 4)
+        .optional(),
+      waitMs: z.number().int().min(0).max(20000).default(0),
+    },
+    async ({
+      project: id,
+      action,
+      uploadId,
+      offset,
+      dataBase64,
+      waitMs,
+      ...options
+    }) => {
+      if (action === "begin") return jsonResult(assets.begin(id, options));
+      if (action === "prune") return jsonResult(await assets.prune(id));
+      if (action === "status")
+        return jsonResult(await assets.wait(id, uploadId, waitMs));
+      if (action === "chunk")
+        return jsonResult(
+          assets.chunk(
+            id,
+            uploadId,
+            offset,
+            decodeChunk(dataBase64),
+            options.sha256,
+          ),
+        );
+      if (action === "complete")
+        return jsonResult(await assets.complete(id, uploadId));
+      return jsonResult(await assets.abort(id, uploadId));
+    },
+    { write: true },
+  );
+  register(
+    "frame_fetch_asset",
+    "Start a background download from a real public HTTPS URL and register the verified material. Returns uploadId; query frame_asset_upload status (waitMs=20000) or abort. URLs may be signed; credentials/query strings are not stored in the catalog. Private networks, credential headers and redirects to private hosts are not allowed. If the client cannot expose an attachment URL, use the upload transport.",
+    {
+      project,
+      url: z.string().min(1).max(8192),
+      filename: uploadMetadata.filename,
+      license: uploadMetadata.license,
+      sha256: uploadMetadata.sha256,
+      maxBytes: z
+        .number()
+        .int()
+        .min(12)
+        .max(MAX_ASSET_BYTES)
+        .default(MAX_ASSET_BYTES),
+    },
+    ({ project: id, ...options }) => jsonResult(assets.fetch(id, options)),
+    { write: true, openWorld: true },
+  );
+  register(
+    "frame_read_asset",
+    "Read a registered public/imports material's metadata and authenticated download link. metadataOnly=false returns up to 1 MiB as base64 with chunk SHA-256 and nextOffset for binary clients; this is not a visual/audio review tool.",
+    {
+      project,
+      path: filePath,
+      metadataOnly: z.boolean().default(true),
+      offset: z.number().int().nonnegative().default(0),
+      length: z.number().int().min(1).max(CHUNK_BYTES).default(CHUNK_BYTES),
+    },
+    ({ project: id, path, ...options }) =>
+      jsonResult(assets.read(id, path, options)),
+  );
   register(
     "frame_start_export",
     "Formal export with real trial encoding, frozen inputs, verified reusable segments, software H.264/AAC, full decode and manifest. Resume requires identical parameters and inputs.",
@@ -701,5 +825,15 @@ export function createFrameServer({
       };
     },
   );
-  return { server, workspace, jobs, writeTools, close: () => jobs.close() };
+  return {
+    server,
+    workspace,
+    jobs,
+    assets,
+    writeTools,
+    close: async () => {
+      await assets.close();
+      await jobs.close();
+    },
+  };
 }

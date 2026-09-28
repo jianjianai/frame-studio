@@ -60,9 +60,13 @@
 | frame_start_export | 实际试编码、分段恢复、完整解码验收的正式导出 |
 | frame_verify_delivery | 针对最终文件的计帧、解码、测量、抽帧与版本检查 |
 | frame_import_asset | 导入已暂存在本项目内的二进制素材并记录许可 |
+| frame_upload_asset / frame_asset_upload | 小文件原样上传、持久分块续传、校验登记与取消 |
+| frame_fetch_asset / frame_read_asset | 后台公网 URL 拉取、已登记素材的元数据与字节读取 |
 | frame_narrate | 根据项目显式配置逐句合成/复用音频、测时并生成字幕 |
 
 MCP 文件读写只允许指定项目内部的普通文件，拒绝路径穿越、Windows 设备名/ADS、符号链接、junction、硬链接及隐藏目录。源码编辑仅接受文本格式；资产二进制使用现有 film import 命令导入，保留来源和许可。依赖、引擎和根配置由维护任务更改。
+
+外部素材可通过新增上传、URL 拉取和原始 HTTP 分块入口传入工程；MCP、命令行共用同一实现，详见 [素材传输](ASSET-TRANSFER.md)。`frame_read_reference` 的 `assets` 返回该指南，项目上下文的 `assetTransfers` 返回当前格式和容量限制。
 
 每个文件最多 1 MiB，单次编辑最多 20 个文件、合计 2 MiB。dryRun 只验证路径、版本和变更摘要，不临时写文件，也不执行修改后检查。多文件提交不是跨进程文件系统事务；服务使用项目独占锁、逐文件原子替换、备份与失败回滚。崩溃遗留锁/事务会阻止后续写入，人工核对备份后恢复；不会自动删除未知锁或覆盖外部编辑。
 

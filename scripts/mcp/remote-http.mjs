@@ -8,6 +8,8 @@ import { createFrameServer } from "./server.mjs";
 import { ProjectService } from "../project-service.mjs";
 import { Jobs } from "./jobs.mjs";
 import { RemoteAuth, AuthError, json } from "./remote-auth.mjs";
+import { FrameError } from "./workspace.mjs";
+import { AssetTransfers, CHUNK_BYTES } from "../asset-transfer.mjs";
 
 const types = {
   ".mp4": "video/mp4",
@@ -44,6 +46,7 @@ export async function startRemoteServer(config) {
     readOnly: true,
   });
   const template = createFrameServer({ ...config, readOnly: true });
+  const assetReader = new AssetTransfers(workspace);
   const writeTools = template.writeTools;
   let closing = false,
     inFlight = 0;
@@ -69,6 +72,34 @@ export async function startRemoteServer(config) {
   };
   const decorate = (result) => {
     if (result.isError || !result.structuredContent) return result;
+    const transfer = result.structuredContent;
+    if (transfer.uploadId && transfer.project) {
+      const url = `${config.publicUrl}/uploads/${encodeURIComponent(transfer.project)}/${transfer.uploadId}`;
+      result = {
+        ...result,
+        structuredContent: {
+          ...transfer,
+          transport: {
+            url,
+            completeUrl: url + "/complete",
+            methods: {
+              status: "GET",
+              chunk: "PATCH",
+              complete: "POST",
+              abort: "DELETE",
+            },
+            chunkBytes: CHUNK_BYTES,
+            authorization:
+              "Use the same Authorization: Bearer header; PATCH uses application/octet-stream and Upload-Offset.",
+          },
+        },
+      };
+      result.content = result.content.map((item) =>
+        item.type === "text"
+          ? { ...item, text: JSON.stringify(result.structuredContent) }
+          : item,
+      );
+    }
     const found = new Map();
     let visited = 0;
     const visit = (value) => {
@@ -83,10 +114,21 @@ export async function startRemoteServer(config) {
           .split(path.sep);
         const [project, ...parts] = relative;
         try {
-          const item = artifactFile(project, parts.join("/"));
+          const relativePath = parts.join("/");
+          const material = relativePath.startsWith("public/imports/");
+          const asset = material
+            ? assetReader.describe(project, relativePath)
+            : null;
+          const item = asset
+            ? {
+                file: asset.absolutePath,
+                stat: { size: asset.bytes },
+                mime: asset.mimeType,
+              }
+            : artifactFile(project, relativePath);
           const uri =
             config.publicUrl +
-            "/artifacts/" +
+            (material ? "/assets/" : "/artifacts/") +
             relative.map(encodeURIComponent).join("/");
           found.set(uri, {
             type: "resource_link",
@@ -129,18 +171,27 @@ export async function startRemoteServer(config) {
         ),
         lastSeen: Date.now(),
       };
+      entry.assets = new AssetTransfers(
+        new ProjectService(config.root, {
+          projects: config.projects,
+          readOnly: config.readOnly,
+        }),
+        { owner: principal },
+      );
       principals.set(principal, entry);
     }
     entry.lastSeen = Date.now();
-    return entry.jobs;
+    return entry;
   };
   const handler = createMcpHandler(
     (ctx) => {
       const info = ctx.authInfo;
+      const entry = manager(info.extra.principal);
       return createFrameServer({
         ...config,
         readOnly: !info.scopes.includes("frame:write"),
-        jobManager: manager(info.extra.principal),
+        jobManager: entry.jobs,
+        assetManager: entry.assets,
         decorateResult: decorate,
       }).server;
     },
@@ -156,10 +207,13 @@ export async function startRemoteServer(config) {
     for (const [key, entry] of principals) {
       if (
         !auth.active(key) ||
-        (!entry.jobs.running.size && Date.now() - entry.lastSeen > 1800000)
+        (!entry.jobs.running.size &&
+          !entry.assets.running.size &&
+          Date.now() - entry.lastSeen > 1800000)
       ) {
         principals.delete(key);
         pending.push(entry.jobs.close());
+        pending.push(entry.assets.close());
       }
     }
     await Promise.allSettled(pending);
@@ -177,33 +231,102 @@ export async function startRemoteServer(config) {
       return new Response(null, {
         status: 204,
         headers: {
-          "Access-Control-Allow-Methods": "GET, HEAD, POST, DELETE, OPTIONS",
+          "Access-Control-Allow-Methods":
+            "GET, HEAD, POST, PATCH, DELETE, OPTIONS",
           "Access-Control-Allow-Headers":
-            "Authorization, Content-Type, Accept, MCP-Protocol-Version, MCP-Session-Id, Last-Event-ID, Range",
+            "Authorization, Content-Type, Accept, MCP-Protocol-Version, MCP-Session-Id, Last-Event-ID, Range, Upload-Offset, X-Chunk-SHA256",
           "Access-Control-Max-Age": "600",
         },
       });
     if (url.pathname === "/healthz" && request.method === "GET")
       return json({ status: closing ? "stopping" : "ready" });
-    if (url.pathname === "/mcp" || url.pathname.startsWith("/artifacts/")) {
+    if (
+      url.pathname === "/mcp" ||
+      ["/artifacts/", "/uploads/", "/assets/"].some((prefix) =>
+        url.pathname.startsWith(prefix),
+      )
+    ) {
       let identity;
       try {
         identity = auth.verify(request.headers.get("authorization"));
       } catch {
         return auth.challenge();
       }
-      if (!rate(identity.principal, 240))
+      if (
+        !rate(
+          identity.principal +
+            (url.pathname.startsWith("/uploads/") ? ":uploads" : ""),
+          url.pathname.startsWith("/uploads/") ? 2400 : 240,
+        )
+      )
         return json({ error: "rate_limited" }, 429, { "Retry-After": "60" });
       if (url.searchParams.has("access_token") || url.searchParams.has("token"))
         return json({ error: "Tokens must use Authorization header" }, 400);
-      if (url.pathname.startsWith("/artifacts/")) {
+      if (url.pathname.startsWith("/uploads/")) {
+        const [, , project, uploadId, suffix, ...extra] = url.pathname
+          .split("/")
+          .map(decodeURIComponent);
+        const assets = manager(identity.principal).assets;
+        if (extra.length || (suffix && suffix !== "complete"))
+          return json({ error: "not_found" }, 404);
+        if (
+          request.method !== "GET" &&
+          !identity.scopes.includes("frame:write")
+        )
+          return auth.challenge("insufficient_scope", "frame:read frame:write");
+        let value;
+        if (!uploadId && request.method === "POST")
+          value = assets.begin(project, await request.json());
+        else if (uploadId && !suffix && request.method === "GET")
+          value = assets.status(project, uploadId);
+        else if (uploadId && !suffix && request.method === "PATCH") {
+          if (
+            request.headers.get("content-type") !== "application/octet-stream"
+          )
+            return json({ error: "Expected application/octet-stream" }, 415);
+          const offset = request.headers.get("upload-offset");
+          if (!/^\d+$/.test(offset ?? ""))
+            return json({ error: "Upload-Offset is required" }, 400);
+          value = assets.chunk(
+            project,
+            uploadId,
+            Number(offset),
+            Buffer.from(await request.arrayBuffer()),
+            request.headers.get("x-chunk-sha256") ?? undefined,
+          );
+        } else if (
+          uploadId &&
+          suffix === "complete" &&
+          request.method === "POST"
+        )
+          value = await assets.complete(project, uploadId);
+        else if (uploadId && !suffix && request.method === "DELETE")
+          value = await assets.abort(project, uploadId);
+        else return json({ error: "method_not_allowed" }, 405);
+        return json(
+          decorate({ content: [], structuredContent: value }).structuredContent,
+        );
+      }
+      if (
+        url.pathname.startsWith("/artifacts/") ||
+        url.pathname.startsWith("/assets/")
+      ) {
         if (!["GET", "HEAD"].includes(request.method))
           return json({ error: "method_not_allowed" }, 405);
         try {
           const [, , project, ...parts] = url.pathname
             .split("/")
             .map(decodeURIComponent);
-          const item = artifactFile(project, parts.join("/")),
+          const asset = url.pathname.startsWith("/assets/")
+            ? assetReader.describe(project, parts.join("/"))
+            : null;
+          const item = asset
+              ? {
+                  file: asset.absolutePath,
+                  stat: { size: asset.bytes },
+                  mime: asset.mimeType,
+                }
+              : artifactFile(project, parts.join("/")),
             size = item.stat.size;
           let start = 0,
             end = size - 1,
@@ -322,7 +445,13 @@ export async function startRemoteServer(config) {
       try {
         const chunks = [];
         let count = 0;
-        const limit = req.url.startsWith("/oauth/") ? 65536 : MAX_BODY;
+        const limit = req.url.startsWith("/oauth/")
+          ? 65536
+          : req.url.startsWith("/uploads/")
+            ? req.method === "PATCH"
+              ? CHUNK_BYTES
+              : 16384
+            : MAX_BODY;
         if (Number(req.headers["content-length"]) > limit) {
           res.writeHead(413);
           res.end("Body too large");
@@ -348,22 +477,46 @@ export async function startRemoteServer(config) {
           response = await route(request);
         } catch (error) {
           response =
-            error instanceof AuthError
+            error instanceof FrameError
               ? json(
-                  { error: error.code, error_description: error.message },
-                  error.status,
-                )
-              : json(
                   {
-                    error:
-                      error instanceof SyntaxError || error instanceof TypeError
-                        ? "invalid_request"
-                        : "server_error",
+                    error: {
+                      code: error.code,
+                      message: error.message,
+                      details: error.details,
+                    },
                   },
-                  error instanceof SyntaxError || error instanceof TypeError
-                    ? 400
-                    : 500,
-                );
+                  ["UPLOAD_DENIED", "PROJECT_DENIED", "READ_ONLY"].includes(
+                    error.code,
+                  )
+                    ? 403
+                    : [
+                          "UPLOAD_BUSY",
+                          "PROJECT_BUSY",
+                          "OFFSET_MISMATCH",
+                          "CHUNK_CONFLICT",
+                          "VERSION_CONFLICT",
+                        ].includes(error.code)
+                      ? 409
+                      : 400,
+                )
+              : error instanceof AuthError
+                ? json(
+                    { error: error.code, error_description: error.message },
+                    error.status,
+                  )
+                : json(
+                    {
+                      error:
+                        error instanceof SyntaxError ||
+                        error instanceof TypeError
+                          ? "invalid_request"
+                          : "server_error",
+                    },
+                    error instanceof SyntaxError || error instanceof TypeError
+                      ? 400
+                      : 500,
+                  );
         }
         // Chromium also applies form-action to redirects after a form POST.
         response = harden(
@@ -409,6 +562,7 @@ export async function startRemoteServer(config) {
         await Promise.allSettled([
           handler.close(),
           ...[...principals.values()].map((entry) => entry.jobs.close()),
+          ...[...principals.values()].map((entry) => entry.assets.close()),
         ]);
       } finally {
         principals.clear();

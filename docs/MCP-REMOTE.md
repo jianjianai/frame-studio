@@ -148,7 +148,9 @@ OAuth 首次登录用于确认访问者身份，与每次工具操作的审批�
 
 ## 外部 AI 读取产物
 
-现有 30 个制作工具与 stdio 共用实现。`frame_read_artifact` 等结果中的本机产物会附加 HTTPS `resource_link` 和 `structuredContent.remoteArtifacts`（纯图片模式不附加链接）。下载限于已授权项目的 `exports/`，支持 Range、HEAD 和流式传输，不开放仓库根目录、源码配置或私有状态。PNG 原生图片回读、JSON 回读和显式的 WAV 内联音频仍可使用。
+现有 34 个制作工具与 stdio 共用实现。`frame_read_artifact` 等结果中的本机产物会附加 HTTPS `resource_link` 和 `structuredContent.remoteArtifacts`（纯图片模式不附加链接）。产物下载限于已授权项目的 `exports/`；素材下载限于已登记的 `public/imports/`。两者支持 Range、HEAD 和流式传输，不开放仓库根目录、源码配置或私有状态。PNG 原生图片回读、JSON 回读和显式的 WAV 内联音频仍可使用。
+
+素材上传使用 `/uploads/`，字节下载使用 `/assets/`，复用同一 OAuth/Bearer 验证。Cloudflare 应转发整个域名，原有配置不需要额外开放端口。每块最多 1 MiB，避免将大文件放进单次 JSON 请求；服务重启后同一授权可继续已确认的分块偏移。具体命令和 HTTP 请求格式见 [素材传输](ASSET-TRANSFER.md)。
 
 远程链接也要求 Authorization 头，没有公共分享链接或 URL token。某些 AI 客户端不能为资源下载附加请求头；这些客户端可用工具内联回读图像/报告，视频需要通过支持认证下载的客户端或本机查看。返回链接不代表模型已看完视频或听过音频。
 
