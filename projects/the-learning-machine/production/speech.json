@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "defaultProvider": "edge",
+  "providers": {
+    "edge": {
+      "type": "edge",
+      "voice": "zh-CN-YunxiNeural",
+      "settings": {
+        "rate": "+0%",
+        "pitch": "+0Hz",
+        "volume": "+0%"
+      }
+    }
+  },
+  "speakers": {
+    "narrator": {
+      "provider": "edge"
+    }
+  }
+}

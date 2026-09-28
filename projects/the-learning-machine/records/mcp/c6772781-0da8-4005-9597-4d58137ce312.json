@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "transaction": "c6772781-0da8-4005-9597-4d58137ce312",
+  "time": "2026-09-28T09:31:11.391Z",
+  "changes": [
+    {
+      "path": "rigs-a.ts",
+      "operation": "replace",
+      "beforeSha256": "a9c7b9a1a6d4c75dd1cc7da731a4370b66c6ee6ad17f21ebb9eef4b4c6ec1816",
+      "afterSha256": "cc9f30f9d36354f55728cba4cc943d77e193c2cfa7ff27e99444631d953ea33e"
+    },
+    {
+      "path": "rigs-b.ts",
+      "operation": "replace",
+      "beforeSha256": "6ff6cde0598ad670a4d9138cff63015920d355221f953cebdc716c03a3fbadbc",
+      "afterSha256": "d1e6461f12a06c1b0eb3f9d06e15a50964ed0420a8c9f4d767b6bdd08b374372"
+    },
+    {
+      "path": "scene.ts",
+      "operation": "replace",
+      "beforeSha256": "a001dc6a1940db12e6b1ab957d0740bc18f20b1ee7f0c07df1c156417f03337d",
+      "afterSha256": "acafbd5b8520489934c0eefc1b8d21652d72b3658915f18eae6c60567eb818dd"
+    },
+    {
+      "path": "score.ts",
+      "operation": "replace",
+      "beforeSha256": "268d67b8971d648ec77e732458f187ba926f3a4800c15f59b8d72db7f9ff3568",
+      "afterSha256": "53491989a4251f50625383e1bc0324493a8149d34ba41d96ed76219b00ac4442"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

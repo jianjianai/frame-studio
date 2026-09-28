@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "transaction": "c2707f11-4f09-4b4f-be86-7a1acbc5e248",
+  "time": "2026-09-28T11:27:49.219Z",
+  "changes": [
+    {
+      "path": "r2/ink.ts",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "8a518a86d7b11cfbcaef2d4f491fb8ad85f5fcae56affbe11044611ab669dd25"
+    },
+    {
+      "path": "r2/early.ts",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "dd017520e4de83d6d43d60fdd08c3f5c4164202c9229d1c7f68c268a0ea2d77a"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

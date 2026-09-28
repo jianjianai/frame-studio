@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "transaction": "e6fb3f6f-0f66-48d0-a578-a584cea2f28a",
+  "time": "2026-09-28T11:57:25.574Z",
+  "changes": [
+    {
+      "path": "tests/unit/timeline.test.ts",
+      "operation": "replace",
+      "beforeSha256": "b195f8e6a1b99bddd30a6040d57296b7f8f3b339a393563d9083f771421fe918",
+      "afterSha256": "d79daaf39f7f6791aac13d5bc7cfac419c99bba7d23a0cb1c55e379bad32e596"
+    },
+    {
+      "path": "tests/unit/audio-performance.test.ts",
+      "operation": "replace",
+      "beforeSha256": "726bdfe1c4e975e44b377288508fda2100b2764f9cab7e080e6c4143c03a3863",
+      "afterSha256": "32be858c2d78c936222dfab403d0e77822d104a9beadd3c40b89ddda3980358d"
+    },
+    {
+      "path": "tests/e2e/scene.spec.ts",
+      "operation": "replace",
+      "beforeSha256": "f28a857f8c9468aa54483f78bf4d9150af63dc1ab9753243937693fd97f332d0",
+      "afterSha256": "e4de96ae2ba3d2594ed6cbc3ba0490c3c4af90ce8ab3f3656e3572e9d685fae3"
+    },
+    {
+      "path": "tests/e2e/audio-runtime.spec.ts",
+      "operation": "replace",
+      "beforeSha256": "7a533a269cd066bacbd082e8d849897de96daac54c6efa01a103b3598dcebd32",
+      "afterSha256": "97a42da50c5c7652278d86a8b536ce5f4d6fb8c609c2413dfd5aaa2eefa7ca2a"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

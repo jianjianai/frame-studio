@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "transaction": "ffe20f04-9525-490e-ba71-85267dbe918a",
+  "time": "2026-09-28T09:43:03.335Z",
+  "changes": [
+    {
+      "path": "rigs-b.ts",
+      "operation": "replace",
+      "beforeSha256": "d1e6461f12a06c1b0eb3f9d06e15a50964ed0420a8c9f4d767b6bdd08b374372",
+      "afterSha256": "449c492c891110281494f0d1d68c46b2b410f6d8af3dbcddee2efd38c8ca3170"
+    },
+    {
+      "path": "scene.ts",
+      "operation": "replace",
+      "beforeSha256": "acafbd5b8520489934c0eefc1b8d21652d72b3658915f18eae6c60567eb818dd",
+      "afterSha256": "e9d99c56304741e07b92baa603ce157dcd70d808d7cbe9f8e2989c1c3127d874"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

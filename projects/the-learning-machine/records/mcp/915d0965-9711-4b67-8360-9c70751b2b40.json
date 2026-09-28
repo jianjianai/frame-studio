@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "transaction": "915d0965-9711-4b67-8360-9c70751b2b40",
+  "time": "2026-09-28T09:01:25.114Z",
+  "changes": [
+    {
+      "path": "production/speech.json",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "c8227a2f17e064698337e7ea0a890fa08a4d376d76aec8126bd69558149e0791"
+    },
+    {
+      "path": "production/narration.example.json",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "c282f0aac37e089ee5965f05d885ff5b7ec9f12ce5dfa414d0bd2524b451acfe"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

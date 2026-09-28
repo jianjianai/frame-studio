@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "transaction": "7fdfc551-65c8-45e7-b558-557dcfdef4b4",
+  "time": "2026-09-28T11:45:57.608Z",
+  "changes": [
+    {
+      "path": "scripts/activate-r2.mjs",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "3a470da145a840a7d1faa1524a36027b6401bab693ae1a20da7d3157fc5e3c2d"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}
