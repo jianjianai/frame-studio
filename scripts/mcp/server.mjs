@@ -36,9 +36,12 @@ export function createFrameServer({
   projects = [],
   readOnly = false,
   timeoutMs = 600000,
+  jobManager,
+  decorateResult = (value) => value,
 }) {
   const workspace = new Workspace(root, { projects, readOnly });
-  const jobs = new Jobs(workspace, { timeoutMs });
+  const jobs = jobManager ?? new Jobs(workspace, { timeoutMs });
+  const writeTools = new Set();
   const reference = (name) => {
     const file = safePath(workspace.root, refs[name]);
     if (fs.statSync(file).size > 1024 * 1024)
@@ -64,6 +67,7 @@ export function createFrameServer({
     handler,
     { write = false, destructive = false, openWorld = false } = {},
   ) => {
+    if (write) writeTools.add(name);
     if (readOnly && write) return;
     server.registerTool(
       name,
@@ -79,7 +83,7 @@ export function createFrameServer({
       },
       async (args) => {
         try {
-          return await handler(args);
+          return decorateResult(await handler(args));
         } catch (error) {
           return jsonResult(
             {
@@ -661,5 +665,5 @@ export function createFrameServer({
       };
     },
   );
-  return { server, workspace, jobs, close: () => jobs.close() };
+  return { server, workspace, jobs, writeTools, close: () => jobs.close() };
 }

@@ -10,6 +10,8 @@ playwright-report/
 # Local configuration and credentials
 .env
 .env.*
+.evn
+.evn.*
 !.env.example
 !.env.sample
 .secrets/

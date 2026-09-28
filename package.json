@@ -26,8 +26,9 @@
     "project:scope": "node scripts/project-scope.mjs",
     "frame": "node scripts/render.mjs --frame-mode",
     "project:check": "node scripts/check-projects.mjs",
-    "film": "node scripts/film.mjs",
+    "film": "node -- scripts/film.mjs",
     "mcp": "node scripts/mcp.mjs",
+    "mcp:remote": "node -- scripts/mcp-remote.mjs",
     "test:mcp": "node --test tests/mcp/*.test.mjs"
   },
   "dependencies": {

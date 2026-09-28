@@ -6,6 +6,8 @@
 
 支持 MCP 的客户端可使用 [FRAME MCP](MCP.md) 完成项目上下文、带哈希校验的批量编辑、检查、PNG 回读与异步导出。统一启动入口是 pnpm --silent film mcp，直接客户端配置建议使用 node 与脚本绝对路径。
 
+外部客户端使用 [远程 MCP 接入](MCP-REMOTE.md)：`pnpm film mcp-remote init|check|serve`，支持内置 OAuth、Bearer token 和环境文件中的 Cloudflare Tunnel 配置。命令行制作功能独立可用。
+
 ## 接手项目
 
 在仓库根目录运行：

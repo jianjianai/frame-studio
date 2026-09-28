@@ -20,6 +20,7 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film import <id> <file> --license "来源与许可"
   pnpm film doctor                          环境检查（只读）
   pnpm film mcp [--project <id>] [--read-only]  启动 AI 编辑 MCP 服务
+  pnpm film mcp-remote init|check|serve|revoke [--env-file .env]  OAuth/Bearer 远程接入
   pnpm film dev|typecheck|test|build|validate <id> [--json]  单项目运行与验证
   pnpm film search <id> --query "文字" [--directory music] [--json]
   pnpm film read <id> --path scene.ts [--line 1 --lines 100] [--json]
@@ -92,6 +93,18 @@ export function inspectProject(root, id) {
 
 export function runFilm(args, root = process.cwd()) {
   const [command = "help", ...rest] = args;
+  if (command === "mcp-remote") {
+    process.argv = [
+      process.execPath,
+      fileURLToPath(new URL("mcp-remote.mjs", import.meta.url)),
+      ...rest,
+    ];
+    void import("./mcp-remote.mjs").catch((error) => {
+      console.error(error.message);
+      process.exitCode = 1;
+    });
+    return 0;
+  }
   if (command === "mcp") {
     // Run in this process so disconnects and signals reach the owned job manager.
     process.argv = [

@@ -4,6 +4,7 @@
 
 | 记录 | 内容 |
 | --- | --- |
+| [2026-09-28-remote-mcp.md](2026-09-28-remote-mcp.md) | 远程 HTTP、内置 OAuth/Bearer 授权、环境配置与 Cloudflare 命名隧道 |
 | [2026-09-28-ai-production.md](2026-09-28-ai-production.md) | 单项目隔离、冻结导出、CLI/MCP 共用编辑/审片/验收、Worker PCM 与旁白流程 |
 | [2026-09-28-animation-mcp.md](2026-09-28-animation-mcp.md) | 本地 MCP 编辑服务、项目边界、事务恢复、预览与导出任务验证 |
 | [2026-09-28-audio-seek-optimization.md](2026-09-28-audio-seek-optimization.md) | 后段预加载、过期请求撤销和分批状态推进；未运行回归 |
