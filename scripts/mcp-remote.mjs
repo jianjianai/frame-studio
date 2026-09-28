@@ -122,6 +122,7 @@ try {
             local: app.url,
             endpoint: config.resource,
             auth: config.mode,
+            recoveredLock: app.auth.lockRecovery,
             tunnel: config.tunnel.enabled
               ? "process_started; external reachability not yet verified"
               : "disabled",
@@ -137,6 +138,8 @@ try {
   console.error(
     JSON.stringify({
       status: "failed",
+      code: error.code,
+      details: error.details,
       error:
         error.code === "EEXIST"
           ? "Configuration already exists; it was not overwritten."

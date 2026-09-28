@@ -6,6 +6,8 @@
 
 双击根目录的 **`启动MCP.cmd`**。脚本自动进入仓库目录，检查 Node.js，缺少依赖时通过 pnpm 安装，读取 `.env` 并检查配置，然后启动远程 MCP 和已启用的 Cloudflare 隧道。保持窗口打开，按 Ctrl+C 停止；失败时窗口会保留错误信息。
 
+异常退出后再次启动，会检查旧启动锁的进程：确认进程已经退出时自动恢复，启动结果中的 `recoveredLock.pid` 说明恢复了哪个旧进程的锁。已有进程仍运行时返回 `SERVER_ALREADY_RUNNING` 和 PID，请使用原窗口，或先在原窗口按 Ctrl+C 再启动；不会自动结束进程。配置检查通过只代表配置有效，不代表服务正在运行。
+
 首次没有 `.env` 时会生成随机私有凭据并停下来提示填写配置，不覆盖已有文件。域名、OAuth 回调和隧道 token 仍需按下文填写。需要使用 `.evn` 或其他配置文件时，在终端运行 `启动MCP.cmd .evn`；相对路径以脚本所在目录为准。已有依赖时无需 pnpm；启用隧道仍需安装 cloudflared。
 
 ## 五步接入
@@ -165,7 +167,8 @@ OAuth 首次登录用于确认访问者身份，与每次工具操作的审批�
 - 401：检查当前 token、认证方式和过期时间；客户端可从 `WWW-Authenticate` 自动发现 OAuth。403：检查 Origin 或只读权限。400 `invalid_target`：检查 `resource` 是否精确为公网 `/mcp` 地址。回调错误：核对 AI 实际回调与允许列表。
 - 429：请求/授权容量或密码失败次数限制；按错误等待或清理旧授权。密码连续失败 10 次会临时限制 10 分钟。
 - 隧道进程退出时整个服务退出并报告失败，便于托管程序重启。日志中的 `process_started` 只表示进程启动，公网可达性需要独立验证。
-- `.secrets/frame-mcp/server.lock` 防止双实例覆盖状态。崩溃遗留锁先核对 PID 与本机实例确已停止，再处理该锁；不要直接删除整个授权目录。Windows 文件权限还应按自己的系统账户管理；程序请求的 POSIX 文件模式不替代 Windows ACL。
+- `.secrets/frame-mcp/server.lock` 防止双实例覆盖状态。启动时仅在操作系统明确报告原 PID 不存在时自动恢复，保留 OAuth 数据和配置。进程权限不足、PID 被其他进程复用、锁损坏、链接或锁变化时不会强行接管，错误会返回 `code`、`details.pid`（有效时）和 `details.lockPath`。Windows 文件权限还应按自己的系统账户管理；程序请求的 POSIX 文件模式不替代 Windows ACL。
+- 同一代旧锁的恢复通过独占恢复锁串行执行，避免两个重启操作误删对方的新锁。`SERVER_LOCK_RECOVERY_BUSY` 表示另一启动操作正在恢复；稍后重试即可。若恢复操作本身被强制结束而持续报错，需核对错误中恢复锁及 `server.lock` 的 PID，确认相关进程均已停止后再处理指定锁。不能确认归属的锁不会自动删除，尤其不要删除整个 `.secrets/frame-mcp/` 授权目录。
 - 使用当前官方 SDK HTTP 和 2025-11-25 无状态 HTTP；不提供旧式独立 `/sse` 端点，也未实现 OAuth Client ID Metadata Document 或第三方 OIDC 登录。客户端应支持动态注册或预注册加 PKCE。具体外部 AI 的兼容性以真实连接为准。
 
 ## 实现约定
@@ -175,6 +178,6 @@ OAuth 首次登录用于确认访问者身份，与每次工具操作的审批�
 - 权限：`frame:read` / `frame:write`；写权限包含编辑与执行可信项目代码。Bearer 与 OAuth 都不能越过本机项目范围和只读配置。每次 HTTP 请求重新认证。
 - 运行配置只来自 `.env` 或进程环境。支持 `--env-file .evn`，不自动猜测拼写。样例可提交；实际 `.env`、`.evn` 和 `.secrets/` 被 Git 忽略，并排除在制作快照之外。init/check/serve 输出不打印凭据。
 - Cloudflare：已有的命名隧道，token 通过子进程环境传给 cloudflared。本地服务默认只监听回环地址；外部地址必须使用 HTTPS。域名、隧道和回调由使用者填写，服务不擅自修改 Cloudflare 账户。
-- OAuth 状态只保存令牌哈希，持久化于 `.secrets/frame-mcp/`；独占锁避免多个实例覆盖授权状态。进程崩溃的锁需确认实例已停止后再处理。
+- OAuth 状态只保存令牌哈希，持久化于 `.secrets/frame-mcp/`；独占锁避免多个实例覆盖授权状态。可确认原进程已退出的普通崩溃锁会在下次启动时自动恢复，状态不明的锁保留并报告原因。
 
 协议依据：[MCP 授权规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)、[官方 SDK](https://ts.sdk.modelcontextprotocol.io/v2/)。验证范围见 [本次记录](../records/2026-09-28-remote-mcp.md)。

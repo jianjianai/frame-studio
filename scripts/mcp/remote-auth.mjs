@@ -8,6 +8,7 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import { redirectUri } from "./remote-config.mjs";
+import { acquireRemoteLock } from "./remote-lock.mjs";
 
 export const hash = (value) => createHash("sha256").update(value).digest("hex");
 const opaque = () => randomBytes(32).toString("base64url");
@@ -90,25 +91,11 @@ export class RemoteAuth {
       if (fs.lstatSync(dir).isSymbolicLink())
         throw new Error("OAuth state directories cannot be links");
     }
-    this.lock = path.join(this.directory, "server.lock");
-    this.lockId = randomUUID();
-    let fd;
+    this.lease = acquireRemoteLock(this.directory);
+    this.lock = this.lease.file;
+    this.lockId = this.lease.token;
+    this.lockRecovery = this.lease.recovered;
     try {
-      fd = fs.openSync(this.lock, "wx", 0o600);
-    } catch (e) {
-      if (e.code === "EEXIST")
-        throw new Error(
-          "Remote server active or crash lock remains; inspect " + this.lock,
-        );
-      throw e;
-    }
-    try {
-      fs.writeFileSync(
-        fd,
-        JSON.stringify({ pid: process.pid, token: this.lockId }),
-      );
-      fs.closeSync(fd);
-      fd = undefined;
       this.file = path.join(this.directory, "oauth.json");
       if (
         fs.existsSync(this.file) &&
@@ -135,17 +122,12 @@ export class RemoteAuth {
       this.prune();
       this.save();
     } catch (error) {
-      if (fd !== undefined) fs.closeSync(fd);
       this.close();
       throw error;
     }
   }
   close() {
-    if (
-      fs.existsSync(this.lock) &&
-      JSON.parse(fs.readFileSync(this.lock, "utf8")).token === this.lockId
-    )
-      fs.unlinkSync(this.lock);
+    this.lease.close();
   }
   save() {
     const tmp = this.file + "." + randomUUID() + ".tmp";
