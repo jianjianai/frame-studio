@@ -8,7 +8,7 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { createFrameServer } from "../../scripts/mcp/server.mjs";
 
 export const repo = path.resolve(import.meta.dirname, "../..");
-export function fixture({ browser = false } = {}) {
+export function fixture({ browser = false, renderer = "canvas" } = {}) {
   const root = path.join(repo, ".cache", "mcp-tests", randomUUID());
   fs.mkdirSync(root, { recursive: true });
   if (browser) {
@@ -43,7 +43,7 @@ export function fixture({ browser = false } = {}) {
       "test-film",
       "MCP 测试",
       "--renderer",
-      "canvas",
+      renderer,
       "--duration",
       "2",
       "--fps",

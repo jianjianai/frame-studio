@@ -20,6 +20,9 @@ export class FrameRenderer {
     height = 720,
     quality: Quality = "standard",
   ): Promise<void> {
+    // Pixi's CSP adapter replaces generated JavaScript with static functions.
+    // Load it before any scene initializes, including browser exports.
+    if (this.project.renderer === "pixi") await import("pixi.js/unsafe-eval");
     const mod = await this.project.load();
     if (this.destroyed) return;
     const scene = await mod.createScene({ width, height, quality });

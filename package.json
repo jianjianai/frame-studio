@@ -1,6 +1,6 @@
 {
   "name": "frame-studio",
-  "version": "4.0.0",
+  "version": "4.0.1",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.4.2",

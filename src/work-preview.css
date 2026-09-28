@@ -231,10 +231,18 @@
   z-index: 2;
 }
 @media (max-width: 640px) {
+  .work-preview .theater {
+    flex: 0 0 auto;
+  }
+  .work-preview .stage-viewport {
+    flex: none;
+    aspect-ratio: 16 / 9;
+    min-height: 0 !important;
+  }
   .work-preview .timeline-panel {
     padding: 8px 9px;
     min-height: 190px;
-    max-height: 60vh;
+    max-height: 220px;
   }
   .work-preview .time-ruler {
     font-size: 9px;

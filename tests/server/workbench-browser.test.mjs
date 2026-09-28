@@ -10,6 +10,7 @@ import { treeHash } from "../../server/security.mjs";
 import { fixture, repo as platformRoot } from "../mcp/helpers.mjs";
 import { executeProject } from "../../scripts/project-execution.mjs";
 import { launchBrowser } from "../../scripts/browser.mjs";
+import { PREVIEW_VERSION } from "../../server/preview-version.mjs";
 const url = process.env.FRAME_TEST_DATABASE_URL;
 test(
   "workbench browser: repository navigation, real sandboxed preview, resizing, dialogs and background continuity",
@@ -18,7 +19,7 @@ test(
     const port = Number(process.env.FRAME_TEST_PORT || 55173),
       origin = `http://127.0.0.1:${port}`;
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-ui-")),
-      f = fixture({ browser: true }),
+      f = fixture({ browser: true, renderer: "pixi" }),
       db = await database(url, "test-password-at-least-14");
     await db.pool.query(
       "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
@@ -62,7 +63,7 @@ test(
           id,
           repo.id,
           {
-            previewVersion: 4,
+            previewVersion: PREVIEW_VERSION,
             artifacts: [{ name: "index.html", path: relative + "/index.html" }],
           },
           treeHash(path.join(data, "works", work.id, "projects/test-film")),
@@ -156,6 +157,14 @@ test(
         ),
       });
       await page.setViewportSize({ width: 390, height: 844 });
+      const mobileStage = await player.getByTestId("stage-canvas").boundingBox();
+      const mobileTransport = await player.locator(".transport").boundingBox();
+      const mobileTimeline = await player.locator(".timeline-panel").boundingBox();
+      assert(mobileStage.height >= 140, "Mobile video must retain useful height");
+      assert(
+        mobileTransport.y + mobileTransport.height <= mobileTimeline.y + 1,
+        "Timeline must not overlap playback controls",
+      );
       assert(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= window.innerWidth + 1,

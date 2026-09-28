@@ -1144,8 +1144,17 @@ audio {
   .creation-split.columns,
   .creation-split.rows {
     display: grid;
+    flex: none;
+    min-height: 807px;
     grid-template-columns: 1fr;
-    grid-template-rows: minmax(420px, var(--split)) 7px minmax(240px, 1fr);
+    grid-template-rows: minmax(500px, var(--split)) 7px minmax(300px, 1fr);
+  }
+  .workspace {
+    overflow: auto;
+  }
+  .creation {
+    height: auto;
+    min-height: 100%;
   }
   .splitter {
     cursor: row-resize;
