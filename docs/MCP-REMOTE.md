@@ -2,6 +2,12 @@
 
 本服务为单个 FRAME 工作区提供 Streamable HTTP、内置 OAuth 授权码 + PKCE 和可选静态 Bearer token。原 stdio 和 film 命令保持可用。远程请求使用同一项目服务，项目范围由本机配置决定，不接受客户端切换根目录。
 
+## Windows 一键启动
+
+双击根目录的 **`启动MCP.cmd`**。脚本自动进入仓库目录，检查 Node.js，缺少依赖时通过 pnpm 安装，读取 `.env` 并检查配置，然后启动远程 MCP 和已启用的 Cloudflare 隧道。保持窗口打开，按 Ctrl+C 停止；失败时窗口会保留错误信息。
+
+首次没有 `.env` 时会生成随机私有凭据并停下来提示填写配置，不覆盖已有文件。域名、OAuth 回调和隧道 token 仍需按下文填写。需要使用 `.evn` 或其他配置文件时，在终端运行 `启动MCP.cmd .evn`；相对路径以脚本所在目录为准。已有依赖时无需 pnpm；启用隧道仍需安装 cloudflared。
+
 ## 五步接入
 
 在仓库根目录运行以下命令。需要已安装项目依赖；首次安装使用 `pnpm install --frozen-lockfile`。

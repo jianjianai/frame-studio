@@ -81,6 +81,8 @@ AI 客户端可通过 [FRAME MCP 服务](docs/MCP.md)直接读取项目、按文
 
 外部 AI 可通过 [远程 MCP](docs/MCP-REMOTE.md) 接入，支持内置 OAuth、Bearer token 和 `.env` 配置的 Cloudflare Tunnel。先运行 `pnpm film mcp-remote init`，填写自己的域名、项目范围、回调和隧道凭据，再执行 `check` 和 `serve`。
 
+Windows 可直接双击 **`启动MCP.cmd`**，自动检查配置并启动远程服务；首次缺少配置时会生成 `.env` 并提示填写。
+
 统一入口是 `pnpm film help`，完整用法见 [AI 工具工作流](docs/AI-WORKFLOW.md)。原命令继续兼容。
 
 ```powershell

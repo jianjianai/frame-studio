@@ -4,6 +4,7 @@
 
 | 记录 | 内容 |
 | --- | --- |
+| [2026-09-28-mcp-launcher.md](2026-09-28-mcp-launcher.md) | Windows 双击启动 MCP、首次配置与真实启动验证 |
 | [2026-09-28-remote-mcp.md](2026-09-28-remote-mcp.md) | 远程 HTTP、内置 OAuth/Bearer 授权、环境配置与 Cloudflare 命名隧道 |
 | [2026-09-28-ai-production.md](2026-09-28-ai-production.md) | 单项目隔离、冻结导出、CLI/MCP 共用编辑/审片/验收、Worker PCM 与旁白流程 |
 | [2026-09-28-animation-mcp.md](2026-09-28-animation-mcp.md) | 本地 MCP 编辑服务、项目边界、事务恢复、预览与导出任务验证 |
