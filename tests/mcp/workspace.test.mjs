@@ -244,7 +244,8 @@ test("MCP schemas, tool errors, create and independent scope failures are observ
   });
   assert.equal(check.structuredContent.structure.passed, true);
   assert.equal(check.structuredContent.scope.passed, false);
-  assert.equal(check.isError, true);
+  assert.notEqual(check.isError, true);
+  assert.equal(check.structuredContent.status, "completed");
   const made = await call(client, "frame_create_project", {
     project: "second-film",
     title: "第二部",

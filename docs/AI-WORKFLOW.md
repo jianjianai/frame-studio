@@ -60,10 +60,15 @@ pnpm film poster my-film
 pnpm film import my-film "D:/assets/voice.wav" --license "作者、来源和授权"
 pnpm film doctor
 pnpm film check my-film --strict --json
-pnpm film scope my-film --base <开始任务时的提交>
+pnpm film scope my-film --base <开始任务时的提交> --json
+pnpm film operation my-film --json
 ```
 
 import 只写本项目素材和索引；名称冲突时生成新文件。check 只检查文件、静态接口和时间范围，不代表画面或声音符合本次任务。单项目 context/check 不依赖其他项目元数据正常。scope 检查 Git 中提交以来及暂存、未暂存、未跟踪文件，发现越界即失败，不撤销修改；共享 checkout 无法识别作者，并行任务应使用独立 checkout。
+
+scope 的 JSON 报告分别列出本工程、其他工程和公共文件的变更数量与有限路径样本，使用 `--limit 5` 可进一步缩短输出。范围不通过退出 1，检查无法执行退出 2；其他项目的现有变更不等于当前项目结构错误，结构检查与预览仍可独立运行。
+
+项目被占用时，`operation` 返回关联任务、开始时间、进程存活状态和恢复条件。先查询或等待正在执行的任务；只有报告 `recoverable: true` 时才用 `pnpm film operation my-film --recover <返回的 lockId> --json` 恢复精确匹配的遗留锁。命令不会终止其他进程，也不会清除未完成的编辑事务或状态未知的崩溃任务。完整条件见 [MCP 操作与恢复说明](MCP.md#连续工作检查与图片兼容)。
 
 核对画面优先使用分镜拼图和关键帧；验证声音/同步时渲染所需短片段。只有本次任务需要时才全片导出或重复测试。项目测试只放本项目 tests；公共功能修改运行 `pnpm verify`。在项目 records/ 内单独保存修改记录、实际检查报告和审查结论，区分代码完成、导出完成和视觉/声音已核对。README 只保留使用说明与记录入口，production/brief.md 只保留需求和设计。仓库公共维护记录统一归档到根 records/，不与 docs/ 使用文档混放。
 

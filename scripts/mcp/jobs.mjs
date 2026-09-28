@@ -126,8 +126,8 @@ export class Jobs {
       );
     } else fail("INVALID_JOB", "Unknown job kind.");
     if (options.subtitles === false) args.push("--no-subtitles");
-    const release = this.workspace.lock(id, kind);
     const jobId = randomUUID();
+    const release = this.workspace.lock(id, kind, { jobId });
     const directory = this.folder(id, jobId);
     let child;
     try {
@@ -138,6 +138,7 @@ export class Jobs {
         schemaVersion: 1,
         persistent: this.persistent,
         id: jobId,
+        ownerSession: this.workspace.sessionId,
         project: id,
         kind,
         status: "running",
@@ -160,6 +161,7 @@ export class Jobs {
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
+      if (child.pid) release.update({ childPid: child.pid });
       let resolveDone;
       const done = new Promise((resolve) => {
         resolveDone = resolve;
@@ -348,6 +350,62 @@ export class Jobs {
       await this.stop(entry, "cancelled");
     return this.status(id, jobId);
   }
+  operation(id) {
+    const operation = this.workspace.operation(id);
+    const entry = operation.jobId && this.running.get(operation.jobId);
+    const cancellable = !!(
+      entry &&
+      entry.state.project === id &&
+      operation.sameSession
+    );
+    return {
+      ...operation,
+      cancellable,
+      ...(operation.jobId
+        ? {
+            actions: {
+              query: {
+                tool: "frame_job",
+                arguments: { project: id, jobId: operation.jobId },
+              },
+              ...(cancellable
+                ? {
+                    cancel: {
+                      tool: "frame_cancel_job",
+                      arguments: { project: id, jobId: operation.jobId },
+                    },
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    };
+  }
+  async wait(id, jobId, waitMs = 0) {
+    if (!Number.isInteger(waitMs) || waitMs < 0 || waitMs > 20000)
+      fail("INVALID_WAIT", "waitMs must be 0..20000.");
+    const initial = this.status(id, jobId);
+    const entry = this.running.get(jobId);
+    if (
+      !waitMs ||
+      !entry ||
+      entry.state.project !== id ||
+      !ACTIVE.has(initial.status)
+    )
+      return initial;
+    let timer;
+    try {
+      await Promise.race([
+        entry.done,
+        new Promise((resolve) => {
+          timer = setTimeout(resolve, waitMs);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+    return this.status(id, jobId);
+  }
   status(id, jobId) {
     const directory = this.folder(id, jobId);
     const entry = this.running.get(jobId);
@@ -383,7 +441,12 @@ export class Jobs {
     } catch {
       state.sourceChanged = true;
     }
-    return { ...state, directory };
+    return {
+      ...state,
+      directory,
+      cancellable:
+        !!entry && entry.state.project === id && ACTIVE.has(state.status),
+    };
   }
   describe(id, jobId, name) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9.-]*\.(png|json|mp4)$/.test(name))
@@ -400,7 +463,7 @@ export class Jobs {
       uri: "frame://artifacts/" + id + "/" + jobId + "/" + name,
     };
   }
-  artifact(id, jobId, name) {
+  artifact(id, jobId, name, { maxImageBytes = 6 * MAX_FILE } = {}) {
     this.folder(id, jobId);
     const state = this.status(id, jobId);
     if (
@@ -413,7 +476,7 @@ export class Jobs {
       );
     const info = this.describe(id, jobId, name);
     if (info.mimeType === "video/mp4") return { info };
-    const max = info.mimeType === "image/png" ? 6 * MAX_FILE : MAX_FILE;
+    const max = info.mimeType === "image/png" ? maxImageBytes : MAX_FILE;
     if (info.bytes > max)
       fail(
         "TOO_LARGE",

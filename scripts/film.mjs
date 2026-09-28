@@ -12,7 +12,8 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film new <id> "标题" --renderer canvas|pixi|three
     [--duration 24] [--fps 30] [--audio silent|generated]
   pnpm film check <id> [--strict] [--json]     结构与接口检查（只读）
-  pnpm film scope <id> [--base <commit>]      检查 Git 修改范围（只读）
+  pnpm film scope <id> [--base <commit>] [--json]  分类报告 Git 修改范围（只读）
+  pnpm film operation <id> [--recover <lock-id>] [--json]  查询操作或恢复已退出实例的遗留锁
   pnpm film storyboard <id> [--times "0,2,5"] [--width 480] [--force]
   pnpm film frame <id> --frame 150 | --time 5 [--width 1280] [--force]
   pnpm film render <id> [--start 0 --end 3] [--width 1920 --fps 30] [--force]
@@ -197,6 +198,7 @@ export function runFilm(args, root = process.cwd()) {
     return 0;
   }
   const routes = {
+    operation: ["project-operation.mjs", ...rest],
     job: ["job-cli.mjs", ...rest],
     workspace: ["production-cli.mjs", "workspace", ...rest],
     playback: ["production-cli.mjs", "playback", ...rest],
@@ -252,7 +254,6 @@ export function runFilm(args, root = process.cwd()) {
       "storyboard",
       "poster",
       "import",
-      "scope",
       "doctor",
       "new",
     ].includes(command);

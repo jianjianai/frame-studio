@@ -52,6 +52,24 @@ test(
         },
       });
       assert.equal(busy.structuredContent.error.code, "PROJECT_BUSY");
+      assert.equal(
+        busy.structuredContent.error.details.activeOperation.jobId,
+        started.id,
+      );
+      assert.equal(
+        busy.structuredContent.error.details.activeOperation.cancellable,
+        true,
+      );
+      const operation = await call(client, "frame_project_operation", {
+        project: "test-film",
+      });
+      assert.equal(operation.actions.cancel.arguments.jobId, started.id);
+      const waiting = await call(client, "frame_job", {
+        project: "test-film",
+        jobId: started.id,
+        waitMs: 20000,
+      });
+      assert.ok(["running", "succeeded"].includes(waiting.status));
       const frame = await waitForJob(client, "test-film", started.id);
       assert.equal(frame.status, "succeeded", JSON.stringify(frame));
       assert.equal(frame.sourceChanged, false);

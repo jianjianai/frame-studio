@@ -82,10 +82,14 @@ export function safePath(base, relative, { internal = false } = {}) {
 }
 
 export class Workspace {
-  constructor(root, { projects = [], readOnly = false } = {}) {
+  constructor(
+    root,
+    { projects = [], readOnly = false, sessionId = randomUUID() } = {},
+  ) {
     this.root = fs.realpathSync(root);
     this.projects = new Set(projects);
     this.readOnly = readOnly;
+    this.sessionId = sessionId;
     for (const id of projects)
       if (!validProjectId(id))
         fail("INVALID_PROJECT", "Invalid project id: " + id);
@@ -307,7 +311,117 @@ export class Workspace {
         .join("\n"),
     );
   }
-  lock(id, purpose) {
+  operation(id) {
+    const folder = this.project(id);
+    const cache = safePath(folder, ".cache/mcp", { internal: true });
+    const lock = safePath(folder, ".cache/mcp/operation.lock", {
+      internal: true,
+    });
+    const transactions =
+      fs.existsSync(cache) &&
+      fs.readdirSync(cache).some((name) => name.startsWith("transaction-"));
+    if (!fs.existsSync(lock))
+      return {
+        busy: false,
+        status: transactions ? "recovery_required" : "idle",
+        recoverable: false,
+        transactions: !!transactions,
+      };
+    let record;
+    try {
+      const stat = fs.statSync(lock);
+      if (!stat.isFile() || stat.nlink > 1 || stat.size > 8192)
+        throw new Error();
+      record = JSON.parse(fs.readFileSync(lock, "utf8"));
+      if (!record || !Number.isInteger(record.pid) || record.pid <= 0)
+        throw new Error();
+    } catch {
+      return {
+        busy: true,
+        status: "unknown",
+        stale: null,
+        recoverable: false,
+        cancellable: false,
+        message:
+          "Lock is unreadable or invalid; preserve it for manual recovery.",
+      };
+    }
+    const alive = (pid) => {
+      if (!Number.isInteger(pid) || pid <= 0) return null;
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch (error) {
+        return error.code === "ESRCH" ? false : null;
+      }
+    };
+    const ownerAlive = alive(record.pid);
+    const workerAlive = record.jobId ? alive(record.childPid) : false;
+    const stale = ownerAlive === false && workerAlive === false;
+    const identified =
+      record.version === 2 && /^[\da-f-]{36}$/.test(record.lockId ?? "");
+    let jobFinished = !record.jobId;
+    if (record.jobId && /^[\da-f-]{36}$/.test(record.jobId)) {
+      try {
+        const report = this.file(id, `exports/mcp/${record.jobId}/job.json`);
+        if (fs.statSync(report).size <= MAX_FILE) {
+          const state = JSON.parse(fs.readFileSync(report, "utf8"));
+          jobFinished =
+            state.id === record.jobId &&
+            state.project === id &&
+            ["succeeded", "failed", "cancelled", "timed_out"].includes(
+              state.status,
+            );
+        }
+      } catch {}
+    }
+    return {
+      busy: true,
+      status: stale ? "stale" : ownerAlive === true ? "running" : "unobserved",
+      lockId: record.lockId ?? null,
+      jobId: record.jobId ?? null,
+      kind: record.purpose,
+      startedAt: record.startedAt,
+      ownerSession: record.ownerSession ?? null,
+      sameSession: record.ownerSession === this.sessionId,
+      ownerAlive,
+      workerAlive,
+      stale,
+      transactions: !!transactions,
+      jobFinished,
+      cancellable: false,
+      recoverable: identified && stale && !transactions && jobFinished,
+      nextAction:
+        stale && identified && !transactions && jobFinished
+          ? "Recover this exact lockId with frame_recover_operation or film operation --recover."
+          : "Query the job or wait. Never delete a live, unknown, legacy or unfinished-transaction lock. An unfinished crashed job needs process-tree inspection before recovery.",
+    };
+  }
+  recoverOperation(id, expectedLockId) {
+    this.writable();
+    const operation = this.operation(id);
+    if (!operation.busy) return { recovered: false, ...operation };
+    if (
+      !operation.recoverable ||
+      !expectedLockId ||
+      operation.lockId !== expectedLockId
+    )
+      fail(
+        "RECOVERY_REFUSED",
+        "Only the exact identified lock with both owner and worker confirmed exited can be recovered, without unfinished transactions.",
+        { activeOperation: operation },
+      );
+    const lock = this.file(id, ".cache/mcp/operation.lock", true);
+    const current = this.operation(id);
+    if (!current.recoverable || current.lockId !== expectedLockId)
+      fail(
+        "VERSION_CONFLICT",
+        "Operation changed during recovery; inspect it again.",
+      );
+    fs.unlinkSync(lock);
+    return { recovered: true, lockId: expectedLockId, status: "idle" };
+  }
+  lock(id, purpose, { jobId = null } = {}) {
     this.writable();
     const folder = this.project(id);
     const cache = safePath(folder, ".cache/mcp", { internal: true });
@@ -322,21 +436,23 @@ export class Workspace {
       if (error.code === "EEXIST")
         fail(
           "PROJECT_BUSY",
-          "Project has an active operation or a crash lock. Inspect " +
-            lock +
-            " before recovery.",
+          "Project is busy. Query its active operation; serialize writes and rendering for this project.",
+          { activeOperation: this.operation(id), retryable: true },
         );
       throw error;
     }
+    const record = {
+      version: 2,
+      lockId: randomUUID(),
+      ownerSession: this.sessionId,
+      pid: process.pid,
+      purpose,
+      jobId,
+      childPid: null,
+      startedAt: new Date().toISOString(),
+    };
     try {
-      fs.writeFileSync(
-        fd,
-        JSON.stringify({
-          pid: process.pid,
-          purpose,
-          startedAt: new Date().toISOString(),
-        }),
-      );
+      fs.writeFileSync(fd, JSON.stringify(record));
     } finally {
       fs.closeSync(fd);
     }
@@ -350,12 +466,28 @@ export class Workspace {
       );
     }
     let released = false;
-    return () => {
+    const release = () => {
       if (!released) {
-        fs.unlinkSync(lock);
+        if (fs.existsSync(lock)) {
+          const current = JSON.parse(fs.readFileSync(lock, "utf8"));
+          if (current.lockId !== record.lockId)
+            fail(
+              "LOCK_CHANGED",
+              "Operation lock ownership changed; preserving it.",
+            );
+          fs.unlinkSync(lock);
+        }
         released = true;
       }
     };
+    release.update = (values) => {
+      const current = JSON.parse(fs.readFileSync(lock, "utf8"));
+      if (current.lockId !== record.lockId)
+        fail("LOCK_CHANGED", "Operation lock ownership changed.");
+      Object.assign(record, values);
+      fs.writeFileSync(lock, JSON.stringify(record));
+    };
+    return release;
   }
   edit(id, changes, { dryRun = false, restoring = false } = {}) {
     this.writable();

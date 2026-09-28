@@ -58,6 +58,13 @@ try {
           auth: config.mode,
           projects: config.projects.length ? config.projects : "*",
           readOnly: config.readOnly,
+          permissions: {
+            projectScope: config.projects.length ? "allowlist" : "all",
+            allowedScopes: config.allowedScopes,
+            bearerScopes: config.bearerScopes,
+            serverPerCallApproval: false,
+            clientApprovalPolicy: "controlled_by_client",
+          },
           tunnel,
           liveConnection: "not_checked",
         }),

@@ -21,6 +21,7 @@ import {
 import { startRemoteServer } from "../../scripts/mcp/remote-http.mjs";
 import { tunnelCommand, startTunnel } from "../../scripts/mcp/tunnel.mjs";
 import { launchBrowser } from "../../scripts/browser.mjs";
+import sharp from "sharp";
 
 const secret = () => randomBytes(32).toString("base64url");
 const callback = "https://ai.example/callback";
@@ -819,6 +820,92 @@ test(
   },
 );
 
+test("HTTP preserves native/image-only PNG content and full workspace permissions", async () => {
+  const f = fixture();
+  let app, client;
+  try {
+    app = await running(f, { FRAME_MCP_PROJECTS: "*" });
+    client = await connect(app);
+    const tools = (await client.listTools()).tools;
+    assert.equal(
+      tools.find((t) => t.name === "frame_edit_files").annotations.readOnlyHint,
+      false,
+    );
+    assert.ok(tools.some((t) => t.name === "frame_recover_operation"));
+    const created = await call(client, "frame_create_project", {
+      project: "second-film",
+      title: "Full workspace",
+      renderer: "canvas",
+    });
+    assert.equal(created.id, "second-film");
+    const id = "a91b029c-b073-4e3e-91af-2ba1cacd0123";
+    const folder = f.file(`exports/mcp/${id}`);
+    fs.mkdirSync(folder, { recursive: true });
+    const png = await sharp({
+      create: { width: 320, height: 180, channels: 3, background: "#345678" },
+    })
+      .png()
+      .toBuffer();
+    fs.writeFileSync(path.join(folder, "frame.png"), png);
+    fs.writeFileSync(
+      path.join(folder, "job.json"),
+      JSON.stringify({
+        id,
+        project: "test-film",
+        status: "succeeded",
+        artifacts: [{ name: "frame.png" }],
+      }),
+    );
+    const args = { project: "test-film", jobId: id, name: "frame.png" };
+    const normal = await client.callTool({
+      name: "frame_read_artifact",
+      arguments: args,
+    });
+    assert.equal(normal.content[0].type, "image");
+    assert.deepEqual(Buffer.from(normal.content[0].data, "base64"), png);
+    assert.ok(normal.structuredContent.remoteArtifacts.length);
+    const response = await fetch(app.config.resource, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + app.config.bearerToken,
+        "Content-Type": "application/json",
+        Accept: "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2025-11-25",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 44,
+        method: "tools/call",
+        params: {
+          name: "frame_read_artifact",
+          arguments: { ...args, presentation: "image-only" },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    const result = (
+      body.startsWith("{")
+        ? JSON.parse(body)
+        : JSON.parse(
+            body
+              .split("\n")
+              .find((s) => s.startsWith("data:"))
+              .slice(5),
+          )
+    ).result;
+    assert.deepEqual(
+      result.content.map((c) => c.type),
+      ["image"],
+    );
+    assert.deepEqual(Buffer.from(result.content[0].data, "base64"), png);
+  } finally {
+    await client?.close();
+    await app?.close();
+    f.close();
+  }
+});
+
 test(
   "browser consent preserves cookies, submits owner password and reaches the allowed external callback",
   { timeout: 60000 },
@@ -829,6 +916,11 @@ test(
       // A real second origin avoids depending on interception of redirect chains.
       // Loopback HTTP is the OAuth exception; production callback configuration requires HTTPS.
       callbackServer = http.createServer((request, response) => {
+        if (new URL(request.url, "http://localhost").pathname !== "/callback") {
+          response.writeHead(404);
+          response.end();
+          return;
+        }
         callbackReferer = request.headers.referer;
         response.writeHead(200, { "Content-Type": "text/html" });
         response.end("<h1>OAuth callback received</h1>");

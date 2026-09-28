@@ -41,6 +41,7 @@
 | ---------------------------------- | ------------------------------------------ |
 | frame_list_projects                | 静态发现项目；个别损坏项目单独报告         |
 | frame_project_context              | 元数据、音轨、README、约定与 Git 基线      |
+| frame_project_operation / frame_recover_operation | 查询占锁任务与恢复已确认退出的遗留锁 |
 | frame_read_reference               | 读取固定的创作规范、接口与公共引擎类型     |
 | frame_list_files / frame_read_file | 有界文件列表、UTF-8 分页读取及内容哈希     |
 | frame_create_project               | 调用既有脚手架，拒绝覆盖                   |
@@ -78,3 +79,21 @@ frame_start_review、frame_start_export、frame_start_validation 等任务完成
 服务只应接入可信本地 checkout。项目渲染会运行浏览器代码，Vite、依赖和配置运行在本机权限下；路径检查和静态检查不构成操作系统沙箱。远程入口已提供单个工作区所有者的身份验证、授权和项目范围控制；多人不可信托管仍需额外的每任务容器/独立 checkout、配额、网络隔离和持久队列。
 
 服务不接管模型 API、不自动提交/发布、不修改客户端的个人配置。远程认证配置保存在本机忽略的环境文件，OAuth 状态保存在私有目录；使用与验证记录见根 records。
+
+## 连续工作、检查与图片兼容
+
+`frame_check_project` 完成检查后返回普通结果：`status: completed`、综合 `passed`、`projectPassed`、`scopeVerified`，以及独立的 `structure` 和 `scope`。不合格报告不设置 `isError`；无法执行 Git 检查、参数错误等执行故障仍返回工具错误。结构通过时可以继续预览，不能把它说成范围检查或成片验收通过。
+
+scope 保持严格判定，分类返回本项目变更、`externalWorkspaceChanges.projects` 和公共文件 `shared`，带总数、有限路径样本和截断标志。`attribution: unknown` 表示不能从共享 checkout 判断修改作者；不能忽略其他工程文件来伪造范围通过。CLI 使用 `pnpm film scope <id> --json` 获得同一报告，范围不通过仍退出 1，检查无法执行退出 2。
+
+同项目的写入、验证、渲染串行执行。遇到 `PROJECT_BUSY`，读取 `error.details.activeOperation`，其中提供任务 ID、操作类型、开始时间、实例身份、存活判断、可取消状态和调用参数；也可调用只读的 `frame_project_operation`。`frame_job` 支持 `waitMs: 20000`，任务结束即返回，否则最多等待 20 秒，避免快速轮询。不能取消其他授权主体的任务。
+
+`frame_recover_operation` 必须带查询返回的精确 `lockId`。仅恢复新格式、所有者和工作进程均已退出、没有未完成事务、关联任务已经结束（或没有关联任务）的锁。旧锁、PID 仍存活、状态未知、未完成崩溃任务均保留现场；不按锁龄自动删除。CLI 对应 `pnpm film operation <id> --json` 和 `pnpm film operation <id> --recover <lock-id> --json`。
+
+PNG 回读与审片工具支持 `presentation`：
+
+- `native`（默认）：先返回原生图片，再返回原图/显示图尺寸、SHA-256、体积与是否变换的元数据。
+- `image-only`：仅返回原生图片，适用于混合内容被连接器遗漏的情况，不附加文本或下载链接。
+- `metadata`：只返回源图信息，远程模式附加需要认证的下载入口。
+
+`maxWidth` 默认 1600、可设 320～2048，同时约束显示图的最长边；内联 PNG 不超过 1 MiB，必要时进一步缩小。源图最多 32 MiB、4000 万像素，原文件不变。需要看细节时生成单帧或较少帧的分镜。报告中的 `visualInspection: not_confirmed` 不会因图片成功返回而自动改变，必须真实看图后记录审阅。

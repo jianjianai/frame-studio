@@ -9,12 +9,18 @@ import { ProjectService as Workspace } from "../project-service.mjs";
 import { Jobs } from "./jobs.mjs";
 import { compareReviews, recordReview } from "../production-media.mjs";
 import { runProcess } from "../project-execution.mjs";
+import { inspectProjectScope } from "../project-scope-report.mjs";
+import { imageResult } from "./image-result.mjs";
 
 const project = z.string().refine(validProjectId, "Invalid project id");
 const filePath = z.string().min(1).max(512);
 const jobId = z.string().uuid();
 const width = z.number().int().min(320).max(3840).multipleOf(32);
 const seconds = z.number().finite().nonnegative();
+const imageOptions = {
+  presentation: z.enum(["native", "image-only", "metadata"]).default("native"),
+  maxWidth: z.number().int().min(320).max(2048).default(1600),
+};
 const refs = {
   rules: "AGENTS.md",
   standard: "docs/NEW-PROJECT-STANDARD.md",
@@ -39,7 +45,11 @@ export function createFrameServer({
   jobManager,
   decorateResult = (value) => value,
 }) {
-  const workspace = new Workspace(root, { projects, readOnly });
+  const workspace = new Workspace(root, {
+    projects,
+    readOnly,
+    sessionId: jobManager?.workspace.sessionId,
+  });
   const jobs = jobManager ?? new Jobs(workspace, { timeoutMs });
   const writeTools = new Set();
   const reference = (name) => {
@@ -57,7 +67,7 @@ export function createFrameServer({
     { name: "frame-animation", version: "1.0.0" },
     {
       instructions:
-        "Edit one FRAME animation project at a time. Begin with frame_project_context and its references. Read files for SHA-256 before editing. Changes stay in projects/<id>/. Check structure, inspect PNG previews, then render. Structural validation is not visual/audio acceptance. Rendering executes trusted local project code.",
+        "Edit one FRAME animation project at a time. Begin with frame_project_context and its references. Read files for SHA-256 before editing. Changes stay in projects/<id>/. Serialize writes and render/validation jobs in one project; different projects can run concurrently. PROJECT_BUSY includes the active job and available actions: query it, wait, or cancel only your own job. A completed check with passed=false is a report, not a malformed tool call. External workspace changes have unknown authors and do not invalidate a passing structural check. Inspect native PNG images; retry presentation=image-only if the client omits the image. Never claim visual/audio review from a file path or metadata. Rendering executes trusted local project code. Authenticated in-scope operations execute without an additional server approval step; the client controls its own approval policy.",
     },
   );
   const register = (
@@ -85,6 +95,14 @@ export function createFrameServer({
         try {
           return decorateResult(await handler(args));
         } catch (error) {
+          if (error.code === "PROJECT_BUSY" && args.project) {
+            try {
+              error.details = {
+                ...error.details,
+                activeOperation: jobs.operation(args.project),
+              };
+            } catch {}
+          }
           return jsonResult(
             {
               error: {
@@ -116,7 +134,25 @@ export function createFrameServer({
     "frame_project_context",
     "Read this project's metadata, audio tracks, instructions, README, boundaries and Git baseline before editing.",
     { project },
-    ({ project: id }) => jsonResult(workspace.context(id)),
+    ({ project: id }) =>
+      jsonResult({
+        ...workspace.context(id),
+        activeOperation: jobs.operation(id),
+      }),
+  );
+  register(
+    "frame_project_operation",
+    "Inspect the current project operation, owning job, liveness and query/cancel/recovery actions without acquiring its lock.",
+    { project },
+    ({ project: id }) => jsonResult(jobs.operation(id)),
+  );
+  register(
+    "frame_recover_operation",
+    "Recover an identified stale lock only after both its owner and worker have exited and no unfinished transaction remains. Obtain lockId with frame_project_operation first.",
+    { project, lockId: z.string().uuid() },
+    ({ project: id, lockId }) =>
+      jsonResult(workspace.recoverOperation(id, lockId)),
+    { write: true },
   );
   register(
     "frame_list_files",
@@ -360,28 +396,32 @@ export function createFrameServer({
       reviewId: jobId,
       name: z.string().regex(/^[a-zA-Z0-9-]+\.(png|json|srt|wav|mp4|html)$/),
       inlineAudio: z.boolean().default(false),
+      ...imageOptions,
     },
-    ({ project: id, reviewId, name, inlineAudio }) => {
+    async ({
+      project: id,
+      reviewId,
+      name,
+      inlineAudio,
+      presentation,
+      maxWidth,
+    }) => {
       const path = workspace.file(id, `exports/reviews/${reviewId}/${name}`);
       const bytes = fs.statSync(path).size;
       if (/\.(mp4|html)$/.test(name) || (name.endsWith(".wav") && !inlineAudio))
         return jsonResult({ path, bytes });
-      if (bytes > 6 * 1024 * 1024)
+      if (bytes > (name.endsWith(".png") ? 32 : 6) * 1024 * 1024)
         fail(
           "TOO_LARGE",
           "Generate a smaller review or open the local artifact.",
         );
       const data = fs.readFileSync(path);
       if (name.endsWith(".png"))
-        return {
-          content: [
-            {
-              type: "image",
-              mimeType: "image/png",
-              data: data.toString("base64"),
-            },
-          ],
-        };
+        return imageResult(
+          data,
+          { path, name, bytes, mimeType: "image/png" },
+          { presentation, maxWidth },
+        );
       if (name.endsWith(".wav"))
         return {
           content: [
@@ -462,7 +502,7 @@ export function createFrameServer({
   );
   register(
     "frame_check_project",
-    "Run strict static project checks and the existing Git scope checker; report both independently. Does not execute tests or assert visual/audio quality.",
+    "Return completed strict structure and Git scope reports, including categorized external changes with unknown authors. passed=false is a normal check result, not a tool error. Does not execute tests or assert visual/audio quality.",
     {
       project,
       base: z
@@ -472,31 +512,26 @@ export function createFrameServer({
     },
     ({ project: id, base }) => {
       const structure = workspace.check(id);
-      const result = spawnSync(
-        process.execPath,
-        [
-          fileURLToPath(new URL("../project-scope.mjs", import.meta.url)),
-          id,
-          ...(base ? ["--base", base] : []),
-        ],
-        {
-          cwd: workspace.root,
-          encoding: "utf8",
-          windowsHide: true,
-          timeout: 10000,
-          maxBuffer: 1024 * 1024,
-        },
-      );
-      const scope = {
-        passed: result.status === 0,
-        exitCode: result.status,
-        output: (result.stdout ?? "") + (result.stderr ?? ""),
-        error: result.error?.message,
-      };
-      return jsonResult(
-        { passed: structure.passed && scope.passed, structure, scope },
-        !structure.passed || !scope.passed,
-      );
+      let scope;
+      try {
+        scope = inspectProjectScope(workspace.root, id, { base });
+      } catch (error) {
+        fail("SCOPE_CHECK_FAILED", "Git scope inspection could not run.", {
+          structure,
+          reason: error.message,
+        });
+      }
+      return jsonResult({
+        status: "completed",
+        passed: structure.passed && scope.passed,
+        projectPassed: structure.passed,
+        scopeVerified: scope.passed,
+        structure,
+        scope,
+        nextAction: !structure.passed
+          ? "Fix the structural errors before rendering."
+          : scope.nextAction,
+      });
     },
   );
   register(
@@ -537,12 +572,14 @@ export function createFrameServer({
   );
   register(
     "frame_job",
-    "Read job state, bounded log, source-change status and artifact links. Unfinished jobs owned by another/previous session are unobserved, never assumed successful.",
+    "Read job state, bounded log, source-change status and artifact links. Use waitMs=20000 to wait for this session's running job and reduce repeated polling. Unknown-session jobs are unobserved, never assumed successful.",
     {
       project,
       jobId,
+      waitMs: z.number().int().min(0).max(20000).default(0),
     },
-    ({ project: id, jobId }) => jsonResult(jobs.status(id, jobId)),
+    async ({ project: id, jobId, waitMs }) =>
+      jsonResult(await jobs.wait(id, jobId, waitMs)),
   );
   register(
     "frame_cancel_job",
@@ -556,22 +593,21 @@ export function createFrameServer({
   );
   register(
     "frame_read_artifact",
-    "Return a successful job's PNG as a native MCP image, JSON as text, or an MP4 local path/resource link. Does not load arbitrary files.",
+    "Read a successful job artifact. PNG returns a bounded native image with dimensions/hashes; use presentation=image-only if the client drops mixed content, or metadata for download details. Files remain unchanged; returning an image is not proof the model inspected it.",
     {
       project,
       jobId,
       name: z.string().min(1).max(120),
+      ...imageOptions,
     },
-    ({ project: id, jobId, name }) => {
-      const { info, bytes } = jobs.artifact(id, jobId, name);
-      const result = jsonResult(info);
+    async ({ project: id, jobId, name, presentation, maxWidth }) => {
+      const { info, bytes } = jobs.artifact(id, jobId, name, {
+        maxImageBytes: 32 * 1024 * 1024,
+      });
       if (info.mimeType === "image/png")
-        result.content.push({
-          type: "image",
-          data: bytes.toString("base64"),
-          mimeType: info.mimeType,
-        });
-      else if (info.mimeType === "application/json")
+        return imageResult(bytes, info, { presentation, maxWidth });
+      const result = jsonResult(info);
+      if (info.mimeType === "application/json")
         result.content.push({ type: "text", text: bytes.toString("utf8") });
       else
         result.content.push({

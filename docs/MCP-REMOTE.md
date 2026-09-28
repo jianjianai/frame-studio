@@ -94,6 +94,34 @@ Authorization: Bearer <FRAME_MCP_BEARER_TOKEN>
 
 `FRAME_MCP_AUTH_MODE=oauth` 只启用 OAuth；`bearer` 只启用静态 token；`both` 同时启用。Bearer-only 模式不提供授权服务器端点。
 
+## 全部项目读写与逐次审批
+
+本机私有 `.env` 使用以下配置，允许创建任意新项目并操作全部已有项目：
+
+```dotenv
+FRAME_MCP_PROJECTS=*
+FRAME_MCP_READ_ONLY=false
+FRAME_MCP_BEARER_SCOPES="frame:read frame:write"
+```
+
+修改后重启 MCP。OAuth 客户端需获得 `frame:read frame:write`，已有只读授权不会被静默升级。`mcp-remote check --json` 的 `permissions` 返回项目范围、可授予权限、Bearer 权限、服务端是否逐次确认和客户端审批归属。
+
+服务端验证身份和权限后直接执行，没有逐次人工确认步骤。这里的完整权限指本工作区所有项目的制作能力，路径边界、版本冲突和操作锁继续有效。
+
+ChatGPT 网页端的确认框由 ChatGPT 控制，MCP 服务器不能通过 `.env` 关闭，也不能把编辑/渲染伪装成只读。将 Frame Studio 的应用权限设为“允许所有操作”（`full_access`）可以取消该应用的逐次询问；通过应用权限管理接口修改后应回读确认。该设置只作用于指定应用，不需要更改全局权限。修改服务器本身不能证明网页端已免审批。自己的 OpenAI Responses API 客户端可以设置 MCP 工具参数 `require_approval: "never"`；该参数属于 API 请求，不能填进 `.env` 冒充 ChatGPT 网页设置。[OpenAI 官方审批说明](https://developers.openai.com/api/docs/guides/tools-connectors-mcp)
+
+```javascript
+const frameTool = {
+  type: "mcp",
+  server_label: "frame_studio",
+  server_url: "https://your-mcp-domain/mcp",
+  authorization: process.env.FRAME_MCP_BEARER_TOKEN,
+  require_approval: "never",
+};
+```
+
+OAuth 首次登录用于确认访问者身份，与每次工具操作的审批不同；远程身份认证保持有效，不开放匿名写入。
+
 ## 配置表
 
 | 配置                                | 默认/要求                                                               |
@@ -120,7 +148,7 @@ Authorization: Bearer <FRAME_MCP_BEARER_TOKEN>
 
 ## 外部 AI 读取产物
 
-现有 28 个制作工具与 stdio 共用实现。`frame_read_artifact` 等结果中的本机产物会附加 HTTPS `resource_link` 和 `structuredContent.remoteArtifacts`。下载限于已授权项目的 `exports/`，支持 Range、HEAD 和流式传输，不开放仓库根目录、源码配置或私有状态。PNG 原生图片回读、JSON 回读和显式的 WAV 内联音频仍可使用。
+现有 30 个制作工具与 stdio 共用实现。`frame_read_artifact` 等结果中的本机产物会附加 HTTPS `resource_link` 和 `structuredContent.remoteArtifacts`（纯图片模式不附加链接）。下载限于已授权项目的 `exports/`，支持 Range、HEAD 和流式传输，不开放仓库根目录、源码配置或私有状态。PNG 原生图片回读、JSON 回读和显式的 WAV 内联音频仍可使用。
 
 远程链接也要求 Authorization 头，没有公共分享链接或 URL token。某些 AI 客户端不能为资源下载附加请求头；这些客户端可用工具内联回读图像/报告，视频需要通过支持认证下载的客户端或本机查看。返回链接不代表模型已看完视频或听过音频。
 
