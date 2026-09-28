@@ -13,7 +13,16 @@ test("opaque server preview plays sampled audio without same-origin permission",
     const response = await route.fetch();
     await route.fulfill({
       response,
-      headers: { ...response.headers(), "access-control-allow-origin": "*" },
+      headers: {
+        ...response.headers(),
+        "access-control-allow-origin": "*",
+        ...(route.request().url().includes("?debug")
+          ? {
+              "content-security-policy":
+                "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'",
+            }
+          : {}),
+      },
     });
   });
   await page.goto("/");

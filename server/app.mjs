@@ -125,7 +125,7 @@ export async function createApp({
     await db.one("SELECT 1");
     return {
       status: "ok",
-      version: "2.0.1",
+      version: "2.0.2",
       revision: process.env.FRAME_REVISION || "development",
     };
   });
@@ -293,7 +293,7 @@ export async function createApp({
       throw problem(404, "Not found");
     res.header(
       "Content-Security-Policy",
-      "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'",
+      "sandbox allow-scripts; default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'",
     );
     res.header("Access-Control-Allow-Origin", "*");
     res.type(types[path.extname(file)] || "application/octet-stream");
@@ -301,7 +301,7 @@ export async function createApp({
   });
   const mcp = createMcpHandler(
     () => {
-      const server = new McpServer({ name: "frame-studio", version: "2.0.1" });
+      const server = new McpServer({ name: "frame-studio", version: "2.0.2" });
       for (const [name, op] of Object.entries(actions.registry)) {
         if (
           name.startsWith("settings_") ||
