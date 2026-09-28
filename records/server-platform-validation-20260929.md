@@ -22,7 +22,11 @@
 2. the-learning-machine 音轨隔离测量中 foley 窗口峰值为 0，未满足阈值。
 3. 该作品历史 R2 音轨测试直接从构建预览服务动态导入源 `.ts` 路径，HTTP 模块获取失败。
 
-这些 `src/`、`projects/` 和 `tests/e2e/` 文件相对基线均未修改。本次未改写作品内容或降低旧测试断言。完整 verify 因此非零；平台测试与平台构建已单独执行并通过，不能将其替代为完整回归通过。
+上述完整回归运行时，这些 `src/`、`projects/` 和 `tests/e2e/` 文件相对基线均未修改。本次未改写作品内容或降低旧测试断言。完整 verify 因此非零；平台测试与平台构建已单独执行并通过，不能将其替代为完整回归通过。
+
+## 2.0.1 上线验收修正
+
+对真实既有作品进行上线后的 sandbox 实播时发现，浏览器拒绝不透明源 iframe 创建外部 URL 音频 Worker。公共音频线程改用 Vite 的内联经典 Blob Worker（IIFE），保持 iframe 的权限隔离。新增 `tests/e2e/server-preview.spec.ts` 已通过：iframe 的 origin 为 null，同时采样配乐进入 running，时间推进到 0.77 秒，无错误。修正后 TypeScript、99 项单元测试与 6 项音频浏览器专项通过；线上继续以实际声音播放状态验收。
 
 ## 发布约束
 
