@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "transaction": "38168fb0-4697-416b-a896-379a19632ec4",
+  "time": "2026-09-28T13:52:31.584Z",
+  "changes": [
+    {
+      "path": "records/r3-review.md",
+      "operation": "replace",
+      "beforeSha256": "a53de09420f1c68306bdbffdff27622809257790c650f8082f8f1b915f4fe4b1",
+      "afterSha256": "8a8107f313d8742affd8b92b66750058a839ea22eacee2ee0a4dc084896359cb"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}

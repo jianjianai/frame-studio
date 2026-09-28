@@ -10,7 +10,7 @@ type Probe = {
 };
 declare global { interface Window { learningAudioProbe: Probe } }
 
-test('first half plays audible audio with a bounded graph, then supports seek, rate and mute', async ({ page }) => {
+test('R3 first half has measured audio output and a bounded graph, then supports seek, rate and mute', async ({ page }) => {
   test.setTimeout(150000);
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -58,7 +58,7 @@ test('first half plays audible audio with a bounded graph, then supports seek, r
   await page.evaluate(() => window.__FRAME_STUDIO__!.waitUntilReady!({ audio: true }));
   await page.getByTestId('play-toggle').click();
   const initial = await page.evaluate(() => window.learningAudioProbe.created);
-  expect(initial, 'startup must not allocate the whole 153.6-second score').toBeLessThan(200);
+  expect(initial, 'file-track startup must retain a bounded audio graph').toBeLessThan(200);
 
   const sustained = await page.evaluate(async () => {
     const probe = window.learningAudioProbe;
@@ -95,13 +95,14 @@ test('first half plays audible audio with a bounded graph, then supports seek, r
     await page.evaluate(() => window.__FRAME_STUDIO__!.pause!());
     expect(await page.evaluate(() => window.learningAudioProbe.connected)).toBe(0);
   }
-  // Each track remains independently audible; muting all four produces silence.
-  for (const track of ['voice', 'drums', 'music', 'fx', 'none']) {
+  // Preserve the original live-output regression, adapted to the R3 three file tracks.
+  // The old R2 generator and its independent scheduler unit tests remain intact.
+  for (const track of ['voice', 'music', 'foley', 'none']) {
     const peak = await page.evaluate(async track => {
       const api = window.__FRAME_STUDIO__!, probe = window.learningAudioProbe;
       api.setRate!(1);
-      for (const id of ['voice', 'drums', 'music', 'fx']) api.setTrack!(id, { muted: id !== track });
-      await api.captureAt!(0, { audio: true }); await api.play!();
+      for (const id of ['voice', 'music', 'foley']) api.setTrack!(id, { muted: id !== track });
+      await api.captureAt!(track === 'foley' ? 10.95 : 0, { audio: true }); await api.play!();
       const values = new Float32Array(probe.meter!.fftSize);
       let peak = 0;
       for (let i = 0; i < 12; i++) {
@@ -118,5 +119,5 @@ test('first half plays audible audio with a bounded graph, then supports seek, r
   expect(result.diagnostics.errors).toEqual([]);
   expect(result.connected).toBe(0);
   expect(errors).toEqual([]);
-  console.info('R2_PREVIEW_AUDIO', JSON.stringify({ initial, peak: result.peak, before: sustained.before, after: sustained.after, samples: sustained.readings.length, time: sustained.state.time }));
+  console.info('R3_PREVIEW_AUDIO', JSON.stringify({ initial, peak: result.peak, before: sustained.before, after: sustained.after, samples: sustained.readings.length, time: sustained.state.time }));
 });

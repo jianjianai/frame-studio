@@ -1,2 +1,2 @@
-// R2 replaces the rejected scene; the standard project entrypoint remains stable.
-export {createScene} from './r2/scene';
+// Stable Frame Studio entrypoint. The previous R2 implementation is preserved.
+export {createScene} from './r3/scene';

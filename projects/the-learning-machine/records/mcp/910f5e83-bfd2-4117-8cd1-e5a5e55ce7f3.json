@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "transaction": "910f5e83-bfd2-4117-8cd1-e5a5e55ce7f3",
+  "time": "2026-09-28T13:24:43.954Z",
+  "changes": [
+    {
+      "path": "r3/acts-futures.ts",
+      "operation": "create",
+      "beforeSha256": null,
+      "afterSha256": "531c645602dd3f9533303fe7dafcc902b2771917723ab4be60355958c913dfb5"
+    }
+  ],
+  "validation": {
+    "passed": true,
+    "errors": 0,
+    "warnings": 0
+  }
+}
