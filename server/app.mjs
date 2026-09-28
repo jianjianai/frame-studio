@@ -25,6 +25,10 @@ import { Tasks } from "./tasks.mjs";
 import { operations } from "./operations.mjs";
 import { agentTools } from "./agent-tools.mjs";
 import { browserPreview } from "./browser-preview.mjs";
+import { Connections } from "./connections.mjs";
+import { GitHub } from "./github.mjs";
+import { Retention } from "./retention.mjs";
+import { sendMedia } from "./media.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
@@ -44,7 +48,35 @@ export async function createApp({
     repos = new Repositories(db, data, secrets),
     assets = new Assets(db, data, repos),
     tasks = new Tasks(db, data, repos, secrets);
-  const actions = operations({ db, data, repos, assets, tasks, secrets });
+  const connections = new Connections(db, data, secrets),
+    github = new GitHub(db, secrets, repos, data),
+    retention = new Retention(db, data);
+  connections.github = github;
+  tasks.connections = connections;
+  const actions = operations({
+    db,
+    data,
+    repos,
+    assets,
+    tasks,
+    secrets,
+    connections,
+    github,
+    retention,
+  });
+  repos.onChange = async (id, project = null) => {
+    if (!project) await assets.indexRepository(id);
+    await actions.works.discover(id, project);
+    assets.scans?.delete(id);
+    assets.scans?.delete("all");
+  };
+  await connections.migrate();
+  await github.migrate();
+  await assets.migrate();
+  await actions.works.discover();
+  await db.pool.query(
+    "UPDATE tasks SET expires=finished+interval '7 days' WHERE finished IS NOT NULL AND expires IS NULL",
+  );
   if (!(await db.one("SELECT id FROM engines LIMIT 1")))
     await db.pool.query(
       "INSERT INTO engines(id,name,config) VALUES($1,$2,$3)",
@@ -66,6 +98,7 @@ export async function createApp({
         "req.headers.authorization",
         "req.headers.cookie",
         "res.headers.set-cookie",
+        "req.url",
       ],
     },
     bodyLimit: 2 * 1024 * 1024,
@@ -136,7 +169,7 @@ export async function createApp({
     await db.one("SELECT 1");
     return {
       status: "ok",
-      version: "3.0.0",
+      version: "4.0.0",
       revision: process.env.FRAME_REVISION || "development",
     };
   });
@@ -185,7 +218,7 @@ export async function createApp({
             ? "image/jpeg"
             : "image/webp",
     );
-    return fs.createReadStream(file);
+    return sendMedia(req, res, file, { cache: 300 });
   });
   app.get("/api/actions", async () =>
     Object.fromEntries(
@@ -211,10 +244,13 @@ export async function createApp({
         } else fields[part.fieldname] = part.value;
       }
       if (!metadata.name) throw problem(400, "File required");
+      if (!fields.repo || !/^[0-9a-f-]{36}$/.test(String(fields.repo)))
+        throw problem(400, "请选择素材所属仓库");
       return await assets.register(file, {
         ...metadata,
         license: String(fields.license || ""),
         tags: String(fields.tags || ""),
+        repo: fields.repo ? String(fields.repo) : null,
       });
     } finally {
       fs.rmSync(file, { force: true });
@@ -229,7 +265,7 @@ export async function createApp({
         "Content-Disposition",
         `attachment; filename*=UTF-8''${encodeURIComponent(a.name)}`,
       );
-    return fs.createReadStream(path.join(data, "blobs", a.sha));
+    return sendMedia(req, res, path.join(data, "blobs", a.sha));
   });
   app.post("/api/models/:id/upload", async (req) => {
     if (!/^[a-z][a-z0-9-]{0,63}$/.test(req.params.id))
@@ -295,7 +331,10 @@ export async function createApp({
     res
       .type(types[path.extname(file)] || "application/octet-stream")
       .header("Content-Disposition", "attachment");
-    return fs.createReadStream(file);
+    const release = retention.lease(task.id);
+    res.raw.once("close", release);
+    res.raw.once("finish", release);
+    return sendMedia(req, res, file, { cache: 0 });
   });
   app.post("/api/tasks/:id/preview", async (req) => {
     const t = await tasks.get(req.params.id);
@@ -312,18 +351,24 @@ export async function createApp({
       throw problem(404, "Not found");
     res.header(
       "Content-Security-Policy",
-      `sandbox allow-scripts${p.ai ? " allow-downloads" : ""}; default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'`,
+      `sandbox allow-scripts allow-downloads; default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'`,
     );
     res.header("Access-Control-Allow-Origin", "*");
     res.type(types[path.extname(file)] || "application/octet-stream");
-    return fs.createReadStream(file);
+    return sendMedia(req, res, file, {
+      cache: Math.max(
+        0,
+        Math.min(3600, Math.floor((p.expires - Date.now()) / 1000)),
+      ),
+      compress: /\.(js|css|json|svg|sf2)$/.test(file),
+    });
   });
   const mcp = createMcpHandler(
     () => {
-      const server = new McpServer({ name: "frame-studio", version: "3.0.0" });
+      const server = new McpServer({ name: "frame-studio", version: "4.0.0" });
       for (const [name, op] of Object.entries(actions.registry)) {
         if (
-          !/^(works_|upload_|assets_(list|update|trash|purge)$|task_(get|cancel)$|artifact_read$|engines_list$)/.test(
+          !/^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|cancel)$|artifact_read$|engines_list$)/.test(
             name,
           )
         )
@@ -389,9 +434,14 @@ export async function createApp({
     });
     app.setNotFoundHandler((req, res) => res.sendFile("index.html"));
   }
-  if (scheduler) tasks.startLoop();
+  if (scheduler) {
+    tasks.startLoop();
+    retention.start();
+  }
   app.addHook("onClose", async () => {
     tasks.close();
+    retention.close();
+    connections.close();
     await mcp.close();
     await db.pool.end();
   });

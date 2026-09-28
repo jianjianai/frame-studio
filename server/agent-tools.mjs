@@ -8,7 +8,10 @@ export function agentTools({ app, db, data, assets, actions }) {
     if (!task) throw problem(403, "Task credential required");
     const { name, args = {} } = req.body || {};
     if (name === "assets")
-      return actions.call("assets_list", { search: args.search || "" });
+      return actions.call("assets_list", {
+        search: args.search || "",
+        repo: task.repo,
+      });
     if (name === "engines") return actions.call("engines_list", {});
     if (name === "use" || name === "speech") {
       const asset =
@@ -17,10 +20,18 @@ export function agentTools({ app, db, data, assets, actions }) {
               await actions.call("speech_test", {
                 engine: args.engine,
                 text: args.text,
+                repo: task.repo,
                 ...(args.voice ? { voice: args.voice } : {}),
               })
             ).asset
           : await assets.get(args.asset);
+      if (
+        !(await db.one(
+          "SELECT asset FROM asset_repos WHERE asset=$1 AND repo=$2",
+          [asset.id, task.repo],
+        ))
+      )
+        throw problem(403, "Material does not belong to this repository");
       if (asset.deleted) throw problem(409, "Material is in recycle bin");
       const root = path.join(data, "runs", task.id, "projects", task.project),
         ext = path

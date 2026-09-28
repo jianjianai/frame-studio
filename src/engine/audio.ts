@@ -1,4 +1,5 @@
 import { Clock } from "./clock";
+import { MediaTracks } from "./media-tracks";
 import {
   prepareAudio,
   prepareAudioSegment,
@@ -11,7 +12,11 @@ export class AudioTransport {
   context?: AudioContext;
   private prepared?: PreparedAudio;
   private gain?: GainNode;
-  private graph?: { dispose(): void };
+  private graph?: {
+    dispose(): void;
+    setTrack?(id: string, control: { gain: number; muted: boolean }): boolean;
+  };
+  private media?: MediaTracks;
   private boundary?: AudioBufferSourceNode;
   private loadPromise?: Promise<void>;
   private closed = false;
@@ -40,6 +45,12 @@ export class AudioTransport {
         this.controls,
         signal,
       );
+    await this.media?.prepare(
+      this.clock.time(),
+      this.clock.rate,
+      this.controls,
+      signal,
+    );
     this.prepareMs = performance.now() - began;
   }
   constructor(
@@ -63,6 +74,16 @@ export class AudioTransport {
       this.gain.connect(this.context.destination);
       this.clock.seek(saved);
       this.applyGain();
+      this.media = new MediaTracks(
+        projectAudioTracks(this.project),
+        this.context,
+        this.gain,
+        this.project.duration,
+        () => {
+          if (this.requestedPlay && !this.buffering) this.restart();
+        },
+        (error) => this.report(error, this.generation),
+      );
     }
   }
   private async load(): Promise<void> {
@@ -72,6 +93,7 @@ export class AudioTransport {
       this.project,
       this.context!,
       this.abort.signal,
+      true,
     )
       .then((prepared) => {
         if (!this.closed) this.prepared = prepared;
@@ -104,16 +126,24 @@ export class AudioTransport {
           !this.prepared
         )
           return;
-        return prepareAudioSegment(
-          this.prepared,
-          this.context!,
-          this.clock.duration,
-          offset,
-          this.clock.duration - offset,
-          this.clock.rate,
-          this.controls,
-          request.signal,
-        );
+        return Promise.all([
+          this.media?.prepare(
+            offset,
+            this.clock.rate,
+            this.controls,
+            request.signal,
+          ),
+          prepareAudioSegment(
+            this.prepared,
+            this.context!,
+            this.clock.duration,
+            offset,
+            this.clock.duration - offset,
+            this.clock.rate,
+            this.controls,
+            request.signal,
+          ),
+        ]);
       })
       .catch(() => {
         // Playback will retry initialization and report actionable errors itself.
@@ -171,7 +201,10 @@ export class AudioTransport {
     if (!Number.isFinite(control.gain) || control.gain < 0 || control.gain > 4)
       throw new Error("无效音轨音量");
     this.controls.set(id, control);
-    if (this.requestedPlay) this.restart();
+    const mediaAdjusted = this.media?.setTrack(id, control);
+    const adjusted = this.graph?.setTrack?.(id, control) || mediaAdjusted;
+    if (this.requestedPlay && !adjusted && !control.muted && control.gain > 0)
+      this.restart();
   }
   setVolume(v: number): void {
     this.volume = Math.min(1, Math.max(0, v));
@@ -190,6 +223,7 @@ export class AudioTransport {
       );
   }
   private stopSource(): void {
+    this.media?.stop();
     if (this.boundary) {
       this.boundary.onended = null;
       this.boundary.stop();
@@ -240,16 +274,24 @@ export class AudioTransport {
     const request = (this.preparation = new AbortController());
     const offset = this.clock.time(),
       length = this.clock.duration - offset;
-    const pending = prepareAudioSegment(
-      this.prepared,
-      this.context,
-      this.clock.duration,
-      offset,
-      length,
-      this.clock.rate,
-      this.controls,
-      request.signal,
-    );
+    const pending = Promise.all([
+      this.media?.prepare(
+        offset,
+        this.clock.rate,
+        this.controls,
+        request.signal,
+      ),
+      prepareAudioSegment(
+        this.prepared,
+        this.context,
+        this.clock.duration,
+        offset,
+        length,
+        this.clock.rate,
+        this.controls,
+        request.signal,
+      ),
+    ]);
     const start = () => {
       if (this.closed || generation !== this.generation || !this.requestedPlay)
         return;
@@ -269,6 +311,12 @@ export class AudioTransport {
         this.clock.rate,
         this.controls,
         (error) => this.report(error, generation),
+      );
+      this.media?.start(
+        () => this.clock.time(),
+        this.clock.rate,
+        this.controls,
+        when,
       );
       const boundary = this.context!.createBufferSource();
       boundary.buffer = this.context!.createBuffer(
@@ -305,10 +353,14 @@ export class AudioTransport {
     this.closed = true;
     this.pause();
     this.abort.abort();
+    this.media?.dispose();
     if (this.context) this.prepared?.generated?.disposeAudio?.(this.context);
     this.prepared = undefined;
     this.gain?.disconnect();
     if (this.context && this.context.state !== "closed")
       await this.context.close();
+  }
+  bufferedRanges() {
+    return this.media?.ranges() || {};
   }
 }

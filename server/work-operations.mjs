@@ -2,6 +2,7 @@ import { z } from "zod";
 import { Works } from "./works.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { treeHash } from "./security.mjs";
+import { PREVIEW_VERSION } from "./preview-version.mjs";
 export function workOperations({
   add,
   registry,
@@ -27,15 +28,19 @@ export function workOperations({
       search: z.string().max(200).default(""),
       category: z.string().max(80).default(""),
       status: z.enum(["", "draft", "review", "finished"]).default(""),
+      repo: uuid.optional(),
+      recent: z.boolean().default(false),
+      limit: z.number().int().min(1).max(100).default(60),
+      offset: z.number().int().min(0).default(0),
     },
     (a) => works.list(a),
   );
   add(
     "works_create",
-    "Create a work. Default storage is automatic; no development repository is needed",
+    "Create a work in its own branch of the selected content repository",
     {
       title: z.string().trim().min(1).max(150),
-      repo: uuid.optional(),
+      repo: uuid,
       renderer: z.enum(["canvas", "pixi", "three"]).default("canvas"),
       duration: z.number().positive().max(3600).default(12),
       category: z.string().max(80).default(""),
@@ -57,8 +62,16 @@ export function workOperations({
   add(
     "works_trash",
     "Move a work to the recoverable recycle bin, or restore it; files and assets are retained",
-    { id: uuid, deleted: z.boolean() },
-    (a) => works.update(a.id, { deleted: a.deleted }),
+    { id: uuid, deleted: z.boolean(), confirm: z.string().optional() },
+    async (a) => {
+      const w = await works.get(a.id);
+      if (a.deleted && a.confirm !== w.title) {
+        const error = new Error("请输入完整作品名称确认删除");
+        error.statusCode = 400;
+        throw error;
+      }
+      return works.update(a.id, { deleted: a.deleted });
+    },
   );
   add(
     "works_duplicate",
@@ -76,11 +89,11 @@ export function workOperations({
       return {
         work,
         ...(await invoke("project_context", args)),
-        assets: (await assets.list()).filter((x) =>
-          x.refs.some(
-            (r) => r.repo === work.repo && r.project === work.project,
-          ),
-        ),
+        assets: await assets.list({
+          repo: work.repo,
+          project: work.project,
+          limit: 200,
+        }),
         tasks: await db.all(
           "SELECT * FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC LIMIT 60",
           [work.repo, work.project],
@@ -137,13 +150,20 @@ export function workOperations({
   add(
     "works_assets",
     "List materials present in a work",
-    { id: uuid },
+    {
+      id: uuid,
+      limit: z.number().int().min(1).max(200).default(60),
+      offset: z.number().int().min(0).default(0),
+    },
     async (a) => {
       const w = await works.get(a.id);
       await assets.importProject(w.repo, w.project);
-      return (await assets.list()).filter((x) =>
-        x.refs.some((r) => r.repo === w.repo && r.project === w.project),
-      );
+      return assets.list({
+        repo: w.repo,
+        project: w.project,
+        limit: a.limit,
+        offset: a.offset,
+      });
     },
   );
   add(
@@ -192,15 +212,13 @@ export function workOperations({
   );
   add(
     "works_versions",
-    "List recoverable work snapshots",
-    { id: uuid },
-    async (a) => {
-      await works.get(a.id);
-      return db.all(
-        "SELECT * FROM work_versions WHERE work=$1 ORDER BY created DESC",
-        [a.id],
-      );
+    "List independent Git history and legacy local snapshots of this work",
+    {
+      id: uuid,
+      limit: z.number().int().min(1).max(100).default(50),
+      offset: z.number().int().min(0).default(0),
     },
+    (a) => works.history(a.id, a.limit, a.offset),
   );
   add(
     "works_chat_send",
@@ -229,7 +247,7 @@ export function workOperations({
   add(
     "works_restore",
     "Restore a work snapshot, saving the current version first",
-    { id: uuid, version: uuid },
+    { id: uuid, version: z.union([uuid, z.string().regex(/^[a-f0-9]{40}$/)]) },
     (a) => works.restore(a.id, a.version),
   );
   add(
@@ -250,8 +268,8 @@ export function workOperations({
       const w = await works.get(a.id, { active: true });
       const { dir } = await repos.project(w.repo, w.project);
       const latest = await db.one(
-        "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND state='succeeded' AND result->>'previewVersion'='3' ORDER BY created DESC LIMIT 1",
-        [w.repo, w.project],
+        "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND state='succeeded' AND result->>'previewVersion'=$3 ORDER BY created DESC LIMIT 1",
+        [w.repo, w.project, String(PREVIEW_VERSION)],
       );
       if (latest && !a.rebuild && latest.fingerprint === treeHash(dir)) {
         const link = await browserPreview(db, latest, { ai: true });
@@ -269,8 +287,8 @@ export function workOperations({
         };
       }
       const pending = await db.one(
-        "SELECT id,kind,state FROM tasks WHERE repo=$1 AND state IN ('queued','running','cancelling') ORDER BY created LIMIT 1",
-        [w.repo],
+        "SELECT id,kind,state FROM tasks WHERE repo=$1 AND project=$2 AND state IN ('queued','running','cancelling') ORDER BY created LIMIT 1",
+        [w.repo, w.project],
       );
       if (pending)
         return {

@@ -2,7 +2,7 @@ import fs from "node:fs";
 const [name, input = "{}"] = process.argv.slice(2);
 if (!name || name === "help") {
   console.log(
-    'FRAME works CLI: FRAME_URL=https://frame.example FRAME_TOKEN=... pnpm platform <operation> <JSON | @file | ->\nList operations: pnpm platform actions\nStart: pnpm platform works_list\nCreate: pnpm platform works_create \'{"title":"我的作品"}\'\nThen use works_context, works_files/read/write, works_use_asset, works_speech, works_task, works_browser with the work UUID.',
+    'FRAME works CLI: FRAME_URL=https://frame.example FRAME_TOKEN=... pnpm platform <operation> <JSON | @file | ->\nList operations: pnpm platform actions\nStart: pnpm platform repositories_page\nCreate: pnpm platform works_create \'{"repo":"repository-UUID","title":"我的作品"}\'\nUse works_context, works_files/read/write, works_use_asset, works_speech, works_task, works_browser with the work UUID. Upload: FRAME_REPOSITORY=repository-UUID FRAME_ASSET_LICENSE=source pnpm platform upload file.png',
   );
 } else {
   const base = process.env.FRAME_URL,
@@ -14,6 +14,11 @@ if (!name || name === "help") {
     response = await fetch(base + "/api/actions", { headers });
   else if (name === "upload") {
     const form = new FormData();
+    if (!process.env.FRAME_REPOSITORY)
+      throw new Error(
+        "Set FRAME_REPOSITORY to the material library repository UUID",
+      );
+    form.set("repo", process.env.FRAME_REPOSITORY);
     form.set("license", process.env.FRAME_ASSET_LICENSE || "");
     form.set(
       "file",

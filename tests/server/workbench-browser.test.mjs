@@ -1,0 +1,222 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { database } from "../../server/db.mjs";
+import { createApp } from "../../server/app.mjs";
+import { treeHash } from "../../server/security.mjs";
+import { fixture, repo as platformRoot } from "../mcp/helpers.mjs";
+import { executeProject } from "../../scripts/project-execution.mjs";
+import { launchBrowser } from "../../scripts/browser.mjs";
+const url = process.env.FRAME_TEST_DATABASE_URL;
+test(
+  "workbench browser: repository navigation, real sandboxed preview, resizing, dialogs and background continuity",
+  { skip: !url, timeout: 120000 },
+  async () => {
+    const port = Number(process.env.FRAME_TEST_PORT || 55173),
+      origin = `http://127.0.0.1:${port}`;
+    const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-ui-")),
+      f = fixture({ browser: true }),
+      db = await database(url, "test-password-at-least-14");
+    await db.pool.query(
+      "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
+    );
+    const { app, actions } = await createApp({
+      db,
+      data,
+      masterKey: "33".repeat(32),
+      origin,
+      scheduler: false,
+    });
+    let browser;
+    const call = (name, args = {}) => actions.call(name, args);
+    try {
+      const repo = await call("repositories_add", { name: "作品浏览器测试" });
+      fs.cpSync(
+        f.file(""),
+        path.join(data, "repos", repo.id, "projects/test-film"),
+        { recursive: true },
+      );
+      await actions.works.discover(repo.id);
+      const work = (await call("works_page", { repo: repo.id })).items[0];
+      const oldPreview = process.env.FRAME_WORK_PREVIEW;
+      process.env.FRAME_WORK_PREVIEW = "1";
+      let built;
+      try {
+        built = await executeProject(f.root, "test-film", "build");
+      } finally {
+        if (oldPreview === undefined) delete process.env.FRAME_WORK_PREVIEW;
+        else process.env.FRAME_WORK_PREVIEW = oldPreview;
+      }
+      assert.equal(built.status, "passed", JSON.stringify(built));
+      const id = randomUUID(),
+        relative = "projects/test-film/exports/preview";
+      fs.cpSync(built.output, path.join(data, "runs", id, relative), {
+        recursive: true,
+      });
+      await db.pool.query(
+        "INSERT INTO tasks(id,repo,project,kind,state,input,result,fingerprint,finished) VALUES($1,$2,'test-film','build','succeeded','{}',$3,$4,now())",
+        [
+          id,
+          repo.id,
+          {
+            previewVersion: 4,
+            artifacts: [{ name: "index.html", path: relative + "/index.html" }],
+          },
+          treeHash(path.join(data, "works", work.id, "projects/test-film")),
+        ],
+      );
+      await app.listen({ host: "127.0.0.1", port });
+      browser = await launchBrowser();
+      const context = await browser.newContext({
+          viewport: { width: 1500, height: 1000 },
+        }),
+        page = await context.newPage(),
+        errors = [];
+      page.on("pageerror", (e) => errors.push(e.message));
+      await page.goto(origin);
+      await page
+        .getByLabel("登录密码", { exact: true })
+        .fill("test-password-at-least-14");
+      await page.getByRole("button", { name: "进入工作台" }).click();
+      await page.getByRole("link", { name: "作品仓库", exact: true }).click();
+      await page.getByRole("button", { name: /作品浏览器测试/ }).click();
+      await page
+        .getByRole("button", { name: /MCP 测试/ })
+        .first()
+        .click();
+      const player = page.frameLocator('iframe[title="作品播放器"]');
+      await player.getByTestId("play-toggle").waitFor({ timeout: 30000 });
+      await player.getByTestId("play-toggle").click();
+      await page.waitForTimeout(350);
+      await player.getByTestId("play-toggle").click();
+      await player.locator(".timeline-options summary").click();
+      await player.getByLabel("定位帧", { exact: true }).fill("6");
+      await player.getByLabel("定位帧", { exact: true }).press("Enter");
+      await player.getByRole("button", { name: "设为入点" }).click();
+      await player.getByLabel("定位帧", { exact: true }).fill("12");
+      await player.getByLabel("定位帧", { exact: true }).press("Enter");
+      await player.getByRole("button", { name: "设为出点" }).click();
+      await player.getByRole("button", { name: "播放选段" }).click();
+      await page.waitForTimeout(650);
+      const playerFrame = page
+        .frames()
+        .find((frame) => frame.url().includes("/preview/"));
+      const state = await playerFrame.evaluate(() =>
+        window.__FRAME_STUDIO__.getState(),
+      );
+      assert.equal(state.playing, false);
+      assert(Math.abs(state.time - 1) < 0.1, JSON.stringify(state));
+      await player.getByLabel("时间轴缩放").selectOption("4");
+      assert(
+        await player
+          .locator(".timeline-scroll")
+          .evaluate((element) => element.scrollWidth > element.clientWidth * 3),
+      );
+      await player.getByLabel("时间轴缩放").selectOption("1");
+      await player.locator(".timeline-options summary").click();
+      const separator = page.getByRole("separator"),
+        before = await page.locator(".preview-pane").boundingBox(),
+        box = await separator.boundingBox();
+      await page.mouse.move(box.x + box.width / 2, box.y + 40);
+      await page.mouse.down();
+      await page.mouse.move(box.x - 120, box.y + 40, { steps: 8 });
+      await page.mouse.up();
+      assert(
+        (await page.locator(".preview-pane").boundingBox()).width <
+          before.width - 70,
+      );
+      await page.getByRole("button", { name: "切换左右或上下布局" }).click();
+      assert.equal(
+        await separator.getAttribute("aria-orientation"),
+        "horizontal",
+      );
+      await page.getByRole("button", { name: "版本", exact: true }).click();
+      const versions = page.getByRole("dialog", { name: "版本管理" });
+      await versions.getByLabel("版本名称").fill("审片确认");
+      await versions.getByRole("button", { name: "保存当前版本" }).click();
+      await versions.getByText("审片确认", { exact: true }).waitFor();
+      await versions.getByRole("button", { name: "关闭弹窗" }).click();
+      await page.getByRole("button", { name: "同步", exact: true }).click();
+      await page
+        .getByRole("dialog")
+        .getByText(work.branch, { exact: true })
+        .waitFor();
+      await page.getByRole("button", { name: "关闭弹窗" }).click();
+      await page.getByRole("button", { name: "切换左右或上下布局" }).click();
+      fs.mkdirSync(path.join(platformRoot, ".cache/validation"), {
+        recursive: true,
+      });
+      await page.screenshot({
+        path: path.join(
+          platformRoot,
+          ".cache/validation/workbench-desktop.png",
+        ),
+      });
+      await page.setViewportSize({ width: 390, height: 844 });
+      assert(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= window.innerWidth + 1,
+        ),
+      );
+      await page.screenshot({
+        path: path.join(platformRoot, ".cache/validation/workbench-mobile.png"),
+      });
+      await page.setViewportSize({ width: 1500, height: 1000 });
+      const connection = await call("connections_save", {
+          name: "测试连接",
+          tool: "codex",
+          mode: "api",
+          apiKey: "test-fixture-only",
+          model: "fixture",
+        }),
+        chat = await call("works_chat_create", {
+          id: work.id,
+          connection: connection.id,
+          title: "后台连续性",
+        });
+      const queued = await call("works_chat_send", {
+        id: work.id,
+        chat: chat.id,
+        prompt: "继续制作",
+        requestKey: randomUUID(),
+      });
+      await page.close();
+      const reopened = await context.newPage();
+      await reopened.goto(origin + "/#/background");
+      await reopened.getByRole("button", { name: "打开作品" }).waitFor();
+      assert.equal(
+        (await db.one("SELECT state FROM tasks WHERE id=$1", [queued.id]))
+          .state,
+        "queued",
+      );
+      await reopened.getByRole("button", { name: "停止", exact: true }).click();
+      await reopened.getByText("当前没有在后台运行的项目。").waitFor();
+      await reopened.goto(origin + "/#/repository/" + repo.id);
+      await reopened.getByLabel("MCP 测试操作").click();
+      await reopened.getByRole("button", { name: "删除", exact: true }).click();
+      const confirm = reopened.getByRole("dialog", { name: "删除作品" });
+      await confirm.getByLabel("输入作品名称确认").fill("wrong");
+      await confirm.getByRole("button", { name: "确认删除" }).click();
+      await reopened
+        .getByText("请输入完整作品名称确认删除", { exact: true })
+        .waitFor();
+      await confirm.getByLabel("输入作品名称确认").fill(work.title);
+      await confirm.getByRole("button", { name: "确认删除" }).click();
+      await confirm.waitFor({ state: "hidden" });
+      assert.equal(
+        (await db.one("SELECT deleted FROM works WHERE id=$1", [work.id]))
+          .deleted,
+        true,
+      );
+      assert.deepEqual(errors, []);
+    } finally {
+      await browser?.close();
+      await app.close();
+      fs.rmSync(data, { recursive: true, force: true });
+      f.close();
+    }
+  },
+);

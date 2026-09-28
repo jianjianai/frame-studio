@@ -15,8 +15,8 @@ export class Works {
   constructor(db, data, repos, assets, tasks) {
     Object.assign(this, { db, data, repos, assets, tasks });
   }
-  async discover() {
-    for (const repo of await this.repos.list()) {
+  async discover(repository = null, projectId = null) {
+    for (const repo of await this.repos.list(repository, projectId)) {
       for (const project of repo.projects) {
         const { dir } = await this.repos.project(repo.id, project.id);
         const file = confined(dir, "production/work.json");
@@ -47,24 +47,51 @@ export class Works {
             info.deleted === true,
           ],
         );
-        if (inserted.rowCount)
+        const work = await this.db.one(
+          "SELECT * FROM works WHERE repo=$1 AND project=$2",
+          [repo.id, project.id],
+        );
+        const migrated = !work.branch;
+        await this.repos.isolate(work);
+        if (migrated)
+          await this.repos.checkpoint(
+            repo.id,
+            project.id,
+            "导入作品 · " + title,
+          );
+        if (inserted.rowCount || migrated || repository)
           await this.assets.importProject(repo.id, project.id);
       }
     }
+    if (!repository) this.discovered = true;
   }
   async list({
     deleted = false,
     search = "",
     category = "",
     status = "",
+    repo = null,
+    recent = false,
+    limit = 60,
+    offset = 0,
   } = {}) {
-    await this.discover();
+    if (!this.discovered) await this.discover();
     const rows = await this.db.all(
       `SELECT w.*, r.name AS storage_name, r.url AS remote,
       (SELECT jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'finished',t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project ORDER BY t.created DESC LIMIT 1) AS activity,
       greatest(w.updated,COALESCE((SELECT max(t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.kind IN ('agent','new') AND t.state='succeeded'),w.updated)) AS modified
-      FROM works w JOIN repos r ON r.id=w.repo WHERE w.deleted=$1 AND (w.title ILIKE $2 OR w.description ILIKE $2) AND ($3='' OR w.category=$3) AND ($4='' OR w.status=$4) ORDER BY modified DESC`,
-      [deleted, "%" + search + "%", category, status],
+      FROM works w JOIN repos r ON r.id=w.repo WHERE w.deleted=$1 AND (w.title ILIKE $2 OR w.description ILIKE $2) AND ($3='' OR w.category=$3) AND ($4='' OR w.status=$4) AND ($5::uuid IS NULL OR w.repo=$5) AND (NOT $6 OR w.opened IS NOT NULL)
+      ORDER BY CASE WHEN $6 THEN w.opened ELSE w.updated END DESC,w.id LIMIT $7 OFFSET $8`,
+      [
+        deleted,
+        "%" + search + "%",
+        category,
+        status,
+        repo,
+        recent,
+        Math.min(100, limit),
+        offset,
+      ],
     );
     for (const row of rows) {
       try {
@@ -104,19 +131,6 @@ export class Works {
     if (active && row.deleted) throw problem(409, "Restore this work first");
     return row;
   }
-  async defaultRepo() {
-    return this.db.lock("default-content-repo", async () => {
-      const preferred = await this.db.setting("default-repository");
-      if (
-        preferred?.id &&
-        (await this.db.one("SELECT id FROM repos WHERE id=$1", [preferred.id]))
-      )
-        return preferred.id;
-      const repo = await this.repos.add({ name: "我的作品" });
-      await this.db.setting("default-repository", { id: repo.id });
-      return repo.id;
-    });
-  }
   async create({
     title,
     repo,
@@ -124,35 +138,58 @@ export class Works {
     duration = 12,
     category = "",
   }) {
-    repo ||= await this.defaultRepo();
-    return this.db.lock(repo, async () => {
-      await this.repos.writable(repo);
-      const r = await this.repos.get(repo);
+    if (!repo) throw problem(400, "请选择作品所属仓库");
+    return this.db.lock("create-work:" + repo, async () => {
       const id = randomUUID(),
         project = "work-" + id.slice(0, 8);
-      await command(
-        process.execPath,
-        [
-          fileURLToPath(
-            new URL("../scripts/new-animation.mjs", import.meta.url),
-          ),
-          project,
-          title,
-          "--renderer",
-          renderer,
-          "--duration",
-          String(duration),
-        ],
-        { cwd: r.root },
-      );
       await this.db.pool.query(
         "INSERT INTO works(id,repo,project,title,category) VALUES($1,$2,$3,$4,$5)",
         [id, repo, project, title, category],
       );
-      const work = await this.get(id);
-      await this.saveInfo(work);
-      return work;
+      try {
+        const r = await this.repos.isolate(await this.get(id));
+        await command(
+          process.execPath,
+          [
+            fileURLToPath(
+              new URL("../scripts/new-animation.mjs", import.meta.url),
+            ),
+            project,
+            title,
+            "--renderer",
+            renderer,
+            "--duration",
+            String(duration),
+          ],
+          { cwd: r.root },
+        );
+        const work = await this.get(id);
+        await this.saveInfo(work);
+        await this.repos.checkpoint(repo, project, "创建作品 · " + title);
+        return work;
+      } catch (error) {
+        await this.removeFailedCreation(id, repo);
+        await this.db.pool.query("DELETE FROM works WHERE id=$1", [id]);
+        throw error;
+      }
     });
+  }
+  async removeFailedCreation(id, repo) {
+    const root = path.resolve(this.data, "works"),
+      target = path.resolve(root, id);
+    if (path.dirname(target) !== root || !/^[0-9a-f-]{36}$/.test(id))
+      throw new Error("Invalid work path");
+    const r = await this.repos.get(repo);
+    if (fs.existsSync(path.join(target, ".git")))
+      await this.repos.git(r.root, [
+        "worktree",
+        "remove",
+        "--force",
+        "--",
+        target,
+      ]);
+    else if (fs.existsSync(target))
+      fs.rmSync(target, { recursive: true, force: true });
   }
   async saveInfo(work) {
     const { dir } = await this.repos.project(work.repo, work.project);
@@ -169,8 +206,8 @@ export class Works {
   }
   async update(id, fields) {
     const w = await this.get(id);
-    return this.db.lock(w.repo, async () => {
-      await this.repos.writable(w.repo);
+    return this.db.lock(`${w.repo}:${w.project}`, async () => {
+      await this.repos.writable(w.repo, w.project);
       const next = { ...w, ...fields };
       await this.saveInfo(next);
       await this.db.pool.query(
@@ -189,13 +226,16 @@ export class Works {
   }
   async duplicate(id, title) {
     const w = await this.get(id, { active: true });
-    return this.db.lock(w.repo, async () => {
-      await this.repos.writable(w.repo);
-      const { dir, repo } = await this.repos.project(w.repo, w.project);
+    return this.db.lock(`${w.repo}:${w.project}`, async () => {
+      await this.repos.writable(w.repo, w.project);
+      const { dir } = await this.repos.project(w.repo, w.project);
       const newId = randomUUID(),
-        project = "work-" + newId.slice(0, 8),
-        dest = confined(repo.root, "projects/" + project);
-      copyTree(dir, dest);
+        project = "work-" + newId.slice(0, 8);
+      await this.db.pool.query(
+        "INSERT INTO works(id,repo,project,title,category,description) VALUES($1,$2,$3,$4,$5,$6)",
+        [newId, w.repo, project, title, w.category, w.description],
+      );
+      let dest;
       // Only rewrite this work's identity and its own URL/path prefixes; binary material bytes remain identical.
       const walk = (folder) => {
         for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
@@ -216,6 +256,9 @@ export class Works {
         }
       };
       try {
+        const repo = await this.repos.isolate(await this.get(newId));
+        dest = confined(repo.root, "projects/" + project);
+        copyTree(dir, dest);
         walk(dest);
         const file = path.join(dest, "project.ts"),
           replacements = [];
@@ -257,19 +300,16 @@ export class Works {
             409,
             "This work uses a computed id; duplicate requires a literal id",
           );
-        await this.db.pool.query(
-          "INSERT INTO works(id,repo,project,title,category,description) VALUES($1,$2,$3,$4,$5,$6)",
-          [newId, w.repo, project, title, w.category, w.description],
-        );
         const next = await this.get(newId);
         await this.saveInfo(next);
         await this.db.pool.query(
           "INSERT INTO asset_refs(asset,repo,project,path) SELECT asset,repo,$3,path FROM asset_refs WHERE repo=$1 AND project=$2 ON CONFLICT DO NOTHING",
           [w.repo, w.project, project],
         );
+        await this.repos.checkpoint(w.repo, project, "复制作品 · " + title);
         return next;
       } catch (e) {
-        fs.rmSync(dest, { recursive: true, force: true });
+        await this.removeFailedCreation(newId, w.repo);
         await this.db.pool.query("DELETE FROM works WHERE id=$1", [newId]);
         throw e;
       }
@@ -277,19 +317,52 @@ export class Works {
   }
   async version(id, name) {
     const w = await this.get(id, { active: true });
-    return this.db.lock(w.repo, async () => {
-      await this.repos.writable(w.repo);
-      const { dir } = await this.repos.project(w.repo, w.project),
-        version = randomUUID();
-      copyTree(dir, path.join(this.data, "versions", version));
-      return this.db.one(
-        "INSERT INTO work_versions(id,work,name) VALUES($1,$2,$3) RETURNING *",
-        [version, id, name],
-      );
+    return this.db.lock(`${w.repo}:${w.project}`, async () => {
+      await this.repos.writable(w.repo, w.project);
+      const commit = await this.repos.checkpoint(w.repo, w.project, name, {
+        named: true,
+      });
+      return {
+        id: commit,
+        work: id,
+        name,
+        created: new Date().toISOString(),
+        kind: "git",
+      };
     });
+  }
+  async history(id, limit = 50, offset = 0) {
+    const w = await this.get(id),
+      { repo } = await this.repos.project(w.repo, w.project);
+    const log = await this.repos.git(repo.root, [
+      "log",
+      `--max-count=${limit}`,
+      `--skip=${offset}`,
+      "--format=%H%x00%cI%x00%s%x00",
+      "HEAD",
+    ]);
+    const fields = log.split("\0"),
+      rows = [];
+    for (let i = 0; i + 2 < fields.length; i += 3)
+      rows.push({
+        id: fields[i].trim(),
+        created: fields[i + 1],
+        name: fields[i + 2],
+        kind: "git",
+      });
+    // Local snapshots from earlier installations remain recoverable during migration.
+    if (offset === 0)
+      rows.push(
+        ...(await this.db.all(
+          "SELECT *, 'snapshot' AS kind FROM work_versions WHERE work=$1 ORDER BY created DESC LIMIT 50",
+          [id],
+        )),
+      );
+    return rows;
   }
   async restore(id, version) {
     const w = await this.get(id, { active: true });
+    if (/^[a-f0-9]{40}$/.test(version)) return this.restoreCommit(w, version);
     if (
       !(await this.db.one(
         "SELECT id FROM work_versions WHERE id=$1 AND work=$2",
@@ -297,8 +370,8 @@ export class Works {
       ))
     )
       throw problem(404, "Version not found");
-    return this.db.lock(w.repo, async () => {
-      await this.repos.writable(w.repo);
+    return this.db.lock(`${w.repo}:${w.project}`, async () => {
+      await this.repos.writable(w.repo, w.project);
       const { dir } = await this.repos.project(w.repo, w.project),
         backup = randomUUID();
       copyTree(dir, path.join(this.data, "versions", backup));
@@ -319,7 +392,71 @@ export class Works {
       await this.db.pool.query("UPDATE works SET updated=now() WHERE id=$1", [
         id,
       ]);
+      await this.repos.checkpoint(w.repo, w.project, "恢复本地快照");
+      fs.rmSync(run, { recursive: true, force: true });
       return this.get(id);
     });
+  }
+  async restoreCommit(w, version) {
+    await this.db.lock(`${w.repo}:${w.project}`, async () => {
+      await this.repos.writable(w.repo, w.project);
+      const { repo } = await this.repos.project(w.repo, w.project);
+      const valid = await this.repos
+        .git(repo.root, ["merge-base", "--is-ancestor", version, "HEAD"])
+        .then(
+          () => true,
+          () => false,
+        );
+      if (!valid) throw problem(400, "只能恢复当前作品分支的历史版本");
+      await this.repos.git(repo.root, [
+        "cat-file",
+        "-e",
+        `${version}:projects/${w.project}/project.ts`,
+      ]);
+      const backup = await this.repos.checkpoint(
+        w.repo,
+        w.project,
+        "恢复前自动保存",
+      );
+      try {
+        await this.repos.git(
+          repo.root,
+          [
+            "restore",
+            "--source=" + version,
+            "--staged",
+            "--worktree",
+            "--",
+            `projects/${w.project}`,
+          ],
+          true,
+        );
+        await this.repos.checkpoint(
+          w.repo,
+          w.project,
+          "恢复版本 " + version.slice(0, 8),
+          { named: true },
+        );
+      } catch (error) {
+        await this.repos.git(
+          repo.root,
+          [
+            "restore",
+            "--source=" + backup,
+            "--staged",
+            "--worktree",
+            "--",
+            `projects/${w.project}`,
+          ],
+          true,
+        );
+        throw error;
+      }
+    });
+    await this.discover(w.repo, w.project);
+    await this.db.pool.query("UPDATE works SET updated=now() WHERE id=$1", [
+      w.id,
+    ]);
+    return this.get(w.id);
   }
 }

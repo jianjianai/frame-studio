@@ -1,6 +1,6 @@
 # FRAME · 作品管理与 AI 创作平台
 
-以作品为中心的私人动画工作室：创建作品、AI 对话、画面预览、素材与配音、版本快照、视频导出和 GitHub 同步。
+以 AI 创作、人类审片为中心的私人视频工作台：持久对话、精确播放器、多轨时间轴、素材与配音、独立版本历史、导出和 GitHub 同步。
 
 ## 两类独立仓库
 
@@ -13,9 +13,11 @@
 
 部署与首次配置见 [Docker / Dockge 部署](docs/SERVER.md)，产品与数据边界见 [作品平台设计](docs/WORKS-PLATFORM.md)。
 
-登录后进入作品库，直接新建或打开作品。在同一创作页查看画面、与 Codex / Claude Code 对话、使用素材、合成中文配音、保存版本并导出。关闭浏览器不会停止后台任务。
+首页显示最近打开。通过仓库进入作品列表，新建只填名称。每个作品使用同仓库内独立的 `works/<id>` 分支，素材库独立使用 `frame/materials`；作品历史和拉取/推送互不干扰。具体产品契约见 [AI 工作台](docs/AI-WORKBENCH.md)。
 
-设置中管理 AI 凭证、工具独立升级、语音引擎和模型、多个 GitHub 作品仓库、MCP 令牌及登录密码。内置 CPU 中文 Kokoro 模型，支持兼容语音 API 和 Kokoro 模型上传。
+作品页常驻播放器、时间轴和 AI 对话，支持折叠导航、拖动分栏、左右/上下布局；素材、版本、导出和资料在弹窗操作。设置支持多个模型提供商、官方账号登录、多 GitHub 账号、CLI 独立升级及语音模型。管理员密码仅通过 `FRAME_ADMIN_PASSWORD` 配置。内置 CPU 中文 Kokoro 模型。
+
+AI 消息提交后在独立容器执行，关闭浏览器不停止任务。通过结构、范围、项目测试和预览构建验证后才应用修改，自动产生 Git 版本并刷新播放器。导出文件有保留期限，与素材库分离；可发布到对应作品仓库 Releases。
 
 外部 AI 使用带 Bearer 令牌的 `/mcp`；CLI 使用 `FRAME_URL`、`FRAME_TOKEN` 和 `pnpm platform works_list`。作品操作统一使用作品 UUID。隔离任务内使用 `pnpm film` 和 `node scripts/work-tool.mjs`。
 

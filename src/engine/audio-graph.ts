@@ -9,17 +9,19 @@ export interface PreparedAudio {
   tracks: AudioTrack[];
   buffers: Map<string, AudioBuffer>;
   generated?: GeneratedAudioModule;
+  progressive?: boolean;
 }
 export async function prepareAudio(
   project: AnimationProject,
   context: BaseAudioContext,
   signal?: AbortSignal,
+  progressive = false,
 ): Promise<PreparedAudio> {
   const tracks = projectAudioTracks(project),
     buffers = new Map<string, AudioBuffer>();
   await Promise.all(
     tracks.map(async (track) => {
-      if (track.kind !== "file") return;
+      if (track.kind !== "file" || progressive) return;
       const response = await fetch(assetUrl(track.src), { signal });
       if (!response.ok)
         throw new Error(`音轨 ${track.name} 载入失败：${response.status}`);
@@ -46,7 +48,7 @@ export async function prepareAudio(
   } finally {
     signal?.removeEventListener("abort", release);
   }
-  return { tracks, buffers, generated };
+  return { tracks, buffers, generated, progressive };
 }
 export function trackSegment(
   track: AudioTrack,
@@ -113,11 +115,13 @@ export function scheduleAudio(
   onError?: (error: Error) => void,
 ) {
   const cleanups: (() => void)[] = [];
+  const gains = new Map<string, GainNode>();
   const dispose = () => {
     for (const cleanup of cleanups.splice(0).reverse()) cleanup();
   };
   try {
     for (const track of prepared.tracks) {
+      if (track.kind === "file" && prepared.progressive) continue;
       const segment = trackSegment(track, projectDuration, from, length);
       const control = overrides.get(track.id) ?? {
         gain: track.gain ?? 1,
@@ -125,6 +129,7 @@ export function scheduleAudio(
       };
       if (!segment || control.muted || control.gain === 0) continue;
       const gain = context.createGain();
+      gains.set(track.id, gain);
       gain.gain.value = control.gain;
       gain.connect(destination);
       cleanups.push(() => gain.disconnect());
@@ -159,7 +164,19 @@ export function scheduleAudio(
         cleanups.push(() => voice.dispose());
       }
     }
-    return { dispose };
+    return {
+      dispose,
+      setTrack(id: string, control: { gain: number; muted: boolean }) {
+        const gain = gains.get(id);
+        if (gain)
+          gain.gain.setTargetAtTime(
+            control.muted ? 0 : control.gain,
+            context.currentTime,
+            0.012,
+          );
+        return !!gain;
+      },
+    };
   } catch (error) {
     dispose();
     throw error;

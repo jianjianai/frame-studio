@@ -3,21 +3,25 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { workOperations } from "./work-operations.mjs";
-import {
-  hash,
-  token,
-  confined,
-  problem,
-  passwordHash,
-  passwordMatches,
-} from "./security.mjs";
+import { workbenchOperations } from "./workbench.mjs";
+import { hash, token, confined, problem } from "./security.mjs";
 const uuid = z.string().uuid(),
   text = z.string().max(20000),
   project = z
     .string()
     .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)
     .max(64);
-export function operations({ db, data, repos, assets, tasks, secrets }) {
+export function operations({
+  db,
+  data,
+  repos,
+  assets,
+  tasks,
+  secrets,
+  connections,
+  github,
+  retention,
+}) {
   const registry = {};
   const add = (name, description, shape, fn) =>
     (registry[name] = { description, schema: z.strictObject(shape), fn });
@@ -34,8 +38,13 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
       name: z.string().min(1).max(120),
       url: z.string().default(""),
       branch: z.string().default("main"),
+      account: uuid.optional(),
     },
-    (a) => repos.add(a),
+    async (a) => {
+      const repo = await repos.add(a);
+      await repos.onChange?.(repo.id);
+      return repo;
+    },
   );
   add(
     "repositories_status",
@@ -69,7 +78,7 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
   );
   add(
     "repositories_sync",
-    "Fetch, fast-forward pull, commit content files, or push including LFS",
+    "Synchronize the repository material-library branch including LFS; use works_sync for a work",
     {
       repo: uuid,
       action: z.enum(["fetch", "pull", "commit", "push"]),
@@ -149,7 +158,7 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
       content: z.string().max(1024 * 1024),
     },
     async (a) =>
-      db.lock(a.repo, async () => {
+      db.lock(`${a.repo}:${a.project}`, async () => {
         await repos.writable(a.repo);
         const { dir } = await repos.project(a.repo, a.project),
           file = confined(dir, a.path);
@@ -243,6 +252,9 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
       unused: z.boolean().default(false),
       deleted: z.boolean().default(false),
       search: z.string().max(200).default(""),
+      repo: uuid.optional(),
+      limit: z.number().int().min(1).max(200).default(60),
+      offset: z.number().int().nonnegative().default(0),
     },
     (a) => assets.list(a),
   );
@@ -267,15 +279,13 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
   add(
     "assets_update",
     "Edit asset display name and tags",
-    { id: uuid, name: z.string().min(1).max(200), tags: z.string().max(1000) },
-    async (a) => {
-      await db.pool.query("UPDATE assets SET name=$2,tags=$3 WHERE id=$1", [
-        a.id,
-        a.name,
-        a.tags,
-      ]);
-      return assets.get(a.id);
+    {
+      id: uuid,
+      name: z.string().min(1).max(200),
+      tags: z.string().max(1000),
+      license: z.string().trim().min(1).max(4000).optional(),
     },
+    (a) => assets.update(a.id, a.name, a.tags, a.license),
   );
   add(
     "assets_purge",
@@ -296,8 +306,10 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
       sha256: z.string().regex(/^[a-f0-9]{64}$/),
       license: z.string().min(1).max(2000),
       mime: z.string().max(120).default("application/octet-stream"),
+      repo: uuid,
     },
     async (a) => {
+      await repos.get(a.repo);
       const id = randomUUID(),
         dir = path.join(data, "uploads", id);
       fs.mkdirSync(dir, { recursive: true });
@@ -488,19 +500,6 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
     },
   );
   add(
-    "password_change",
-    "Change the administrator password and invalidate all sessions",
-    { current: z.string().max(1024), password: z.string().min(14).max(1024) },
-    async (a) => {
-      const admin = await db.setting("admin");
-      if (!passwordMatches(a.current, admin.password))
-        throw problem(403, "Current password incorrect");
-      await db.setting("admin", { password: passwordHash(a.password) });
-      await db.pool.query("DELETE FROM sessions");
-      return { ok: true };
-    },
-  );
-  add(
     "engines_list",
     "List built-in and external speech engines without API keys",
     {},
@@ -590,10 +589,35 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, bytes);
       try {
+        if (!a.repo) {
+          const id = randomUUID(),
+            relative = "projects/speech-test/exports/preview.wav",
+            target = path.join(data, "runs", id, relative);
+          fs.mkdirSync(path.dirname(target), { recursive: true });
+          fs.copyFileSync(file, target);
+          await db.pool.query(
+            "INSERT INTO tasks(id,project,kind,state,input,result,finished,expires) VALUES($1,'speech-test','speech-test','succeeded',$2,$3,now(),now()+interval '1 day')",
+            [
+              id,
+              { engine: a.engine },
+              {
+                artifacts: [
+                  { name: "preview.wav", path: relative, bytes: bytes.length },
+                ],
+              },
+            ],
+          );
+          return {
+            task: id,
+            url: `/api/tasks/${id}/file/${relative}`,
+            elapsedMs: Date.now() - start,
+          };
+        }
         const asset = await assets.register(file, {
           name: "speech-" + Date.now() + ".wav",
           mime: "audio/wav",
           license: "Generated with " + row.name,
+          repo: a.repo,
         });
         if (a.repo && a.project)
           await assets.attach(asset.id, a.repo, a.project);
@@ -624,7 +648,19 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
     "models_delete",
     "Delete a custom model; built-in model is protected",
     { id: project },
-    (a) => local("/models/" + a.id, { method: "DELETE" }),
+    async (a) => {
+      for (const row of await db.all(
+        "SELECT config FROM engines WHERE enabled=true",
+      )) {
+        const c = secrets.decrypt(row.config);
+        if (
+          c.model === a.id &&
+          c.url.startsWith(process.env.FRAME_SPEECH_URL || "http://speech:8000")
+        )
+          throw problem(409, "请先停用使用此模型的语音引擎");
+      }
+      return local("/models/" + a.id, { method: "DELETE" });
+    },
   );
   const works = workOperations({
     add,
@@ -635,6 +671,19 @@ export function operations({ db, data, repos, assets, tasks, secrets }) {
     assets,
     tasks,
   });
+  if (connections)
+    workbenchOperations({
+      add,
+      db,
+      data,
+      works,
+      repos,
+      assets,
+      tasks,
+      connections,
+      github,
+      retention,
+    });
   return {
     works,
     registry,

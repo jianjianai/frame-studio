@@ -111,6 +111,7 @@ test(
       assert.equal(conflict.statusCode, 409);
       const body = Buffer.from("test material"),
         upload = await call("upload_begin", {
+          repo: repo.id,
           name: "test.txt",
           bytes: body.length,
           sha256: hash(body),
@@ -157,7 +158,7 @@ test(
           expectedSha256: hash("export const value = 2;"),
           content: "busy",
         }),
-        /active task/,
+        /作品正在运行/,
       );
       await call("task_cancel", { id: task.id });
       assert.equal((await tasks.get(task.id)).state, "cancelled");
@@ -186,12 +187,13 @@ test(
       assert.equal(fs.existsSync(dir + "/" + ref.path), false);
       const work = await call("works_create", {
         title: "独立作品",
+        repo: repo.id,
         duration: 2,
       });
-      assert.notEqual(
+      assert.equal(
         work.repo,
         repo.id,
-        "default storage is a dedicated content repository",
+        "creation uses the selected content repository",
       );
       assert.equal(
         fs.existsSync(path.join(data, "repos", work.repo, "package.json")),
@@ -216,10 +218,18 @@ test(
         (await call("works_read", { id: work.id, path: "scene.ts" })).content,
         source.content,
       );
-      assert.equal(
-        (await call("works_versions", { id: work.id })).length,
-        2,
-        "restore saves current version",
+      const history = await call("works_versions", { id: work.id });
+      assert(
+        history.some((v) => v.id === version.id),
+        "named version survives restore",
+      );
+      assert(
+        history.some((v) => v.name === "恢复前自动保存"),
+        "restore preserves modified version",
+      );
+      assert(
+        history[0].name.startsWith("恢复版本 "),
+        "restore appends history instead of rewriting it",
       );
       await call("works_update", {
         id: work.id,
@@ -240,11 +250,19 @@ test(
       );
       const workTask = await call("works_task", { id: work.id, kind: "build" });
       await assert.rejects(
-        actions.call("works_trash", { id: work.id, deleted: true }),
-        /active task/,
+        actions.call("works_trash", {
+          id: work.id,
+          deleted: true,
+          confirm: "改名的作品",
+        }),
+        /作品正在运行/,
       );
       await call("task_cancel", { id: workTask.id });
-      await call("works_trash", { id: work.id, deleted: true });
+      await call("works_trash", {
+        id: work.id,
+        deleted: true,
+        confirm: "改名的作品",
+      });
       assert(
         (await call("works_list", { deleted: true })).some(
           (w) => w.id === work.id,

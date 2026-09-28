@@ -1,6 +1,261 @@
 .work-preview {
   background: transparent;
 }
+.work-preview #root {
+  height: 100dvh;
+  min-height: 0;
+}
+.work-preview .work-player {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.work-preview .studio-layout {
+  flex: 1;
+  min-height: 0;
+}
+.work-preview .editing-area {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.work-preview .theater {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.work-preview .stage-viewport {
+  position: relative;
+  flex: 1;
+  min-height: 60px !important;
+  aspect-ratio: auto;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.work-preview .stage-viewport > canvas {
+  position: absolute;
+  inset: 0;
+  max-height: none;
+  max-width: none;
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: contain;
+}
+.work-preview .transport {
+  flex-shrink: 0;
+  padding: 10px 14px;
+}
+.work-preview .timeline-panel {
+  flex-shrink: 0;
+  margin-top: 0;
+  padding: 12px 14px;
+  max-height: 40vh;
+  overflow: auto;
+}
+.work-preview .panel-heading > div > span {
+  display: none;
+}
+.work-preview .panel-heading .frame-controls > span {
+  display: inline;
+  font-size: 11px;
+}
+.work-preview .time-ruler {
+  font-size: 10px;
+  margin-top: 6px;
+  margin-left: 44px;
+}
+.work-preview .master-slider {
+  margin-left: 44px;
+  width: calc(100% - 44px);
+}
+.work-preview .tracks {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+.work-preview .transport .timecode {
+  font-size: 12px;
+}
+.work-preview .work-header {
+  display: none;
+}
+.track-volume {
+  position: relative;
+  z-index: 5;
+}
+.track-volume summary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  list-style: none;
+  cursor: pointer;
+  border-radius: 5px;
+  padding: 5px;
+}
+.track-volume summary::-webkit-details-marker {
+  display: none;
+}
+.track-volume[open] summary {
+  background: #d8e8c4;
+}
+.track-volume-popup {
+  position: absolute;
+  left: 29px;
+  bottom: 0;
+  width: 215px;
+  background: #fbfdf7;
+  padding: 13px;
+  display: grid;
+  gap: 9px;
+  border: 1px solid #cddabd;
+  border-radius: 9px;
+  box-shadow: 0 5px 22px #263b3230;
+  color: #263b32;
+}
+.track-volume-popup button {
+  border: 1px solid #cad8bc;
+  background: #eef4e5;
+  border-radius: 5px;
+  padding: 5px;
+  cursor: pointer;
+}
+.track-volume-popup input {
+  width: 100%;
+  accent-color: #6c8755;
+}
+.track-volume-popup output {
+  font-size: 11px;
+}
+.individual-track {
+  position: relative;
+  overflow: visible !important;
+  padding: 0 !important;
+  min-height: 31px;
+}
+.individual-track.muted {
+  opacity: 0.45;
+}
+.audio-clip {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  overflow: hidden;
+  background: #deebd0;
+  border: 1px solid #c7dbb6;
+  border-radius: 4px;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+  color: #537343;
+}
+.audio-clip > span {
+  position: relative;
+  z-index: 1;
+  display: block;
+  font-size: 10px;
+  background: #deebd0c9;
+  padding: 3px 7px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.audio-clip svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0.55;
+}
+.work-preview .track-playhead {
+  pointer-events: none;
+}
+.timeline-scroll {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.timeline-content {
+  min-width: 100%;
+}
+.timeline-options summary {
+  cursor: pointer;
+  font-size: 10px;
+  color: #6e805c;
+  padding: 3px 0 6px;
+}
+.range-controls {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding: 3px 0 8px;
+  font-size: 10px;
+}
+.range-controls input {
+  width: 62px;
+}
+.range-controls button,
+.range-controls input,
+.frame-controls select {
+  border: 1px solid #cddabd;
+  border-radius: 5px;
+  padding: 4px 6px;
+  background: #f5f8ee;
+  color: #344a37;
+  font-size: 10px;
+}
+.range-controls button {
+  cursor: pointer;
+}
+.range-controls button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.timeline-selection {
+  position: absolute;
+  inset-block: 0;
+  z-index: 1;
+  background: #718e3b18;
+  border-inline: 1px solid #719243;
+  pointer-events: none;
+}
+.timeline-content .track-label {
+  position: sticky;
+  left: 0;
+  z-index: 4;
+  background: #f5f8ee;
+}
+.work-preview .track-playhead {
+  display: block !important;
+  z-index: 2;
+}
+@media (max-width: 640px) {
+  .work-preview .timeline-panel {
+    padding: 8px 9px;
+    min-height: 190px;
+    max-height: 60vh;
+  }
+  .work-preview .time-ruler {
+    font-size: 9px;
+  }
+  .work-preview .time-ruler > span:nth-child(even) {
+    display: none;
+  }
+  .work-preview .tracks {
+    gap: 4px 0;
+  }
+  .work-preview .panel-heading {
+    padding-bottom: 6px;
+  }
+  .work-preview .transport {
+    gap: 5px !important;
+    padding: 6px !important;
+  }
+  .work-preview .transport select {
+    max-width: 75px;
+  }
+}
 .work-preview .work-player {
   max-width: none;
   padding: 0;

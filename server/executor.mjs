@@ -1,9 +1,21 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { agentEvent } from "./agent-events.mjs";
+import { PREVIEW_VERSION } from "./preview-version.mjs";
 const work = "/workspace",
   core = "/opt/frame";
 const task = JSON.parse(fs.readFileSync(work + "/task.json", "utf8"));
+const redact = (value) => {
+  let text = String(value);
+  for (const [key, secret] of Object.entries(process.env))
+    if (/KEY|TOKEN|SECRET|PASSWORD/.test(key) && secret?.length >= 8)
+      text = text.split(secret).join("[redacted]");
+  return text.replace(
+    /\b(?:sk-[\w-]{16,}|gh[pousr]_[\w]{16,}|github_pat_[\w]{16,})/g,
+    "[redacted]",
+  );
+};
 const result = (value) =>
   fs.writeFileSync(work + "/result.json", JSON.stringify(value));
 const run = (bin, args, options = {}) =>
@@ -18,17 +30,43 @@ const run = (bin, args, options = {}) =>
       stdio: ["pipe", "pipe", "pipe"],
       ...options,
     });
-    let output = "";
+    let output = "",
+      errors = "";
+    let pending = "";
     child.stdout.on("data", (v) => {
       output = (output + v).slice(-8 * 1024 * 1024);
-      process.stdout.write(v);
+      if (!options.agent) process.stdout.write(redact(v));
+      if (options.agent) {
+        pending += v.toString();
+        let newline;
+        while ((newline = pending.indexOf("\n")) >= 0) {
+          const line = pending.slice(0, newline);
+          pending = pending.slice(newline + 1);
+          try {
+            const event = agentEvent(JSON.parse(line));
+            if (event)
+              fs.appendFileSync(
+                work + "/events.ndjson",
+                redact(JSON.stringify(event)) + "\n",
+              );
+          } catch {}
+        }
+        if (pending.length > 2 * 1024 * 1024) pending = "";
+      }
     });
-    child.stderr.on("data", (v) => process.stderr.write(v));
+    child.stderr.on("data", (v) => {
+      errors = (errors + redact(v)).slice(-12000);
+      process.stderr.write(redact(v));
+    });
     child.once("error", reject);
     child.once("close", (code) =>
       code === 0
         ? resolve(output)
-        : reject(new Error(`Process exited ${code}`)),
+        : reject(
+            new Error(
+              `${path.basename(bin)} exited ${code}\n${errors.trim() || redact(output).slice(-6000).trim()}`,
+            ),
+          ),
     );
     child.stdin.end(options.input);
   });
@@ -81,6 +119,7 @@ try {
       "projects/*/exports/",
       "task.json",
       "result.json",
+      "events.ndjson",
     ];
     fs.writeFileSync(work + "/.gitignore", skip.join("\n") + "\n");
     const baseline = [
@@ -103,6 +142,7 @@ try {
     ].filter((name) => fs.existsSync(work + "/" + name));
     await run("git", ["add", "--", ...baseline]);
     await run("git", ["commit", "-qm", "Initialize isolated task workspace"]);
+    const baselineCommit = (await run("git", ["rev-parse", "HEAD"])).trim();
     let value = { status: "passed" };
     if (task.kind === "agent") {
       const p = task.input.provider;
@@ -119,8 +159,20 @@ try {
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           ...(task.model ? ["-m", task.model] : []),
-          ...(task.baseUrl
-            ? ["-c", "openai_base_url=" + JSON.stringify(task.baseUrl)]
+          ...(task.authMode !== "official"
+            ? [
+                "-c",
+                'model_provider="frame"',
+                "-c",
+                'model_providers.frame.name="FRAME connection"',
+                "-c",
+                'model_providers.frame.wire_api="responses"',
+                "-c",
+                'model_providers.frame.env_key="CODEX_API_KEY"',
+                "-c",
+                "model_providers.frame.base_url=" +
+                  JSON.stringify(task.baseUrl || "https://api.openai.com/v1"),
+              ]
             : []),
           "-",
         ];
@@ -130,12 +182,19 @@ try {
           "--verbose",
           "--output-format",
           "stream-json",
+          "--include-partial-messages",
           "--permission-mode",
           "bypassPermissions",
           ...(task.upstream ? ["--resume", task.upstream] : []),
           ...(task.model ? ["--model", task.model] : []),
         ];
-      const output = await run(bin, args, { input: prompt });
+      const context = task.input.context
+        ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}`
+        : "";
+      const output = await run(bin, args, {
+        input: prompt + context,
+        agent: true,
+      });
       for (const line of output.split("\n")) {
         try {
           const event = JSON.parse(line);
@@ -143,11 +202,86 @@ try {
             value.upstream = event.thread_id || event.session_id;
           if (event.type === "result" && event.is_error)
             throw new Error(event.result || "Agent failed");
+          if (event.type === "turn.failed" || event.type === "error")
+            throw new Error(
+              event.error?.message || event.message || "Agent failed",
+            );
         } catch (e) {
           if (e instanceof SyntaxError) continue;
           throw e;
         }
       }
+      fs.appendFileSync(
+        work + "/events.ndjson",
+        JSON.stringify({
+          type: "activity",
+          id: "validation",
+          tool: "validation",
+          phase: "running",
+          text: "正在验证作品并准备预览",
+        }) + "\n",
+      );
+      await run("node", [
+        core + "/scripts/project-scope.mjs",
+        task.project,
+        "--base",
+        baselineCommit,
+      ]);
+      await run("node", [
+        core + "/scripts/check-projects.mjs",
+        task.project,
+        "--strict",
+      ]);
+      await run("node", [
+        core + "/scripts/film.mjs",
+        "test",
+        task.project,
+        "--json",
+      ]);
+      const built = await run(
+        "node",
+        [work + "/scripts/film.mjs", "build", task.project, "--json"],
+        {
+          env: {
+            ...process.env,
+            FRAME_PROJECT: task.project,
+            FRAME_WORK_PREVIEW: "1",
+          },
+        },
+      );
+      let buildResult;
+      try {
+        buildResult = JSON.parse(built);
+      } catch {
+        throw new Error("Preview build did not return a valid result");
+      }
+      if (buildResult.status === "failed" || buildResult.passed === false)
+        throw new Error("Preview build failed");
+      const base = path.join(work, "projects", task.project, "exports");
+      const file = path.resolve(buildResult.output || "", "index.html");
+      if (
+        !file.startsWith(base + path.sep) ||
+        !fs.existsSync(file) ||
+        fs.lstatSync(file).isSymbolicLink()
+      )
+        throw new Error("Preview entry missing or outside work output");
+      value.previewArtifacts = [
+        {
+          name: path.relative(base, file).replaceAll("\\", "/"),
+          path: path.relative(work, file).replaceAll("\\", "/"),
+          bytes: fs.statSync(file).size,
+        },
+      ];
+      fs.appendFileSync(
+        work + "/events.ndjson",
+        JSON.stringify({
+          type: "activity",
+          id: "validation",
+          tool: "validation",
+          phase: "done",
+          text: "作品验证通过，预览已准备",
+        }) + "\n",
+      );
     } else {
       const input = task.input;
       let args = [
@@ -182,11 +316,11 @@ try {
       if (value.status === "failed" || value.passed === false)
         throw new Error("FRAME validation failed");
     }
-    if (task.kind === "build") value.previewVersion = 3;
+    if (task.kind === "build") value.previewVersion = PREVIEW_VERSION;
     result(value);
   }
 } catch (e) {
   console.error(e.stack);
-  result({ status: "failed", error: e.message });
+  result({ status: "failed", error: redact(e.message) });
   process.exitCode = 1;
 }

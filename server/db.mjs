@@ -1,5 +1,5 @@
 import pg from "pg";
-import { passwordHash } from "./security.mjs";
+import { passwordHash, passwordMatches } from "./security.mjs";
 export async function database(url, password) {
   const pool = new pg.Pool({ connectionString: url, max: 12 });
   await pool.query(`
@@ -18,19 +18,54 @@ export async function database(url, password) {
     CREATE TABLE IF NOT EXISTS works (id uuid PRIMARY KEY, repo uuid NOT NULL REFERENCES repos(id), project text NOT NULL, title text NOT NULL, category text NOT NULL DEFAULT '', status text NOT NULL DEFAULT 'draft', description text NOT NULL DEFAULT '', deleted boolean NOT NULL DEFAULT false, created timestamptz NOT NULL DEFAULT now(), updated timestamptz NOT NULL DEFAULT now(), UNIQUE(repo,project));
     CREATE TABLE IF NOT EXISTS work_versions (id uuid PRIMARY KEY, work uuid NOT NULL REFERENCES works(id), name text NOT NULL, created timestamptz NOT NULL DEFAULT now());
     CREATE TABLE IF NOT EXISTS agent_tokens (hash text PRIMARY KEY, task uuid NOT NULL REFERENCES tasks(id));
+    CREATE TABLE IF NOT EXISTS connections (id uuid PRIMARY KEY, name text NOT NULL, tool text NOT NULL CHECK(tool IN ('codex','claude')), mode text NOT NULL CHECK(mode IN ('api','official')), config text NOT NULL, state text NOT NULL DEFAULT 'unconfigured', error text, created timestamptz NOT NULL DEFAULT now());
+    CREATE TABLE IF NOT EXISTS github_accounts (id uuid PRIMARY KEY, login text UNIQUE NOT NULL, config text NOT NULL, state text NOT NULL DEFAULT 'ready', checked timestamptz, created timestamptz NOT NULL DEFAULT now());
+    CREATE TABLE IF NOT EXISTS auth_flows (id uuid PRIMARY KEY, target uuid, kind text NOT NULL, state text NOT NULL DEFAULT 'pending', info jsonb NOT NULL DEFAULT '{}', expires timestamptz NOT NULL, created timestamptz NOT NULL DEFAULT now());
+    ALTER TABLE repos ADD COLUMN IF NOT EXISTS account uuid REFERENCES github_accounts(id);
+    ALTER TABLE repos ADD COLUMN IF NOT EXISTS sync_state jsonb;
+    ALTER TABLE works ADD COLUMN IF NOT EXISTS opened timestamptz;
+    ALTER TABLE works ADD COLUMN IF NOT EXISTS metadata jsonb NOT NULL DEFAULT '{}';
+    ALTER TABLE works ADD COLUMN IF NOT EXISTS branch text;
+    ALTER TABLE works ADD COLUMN IF NOT EXISTS sync_state jsonb;
+    CREATE UNIQUE INDEX IF NOT EXISTS works_branch ON works(repo,branch) WHERE branch IS NOT NULL;
+    ALTER TABLE chats ADD COLUMN IF NOT EXISTS connection uuid REFERENCES connections(id);
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS request_key uuid UNIQUE;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS expires timestamptz;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cleaned timestamptz;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS log_cursor text;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_commit text;
+    ALTER TABLE events ADD COLUMN IF NOT EXISTS source_offset bigint;
+    CREATE UNIQUE INDEX IF NOT EXISTS events_source ON events(task,source_offset) WHERE source_offset IS NOT NULL;
+    CREATE TABLE IF NOT EXISTS asset_repos (asset uuid REFERENCES assets(id) ON DELETE CASCADE, repo uuid REFERENCES repos(id), PRIMARY KEY(asset,repo));
+    ALTER TABLE asset_repos ADD COLUMN IF NOT EXISTS catalog_id uuid;
+    UPDATE asset_repos SET catalog_id=asset WHERE catalog_id IS NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS asset_catalog_ids ON asset_repos(repo,catalog_id);
+    CREATE INDEX IF NOT EXISTS works_repository_page ON works(repo,deleted,updated DESC,id);
+    CREATE INDEX IF NOT EXISTS works_recent ON works(opened DESC,id) WHERE opened IS NOT NULL AND NOT deleted;
+    CREATE INDEX IF NOT EXISTS tasks_work_recent ON tasks(repo,project,created DESC);
+    CREATE INDEX IF NOT EXISTS tasks_chat_recent ON tasks(chat,created);
+    CREATE INDEX IF NOT EXISTS tasks_expiration ON tasks(expires) WHERE cleaned IS NULL;
+    CREATE INDEX IF NOT EXISTS asset_repos_repo ON asset_repos(repo,asset);
+    INSERT INTO asset_repos(asset,repo,catalog_id) SELECT DISTINCT asset,repo,asset FROM asset_refs ON CONFLICT DO NOTHING;
   `);
   const admin = await pool.query(
     "SELECT value FROM settings WHERE key='admin'",
   );
-  if (!admin.rowCount) {
-    if (!password || password.length < 14)
-      throw new Error(
-        "Set FRAME_ADMIN_PASSWORD (at least 14 characters) for first startup",
-      );
+  if (!password || password.length < 14) {
+    await pool.end();
+    throw new Error(
+      "FRAME_ADMIN_PASSWORD (at least 14 characters) is required on every startup",
+    );
+  }
+  if (
+    !admin.rowCount ||
+    !passwordMatches(password, admin.rows[0].value.password)
+  ) {
     await pool.query(
-      "INSERT INTO settings VALUES ('admin',$1) ON CONFLICT DO NOTHING",
+      "INSERT INTO settings VALUES ('admin',$1) ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value",
       [{ password: passwordHash(password) }],
     );
+    await pool.query("DELETE FROM sessions");
   }
   return {
     pool,

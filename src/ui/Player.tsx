@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import {
   Play,
   Pause,
@@ -60,22 +60,24 @@ export function Player({
   const theater = useRef<HTMLDivElement>(null);
   const transport = useRef<AudioTransport | null>(null);
   const renderer = useRef<FrameRenderer | null>(null);
-  const [peaks, setPeaks] = useState<number[]>([]);
+  const [waveforms, setWaveforms] = useState<Record<string, number[]>>({});
   useEffect(() => {
     let canceled = false;
     fetch(assetUrl("films/" + project.id + "/waveforms.json"))
       .then((r) => (r.ok ? r.json() : {}))
       .then((data) => {
         if (!canceled) {
-          const values = (data as Record<string, unknown>)[
-            project.audio ??
-              audioTracks.find((t) => t.kind === "file")?.src ??
-              project.id
-          ];
-          setPeaks(
-            Array.isArray(values)
-              ? values.map((n) => (typeof n === "number" ? clamp(n) : 0))
-              : [],
+          setWaveforms(
+            Object.fromEntries(
+              Object.entries(data || {})
+                .filter(([, value]) => Array.isArray(value))
+                .map(([key, value]) => [
+                  key,
+                  (value as unknown[]).map((n) =>
+                    typeof n === "number" ? clamp(n) : 0,
+                  ),
+                ]),
+            ),
           );
         }
       })
@@ -112,6 +114,26 @@ export function Player({
     muted: false,
   });
   const [view, setView] = useState<Playback>(saved.current);
+  const [zoom, setZoom] = useState(1);
+  const [selection, setSelection] = useState<{ start?: number; end?: number }>(
+    {},
+  );
+  const selectionRef = useRef(selection);
+  selectionRef.current = selection;
+  const segmentEnd = useRef<number | null>(null);
+  const timelineScroll = useRef<HTMLDivElement>(null);
+  const frameTime = (time: number) =>
+    `${formatTime(time)}:${String(Math.floor(time * project.fps + 0.001) % project.fps).padStart(2, "0")}`;
+  useEffect(() => {
+    const element = timelineScroll.current;
+    if (!element || !view.playing || zoom === 1) return;
+    const x = (view.time / project.duration) * element.scrollWidth;
+    if (
+      x < element.scrollLeft ||
+      x > element.scrollLeft + element.clientWidth - 24
+    )
+      element.scrollLeft = Math.max(0, x - element.clientWidth / 4);
+  }, [view.time, view.playing, zoom, project.duration]);
   const exportAbort = useRef<AbortController | null>(null);
   const publish = () => {
     const a = transport.current;
@@ -127,8 +149,35 @@ export function Player({
       };
       saved.current = value;
       setView(value);
+      if (embedded && parent !== window)
+        parent.postMessage(
+          {
+            type: "frame-player-state",
+            ...value,
+            duration: project.duration,
+            fps: project.fps,
+            selection: selectionRef.current,
+          },
+          "*",
+        );
     }
   };
+  useEffect(() => {
+    if (!embedded || parent === window) return;
+    const receive = (event: MessageEvent) => {
+      if (
+        event.source !== parent ||
+        event.data?.type !== "frame-player-command"
+      )
+        return;
+      if (event.data.command === "export") setExportOpen(true);
+      if (event.data.command === "pause") transport.current?.pause();
+      if (event.data.command === "seek" && Number.isFinite(event.data.time))
+        seek(event.data.time);
+    };
+    window.addEventListener("message", receive);
+    return () => window.removeEventListener("message", receive);
+  }, [embedded]);
   const seek = (t: number) => {
     if (exporting) return;
     transport.current?.seek(t);
@@ -144,6 +193,7 @@ export function Player({
     setError("");
     if (a.clock.playing || a.buffering) {
       a.pause();
+      segmentEnd.current = null;
       setStarting(false);
       publish();
       return;
@@ -271,7 +321,7 @@ export function Player({
           buffering: sound.buffering,
           prepareMs: sound.prepareMs,
           tracks: Object.fromEntries(sound.controls),
-          bufferedRanges: null,
+          bufferedRanges: sound.bufferedRanges(),
         },
         errors: [...diagnosticErrors],
       }),
@@ -306,6 +356,11 @@ export function Player({
           if (canceled) return;
           try {
             const t = sound.clock.time();
+            if (segmentEnd.current !== null && t >= segmentEnd.current) {
+              sound.pause();
+              sound.seek(segmentEnd.current);
+              segmentEnd.current = null;
+            }
             if (
               sound.clock.playing ||
               lastRender !== t ||
@@ -351,7 +406,9 @@ export function Player({
           setError(
             "场景载入失败：" +
               String(e) +
-              "。请检查浏览器硬件加速或运行 pnpm env:check。",
+              (embedded
+                ? "。可尝试刷新预览，或把错误告诉 AI 修复作品。"
+                : "。请检查浏览器硬件加速或运行 pnpm env:check。"),
           );
           setLoading(false);
         }
@@ -630,10 +687,8 @@ export function Player({
                   )}
                 </button>
                 <div className="timecode">
-                  <strong data-testid="timecode">
-                    {formatTime(view.time)}
-                  </strong>
-                  <span>/ {formatTime(project.duration)}</span>
+                  <strong data-testid="timecode">{frameTime(view.time)}</strong>
+                  <span>/ {frameTime(project.duration)}</span>
                 </div>
               </div>
               <div className="transport-right">
@@ -711,9 +766,19 @@ export function Player({
               <div>
                 <SlidersHorizontal size={15} />
                 <strong>主时间轴</strong>
-                <span>同一时钟 · 声画同步</span>
               </div>
               <div className="frame-controls">
+                <select
+                  aria-label="时间轴缩放"
+                  value={zoom}
+                  onChange={(event) => setZoom(Number(event.target.value))}
+                >
+                  {[1, 2, 4, 8, 16].map((value) => (
+                    <option key={value} value={value}>
+                      {value === 1 ? "全片" : value + "×"}
+                    </option>
+                  ))}
+                </select>
                 <button
                   className="icon-button"
                   aria-label="上一帧"
@@ -736,101 +801,294 @@ export function Player({
                 </button>
               </div>
             </div>
-            <div className="time-ruler">
-              {Array.from({ length: 9 }, (_, i) => (
-                <span key={i}>{formatTime((i * project.duration) / 8)}</span>
-              ))}
-            </div>
-            <input
-              data-testid="timeline"
-              className="master-slider"
-              aria-label="动画进度"
-              type="range"
-              min="0"
-              max={project.duration}
-              step={1 / project.fps}
-              value={view.time}
-              disabled={loading || exporting}
-              onChange={(e) => seek(Number(e.target.value))}
-              style={
-                {
-                  "--progress": (view.time / project.duration) * 100 + "%",
-                } as React.CSSProperties
-              }
-            />
-            <div className="tracks">
-              <div className="track-label">镜头</div>
-              <div className="shot-track">
-                {project.beats.map((b, i) => (
-                  <button
-                    key={b.at}
-                    style={{
-                      flex:
-                        (project.beats[i + 1]?.at ?? project.duration) - b.at,
+            <details className="timeline-options">
+              <summary>
+                定位与选段
+                {selection.start !== undefined && selection.end !== undefined
+                  ? ` · ${frameTime(selection.start)} → ${frameTime(selection.end)}`
+                  : ""}
+              </summary>
+              <div className="range-controls">
+                <label>
+                  定位帧{" "}
+                  <input
+                    aria-label="定位帧"
+                    type="number"
+                    min="0"
+                    max={Math.round(project.duration * project.fps)}
+                    placeholder={String(Math.round(view.time * project.fps))}
+                    onKeyDown={(event) => {
+                      if (
+                        event.key === "Enter" &&
+                        event.currentTarget.value !== ""
+                      ) {
+                        seek(Number(event.currentTarget.value) / project.fps);
+                        event.currentTarget.blur();
+                      }
                     }}
-                    className={currentBeat === b ? "selected" : ""}
-                    disabled={exporting}
-                    onClick={() => seek(b.at)}
-                    title={b.detail}
-                  >
-                    <span>{String(i + 1).padStart(2, "0")}</span>
-                    {b.title}
-                  </button>
-                ))}
-              </div>
-              <div className="track-label">配乐</div>
-              <div className="audio-track">
-                <svg
-                  viewBox="0 0 720 32"
-                  preserveAspectRatio="none"
-                  aria-hidden="true"
+                  />
+                </label>
+                <button
+                  disabled={loading || exporting}
+                  onClick={() =>
+                    setSelection((previous) => ({
+                      ...previous,
+                      start: Math.floor(view.time * project.fps) / project.fps,
+                    }))
+                  }
                 >
-                  {Array.from({ length: 180 }, (_, i) => {
-                    const h = peaks[i] ? 2 + peaks[i] * 36 : 2;
-                    return (
-                      <rect
-                        key={i}
-                        x={i * 4}
-                        y={(32 - h) / 2}
-                        width="2"
-                        height={h}
-                        rx="1"
+                  设为入点
+                </button>
+                <button
+                  disabled={loading || exporting}
+                  onClick={() =>
+                    setSelection((previous) => ({
+                      ...previous,
+                      end: Math.ceil(view.time * project.fps) / project.fps,
+                    }))
+                  }
+                >
+                  设为出点
+                </button>
+                <span>
+                  {selection.start === undefined
+                    ? "—"
+                    : frameTime(selection.start)}{" "}
+                  →{" "}
+                  {selection.end === undefined ? "—" : frameTime(selection.end)}
+                </span>
+                <button
+                  disabled={
+                    loading ||
+                    exporting ||
+                    selection.start === undefined ||
+                    selection.end === undefined ||
+                    selection.end <= selection.start
+                  }
+                  onClick={async () => {
+                    transport.current?.pause();
+                    seek(selection.start!);
+                    segmentEnd.current = selection.end!;
+                    try {
+                      await transport.current?.play();
+                      publish();
+                    } catch (error) {
+                      setError("片段播放失败：" + String(error));
+                    }
+                  }}
+                >
+                  播放选段
+                </button>
+                {(selection.start !== undefined ||
+                  selection.end !== undefined) && (
+                  <button
+                    onClick={() => {
+                      setSelection({});
+                      segmentEnd.current = null;
+                    }}
+                  >
+                    清除选段
+                  </button>
+                )}
+              </div>
+            </details>
+            <div className="timeline-scroll" ref={timelineScroll}>
+              <div
+                className="timeline-content"
+                style={{ width: `${zoom * 100}%` }}
+              >
+                <div className="time-ruler">
+                  {Array.from({ length: 8 * zoom + 1 }, (_, i) => (
+                    <span key={i}>
+                      {frameTime((i * project.duration) / (8 * zoom))}
+                    </span>
+                  ))}
+                </div>
+                <input
+                  data-testid="timeline"
+                  className="master-slider"
+                  aria-label="动画进度"
+                  type="range"
+                  min="0"
+                  max={project.duration}
+                  step={1 / project.fps}
+                  value={view.time}
+                  disabled={loading || exporting}
+                  onChange={(e) => seek(Number(e.target.value))}
+                  style={
+                    {
+                      "--progress": (view.time / project.duration) * 100 + "%",
+                    } as React.CSSProperties
+                  }
+                />
+                <div className="tracks">
+                  {selection.start !== undefined &&
+                    selection.end !== undefined &&
+                    selection.end > selection.start && (
+                      <div
+                        className="timeline-selection"
+                        style={{
+                          left: `calc(44px + (100% - 44px) * ${selection.start / project.duration})`,
+                          width: `calc((100% - 44px) * ${(selection.end - selection.start) / project.duration})`,
+                        }}
                       />
+                    )}
+                  <div className="track-label">镜头</div>
+                  <div className="shot-track">
+                    {project.beats.map((b, i) => (
+                      <button
+                        key={b.at}
+                        style={{
+                          flex:
+                            (project.beats[i + 1]?.at ?? project.duration) -
+                            b.at,
+                        }}
+                        className={currentBeat === b ? "selected" : ""}
+                        disabled={exporting}
+                        onClick={() => seek(b.at)}
+                        title={b.detail}
+                      >
+                        <span>{String(i + 1).padStart(2, "0")}</span>
+                        {b.title}
+                      </button>
+                    ))}
+                  </div>
+                  {audioTracks.map((track) => {
+                    const control = trackControls[track.id] ?? {
+                      gain: track.gain ?? 1,
+                      muted: track.muted ?? false,
+                    };
+                    const update = (change: Partial<typeof control>) => {
+                      const next = { ...control, ...change };
+                      transport.current?.setTrack(track.id, next);
+                      setTrackControls((previous) => ({
+                        ...previous,
+                        [track.id]: next,
+                      }));
+                    };
+                    const values =
+                      waveforms[track.kind === "file" ? track.src : track.id] ||
+                      [];
+                    return (
+                      <Fragment key={track.id}>
+                        <div className="track-label audio-label">
+                          <details className="track-volume">
+                            <summary
+                              aria-label={`${track.name}音轨控制`}
+                              title={track.name}
+                            >
+                              {control.muted ? (
+                                <VolumeX size={16} />
+                              ) : (
+                                <Volume2 size={16} />
+                              )}
+                            </summary>
+                            <div className="track-volume-popup">
+                              <strong>{track.name}</strong>
+                              <button
+                                aria-label={`${track.name}静音`}
+                                aria-pressed={control.muted}
+                                disabled={exporting}
+                                onClick={() =>
+                                  update({ muted: !control.muted })
+                                }
+                              >
+                                {control.muted ? "取消静音" : "静音"}
+                              </button>
+                              <input
+                                aria-label={`${track.name}音量`}
+                                type="range"
+                                min="0"
+                                max="4"
+                                step="0.01"
+                                value={control.gain}
+                                disabled={exporting}
+                                onChange={(event) =>
+                                  update({ gain: Number(event.target.value) })
+                                }
+                              />
+                              <output>{Math.round(control.gain * 100)}%</output>
+                            </div>
+                          </details>
+                        </div>
+                        <div
+                          className={
+                            "audio-track individual-track " +
+                            (control.muted ? "muted" : "")
+                          }
+                          aria-label={`${track.name}时间轨道`}
+                        >
+                          <button
+                            className="audio-clip"
+                            disabled={exporting}
+                            style={{
+                              left:
+                                ((track.start ?? 0) / project.duration) * 100 +
+                                "%",
+                              width:
+                                (Math.min(
+                                  track.duration ?? project.duration,
+                                  project.duration - (track.start ?? 0),
+                                ) /
+                                  project.duration) *
+                                  100 +
+                                "%",
+                            }}
+                            onClick={() => seek(track.start ?? 0)}
+                          >
+                            <span>{track.name}</span>
+                            {values.length > 0 && (
+                              <svg
+                                viewBox="0 0 720 32"
+                                preserveAspectRatio="none"
+                                aria-hidden="true"
+                              >
+                                {values.slice(0, 180).map((value, i) => (
+                                  <rect
+                                    key={i}
+                                    x={(i * 720) / Math.min(180, values.length)}
+                                    y={16 - clamp(value) * 14}
+                                    width="2"
+                                    height={2 + clamp(value) * 28}
+                                    rx="1"
+                                  />
+                                ))}
+                              </svg>
+                            )}
+                          </button>
+                        </div>
+                      </Fragment>
                     );
                   })}
-                </svg>
-                <span>
-                  {audioTracks.length
-                    ? `${audioTracks.length} 条音轨 · 同步混音`
-                    : "未设置音轨"}
-                </span>
-              </div>
-              <div className="track-label">字幕</div>
-              <div className="subtitle-track">
-                {project.subtitles.map((s) => (
-                  <button
-                    key={s.start}
+                  <div className="track-label">字幕</div>
+                  <div className="subtitle-track">
+                    {project.subtitles.map((s) => (
+                      <button
+                        key={s.start}
+                        style={{
+                          left: (s.start / project.duration) * 100 + "%",
+                          width:
+                            ((s.end - s.start) / project.duration) * 100 + "%",
+                        }}
+                        title={s.text}
+                        disabled={exporting}
+                        onClick={() => seek(s.start)}
+                      >
+                        {s.text}
+                      </button>
+                    ))}
+                  </div>
+                  <div
+                    className="track-playhead"
                     style={{
-                      left: (s.start / project.duration) * 100 + "%",
-                      width: ((s.end - s.start) / project.duration) * 100 + "%",
+                      left:
+                        "calc(44px + (100% - 44px) * " +
+                        clamp(view.time / project.duration) +
+                        ")",
                     }}
-                    title={s.text}
-                    disabled={exporting}
-                    onClick={() => seek(s.start)}
-                  >
-                    {s.text}
-                  </button>
-                ))}
+                  />
+                </div>
               </div>
-              <div
-                className="track-playhead"
-                style={{
-                  left:
-                    "calc(44px + (100% - 44px) * " +
-                    clamp(view.time / project.duration) +
-                    ")",
-                }}
-              />
             </div>
           </section>
           <div className="keyboard-hint">
@@ -852,60 +1110,6 @@ export function Player({
               <kbd>F</kbd> 全屏
             </span>
           </div>
-          {audioTracks.length > 0 && (
-            <section className="track-mixer" aria-label="音轨混音">
-              {audioTracks.map((track) => {
-                const control = trackControls[track.id] ?? {
-                  gain: track.gain ?? 1,
-                  muted: track.muted ?? false,
-                };
-                const update = (change: Partial<typeof control>) => {
-                  const next = { ...control, ...change };
-                  transport.current?.setTrack(track.id, next);
-                  setTrackControls((previous) => ({
-                    ...previous,
-                    [track.id]: next,
-                  }));
-                };
-                return (
-                  <div className="track-mixer-row" key={track.id}>
-                    <span>
-                      {track.name}
-                      <small>
-                        {track.kind === "generated" ? "实时生成" : "音频文件"} ·{" "}
-                        {track.start ?? 0}s 起
-                      </small>
-                    </span>
-                    <button
-                      aria-label={`${track.name}静音`}
-                      aria-pressed={control.muted}
-                      disabled={exporting}
-                      onClick={() => update({ muted: !control.muted })}
-                    >
-                      {control.muted ? (
-                        <VolumeX size={16} />
-                      ) : (
-                        <Volume2 size={16} />
-                      )}
-                    </button>
-                    <input
-                      aria-label={`${track.name}音量`}
-                      type="range"
-                      min="0"
-                      max="4"
-                      step="0.01"
-                      value={control.gain}
-                      disabled={exporting}
-                      onChange={(event) =>
-                        update({ gain: Number(event.target.value) })
-                      }
-                    />
-                    <output>{Math.round(control.gain * 100)}%</output>
-                  </div>
-                );
-              })}
-            </section>
-          )}
         </div>
         {!embedded && (
           <aside className="inspector">
@@ -1095,34 +1299,36 @@ export function Player({
               </div>
               <Play size={18} />
             </button>
-            <div className="offline-export">
-              <strong>正式输出 · 逐帧 MP4</strong>
-              <p>
-                本地 FFmpeg + Playwright
-                逐帧渲染，不受实时播放掉帧影响。输出在项目 exports/ 目录。
-              </p>
-              <div className="command">
-                <code>{command}</code>
-                <button
-                  className="icon-button"
-                  aria-label="复制导出命令"
-                  onClick={() =>
-                    void navigator.clipboard
-                      .writeText(command)
-                      .then(() => {
-                        setCopied(true);
-                        setTimeout(() => setCopied(false), 2000);
-                      })
-                      .catch(() => setError("剪贴板不可用，请手动复制命令。"))
-                  }
-                >
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                </button>
+            {!embedded && (
+              <div className="offline-export">
+                <strong>正式输出 · 逐帧 MP4</strong>
+                <p>
+                  本地 FFmpeg + Playwright
+                  逐帧渲染，不受实时播放掉帧影响。输出在项目 exports/ 目录。
+                </p>
+                <div className="command">
+                  <code>{command}</code>
+                  <button
+                    className="icon-button"
+                    aria-label="复制导出命令"
+                    onClick={() =>
+                      void navigator.clipboard
+                        .writeText(command)
+                        .then(() => {
+                          setCopied(true);
+                          setTimeout(() => setCopied(false), 2000);
+                        })
+                        .catch(() => setError("剪贴板不可用，请手动复制命令。"))
+                    }
+                  >
+                    {copied ? <Check size={16} /> : <Copy size={16} />}
+                  </button>
+                </div>
+                <small>
+                  支持 --width 3840、--fps 60、--start / --end、--no-subtitles。
+                </small>
               </div>
-              <small>
-                支持 --width 3840、--fps 60、--start / --end、--no-subtitles。
-              </small>
-            </div>
+            )}
           </section>
         </div>
       )}

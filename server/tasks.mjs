@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { command } from "./process.mjs";
 import {
   copyTree,
@@ -11,6 +12,7 @@ import {
   hash,
 } from "./security.mjs";
 import { applyProject } from "./apply-project.mjs";
+import { PREVIEW_VERSION } from "./preview-version.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets) {
     this.db = db;
@@ -23,7 +25,15 @@ export class Tasks {
     fs.mkdirSync(path.join(data, "runs"), { recursive: true });
     fs.mkdirSync(path.join(data, "sessions"), { recursive: true });
   }
-  async create({ repo, project, kind, input = {}, chat = null }) {
+  async create({
+    repo,
+    project,
+    kind,
+    input = {},
+    chat = null,
+    requestKey = null,
+  }) {
+    input = JSON.parse(JSON.stringify(input));
     if (
       ![
         "new",
@@ -46,7 +56,23 @@ export class Tasks {
     } else await this.repos.project(repo, project, { exists: kind !== "new" });
     const id = randomUUID();
     const insert = async () => {
-      if (repo) await this.repos.writable(repo);
+      if (requestKey) {
+        const existing = await this.db.one(
+          "SELECT * FROM tasks WHERE request_key=$1",
+          [requestKey],
+        );
+        if (existing) {
+          if (
+            existing.repo !== repo ||
+            existing.project !== project ||
+            existing.chat !== chat ||
+            !isDeepStrictEqual(existing.input, input)
+          )
+            throw problem(409, "Message request key already used");
+          return existing;
+        }
+      }
+      if (repo && kind !== "agent") await this.repos.writable(repo, project);
       if (
         kind === "tools-update" &&
         (await this.db.one(
@@ -55,11 +81,11 @@ export class Tasks {
       )
         throw problem(409, "Another tool upgrade is running");
       return this.db.one(
-        "INSERT INTO tasks(id,repo,project,kind,input,chat) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
-        [id, repo || null, project || null, kind, input, chat],
+        "INSERT INTO tasks(id,repo,project,kind,input,chat,request_key) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
+        [id, repo || null, project || null, kind, input, chat, requestKey],
       );
     };
-    return this.db.lock(repo || "tools-update", insert);
+    return this.db.lock(repo ? `${repo}:${project}` : "tools-update", insert);
   }
   async get(id) {
     const row = await this.db.one("SELECT * FROM tasks WHERE id=$1", [id]);
@@ -70,7 +96,7 @@ export class Tasks {
     const t = await this.get(id);
     if (t.state === "queued")
       await this.db.pool.query(
-        "UPDATE tasks SET state='cancelled',finished=now() WHERE id=$1 AND state='queued'",
+        "UPDATE tasks SET state='cancelled',finished=now(),expires=now()+interval '7 days' WHERE id=$1 AND state='queued'",
         [id],
       );
     else if (t.state === "running")
@@ -87,6 +113,7 @@ export class Tasks {
     const run = path.join(this.data, "runs", t.id);
     fs.mkdirSync(run, { recursive: true });
     let fingerprint = null;
+    let sourceCommit = null;
     if (t.repo) {
       const { dir } = await this.repos.project(t.repo, t.project, {
         exists: t.kind !== "new",
@@ -96,12 +123,24 @@ export class Tasks {
       fingerprint = treeHash(dir);
       if (fs.existsSync(dir))
         copyTree(dir, path.join(run, "projects", t.project));
+      if (t.kind !== "new")
+        sourceCommit = await this.repos.checkpoint(
+          t.repo,
+          t.project,
+          t.kind === "agent" ? "AI 修改前自动保存" : "生成预览或导出前保存",
+        );
     }
     let config = {};
     if (t.kind === "agent") {
-      const stored = await this.db.setting(t.input.provider);
-      config = stored?.encrypted ? this.secrets.decrypt(stored.encrypted) : {};
-      if (!config.apiKey)
+      if (t.input.connection)
+        config = await this.connections.resolve(t.input.connection);
+      else {
+        const stored = await this.db.setting(t.input.provider);
+        config = stored?.encrypted
+          ? this.secrets.decrypt(stored.encrypted)
+          : {};
+      }
+      if (!config.apiKey && config.mode !== "official")
         throw problem(
           400,
           "Configure this AI provider API key in Settings first",
@@ -118,15 +157,29 @@ export class Tasks {
       upstream: chat?.upstream || null,
       model: config.model || null,
       baseUrl: config.baseUrl || null,
+      authMode: config.mode || "api",
     };
     fs.writeFileSync(path.join(run, "task.json"), JSON.stringify(payload));
     await command("chown", ["-R", "1000:1000", run]);
     const session = t.chat || t.id,
       sessionDir = path.join(this.data, "sessions", session);
-    fs.mkdirSync(sessionDir, { recursive: true });
+    fs.mkdirSync(path.join(sessionDir, ".codex"), { recursive: true });
     await command("chown", ["-R", "1000:1000", sessionDir]);
     const env = {};
     const flags = [];
+    if (t.kind === "agent" && config.mode === "official") {
+      const auth = path.join(this.data, "auth", config.id);
+      if (!fs.existsSync(auth))
+        throw problem(409, "官方登录凭据不存在，请重新登录");
+      flags.push(
+        "-v",
+        this.host("auth/" + config.id) + ":/auth",
+        "-e",
+        t.input.provider === "codex"
+          ? "CODEX_HOME=/auth/codex"
+          : "CLAUDE_CONFIG_DIR=/auth/claude",
+      );
+    }
     if (t.kind === "agent") {
       const value = token();
       await this.db.pool.query(
@@ -155,8 +208,8 @@ export class Tasks {
     const image = process.env.FRAME_EXECUTOR_IMAGE || "frame-studio:local",
       container = "frame-task-" + t.id;
     await this.db.pool.query(
-      "UPDATE tasks SET state='running',started=now(),container=$2,fingerprint=$3 WHERE id=$1",
-      [t.id, container, fingerprint],
+      "UPDATE tasks SET state='running',started=now(),container=$2,fingerprint=$3,source_commit=$4 WHERE id=$1",
+      [t.id, container, fingerprint, sourceCommit],
     );
     const args = [
       "run",
@@ -209,26 +262,36 @@ export class Tasks {
       : {};
     if (t.state === "cancelling") {
       await this.db.pool.query(
-        "UPDATE tasks SET state='cancelled',finished=now() WHERE id=$1",
+        "UPDATE tasks SET state='cancelled',finished=now(),expires=now()+interval '7 days' WHERE id=$1",
         [t.id],
       );
+      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [
+        t.id,
+      ]);
       return;
     }
     if (exit !== 0 || result.error || result.status === "failed")
       throw new Error(result.error || "Task failed; inspect task events");
     if (t.repo && ["agent", "new"].includes(t.kind))
-      await this.db.lock(t.repo, async () => {
+      await this.db.lock(`${t.repo}:${t.project}`, async () => {
         const { dir } = await this.repos.project(t.repo, t.project, {
           exists: false,
         });
         const source = confined(run, "projects/" + t.project);
-        applyProject({
-          source,
-          destination: dir,
-          run,
-          id: t.id,
-          fingerprint: t.fingerprint,
-        });
+        // After a process restart, an already applied identical result is safe to finish publishing.
+        if (treeHash(dir) !== treeHash(source))
+          applyProject({
+            source,
+            destination: dir,
+            run,
+            id: t.id,
+            fingerprint: t.fingerprint,
+          });
+        result.commit = await this.repos.checkpoint(
+          t.repo,
+          t.project,
+          "AI · " + (t.input.prompt || "创建作品").slice(0, 120),
+        );
       });
     if (t.chat && result.upstream)
       await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
@@ -254,8 +317,8 @@ export class Tasks {
     walk(base);
     result = { ...result, artifacts };
     await this.db.pool.query(
-      "UPDATE tasks SET state='succeeded',result=$2,finished=now() WHERE id=$1",
-      [t.id, result],
+      "UPDATE tasks SET state='succeeded',result=$2,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days' WHERE id=$1",
+      [t.id, result, result.commit || null],
     );
     await this.db.event(t.id, "result", result);
     await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
@@ -265,12 +328,55 @@ export class Tasks {
         [t.repo, t.project],
       );
       // A completed creation turn publishes a fresh player preview without a second user action.
-      await this.create({
-        repo: t.repo,
-        project: t.project,
-        kind: "build",
-      }).catch((e) =>
-        this.db.event(t.id, "preview-error", { message: e.message }),
+      // Publish the build already validated in this isolated turn, before queued follow-up work.
+      try {
+        if (result.previewArtifacts) {
+          const preview = randomUUID(),
+            previewRun = path.join(this.data, "runs", preview);
+          fs.mkdirSync(previewRun, { recursive: true });
+          const directories = new Set(
+            result.previewArtifacts.map((a) => path.posix.dirname(a.path)),
+          );
+          for (const relative of directories) {
+            if (!relative.startsWith(`projects/${t.project}/exports/`))
+              throw new Error("Invalid preview output");
+            fs.cpSync(confined(run, relative), confined(previewRun, relative), {
+              recursive: true,
+              filter: (file) => !fs.lstatSync(file).isSymbolicLink(),
+            });
+          }
+          const { dir } = await this.repos.project(t.repo, t.project);
+          await this.db.pool.query(
+            "INSERT INTO tasks(id,repo,project,kind,state,input,result,fingerprint,source_commit,created,started,finished,expires) VALUES($1,$2,$3,'build','succeeded','{}',$4,$5,$6,now(),now(),now(),now()+interval '7 days')",
+            [
+              preview,
+              t.repo,
+              t.project,
+              {
+                previewVersion: PREVIEW_VERSION,
+                artifacts: result.previewArtifacts,
+              },
+              treeHash(dir),
+              result.commit || t.source_commit,
+            ],
+          );
+        } else
+          await this.create({
+            repo: t.repo,
+            project: t.project,
+            kind: "build",
+          }).catch((e) =>
+            this.db.event(t.id, "preview-error", { message: e.message }),
+          );
+      } catch (e) {
+        await this.db.event(t.id, "preview-error", {
+          message: "作品已保存，预览发布失败，可重新生成：" + e.message,
+        });
+      }
+      await this.repos.onChange?.(t.repo, t.project).catch((e) =>
+        this.db.event(t.id, "index-error", {
+          message: "作品已保存，素材索引待刷新：" + e.message,
+        }),
       );
     }
   }
@@ -285,13 +391,21 @@ export class Tasks {
         try {
           if (
             t.state === "running" &&
-            Date.now() - new Date(t.started).getTime() > 3600000
+            Date.now() - new Date(t.started).getTime() >
+              Math.max(
+                600,
+                Math.min(
+                  604800,
+                  Number(process.env.FRAME_TASK_TIMEOUT_SECONDS) || 21600,
+                ),
+              ) *
+                1000
           ) {
             await command("docker", ["stop", "-t", "5", t.container]).catch(
               () => {},
             );
             throw new Error(
-              "Task exceeded the one hour execution limit; completed output is retained.",
+              "创作超过服务器配置的运行时限，隔离工作区产物已保留，可重新继续。",
             );
           }
           if (t.state === "cancelling")
@@ -306,11 +420,19 @@ export class Tasks {
               t.container,
             ]),
           );
-          const log = await command(
-            "docker",
-            ["logs", "--tail", "1500", t.container],
-            { max: 1024 * 1024, combined: true },
-          ).catch((e) => e.message);
+          if (t.kind === "agent") {
+            do {
+              if (!(await this.collectEvents(t))) break;
+            } while (!state.Running);
+          }
+          const log =
+            t.kind === "agent"
+              ? ""
+              : await command(
+                  "docker",
+                  ["logs", "--tail", "1500", t.container],
+                  { max: 1024 * 1024, combined: true },
+                ).catch((e) => e.message);
           if (log !== this.logs.get(t.id)) {
             const old = this.logs.get(t.id) || "";
             const delta = log.startsWith(old) ? log.slice(old.length) : log;
@@ -325,10 +447,15 @@ export class Tasks {
           }
         } catch (e) {
           await this.db.pool.query(
-            "UPDATE tasks SET state='failed',error=$2,finished=now() WHERE id=$1",
+            "UPDATE tasks SET state='failed',error=$2,finished=now(),expires=now()+interval '14 days' WHERE id=$1",
             [t.id, e.message],
           );
           await this.db.event(t.id, "error", { message: e.message });
+          await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [
+            t.id,
+          ]);
+          if (t.container)
+            await command("docker", ["rm", "-f", t.container]).catch(() => {});
         }
       }
       const count = await this.db.one(
@@ -336,21 +463,71 @@ export class Tasks {
       );
       if (count.n < 2) {
         const t = await this.db.one(
-          "SELECT * FROM tasks WHERE state='queued' ORDER BY created LIMIT 1",
+          `SELECT t.* FROM tasks t WHERE t.state='queued' AND NOT EXISTS(SELECT 1 FROM tasks r WHERE r.state IN ('running','cancelling') AND ((r.repo=t.repo AND r.project=t.project) OR (t.input->>'connection' IS NOT NULL AND r.input->>'connection'=t.input->>'connection')))
+          ORDER BY t.created LIMIT 1`,
         );
         if (t)
           try {
             await this.start(t);
           } catch (e) {
             await this.db.pool.query(
-              "UPDATE tasks SET state='failed',error=$2,finished=now() WHERE id=$1",
+              "UPDATE tasks SET state='failed',error=$2,finished=now(),expires=now()+interval '14 days' WHERE id=$1",
               [t.id, e.message],
             );
+            await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [
+              t.id,
+            ]);
+            const failed = await this.get(t.id);
+            if (failed.container)
+              await command("docker", ["rm", "-f", failed.container]).catch(
+                () => {},
+              );
+            await this.db.event(t.id, "error", { message: e.message });
           }
       }
     } finally {
       this.ticking = false;
     }
+  }
+  async collectEvents(task) {
+    const file = path.join(this.data, "runs", task.id, "events.ndjson");
+    if (!fs.existsSync(file)) return;
+    const start = Number(task.log_cursor || 0),
+      size = fs.statSync(file).size;
+    if (size <= start) return;
+    const fd = fs.openSync(file, "r"),
+      bytes = Buffer.alloc(Math.min(size - start, 1024 * 1024));
+    try {
+      fs.readSync(fd, bytes, 0, bytes.length, start);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const end = bytes.lastIndexOf(10);
+    if (end < 0) return;
+    let offset = start;
+    for (const line of bytes.subarray(0, end).toString("utf8").split("\n")) {
+      offset += Buffer.byteLength(line) + 1;
+      try {
+        const event = JSON.parse(line);
+        await this.db.pool.query(
+          "INSERT INTO events(task,kind,data,source_offset) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+          [task.id, event.type, event, offset],
+        );
+        if (event.type === "session" && task.chat)
+          await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
+            task.chat,
+            event.id,
+          ]);
+      } catch (e) {
+        if (!(e instanceof SyntaxError)) throw e;
+      }
+    }
+    await this.db.pool.query("UPDATE tasks SET log_cursor=$2 WHERE id=$1", [
+      task.id,
+      String(start + end + 1),
+    ]);
+    task.log_cursor = String(start + end + 1);
+    return start + end + 1 < size;
   }
   startLoop() {
     this.timer = setInterval(

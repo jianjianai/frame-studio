@@ -1,7 +1,7 @@
 name: frame
 services:
   studio:
-    image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-3.0.0}
+    image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.0.0}
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://frame:${POSTGRES_PASSWORD}@postgres:5432/frame
@@ -10,7 +10,8 @@ services:
       FRAME_PUBLIC_URL: https://frame.nerviloom.com
       FRAME_DATA: /data
       FRAME_HOST_DATA: /opt/stacks/frame/data
-      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-3.0.0}
+      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.0.0}
+      FRAME_TASK_TIMEOUT_SECONDS: ${FRAME_TASK_TIMEOUT_SECONDS:-21600}
       FRAME_SPEECH_URL: http://speech:8000
     volumes:
       - ./data:/data
@@ -50,7 +51,7 @@ services:
       timeout: 3s
       retries: 15
   speech:
-    image: ghcr.io/jianjianai/frame-speech:${FRAME_VERSION:-3.0.0}
+    image: ghcr.io/jianjianai/frame-speech:${FRAME_SPEECH_VERSION:-3.0.0}
     restart: unless-stopped
     environment: { OMP_NUM_THREADS: "2", MKL_NUM_THREADS: "2" }
     volumes: [models:/models]

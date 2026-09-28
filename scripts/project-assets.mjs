@@ -44,7 +44,11 @@ export function projectAssets({ project } = {}) {
         }
         if (!url?.startsWith("/films/")) return next();
         try {
-          if (project && !decodeURIComponent(url).startsWith('/films/' + project + '/')) throw new Error('Asset belongs to another project');
+          if (
+            project &&
+            !decodeURIComponent(url).startsWith("/films/" + project + "/")
+          )
+            throw new Error("Asset belongs to another project");
           const file = assetPath(root, decodeURIComponent(url.slice(1)));
           if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
             res.statusCode = 404;
@@ -72,7 +76,8 @@ export function projectAssets({ project } = {}) {
         }
       });
     },
-    generateBundle() {
+    async generateBundle() {
+      const banks = [];
       const walk = (dir, prefix) => {
         if (!fs.existsSync(dir)) return;
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -81,12 +86,15 @@ export function projectAssets({ project } = {}) {
           const file = path.join(dir, entry.name),
             name = prefix + "/" + entry.name;
           if (entry.isDirectory()) walk(file, name);
-          else
+          else {
             this.emitFile({
               type: "asset",
               fileName: name,
               source: fs.readFileSync(file),
             });
+            if (/\.sf2$/i.test(name) && fs.statSync(file).size > 1024 * 1024)
+              banks.push({ file, name });
+          }
         }
       };
       for (const directory of ids ??
@@ -95,6 +103,28 @@ export function projectAssets({ project } = {}) {
           path.join(root, "projects", directory, "public"),
           "films/" + directory,
         );
+      if (banks.length) {
+        const { splitSoundfont } = await import("./soundfont-parts.mjs");
+        for (const { file, name } of banks) {
+          const split = splitSoundfont(fs.readFileSync(file));
+          if (!split) continue;
+          this.emitFile({
+            type: "asset",
+            fileName: name + ".parts/index.json",
+            source: JSON.stringify(split.manifest),
+          });
+          const emitted = new Set();
+          for (const part of split.parts)
+            if (!emitted.has(part.file)) {
+              emitted.add(part.file);
+              this.emitFile({
+                type: "asset",
+                fileName: name + ".parts/" + part.file,
+                source: part.bytes,
+              });
+            }
+        }
+      }
       this.emitFile({
         type: "asset",
         fileName: "assets.json",
