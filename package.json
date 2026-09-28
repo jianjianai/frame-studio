@@ -17,7 +17,7 @@
     "render": "node scripts/render.mjs",
     "assets": "node scripts/prepare-assets.mjs",
     "format": "prettier --write src scripts tests templates/*.txt package.json tsconfig.json vite.config.ts vitest.config.ts playwright.config.ts README.md AGENTS.md docs/*.md --ignore-unknown",
-    "verify": "pnpm project:check && pnpm typecheck && pnpm test && pnpm build && pnpm test:e2e",
+    "verify": "pnpm project:check && pnpm typecheck && pnpm test && pnpm test:mcp && pnpm build && pnpm test:e2e",
     "posters": "node scripts/render.mjs --posters",
     "env:check": "node scripts/doctor.mjs",
     "assets:import": "node scripts/import-asset.mjs",
@@ -26,7 +26,9 @@
     "project:scope": "node scripts/project-scope.mjs",
     "frame": "node scripts/render.mjs --frame-mode",
     "project:check": "node scripts/check-projects.mjs",
-    "film": "node scripts/film.mjs"
+    "film": "node scripts/film.mjs",
+    "mcp": "node scripts/mcp.mjs",
+    "test:mcp": "node --test tests/mcp/*.test.mjs"
   },
   "dependencies": {
     "flubber": "0.4.2",
@@ -42,6 +44,8 @@
   },
   "devDependencies": {
     "@babel/parser": "7.28.5",
+    "@modelcontextprotocol/client": "2.1.0",
+    "@modelcontextprotocol/server": "2.1.0",
     "@playwright/test": "1.63.0",
     "@types/flubber": "0.4.0",
     "@types/node": "26.6.3",

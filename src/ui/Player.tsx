@@ -33,7 +33,7 @@ import type { ExportProgress } from "../engine/browser-export";
 import { activeSubtitle, toSrt } from "../engine/subtitles";
 import { downloadBlob, downloadCanvas } from "../engine/download";
 import { clamp, formatTime } from "../engine/math";
-import type { StudioApi } from "../engine/debug";
+import { waitForStudio, type StudioApi } from "../engine/debug";
 interface Playback {
   time: number;
   playing: boolean;
@@ -87,6 +87,7 @@ export function Player({ project }: { project: AnimationProject }) {
   const [exporting, setExporting] = useState(false);
   const [exportWidth, setExportWidth] = useState(1920);
   const [exportFps, setExportFps] = useState(project.fps);
+  const [exportToDisk, setExportToDisk] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(
     null,
   );
@@ -167,7 +168,9 @@ export function Player({ project }: { project: AnimationProject }) {
       frames = 0,
       fpsAt = performance.now();
     const output = new FrameRenderer(canvas.current!, project);
+    const diagnosticErrors: string[] = [];
     const sound = new AudioTransport(project, (error) => {
+      diagnosticErrors.push(error.message);
       if (!canceled) {
         setError("播放已暂停：" + error.message);
         publish();
@@ -218,6 +221,57 @@ export function Player({ project }: { project: AnimationProject }) {
         height: Math.round((w * 9) / 16),
       }),
       dataURL: () => canvas.current!.toDataURL("image/png"),
+      async waitUntilReady(options = {}) {
+        await waitForStudio(api, options);
+        if (options.audio)
+          await sound.preparePosition(
+            AbortSignal.timeout(options.timeoutMs ?? 60000),
+          );
+      },
+      async captureAt(t, options = {}) {
+        await waitForStudio(api, options);
+        api.frame(t, options.subtitles ?? subtitleRef.current);
+        await api.waitUntilReady!(options);
+        return {
+          time: sound.clock.time(),
+          dataURL: api.dataURL(),
+          diagnostics: api.getDiagnostics!(),
+        };
+      },
+      setRate(rate) {
+        sound.setRate(rate);
+        publish();
+      },
+      setTrack(id, control) {
+        sound.setTrack(id, control);
+        setTrackControls((previous) => ({
+          ...previous,
+          [id]: sound.controls.get(id)!,
+        }));
+        publish();
+      },
+      getDiagnostics: () => ({
+        ...output.diagnostics(),
+        audio: {
+          state: sound.context?.state ?? "locked",
+          buffering: sound.buffering,
+          prepareMs: sound.prepareMs,
+          tracks: Object.fromEntries(sound.controls),
+          bufferedRanges: null,
+        },
+        errors: [...diagnosticErrors],
+      }),
+      getParameters: () => output.parameters(),
+      setParameters(values) {
+        sound.pause();
+        output.setParameters(values);
+        output.render(sound.clock.time(), subtitleRef.current);
+        publish();
+      },
+      setOverlay(enabled) {
+        output.setOverlay(enabled);
+        output.render(sound.clock.time(), subtitleRef.current);
+      },
     };
     if (
       import.meta.env.DEV ||
@@ -269,6 +323,7 @@ export function Player({ project }: { project: AnimationProject }) {
             }
             raf = requestAnimationFrame(tick);
           } catch (e) {
+            diagnosticErrors.push(String(e));
             sound.pause();
             setError("渲染错误：" + String(e));
           }
@@ -276,6 +331,7 @@ export function Player({ project }: { project: AnimationProject }) {
         raf = requestAnimationFrame(tick);
       })
       .catch((e) => {
+        diagnosticErrors.push(String(e));
         if (!canceled) {
           setError(
             "场景载入失败：" +
@@ -359,17 +415,55 @@ export function Player({ project }: { project: AnimationProject }) {
     setExportOpen(false);
     setExportProgress({ phase: "preparing", completed: 0, total: 0 });
     try {
-      const { exportWebm } = await import("../engine/browser-export");
-      const blob = await exportWebm(project, {
-        width: exportWidth,
-        fps: exportFps,
-        subtitles: subtitleRef.current,
-        controls: new Map(sound.controls),
-        volume: sound.muted ? 0 : sound.volume,
-        signal: abort.signal,
-        onProgress: setExportProgress,
-      });
-      if (!abort.signal.aborted) downloadBlob(blob, project.id + ".webm");
+      type FileWriter = {
+        write(chunk: unknown): Promise<void>;
+        close(): Promise<void>;
+        abort(): Promise<void>;
+      };
+      const picker = (
+        window as unknown as {
+          showSaveFilePicker?: (
+            options: unknown,
+          ) => Promise<{ createWritable(): Promise<FileWriter> }>;
+        }
+      ).showSaveFilePicker;
+      const writer =
+        exportToDisk && picker
+          ? await (
+              await picker.call(window, {
+                suggestedName: project.id + ".webm",
+                types: [
+                  {
+                    description: "WebM 视频",
+                    accept: { "video/webm": [".webm"] },
+                  },
+                ],
+              })
+            ).createWritable()
+          : undefined;
+      let blob: Blob | null;
+      try {
+        const { exportWebm } = await import("../engine/browser-export");
+        blob = await exportWebm(project, {
+          width: exportWidth,
+          fps: exportFps,
+          subtitles: subtitleRef.current,
+          controls: new Map(sound.controls),
+          volume: sound.muted ? 0 : sound.volume,
+          signal: abort.signal,
+          onProgress: setExportProgress,
+          writable: writer
+            ? new WritableStream({ write: (chunk) => writer.write(chunk) })
+            : undefined,
+        });
+        if (abort.signal.aborted) throw abort.signal.reason;
+        await writer?.close();
+      } catch (error) {
+        await writer?.abort().catch(() => {});
+        throw error;
+      }
+      if (blob && !abort.signal.aborted)
+        downloadBlob(blob, project.id + ".webm");
     } catch (error) {
       if (!abort.signal.aborted) setError("逐帧导出失败：" + String(error));
     } finally {
@@ -381,7 +475,7 @@ export function Player({ project }: { project: AnimationProject }) {
     }
   }
   const command =
-    "pnpm film render " +
+    "pnpm film export " +
     project.id +
     " --width " +
     exportWidth +
@@ -962,6 +1056,16 @@ export function Player({ project }: { project: AnimationProject }) {
                 </select>
               </label>
             </div>
+            {"showSaveFilePicker" in window && (
+              <label>
+                <input
+                  type="checkbox"
+                  checked={exportToDisk}
+                  onChange={(event) => setExportToDisk(event.target.checked)}
+                />
+                直接保存到文件，适合较长作品
+              </label>
+            )}
             <button className="export-option" onClick={() => void renderWebm()}>
               <Video size={23} />
               <div>

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { assetPath, projectPath } from "./project-paths.mjs";
-import { readProjectCatalog } from "./project-metadata.mjs";
+import { readProjectCatalog, validProjectId } from "./project-metadata.mjs";
 
 export function assetCatalog(root, ids) {
   const selected =
@@ -13,10 +13,24 @@ export function assetCatalog(root, ids) {
 }
 
 /** Project public files are served/copied directly; no generated source-tree mirror. */
-export function projectAssets() {
+export function projectAssets({ project } = {}) {
+  if (project && !validProjectId(project))
+    throw new Error("Invalid FRAME_PROJECT");
+  const ids = project ? [project] : undefined;
   let root;
   return {
     name: "frame-project-assets",
+    enforce: "pre",
+    transform(code, id) {
+      if (
+        project &&
+        id.replaceAll("\\", "/").endsWith("/src/projects/index.ts")
+      )
+        return code.replace(
+          /const modules = import\.meta\.glob[\s\S]*?\);/,
+          `import selected from '../../projects/${project}/project';\nconst modules = { selected: { default: selected } };`,
+        );
+    },
     configResolved(config) {
       root = config.root;
     },
@@ -25,11 +39,12 @@ export function projectAssets() {
         const url = req.url?.split("?")[0];
         if (url === "/assets.json") {
           res.setHeader("Content-Type", "application/json");
-          res.end(JSON.stringify(assetCatalog(root)));
+          res.end(JSON.stringify(assetCatalog(root, ids)));
           return;
         }
         if (!url?.startsWith("/films/")) return next();
         try {
+          if (project && !decodeURIComponent(url).startsWith('/films/' + project + '/')) throw new Error('Asset belongs to another project');
           const file = assetPath(root, decodeURIComponent(url.slice(1)));
           if (!fs.existsSync(file) || !fs.statSync(file).isFile()) {
             res.statusCode = 404;
@@ -74,7 +89,8 @@ export function projectAssets() {
             });
         }
       };
-      for (const { directory } of readProjectCatalog(root))
+      for (const directory of ids ??
+        readProjectCatalog(root).map((p) => p.directory))
         walk(
           path.join(root, "projects", directory, "public"),
           "films/" + directory,
@@ -82,7 +98,7 @@ export function projectAssets() {
       this.emitFile({
         type: "asset",
         fileName: "assets.json",
-        source: JSON.stringify(assetCatalog(root)),
+        source: JSON.stringify(assetCatalog(root, ids)),
       });
     },
   };

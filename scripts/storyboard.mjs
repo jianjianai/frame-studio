@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
-import { readProjectCatalog, validProjectId } from "./project-metadata.mjs";
+import { readProject, validProjectId } from "./project-metadata.mjs";
 import { projectPath } from "./project-paths.mjs";
 import { createRenderSession, framePng } from "./render-session.mjs";
 import { createExportPlan } from "../src/engine/export-plan.mjs";
@@ -30,10 +30,14 @@ try {
     } else throw new Error("Unknown or incomplete option: " + args[i]);
   }
   const root = process.cwd();
-  const entry = readProjectCatalog(root).find((p) => p.directory === id);
+  const entry = readProject(projectPath(root, id, "project.ts"));
   if (!entry) throw new Error("Unknown project: " + id);
   const { meta } = entry;
-  const { width, height, frames: frameCount } = createExportPlan({
+  const {
+    width,
+    height,
+    frames: frameCount,
+  } = createExportPlan({
     duration: meta.duration,
     width: Number(values.get("--width") ?? 480),
     fps: meta.fps,
@@ -117,6 +121,7 @@ try {
     JSON.stringify(
       {
         schemaVersion: 1,
+        input: session.input(id),
         project: id,
         output,
         width,

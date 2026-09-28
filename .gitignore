@@ -32,3 +32,4 @@ coverage/
 projects/*/exports/
 projects/*/.cache/
 projects/.cache/
+projects/*/.history/

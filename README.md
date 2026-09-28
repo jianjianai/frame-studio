@@ -77,6 +77,8 @@ pnpm render tiny-seed --frame 150
 
 ## AI 制作入口
 
+AI 客户端可通过 [FRAME MCP 服务](docs/MCP.md)直接读取项目、按文件版本批量编辑、查看分镜图片并启动/取消导出。运行 pnpm --silent film mcp；可用 --project 限定项目，--read-only 提供只读接入。
+
 统一入口是 `pnpm film help`，完整用法见 [AI 工具工作流](docs/AI-WORKFLOW.md)。原命令继续兼容。
 
 ```powershell
@@ -93,6 +95,8 @@ context 只读输出项目入口、音轨、素材和修改边界。storyboard �
 浏览器编码依赖 WebCodecs；不支持时明确报错，不降级为实时录屏。浏览器编码文件缓存上限 256 MiB，大型成片使用命令导出。代码音频在浏览器与命令导出时都使用离线混音。
 
 ## 常用命令
+
+AI 制作的完整命令流程见 [AI-PRODUCTION](docs/AI-PRODUCTION.md)：局部修改与撤销、单项目验证、声画审片、正式分段导出、后台任务及旁白。无需 MCP 也可使用全部主要制作能力。
 
 ```powershell
 pnpm animation:new my-film "我的动画" --renderer pixi

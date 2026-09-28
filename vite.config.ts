@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 import { projectAssets } from "./scripts/project-assets.mjs";
 export default defineConfig({
   base: "./",
-  plugins: [react(), projectAssets()],
+  plugins: [react(), projectAssets({ project: process.env.FRAME_PROJECT })],
   worker: { format: "es" },
   server: {
     host: "127.0.0.1",

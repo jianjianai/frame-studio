@@ -84,6 +84,16 @@ export interface Scene {
   canvas: HTMLCanvasElement;
   render(time: number): void;
   dispose(): void;
+  /** Optional author-defined controls; these do not change the scene protocol. */
+  debug?: {
+    parameters(): Record<
+      string,
+      { value: number; min: number; max: number; step?: number; label?: string }
+    >;
+    setParameters(values: Record<string, number>): void;
+    setOverlay?(enabled: boolean): void;
+    diagnostics?(): Record<string, unknown>;
+  };
 }
 export interface SceneModule {
   createScene(options: SceneOptions): Promise<Scene> | Scene;

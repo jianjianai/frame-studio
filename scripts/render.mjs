@@ -8,7 +8,11 @@ import { writeProjectPoster } from "./poster-output.mjs";
 import { createRenderSession } from "./render-session.mjs";
 import { createExportPlan } from "../src/engine/export-plan.mjs";
 import { projectPath } from "./project-paths.mjs";
-import { validProjectId, readProjectCatalog } from "./project-metadata.mjs";
+import {
+  validProjectId,
+  readProjectCatalog,
+  readProject,
+} from "./project-metadata.mjs";
 const args = process.argv.slice(2);
 const values = new Set([
   "--width",
@@ -69,7 +73,15 @@ if (!posters && (!validProjectId(id) || positional.length !== 1)) {
   );
   process.exit(1);
 }
-const catalog = readProjectCatalog(root);
+const catalog =
+  posters && !posterProject
+    ? readProjectCatalog(root)
+    : [
+        {
+          directory: posterProject ?? id,
+          ...readProject(projectPath(root, posterProject ?? id, "project.ts")),
+        },
+      ];
 const selected = catalog.find((project) => project.meta.id === id)?.meta;
 if (!posters && !selected) throw new Error("Unknown project: " + id);
 if (!posters && val("--out"))
@@ -131,19 +143,7 @@ try {
       args.includes("--frame") ||
       args.includes("--time");
     const page = await renderPage(id);
-    const meta = await page.evaluate(async (projectId) => {
-      const { projects } = await import("/src/projects/index.ts");
-      const p = projects.find((p) => p.id === projectId);
-      return p
-        ? {
-            duration: p.duration,
-            audio: p.audio,
-            audioTracks: p.audioTracks,
-            title: p.title,
-            fps: p.fps,
-          }
-        : null;
-    }, id);
+    const meta = selected;
     if (!meta) throw new Error("Unknown project: " + id);
     const scopedOutput = (fallback, extension) => {
       const output = path.resolve(val("--out", fallback));
@@ -406,6 +406,8 @@ try {
       await fs.rename(temporary, output);
       temporary = undefined;
       const report = {
+        input: session.input(id),
+        diagnostics: page.frameDiagnostics(),
         project: id,
         title: meta.title,
         output,

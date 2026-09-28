@@ -1,6 +1,8 @@
 import {
   Output,
   BufferTarget,
+  StreamTarget,
+  type StreamTargetChunk,
   WebMOutputFormat,
   CanvasSource,
   AudioBufferSource,
@@ -26,13 +28,15 @@ export interface BrowserExportOptions {
   controls?: Map<string, { gain: number; muted: boolean }>;
   volume?: number;
   onProgress?: (progress: ExportProgress) => void;
+  writable?: WritableStream<StreamTargetChunk>;
+  onEncoder?: (report: { codec: string; failures: string[] }) => void;
 }
 
 /** Own scene, integer frame grid, awaited encoder backpressure, offline audio. */
 export async function exportWebm(
   project: AnimationProject,
   options: BrowserExportOptions,
-): Promise<Blob> {
+): Promise<Blob | null> {
   const plan = createExportPlan({
     duration: project.duration,
     width: options.width,
@@ -49,18 +53,9 @@ export async function exportWebm(
     frameRate: plan.fps,
     quality: new Quality("very-high"),
     latencyMode: "quality" as const,
+    hardwareAcceleration: "prefer-software" as const,
   };
   let codec: "vp9" | "vp8" | undefined;
-  for (const candidate of ["vp9", "vp8"] as const) {
-    if (await canEncodeVideo(candidate, encoding)) {
-      codec = candidate;
-      break;
-    }
-  }
-  if (!codec)
-    throw new Error(
-      "浏览器不支持此尺寸的逐帧编码，请换用新版 Chrome / Edge 或使用命令导出。",
-    );
   const hasAudio = projectAudioTracks(project).length > 0;
   if (
     hasAudio &&
@@ -75,11 +70,16 @@ export async function exportWebm(
     options.controls,
     options.volume,
   );
-  const target = new BufferTarget();
+  const target = options.writable
+    ? new StreamTarget(options.writable, {
+        chunked: true,
+        chunkSize: 1024 * 1024,
+      })
+    : new BufferTarget();
   const output = new Output({ format: new WebMOutputFormat(), target });
   // Bound retained encoded data. Raw frames/audio are submitted in small batches.
   target.on("write", ({ end }) => {
-    if (end > 256 * 1024 * 1024)
+    if (!options.writable && end > 256 * 1024 * 1024)
       throw new Error("导出文件超过浏览器 256 MiB 缓存上限，请使用命令导出。");
   });
   const stopAudio = () => audio.dispose();
@@ -89,6 +89,57 @@ export async function exportWebm(
     await renderer.init(plan.width, plan.height, "high");
     await document.fonts.ready;
     signal.throwIfAborted();
+    const failures: string[] = [];
+    for (const candidate of ["vp9", "vp8"] as const) {
+      if (!(await canEncodeVideo(candidate, encoding))) {
+        failures.push(candidate + ": unsupported");
+        continue;
+      }
+      const trialTarget = new BufferTarget();
+      const trial = new Output({
+        format: new WebMOutputFormat(),
+        target: trialTarget,
+      });
+      try {
+        const video = new CanvasSource(canvas, {
+          codec: candidate,
+          ...encoding,
+        });
+        const sound = hasAudio
+          ? new AudioBufferSource({
+              codec: "opus",
+              quality: new Quality({ bitrate: 192000 }),
+            })
+          : undefined;
+        trial.addVideoTrack(video, { frameRate: plan.fps });
+        if (sound) trial.addAudioTrack(sound);
+        await trial.start();
+        const trialFrames = Math.min(3, plan.frames);
+        if (sound)
+          await sound.add(await audio.render(0, trialFrames / plan.fps));
+        for (let frame = 0; frame < trialFrames; frame++) {
+          signal.throwIfAborted();
+          renderer.render(frame / plan.fps, options.subtitles);
+          await video.add(frame / plan.fps, 1 / plan.fps);
+        }
+        video.close();
+        sound?.close();
+        await trial.finalize();
+        if (!trialTarget.buffer?.byteLength)
+          throw new Error("Trial encoder produced no media");
+        codec = candidate;
+        break;
+      } catch (error) {
+        await trial.cancel().catch(() => {});
+        signal.throwIfAborted();
+        failures.push(candidate + ": " + String(error));
+      }
+    }
+    if (!codec)
+      throw new Error(
+        "实际试编码失败，请使用 film export 命令。" + failures.join("; "),
+      );
+    options.onEncoder?.({ codec, failures });
     const video = new CanvasSource(canvas, { codec, ...encoding });
     const sound = hasAudio
       ? new AudioBufferSource({
@@ -125,6 +176,7 @@ export async function exportWebm(
     progress("finalizing", plan.frames);
     await output.finalize();
     signal.throwIfAborted();
+    if (target instanceof StreamTarget) return null;
     if (!target.buffer?.byteLength) throw new Error("编码器没有生成有效文件");
     return new Blob([target.buffer], { type: "video/webm" });
   } catch (error) {

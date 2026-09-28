@@ -4,6 +4,9 @@ export class FrameRenderer {
   private scene?: Scene;
   private ctx: CanvasRenderingContext2D;
   private destroyed = false;
+  private lastTime = 0;
+  private renderMs = 0;
+  private renderCount = 0;
   constructor(
     public readonly canvas: HTMLCanvasElement,
     public readonly project: AnimationProject,
@@ -31,6 +34,7 @@ export class FrameRenderer {
   }
   render(time: number, subtitles = true): void {
     if (!this.scene || this.destroyed) return;
+    const began = performance.now();
     this.scene.render(time);
     this.ctx.drawImage(
       this.scene.canvas,
@@ -46,6 +50,40 @@ export class FrameRenderer {
         this.canvas.width,
         this.canvas.height,
       );
+    this.lastTime = time;
+    this.renderMs = performance.now() - began;
+    this.renderCount++;
+  }
+  diagnostics() {
+    return {
+      ready: Boolean(this.scene) && !this.destroyed,
+      actualTime: this.lastTime,
+      renderMs: this.renderMs,
+      renderCount: this.renderCount,
+      scene: this.scene?.debug?.diagnostics?.() ?? null,
+    };
+  }
+  parameters() {
+    return this.scene?.debug?.parameters() ?? {};
+  }
+  setParameters(values: Record<string, number>) {
+    const schema = this.parameters();
+    for (const [key, value] of Object.entries(values)) {
+      const parameter = schema[key];
+      if (
+        !parameter ||
+        !Number.isFinite(value) ||
+        value < parameter.min ||
+        value > parameter.max
+      )
+        throw new Error("Unknown or out-of-range scene parameter: " + key);
+    }
+    if (!this.scene?.debug)
+      throw new Error("This scene does not expose parameters");
+    this.scene.debug.setParameters(values);
+  }
+  setOverlay(enabled: boolean) {
+    this.scene?.debug?.setOverlay?.(enabled);
   }
   dispose(): void {
     this.destroyed = true;
