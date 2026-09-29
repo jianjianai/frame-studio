@@ -7,6 +7,7 @@ import { createAgentFileInspector } from "./agent-file-changes.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { installToolVersion } from "./tool-installation.mjs";
+import { creatorTaskIgnores, creatorPrompt } from "./creator-workspace.mjs";
 const work = "/workspace",
   core = "/opt/frame";
 const task = JSON.parse(fs.readFileSync(work + "/task.json", "utf8"));
@@ -141,16 +142,7 @@ try {
     await run("git", ["init", "-b", "frame-task"]);
     await run("git", ["config", "user.name", "FRAME"]);
     await run("git", ["config", "user.email", "frame@localhost"]);
-    const skip = [
-      "node_modules",
-      ".cache/",
-      "projects/*/.cache/",
-      "projects/*/.history/",
-      "projects/*/exports/",
-      "task.json",
-      "result.json",
-      "events.ndjson",
-    ];
+    const skip = creatorTaskIgnores;
     fs.writeFileSync(work + "/.gitignore", skip.join("\n") + "\n");
     const baseline = [
       "src",
@@ -187,7 +179,7 @@ try {
         bin = `/tools/${p}/${pinned.version}/node_modules/.bin/${bin}`;
       }
       actualRuntime.tool = { provider: p, pinnedVersion: pinned?.version || null, actualVersion: (await run(bin, ["--version"])).trim(), model: task.model, authMode: task.authMode };
-      const prompt = `You are creating one work in FRAME: ${task.project}. Only edit projects/${task.project}/. The surrounding engine and tools are the platform runtime, not another project to create or install. Read AGENTS.md, docs/AUTHORING.md and the work README. Use pnpm --silent film context ${task.project} --json, frame/storyboard/render for visual inspection. Use node scripts/work-tool.mjs help for asset and speech tools. engines lists ready built-in engines and voices; engine_add adds a custom compatible speech API when needed. engine_test creates temporary audition audio only; speech generates final narration into the current work. use copies a selected asset into this work. Wire returned material URLs into scenes/audioTracks as needed. Pass credentials through @file or stdin and never print them. Validate before finishing; a preview is built automatically after successful completion.\n\n${task.input.prompt}`;
+      const prompt = creatorPrompt(task.project) + "\n\n" + task.input.prompt;
       const context = task.input.context
         ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}` : "";
       const reference = task.reviewReference
