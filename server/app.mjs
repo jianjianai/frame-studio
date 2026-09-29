@@ -387,7 +387,7 @@ export async function createApp({
           },
           async (args) => {
             try {
-              const value = await op.fn(args);
+              const value = await actions.call(name, args);
               if (name === "speech_test" && value.bytes <= 8 * 1024 * 1024) {
                 const audio = confined(
                   path.join(data, "runs", value.task),

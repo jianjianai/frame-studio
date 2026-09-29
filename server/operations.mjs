@@ -5,6 +5,8 @@ import { z } from "zod";
 import { speechOperations } from "./speech.mjs";
 import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
+import { chatOperations } from "./chat-operations.mjs";
+import { createOperationRegistry } from "./operation-registry.mjs";
 import { hash, token, confined, problem } from "./security.mjs";
 const uuid = z.string().uuid(),
   text = z.string().max(20000),
@@ -23,9 +25,7 @@ export function operations({
   github,
   retention,
 }) {
-  const registry = {};
-  const add = (name, description, shape, fn) =>
-    (registry[name] = { description, schema: z.strictObject(shape), fn });
+  const { registry, add, call } = createOperationRegistry();
   add(
     "repositories_list",
     "List repositories and statically discovered animation projects",
@@ -384,39 +384,6 @@ export function operations({
     db.all("SELECT * FROM chats ORDER BY created DESC LIMIT 100"),
   );
   add(
-    "chats_create",
-    "Create an AI conversation tied to one project",
-    {
-      repo: uuid,
-      project,
-      provider: z.enum(["codex", "claude"]),
-      title: z.string().min(1).max(120),
-    },
-    async (a) => {
-      await repos.project(a.repo, a.project);
-      return db.one(
-        "INSERT INTO chats(id,repo,project,provider,title) VALUES($1,$2,$3,$4,$5) RETURNING *",
-        [randomUUID(), a.repo, a.project, a.provider, a.title],
-      );
-    },
-  );
-  add(
-    "chats_send",
-    "Send a turn to an AI conversation; runs after browser disconnect",
-    { id: uuid, prompt: z.string().min(1).max(40000) },
-    async (a) => {
-      const c = await db.one("SELECT * FROM chats WHERE id=$1", [a.id]);
-      if (!c) throw problem(404, "Chat not found");
-      return tasks.create({
-        repo: c.repo,
-        project: c.project,
-        kind: "agent",
-        chat: c.id,
-        input: { provider: c.provider, prompt: a.prompt },
-      });
-    },
-  );
-  add(
     "settings_get",
     "Read connection settings with secrets removed",
     {},
@@ -511,6 +478,7 @@ export function operations({
     assets,
     tasks,
   });
+  chatOperations({ add, db, works, repos, tasks, connections });
   if (connections)
     workbenchOperations({
       add,
@@ -527,10 +495,6 @@ export function operations({
   return {
     works,
     registry,
-    async call(name, args) {
-      const op = registry[name];
-      if (!op) throw problem(404, "Unknown operation");
-      return op.fn(op.schema.parse(args || {}));
-    },
+    call,
   };
 }

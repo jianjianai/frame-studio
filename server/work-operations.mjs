@@ -201,17 +201,6 @@ export function workOperations({
     },
   );
   add(
-    "works_chat_create",
-    "Start a persistent AI conversation for a work",
-    {
-      id: uuid,
-      provider: z.enum(["codex", "claude"]),
-      title: z.string().min(1).max(120),
-    },
-    async ({ id, ...a }) =>
-      invoke("chats_create", { ...(await resolve(id)), ...a }),
-  );
-  add(
     "works_versions",
     "List independent Git history and legacy local snapshots of this work",
     {
@@ -220,24 +209,6 @@ export function workOperations({
       offset: z.number().int().min(0).default(0),
     },
     (a) => works.history(a.id, a.limit, a.offset),
-  );
-  add(
-    "works_chat_send",
-    "Send a persistent AI creation turn for this work; continues after disconnect",
-    {
-      id: uuid,
-      chat: uuid,
-      prompt: z.string().min(1).max(40000),
-    },
-    async ({ id, chat, prompt }) => {
-      const w = await works.get(id, { active: true });
-      const c = await db.one(
-        "SELECT id FROM chats WHERE id=$1 AND repo=$2 AND project=$3",
-        [chat, w.repo, w.project],
-      );
-      if (!c) throw new Error("Conversation does not belong to this work");
-      return invoke("chats_send", { id: chat, prompt });
-    },
   );
   add(
     "works_checkpoint",
