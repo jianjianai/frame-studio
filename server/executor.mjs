@@ -2,6 +2,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { agentEvent } from "./agent-events.mjs";
+import { runAgentTurn } from "./agent-runtime.mjs";
+import { createAgentFileInspector } from "./agent-file-changes.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { installToolVersion } from "./tool-installation.mjs";
@@ -19,6 +21,14 @@ const redact = (value) => {
   );
 };
 let actualRuntime = null;
+let reportCommands = false, commandSerial = 0;
+const abortController = new AbortController();
+process.once("SIGTERM", () => abortController.abort(new Error("创作已停止")));
+const emitAgentEvent = (event) => {
+  const line = redact(JSON.stringify(event));
+  if (Buffer.byteLength(line) > 768 * 1024) throw Error("Agent event exceeds the bounded event store");
+  fs.appendFileSync(work + "/events.ndjson", line + "\n");
+};
 const result = (value) =>
   fs.writeFileSync(work + "/result.json", JSON.stringify({ ...value, runtime: actualRuntime, runtimeFingerprint: actualRuntime?.fingerprint || null }));
 const run = (bin, args, options = {}) =>
@@ -34,11 +44,24 @@ const run = (bin, args, options = {}) =>
       stdio: ["pipe", "pipe", "pipe"],
       ...options,
     });
-    let output = "",
-      errors = "";
+    const commandId = reportCommands ? `platform-command:${++commandSerial}` : null, commandStarted = Date.now();
+    if (commandId) emitAgentEvent({ type: "agent-item", version: 1, id: commandId, kind: "command", phase: "running", at: commandStarted,
+      title: "验证与构建", command: [bin, ...args].map((part) => /\s/.test(part) ? JSON.stringify(part) : part).join(" "), cwd: work });
+    let output = "", errors = "", lineOutput = "";
+    const showOutput = (v) => {
+      if (!commandId) return;
+      lineOutput += v.toString();
+      const end = lineOutput.lastIndexOf("\n");
+      if (end >= 0) {
+        emitAgentEvent({ type: "agent-item", version: 1, id: commandId, kind: "command", phase: "running", at: Date.now(), outputDelta: redact(lineOutput.slice(0, end + 1)).slice(-32000) });
+        lineOutput = lineOutput.slice(end + 1);
+      }
+      if (lineOutput.length > 32000) lineOutput = lineOutput.slice(-32000);
+    };
     let pending = "";
     child.stdout.on("data", (v) => {
       output = (output + v).slice(-8 * 1024 * 1024);
+      showOutput(v);
       if (!options.agent) process.stdout.write(redact(v));
       if (options.agent) {
         pending += v.toString();
@@ -60,18 +83,15 @@ const run = (bin, args, options = {}) =>
     });
     child.stderr.on("data", (v) => {
       errors = (errors + redact(v)).slice(-12000);
+      showOutput(v);
       process.stderr.write(redact(v));
     });
     child.once("error", reject);
-    child.once("close", (code) =>
-      code === 0
-        ? resolve(output)
-        : reject(
-            new Error(
-              `${path.basename(bin)} exited ${code}\n${errors.trim() || redact(output).slice(-6000).trim()}`,
-            ),
-          ),
-    );
+    child.once("close", (code) => {
+      if (commandId) emitAgentEvent({ type: "agent-item", version: 1, id: commandId, kind: "command", phase: code === 0 ? "completed" : "failed", at: Date.now(),
+        exitCode: code, durationMs: Date.now() - commandStarted, output: redact(output + (errors ? "\n" + errors : "")).slice(-32000), outputTruncated: output.length + errors.length > 32000 });
+      code === 0 ? resolve(output) : reject(new Error(`${path.basename(bin)} exited ${code}\n${errors.trim() || redact(output).slice(-6000).trim()}`));
+    });
     child.stdin.end(options.input);
   });
 try {
@@ -151,66 +171,21 @@ try {
       }
       actualRuntime.tool = { provider: p, pinnedVersion: pinned?.version || null, actualVersion: (await run(bin, ["--version"])).trim(), model: task.model, authMode: task.authMode };
       const prompt = `You are creating one work in FRAME: ${task.project}. Only edit projects/${task.project}/. The surrounding engine and tools are the platform runtime, not another project to create or install. Read AGENTS.md, docs/AUTHORING.md and the work README. Use pnpm --silent film context ${task.project} --json, frame/storyboard/render for visual inspection. Use node scripts/work-tool.mjs help for asset and speech tools. engines lists ready built-in engines and voices; engine_add adds a custom compatible speech API when needed. engine_test creates temporary audition audio only; speech generates final narration into the current work. use copies a selected asset into this work. Wire returned material URLs into scenes/audioTracks as needed. Pass credentials through @file or stdin and never print them. Validate before finishing; a preview is built automatically after successful completion.\n\n${task.input.prompt}`;
-      let args;
-      if (p === "codex") {
-        args = [
-          "exec",
-          ...(task.upstream ? ["resume", task.upstream] : []),
-          "--json",
-          "--dangerously-bypass-approvals-and-sandbox",
-          ...(task.model ? ["-m", task.model] : []),
-          ...(task.authMode !== "official"
-            ? [
-                "-c",
-                'model_provider="frame"',
-                "-c",
-                'model_providers.frame.name="FRAME connection"',
-                "-c",
-                'model_providers.frame.wire_api="responses"',
-                "-c",
-                'model_providers.frame.env_key="CODEX_API_KEY"',
-                "-c",
-                "model_providers.frame.base_url=" +
-                  JSON.stringify(task.baseUrl || "https://api.openai.com/v1"),
-              ]
-            : []),
-          "-",
-        ];
-      } else
-        args = [
-          "-p",
-          "--verbose",
-          "--output-format",
-          "stream-json",
-          "--include-partial-messages",
-          "--permission-mode",
-          "bypassPermissions",
-          ...(task.upstream ? ["--resume", task.upstream] : []),
-          ...(task.model ? ["--model", task.model] : []),
-        ];
       const context = task.input.context
-        ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}`
-        : "";
-      const output = await run(bin, args, {
-        input: prompt + context,
-        agent: true,
+        ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}` : "";
+      const inspectFiles = createAgentFileInspector({ cwd: work, project: task.project, baseline: baselineCommit, emit: emitAgentEvent });
+      const outcome = await runAgentTurn({
+        provider: p, bin, task, cwd: work,
+        prompt: prompt + context + "\n\nWhen a creative decision genuinely requires human input, ask through " +
+          (p === "codex" ? "frame_ask_user" : "AskUserQuestion") +
+          ". The question is presented directly in the FRAME chat and its answer continues this same task. Do not end the turn with an unanswered question. For a tool-independent fallback use node scripts/work-tool.mjs ask with JSON questions. Never request credentials through chat. Share concise progress and a plan for complex work; do not invent progress or validation results.",
+        env: { ...process.env, FRAME_PROJECT: task.project, FRAME_TASK_PROGRESS_FILE: work + "/progress.json" },
+        emit: emitAgentEvent, signal: abortController.signal, onToolComplete: inspectFiles,
+        onStderr: (value) => process.stderr.write(redact(value)),
       });
-      for (const line of output.split("\n")) {
-        try {
-          const event = JSON.parse(line);
-          if (event.thread_id || event.session_id)
-            value.upstream = event.thread_id || event.session_id;
-          if (event.type === "result" && event.is_error)
-            throw new Error(event.result || "Agent failed");
-          if (event.type === "turn.failed" || event.type === "error")
-            throw new Error(
-              event.error?.message || event.message || "Agent failed",
-            );
-        } catch (e) {
-          if (e instanceof SyntaxError) continue;
-          throw e;
-        }
-      }
+      value.upstream = outcome.upstream;
+      await inspectFiles();
+      reportCommands = true;
       fs.appendFileSync(
         work + "/events.ndjson",
         JSON.stringify({

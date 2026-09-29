@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { agentInteractionOperations } from "./agent-interactions.mjs";
 import { speechOperations } from "./speech.mjs";
 import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
@@ -483,6 +484,7 @@ export function operations({
     assets,
     tasks,
   });
+  const interactions = agentInteractionOperations({ add, db, data });
   chatOperations({ add, db, works, repos, tasks, connections });
   if (connections)
     workbenchOperations({
@@ -499,6 +501,7 @@ export function operations({
     });
   return {
     works,
+    interactions,
     registry,
     call,
   };

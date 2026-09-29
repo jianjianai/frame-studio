@@ -1,3 +1,4 @@
+import { ingestAgentEvents } from "./agent-event-store.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { confined } from "./security.mjs";
@@ -57,7 +58,7 @@ export class TaskMonitor {
       return;
     }
     t = await this.get(t.id);
-    const timedOut = t.state === "running" && Date.now() - new Date(t.started).getTime() >
+    const timedOut = t.state === "running" && Date.now() - new Date(t.started).getTime() - Number(t.input_wait_ms || 0) - (t.input_wait_started ? Math.max(0, Date.now() - new Date(t.input_wait_started).getTime()) : 0) >
       Math.max(600, Math.min(604800, Number(process.env.FRAME_TASK_TIMEOUT_SECONDS) || 21600)) * 1000;
     if (state.Running && (t.state === "cancelling" || timedOut)) {
       // Successful stop is followed by a fresh inspect on the next tick. A failed
@@ -103,43 +104,6 @@ export class TaskMonitor {
     }
   }
   async collectEvents(task) {
-    const file = path.join(this.data, "runs", task.id, "events.ndjson");
-    if (!fs.existsSync(file)) return;
-    const start = Number(task.log_cursor || 0),
-      size = fs.statSync(file).size;
-    if (size <= start) return;
-    const fd = fs.openSync(file, "r"),
-      bytes = Buffer.alloc(Math.min(size - start, 1024 * 1024));
-    try {
-      fs.readSync(fd, bytes, 0, bytes.length, start);
-    } finally {
-      fs.closeSync(fd);
-    }
-    const end = bytes.lastIndexOf(10);
-    if (end < 0) return;
-    let offset = start;
-    for (const line of bytes.subarray(0, end).toString("utf8").split("\n")) {
-      offset += Buffer.byteLength(line) + 1;
-      try {
-        const event = JSON.parse(line);
-        await this.db.pool.query(
-          "INSERT INTO events(task,kind,data,source_offset) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
-          [task.id, event.type, event, offset],
-        );
-        if (event.type === "session" && task.chat)
-          await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
-            task.chat,
-            event.id,
-          ]);
-      } catch (e) {
-        if (!(e instanceof SyntaxError)) throw e;
-      }
-    }
-    await this.db.pool.query("UPDATE tasks SET log_cursor=$2 WHERE id=$1", [
-      task.id,
-      String(start + end + 1),
-    ]);
-    task.log_cursor = String(start + end + 1);
-    return start + end + 1 < size;
+    return ingestAgentEvents(this.db, this.data, task);
   }
 }

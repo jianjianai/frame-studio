@@ -8,6 +8,11 @@ export function agentTools({ app, db, data, assets, actions }) {
     const task = req.agentTask;
     if (!task) throw problem(403, "Task credential required");
     const { name, args = {} } = req.body || {};
+    if (name === "question_create") return actions.interactions.create(task.id, args);
+    if (name === "question_poll") {
+      if (typeof args.id !== "string" || !/^[0-9a-f-]{36}$/i.test(args.id)) throw problem(400, "Invalid question id");
+      return actions.interactions.poll(task.id, args.id);
+    }
     if (name === "assets")
       return actions.call("assets_list", {
         search: args.search || "",
@@ -114,7 +119,7 @@ export function agentTools({ app, db, data, assets, actions }) {
     }
     throw problem(
       403,
-      "Allowed: assets, engines, engine_add, engine_test, use and speech",
+      "Allowed: assets, engines, engine_add, engine_test, use, speech, question_create and question_poll",
     );
   });
 }
