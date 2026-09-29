@@ -3,10 +3,10 @@ import { hasLiveTaskEvents } from "../src/contracts/platform.mjs";
 /** @typedef {{id: number | string, data?: unknown, kind?: string}} TaskEvent */
 /** @typedef {import("../src/contracts/platform").TaskSummary} TaskSummary */
 /** @typedef {{after: number, rows: TaskEvent[], loadedState: string | null}} EventCache */
-/** @typedef {{result?: {events?: TaskEvent[]}, error?: string}} EventUpdate */
+/** @typedef {{result?: {events?: TaskEvent[], hasMore?: boolean}, error?: string}} EventUpdate */
 /**
  * @param {{tasks: TaskSummary[], cache: Record<string, EventCache>,
- * call: (name: string, args: {id: string, after: number}) => Promise<{events?: TaskEvent[]}>,
+ * call: (name: string, args: {id: string, after: number}) => Promise<{events?: TaskEvent[], hasMore?: boolean}>,
  * subscribe: (name: string, args: {id: string, after: number}, receive: (value: EventUpdate) => void) => (() => void),
  * onChange: (events: Record<string, TaskEvent[]>) => void,
  * onError: (error: string) => void, concurrency?: number}} options
@@ -18,10 +18,11 @@ export function loadTaskEvents({ tasks, cache, call, subscribe, onChange, onErro
   const ids = new Set(tasks.map((task) => task.id));
   for (const id of Object.keys(cache)) if (!ids.has(id)) delete cache[id];
   const publish = () => {
-    if (!cancelled) onChange(Object.fromEntries(Object.entries(cache).map(([id, value]) => [id, [...value.rows]])));
+    if (!cancelled) onChange(Object.fromEntries(Object.entries(cache).map(([id, value]) => [id, value.rows])));
   };
   /** @param {EventCache} entry @param {TaskEvent[]} events */
   const merge = (entry, events) => {
+    if (!events.length) return;
     const rows = new Map(entry.rows.map((row) => [row.id, row]));
     for (const row of events) rows.set(row.id, row);
     entry.rows = [...rows.values()].sort((a, b) => Number(a.id) - Number(b.id));
@@ -55,7 +56,7 @@ export function loadTaskEvents({ tasks, cache, call, subscribe, onChange, onErro
           if (cancelled) return;
           const events = result.events || [];
           merge(entry, events);
-          if (events.length < 100) { entry.loadedState = task.state; break; }
+          if (!events.length || !(result.hasMore ?? events.length === 100)) { entry.loadedState = task.state; break; }
         }
       } catch (error) { if (!cancelled) onError(error instanceof Error ? error.message : String(error)); }
     }

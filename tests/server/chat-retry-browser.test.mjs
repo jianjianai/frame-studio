@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
@@ -13,6 +14,7 @@ test(
     const server = await createServer({
       configFile: false,
       root: fileURLToPath(new URL("../../", import.meta.url)),
+      optimizeDeps: { include: ["react", "react-dom/client", "react/jsx-runtime", "react-markdown", "remark-gfm", "rehype-highlight"] },
       server: {
         host: "127.0.0.1",
         port: Number(process.env.FRAME_TEST_PORT || 55194),
@@ -69,6 +71,7 @@ test(
           existing ? "existing conversation" : "new conversation",
           async () => {
             const page = await browser.newPage();
+            page.setDefaultTimeout(15000);
             const errors = [],
               requests = [],
               turns = new Map();
@@ -81,7 +84,7 @@ test(
                 }
               : null;
             let creates = 0;
-            page.on("pageerror", (error) => errors.push(error.message));
+            page.on("pageerror", (error) => { errors.push(error.message); console.error("BROWSER ERROR", error.message); });
             await page.routeWebSocket("**/api/ws", (socket) => {
               socket.onMessage((raw) => {
                 const message = JSON.parse(String(raw));
@@ -205,6 +208,12 @@ test(
                 "",
               );
               assert.deepEqual(errors, []);
+            } catch (error) {
+              fs.mkdirSync(".cache/agent-chat", { recursive: true });
+              await page.screenshot({ path: `.cache/agent-chat/retry-${existing ? "existing" : "new"}.png`, fullPage: true }).catch(() => {});
+              error.message += "\nBrowser errors: " + errors.join("; ") + "\nUI: " + (await page.locator("body").innerText()).slice(0, 5000) + "\nRequests: " + JSON.stringify(requests);
+              console.error(error.message);
+              throw error;
             } finally {
               await page.close();
             }

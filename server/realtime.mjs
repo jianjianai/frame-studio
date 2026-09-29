@@ -118,7 +118,7 @@ export async function installRealtime(app, db, actions, origin) {
           }
           if (sub.name === "task_get" && result.events.length) {
             sub.args = { ...sub.args, after: Number(result.events.at(-1).id) };
-            if (result.events.length === 100) sub.dirty = true;
+            if (result.hasMore ?? result.events.length === 100) sub.dirty = true;
           }
         } while (
           sub.dirty &&

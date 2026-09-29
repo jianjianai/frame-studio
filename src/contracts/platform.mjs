@@ -112,6 +112,7 @@ export const taskGetRequestSchema = z.strictObject({
 export const taskGetResponseSchema = z.looseObject({
   task: taskSummarySchema,
   events: z.array(taskEventSchema),
+  hasMore: z.boolean().optional(),
 });
 // Core operations use these exact contracts on both sides of every transport.
 export const workIdRequestSchema = z.strictObject({ id: uuid });

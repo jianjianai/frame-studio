@@ -139,6 +139,7 @@ export function WorkChat({
   );
   const [run, busy] = useAction(notify),
     [older, setOlder] = useState([]),
+    [focusedTurns, setFocusedTurns] = useState([]),
     [more, setMore] = useState(true),
     [following, setFollowing] = useState(true);
   const initialized = useRef(false),
@@ -191,6 +192,7 @@ export function WorkChat({
     setPrompt(draft.prompt || "");
     setReview(draft.review || null);
     setOlder([]);
+    setFocusedTurns([]);
     setMore(true);
     follow.current = true;
     setFollowing(true);
@@ -230,7 +232,7 @@ export function WorkChat({
   ]);
   const conversationTasks = [
     ...new Map(
-      [...older, ...(currentTurns.data || []), ...tasks]
+      [...focusedTurns, ...older, ...(currentTurns.data || []), ...tasks]
         .filter((t) => t.chat === chat)
         .map((t) => [t.id, t]),
     ).values(),
@@ -258,7 +260,7 @@ export function WorkChat({
     providerModels(chosenConnection).some(
       (entry) => entry.id === model && entry.enabled !== false,
     );
-  useAgentTarget({ work, chat, chats: chats.data, visible, turns: conversationTasks, switchChat, setOlder, follow, setFollowing, messages, notify });
+  useAgentTarget({ work, chat, chats: chats.data, refreshChats: chats.refresh, visible, turns: conversationTasks, switchChat, setOlder: setFocusedTurns, follow, setFollowing, messages, notify });
   const changesProvider =
     !!chat && !!selected?.connection && chosen !== selected.connection;
   const activeTasks = tasks.filter(
@@ -503,7 +505,7 @@ export function WorkChat({
                   id: work.id,
                   chat,
                   limit: 30,
-                  before: conversationTasks[0].id,
+                  before: [...older, ...(currentTurns.data || [])].sort((a, b) => new Date(a.created) - new Date(b.created) || a.id.localeCompare(b.id))[0]?.id,
                 });
                 follow.current = false;
                 historyAnchor.current = {
@@ -604,7 +606,7 @@ export function WorkChat({
       )}
       {activeTasks.length > 0 && (
         <div className="chat-run-status" role="status">
-          <LoaderCircle size={13} className={runningTask ? "spin" : ""} />
+          {runningTask?.interaction ? <CircleHelp size={13} /> : <LoaderCircle size={13} className={runningTask ? "spin" : ""} />}
           <span>
             {(runningTask?.interaction ? "等待回答；新要求会进入队列" : runningTask?.progress?.stage) ||
               (runningTask ? states[runningTask.state] : "等待开始")}

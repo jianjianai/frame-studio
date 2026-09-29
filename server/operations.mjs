@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { agentInteractionOperations } from "./agent-interactions.mjs";
+import { agentEventPage } from "./agent-event-page.mjs";
 import { speechOperations } from "./speech.mjs";
 import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
@@ -220,10 +221,7 @@ export function operations({
     taskGetRequestSchema,
     async (a) => ({
       task: await tasks.get(a.id),
-      events: await db.all(
-        "SELECT * FROM events WHERE task=$1 AND id>$2 ORDER BY id LIMIT 100",
-        [a.id, a.after],
-      ),
+      ...(await agentEventPage(db, a.id, a.after)),
     }),
   );
   add("task_cancel", "Cancel a queued or running task", workIdRequestSchema, (a) =>
