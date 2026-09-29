@@ -2,8 +2,8 @@ export interface StudioApi {
   ready: boolean;
   projectId: string;
   duration: number;
-  frame(time: number, subtitles?: boolean): void;
-  seek(time: number): void;
+  frame(time: number, subtitles?: boolean): Promise<void>;
+  seek(time: number): Promise<void>;
   play(): Promise<void>;
   pause(): void;
   getState(): {
@@ -45,8 +45,8 @@ export interface StudioApi {
     string,
     { value: number; min: number; max: number; step?: number; label?: string }
   >;
-  setParameters?(values: Record<string, number>): void;
-  setOverlay?(enabled: boolean): void;
+  setParameters?(values: Record<string, number>): void | Promise<void>;
+  setOverlay?(enabled: boolean): void | Promise<void>;
 }
 export async function waitForStudio(
   api: StudioApi,

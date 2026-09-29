@@ -93,6 +93,7 @@ test(
         await rpc("works_create", {
           repo: repo.id,
           title: "Real MCP + CLI signal journey",
+          renderer: "canvas",
           duration: 24,
           audio: "generated",
           fps: 30,

@@ -143,7 +143,7 @@ export class Works {
   async create({
     title,
     repo,
-    renderer = "canvas",
+    renderer = "composition",
     duration = 12,
     fps = 30,
     audio = "silent",

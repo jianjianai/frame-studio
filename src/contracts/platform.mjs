@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { rendererIds } from "../engine/adapters.mjs";
 import {
   commitSchema,
   shotIdSchema,
@@ -141,7 +142,7 @@ export const workChatTurnsRequestSchema = workIdRequestSchema.extend({
 export const taskInputSchema = z
   .strictObject({
     title: z.string().max(150).optional(),
-    renderer: z.enum(["canvas", "pixi", "three"]).optional(),
+    renderer: z.enum(rendererIds).optional(),
     duration: z.number().positive().max(3600).optional(),
     time: z.number().nonnegative().max(3600).optional(),
     width: z.number().int().min(2).max(3840).multipleOf(2).optional(),

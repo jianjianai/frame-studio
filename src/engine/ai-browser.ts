@@ -4,10 +4,16 @@ import { FrameRenderer } from "./renderer";
 import { exportWebm, type ExportProgress } from "./browser-export";
 import { downloadBlob } from "./download";
 import { toSrt } from "./subtitles";
-import { frameDimensions, compositionSize, fitComposition } from "./dimensions.mjs";
+import {
+  frameDimensions,
+  compositionSize,
+  fitComposition,
+} from "./dimensions.mjs";
 
 export function installAiBrowser(project: AnimationProject) {
   let segmentTimer: number | undefined;
+  let segmentGeneration = 0;
+  let playbackError: string | null = null;
   let serial = 0;
   const jobs = new Map<
     string,
@@ -29,6 +35,7 @@ export function installAiBrowser(project: AnimationProject) {
     return value;
   };
   const stopSegment = () => {
+    segmentGeneration++;
     if (segmentTimer !== undefined) clearInterval(segmentTimer);
     segmentTimer = undefined;
   };
@@ -95,6 +102,7 @@ export function installAiBrowser(project: AnimationProject) {
     },
     info,
     state: () => ({
+      playbackError,
       ...api().getState(),
       diagnostics: api().getDiagnostics?.(),
       exports: [...jobs.keys()].map(publicJob),
@@ -123,18 +131,13 @@ export function installAiBrowser(project: AnimationProject) {
           ? (options.time ?? api().getState().time)
           : options.frame / project.fps,
       );
-      api().frame(time, options.subtitles ?? true);
+      await api().frame(time, options.subtitles ?? true);
       let dataURL = api().dataURL(),
         width = api().getState().width,
         height = api().getState().height;
       if (options.width !== undefined) {
         width = options.width;
-        if (
-          !Number.isInteger(width) ||
-          width < 64 ||
-          width > 3840 ||
-          width % 2
-        )
+        if (!Number.isInteger(width) || width < 64 || width > 3840 || width % 2)
           throw Error("Width must be an even integer from 64 to 3840");
         height = frameDimensions(project, width).height;
         const canvas = document.createElement("canvas"),
@@ -142,7 +145,7 @@ export function installAiBrowser(project: AnimationProject) {
         try {
           await renderer.init(width, height, "high");
           await document.fonts.ready;
-          renderer.render(time, options.subtitles ?? true);
+          await renderer.render(time, options.subtitles ?? true);
           dataURL = canvas.toDataURL("image/png");
         } finally {
           renderer.dispose();
@@ -189,7 +192,7 @@ export function installAiBrowser(project: AnimationProject) {
     async seek(time: number) {
       stopSegment();
       await control.ready();
-      api().frame(validTime(time));
+      await api().frame(validTime(time));
       return api().getState();
     },
     async play({
@@ -200,24 +203,44 @@ export function installAiBrowser(project: AnimationProject) {
     }: { start?: number; end?: number; rate?: number; loop?: boolean } = {}) {
       await control.ready();
       stopSegment();
+      const generation = segmentGeneration;
+      playbackError = null;
       const from = validTime(start ?? api().getState().time);
       validTime(end);
       if (end <= from) throw Error("End must follow start");
       api().setLoop?.(false);
       api().setRate?.(rate);
-      api().seek(from);
+      await api().seek(from);
+      if (generation !== segmentGeneration) return api().getState();
       await api().play();
+      if (generation !== segmentGeneration) return api().getState();
+      let advancing = false;
       segmentTimer = window.setInterval(() => {
-        if (api().getState().time >= end) {
+        if (
+          advancing ||
+          generation !== segmentGeneration ||
+          api().getState().time < end
+        )
+          return;
+        advancing = true;
+        void (async () => {
           api().pause();
-          api().frame(end);
+          await api().frame(end);
+          if (generation !== segmentGeneration) return;
           if (loop) {
-            api().seek(from);
-            void api()
-              .play()
-              .catch(() => stopSegment());
+            await api().seek(from);
+            if (generation === segmentGeneration) await api().play();
           } else stopSegment();
-        }
+        })()
+          .catch((error) => {
+            if (generation !== segmentGeneration) return;
+            playbackError = String(error);
+            api().pause();
+            stopSegment();
+          })
+          .finally(() => {
+            advancing = false;
+          });
       }, 16);
       return api().getState();
     },

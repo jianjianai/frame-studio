@@ -17,13 +17,31 @@ export async function createRenderSession({
   const inputs = new Map();
   async function close() {
     const failures = [];
-    try { await browser?.close(); } catch (error) { failures.push(error); }
-    for (const entry of owned.splice(0).reverse()) {
-      try { if (entry.server) await new Promise((resolve) => entry.server.httpServer.close(resolve)); }
-      catch (error) { failures.push(error); }
-      try { entry.snapshot.close(); } catch (error) { failures.push(error); }
+    try {
+      await browser?.close();
+    } catch (error) {
+      failures.push(error);
     }
-    if (failures.length) throw new AggregateError(failures, 'Failed to clean up production session');
+    for (const entry of owned.splice(0).reverse()) {
+      try {
+        if (entry.server)
+          await new Promise((resolve) =>
+            entry.server.httpServer.close(resolve),
+          );
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        entry.snapshot.close();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length)
+      throw new AggregateError(
+        failures,
+        "Failed to clean up production session",
+      );
   }
   return {
     close,
@@ -55,20 +73,38 @@ export async function createRenderSession({
       entry.server = await preview(config);
       browser ??= await launchBrowser();
       const page = await browser.newPage({
-        viewport: frameDimensions(readProject(path.join(snapshot.root, "projects", id, "project.ts")).meta, width),
+        viewport: frameDimensions(
+          readProject(path.join(snapshot.root, "projects", id, "project.ts"))
+            .meta,
+          width,
+        ),
         deviceScaleFactor: 1,
       });
       const errors = [];
+      let cancelledMediaRequests = 0;
       page.on("pageerror", (error) => errors.push(error.message));
       page.on("response", (response) => {
         if (response.status() >= 400)
           errors.push(`${response.status()} ${response.url()}`);
       });
-      page.on("requestfailed", (request) =>
-        errors.push(`${request.failure()?.errorText} ${request.url()}`),
-      );
+      page.on("requestfailed", (request) => {
+        // Seeking/disposal intentionally cancels range prefetch. Target-frame readiness
+        // remains authoritative; actual HTTP/decode/render failures still fail export.
+        if (
+          request.failure()?.errorText === "net::ERR_ABORTED" &&
+          !request.isNavigationRequest() &&
+          request.method() === "GET" &&
+          new URL(request.url()).pathname.startsWith("/films/" + id + "/") &&
+          /\.(webm|mp4)(?:[?#]|$)/i.test(request.url())
+        ) {
+          cancelledMediaRequests++;
+          return;
+        }
+        errors.push(`${request.failure()?.errorText} ${request.url()}`);
+      });
       page.frameDiagnostics = () => ({
         errors: [...errors],
+        cancelledMediaRequests,
         input: snapshot.manifest.fingerprint,
       });
       try {
@@ -99,8 +135,8 @@ export async function createRenderSession({
 }
 export async function framePng(page, time, subtitles = true) {
   const data = await page.evaluate(
-    ({ time, subtitles }) => {
-      window.__FRAME_STUDIO__.frame(time, subtitles);
+    async ({ time, subtitles }) => {
+      await window.__FRAME_STUDIO__.frame(time, subtitles);
       return window.__FRAME_STUDIO__.dataURL().split(",")[1];
     },
     { time, subtitles },

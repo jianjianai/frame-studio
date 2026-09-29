@@ -1,6 +1,6 @@
 # 工程接入与接口说明
 
-V5 继续使用场景/音频协议 1，旧作品无需迁移。`beats` 中可选的唯一 `id` 用于更稳定的审片引用，例如 `{ id: 'opening', at: 0, title: '开场', detail: '...' }`；这不是要求作品采用可编辑剪辑数据模型。引用和结果操作见 [V5 升级说明](V5-UPGRADE.md)。
+V6 保留场景/音频协议 1 的旧作品兼容，新增可等待目标帧的协议与独立 `visual.json` 合成文档。默认新建为空白合成，无预选引擎。能力与接口见 [混合合成](COMPOSITION.md)。`beats` 中可选的唯一 `id` 用于更稳定的审片引用，例如 `{ id: 'opening', at: 0, title: '开场', detail: '...' }`；beats 是审片标记，可编辑视觉片段位于 visual.json，两者独立。引用和结果操作见 [V5 升级说明](V5-UPGRADE.md)。
 
 修改边界见 [NEW-PROJECT-STANDARD.md](NEW-PROJECT-STANDARD.md)。每个视频的全部文件都属于 `projects/<id>/`，项目任务不能修改目录之外的文件。
 
@@ -9,7 +9,7 @@ V5 继续使用场景/音频协议 1，旧作品无需迁移。`beats` 中可选
 ## 新建、资源与测试
 
 ```powershell
-pnpm film new my-film "我的动画" --renderer canvas --duration 12 --fps 24 --audio generated
+pnpm film new my-film "我的动画" --duration 12 --fps 24
 pnpm assets:import my-film "D:/assets/voice.wav" --license "来源与许可"
 pnpm project:check my-film --strict
 pnpm project:scope my-film
@@ -41,7 +41,7 @@ export function createScene({ width, height }: SceneOptions): Scene {
 }
 ```
 
-公共播放器和导出器调用同一 render(time)，场景不创建独立时钟。按需要释放 timeline、事件、GPU、纹理与音频节点。初始化失败也回收本实例资源。随机内容采用固定种子。
+render 可返回 Promise；异步资源可在 prepareFrame(time, {signal}) 中就绪，所有预览、截图和导出均等待后再提交画面。快速跳转时旧请求会被取消且不能覆盖新帧。公共播放器和导出器调用同一 render(time)，场景不创建独立时钟。按需要释放 timeline、事件、GPU、纹理与音频节点。初始化失败也回收本实例资源。随机内容采用固定种子。
 
 ## 多音轨与浏览器生成音频
 

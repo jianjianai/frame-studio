@@ -1,4 +1,8 @@
 import fs from "node:fs";
+import { rendererIds, adapters } from "../../src/engine/adapters.mjs";
+import { probeMedia,transcodeMedia } from "../media-probe.mjs";
+import { visualContext, visualEdit } from "../visual-service.mjs";
+import { visualOperationSchema } from "../../src/engine/visual-document.mjs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
@@ -134,6 +138,11 @@ export function createFrameServer({
       },
     );
   };
+  register("frame_media_probe","Read project media dimensions, duration and codecs",{project,src:z.string()},async({project:id,src})=>{workspace.project(id);return jsonResult(await probeMedia(workspace.root,id,src));});
+  register("frame_media_transcode","Create a separate VP9/Opus compatible video copy without overwriting source or output",{project,src:z.string(),out:z.string()},async({project:id,...request})=>{workspace.writable();const release=workspace.lock(id,"media-transcode");try{return jsonResult(await transcodeMedia(workspace.root,id,request));}finally{release();}},{write:true});
+  register("frame_renderers", "List built-in engines, media sources and their capabilities; no preferred engine", {}, () => jsonResult({adapters}));
+  register("frame_composition", "Read authoritative visual.json clips and edit revision", {project}, ({project:id}) => jsonResult(visualContext(workspace,id)));
+  register("frame_composition_edit", "Add, trim, split, move, reorder, replace or keyframe visual clips atomically", {project,expectedSha256:z.string().length(64),operations:z.array(visualOperationSchema).min(1).max(100),dryRun:z.boolean().default(false)}, ({project:id,...request}) => jsonResult(visualEdit(workspace,id,request)), {write:true});
   register(
     "frame_list_projects",
     "Discover allowed projects using static metadata without executing scene code. Broken projects are reported individually.",
@@ -294,7 +303,7 @@ export function createFrameServer({
     {
       project,
       title: z.string().trim().min(1).max(200),
-      renderer: z.enum(["canvas", "pixi", "three"]).default("canvas"),
+      renderer: z.enum(rendererIds).default("composition"),
       duration: z.number().finite().positive().max(3600).default(12),
       fps: z.number().int().min(12).max(60).default(30),
       audio: z.enum(["silent", "generated"]).default("silent"),

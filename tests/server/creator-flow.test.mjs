@@ -92,7 +92,7 @@ test("task preview progress is ignored without hiding real outside changes", () 
 });
 
 test("context identifies the active work and does not expose task credentials or execute code", () => {
-  const f = fixture();
+  const f = fixture({ renderer: "canvas" });
   try {
     initGit(f.root);
     fs.writeFileSync(

@@ -126,8 +126,8 @@ try {
       const at =
         catalog.find((entry) => entry.directory === folder.name)?.meta
           .posterTime ?? duration * 0.5;
-      const data = await page.evaluate((t) => {
-        window.__FRAME_STUDIO__.frame(t, false);
+      const data = await page.evaluate(async (t) => {
+        await window.__FRAME_STUDIO__.frame(t, false);
         return window.__FRAME_STUDIO__.dataURL().split(",")[1];
       }, at);
       const output = await writeProjectPoster(
@@ -181,8 +181,8 @@ try {
         ".png",
       );
       const data = await page.evaluate(
-        ({ time, subtitles }) => {
-          window.__FRAME_STUDIO__.frame(time, subtitles);
+        async ({ time, subtitles }) => {
+          await window.__FRAME_STUDIO__.frame(time, subtitles);
           return window.__FRAME_STUDIO__.dataURL().split(",")[1];
         },
         { time, subtitles: !args.includes("--no-subtitles") },
@@ -226,7 +226,7 @@ try {
         "projects/" + id + "/exports/" + id + "-" + stamp + ".mp4",
         ".mp4",
       );
-      const hasAudio = Boolean(meta.audio || meta.audioTracks?.length);
+      const hasAudio = Boolean(meta.audio || meta.audioTracks?.length || meta.visual?.clips?.some(c=>c.source.kind==="video"&&c.audio?.enabled&&!c.hidden));
       await fs.mkdir(path.dirname(output), { recursive: true });
       temporary = path.join(
         path.dirname(output),
@@ -341,8 +341,8 @@ try {
         if (encoder.exitCode !== null)
           throw new Error("FFmpeg exited early: " + stderr);
         const data = await page.evaluate(
-          ({ t, subtitles }) => {
-            window.__FRAME_STUDIO__.frame(t, subtitles);
+          async ({ t, subtitles }) => {
+            await window.__FRAME_STUDIO__.frame(t, subtitles);
             return window.__FRAME_STUDIO__.dataURL().split(",")[1];
           },
           { t: start + i / fps, subtitles },

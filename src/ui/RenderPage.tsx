@@ -21,12 +21,12 @@ export function RenderPage({ project }: { project: AnimationProject }) {
       ready: false,
       projectId: project.id,
       duration: project.duration,
-      frame(t, subtitles = false) {
+      async frame(t, subtitles = false) {
         time = Math.max(0, Math.min(project.duration, t));
-        renderer.render(time, subtitles);
+        await renderer.render(time, subtitles);
       },
-      seek(t) {
-        this.frame(t);
+      async seek(t) {
+        await this.frame(t);
       },
       async play() {},
       pause() {},
@@ -48,7 +48,7 @@ export function RenderPage({ project }: { project: AnimationProject }) {
       .then(async () => {
         await document.fonts.ready;
         if (canceled) return;
-        api.frame(
+        await api.frame(
           Number(params.get("time")) || 0,
           params.get("subtitles") === "1",
         );

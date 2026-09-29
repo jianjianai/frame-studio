@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { adapters } from "../src/engine/adapters.mjs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -10,8 +11,11 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film list [--json]                     列出项目
   pnpm film inspect <id> [--json]             元数据、素材、音轨和时间标记
   pnpm film context <id> [--json]             AI 接手上下文与修改边界（只读）
-  pnpm film new <id> "标题" --renderer canvas|pixi|three
+  pnpm film new <id> "标题" [--renderer composition|canvas|pixi|three|babylon]
     [--duration 24] [--fps 30] [--audio silent|generated] [--width 1080 --height 1920]
+  pnpm film composition engines --json
+  pnpm film composition <id> [get|edit --input request.json] --json
+  pnpm film media <id> probe|transcode --src films/<id>/file [--out public/compatible.webm]
   pnpm film check <id> [--strict] [--json]     结构与接口检查（只读）
   pnpm film scope <id> [--base <commit>] [--json]  分类报告 Git 修改范围（只读）
   pnpm film operation <id> [--recover <lock-id>] [--json]  查询操作或恢复已退出实例的遗留锁
@@ -71,7 +75,9 @@ export function inspectProject(root, id) {
     id,
     folder,
     metadata: meta,
-    entrypoints: { scene: entry.loadPath, audio: entry.audioLoadPath ?? null },
+    entrypoints: { scene: entry.loadPath, audio: entry.audioLoadPath ?? null, visual:entry.visualLoadPath??null },
+    adapters,
+    visual:meta.visual??null,
     audioTracks:
       meta.audioTracks ??
       (meta.audio ? [{ id: "main", kind: "file", src: meta.audio }] : []),
@@ -227,6 +233,8 @@ export function runFilm(args, root = process.cwd()) {
     return 0;
   }
   const routes = {
+    composition: ["visual-cli.mjs", ...rest],
+    media: ["media-cli.mjs", ...rest],
     speech: ["speech-cli.mjs", ...rest],
     asset: ["asset-cli.mjs", ...rest],
     operation: ["project-operation.mjs", ...rest],

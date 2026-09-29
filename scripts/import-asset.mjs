@@ -4,6 +4,7 @@ import path from "node:path";
 import { projectPath } from "./project-paths.mjs";
 import { randomUUID } from "node:crypto";
 import sharp from "sharp";
+import {validateLottie} from "../src/engine/lottie-document.mjs";
 import { optimize } from "svgo";
 const args = process.argv.slice(2);
 const [id, source] = args;
@@ -28,10 +29,14 @@ const type = images.includes(ext)
       ? "video"
       : models.includes(ext)
         ? "model"
-        : null;
+        : ext === ".json" ? "animation" : null;
 if (!type) throw new Error("Unsupported asset type: " + ext);
 const stat = await fs.stat(source);
 if (!stat.isFile()) throw new Error("Source must be a regular file");
+if(ext === ".json") {
+  if(stat.size>16*1024*1024)throw new Error("Lottie limit is 16 MiB");
+  validateLottie(JSON.parse(await fs.readFile(source,"utf8")));
+}
 let name =
   path
     .basename(source, ext)

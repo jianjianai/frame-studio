@@ -4,6 +4,7 @@ import { Button } from "./ui";
 
 export const toolNames = {
   ai: "AI 创作对话",
+  composition: "合成与片段",
   materials: "素材",
   voice: "配音",
   tasks: "后台任务",

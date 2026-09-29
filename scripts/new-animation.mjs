@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { rendererIds } from "../src/engine/adapters.mjs";
 import { projectPath } from "./project-paths.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -17,7 +18,7 @@ for (let i = 0; i < rest.length; i += 2) {
     throw new Error("Unknown, duplicate or incomplete option: " + rest[i]);
   options.set(rest[i], rest[i + 1]);
 }
-const renderer = options.get("--renderer") ?? "pixi";
+const renderer = options.get("--renderer") ?? "composition";
 const duration = Number(options.get("--duration") ?? 24);
 const fps = Number(options.get("--fps") ?? 30);
 const audio = options.get("--audio") ?? "silent";
@@ -27,7 +28,7 @@ if (
   !validProjectId(id) ||
   typeof title !== "string" ||
   !title.trim() ||
-  !["canvas", "pixi", "three"].includes(renderer) ||
+  !rendererIds.includes(renderer) ||
   !Number.isFinite(duration) ||
   duration <= 0 ||
   duration > 3600 ||
@@ -37,7 +38,7 @@ if (
   !["silent", "generated"].includes(audio)
 ) {
   console.error(
-    'Usage: pnpm film new my-film "我的动画" [--renderer pixi|three|canvas] [--duration 24] [--fps 30] [--audio silent|generated] [--width 1080 --height 1920]',
+    'Usage: pnpm film new my-film "我的动画" [--renderer composition|pixi|three|canvas|babylon] [--duration 24] [--fps 30] [--audio silent|generated] [--width 1080 --height 1920]',
   );
   process.exit(1);
 }
@@ -98,7 +99,7 @@ try {
   const meta = {
     id,
     title: title.trim(),
-    subtitle: "新的故事，从这里开始。",
+    subtitle: "",
     description: `新建工程；文件和脚本说明见 projects/${id}/README.md。`,
     renderer,
     engineProtocol: ENGINE_PROTOCOL_VERSION,
@@ -116,7 +117,7 @@ try {
     poster: `films/${id}/poster.svg`,
     tags: ["制作中"],
     status: "draft",
-    beats: [{ at: 0, title: "第一个镜头", detail: "用动作讲清发生了什么。" }],
+    beats: [],
     subtitles: [],
     credits: ["工程资源索引：projects/" + id + "/README.md"],
   };
@@ -134,6 +135,7 @@ try {
     );
   const poster = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><rect width="1280" height="720" fill="#e4ead9"/><circle cx="640" cy="300" r="74" fill="#6e926f"/><text x="640" y="460" text-anchor="middle" font-family="sans-serif" font-size="44" fill="#355449">DRAFT / ${xml(id)}</text><text x="640" y="520" text-anchor="middle" font-family="sans-serif" font-size="24" fill="#53675b">Placeholder — not a finished film poster</text></svg>`;
   await fs.writeFile(path.join(stage, "scene.ts"), sceneTemplate);
+  if (renderer === "composition") await fs.writeFile(path.join(stage, "visual.json"), JSON.stringify({schemaVersion:1,background:"transparent",clips:[]},null,2)+"\n");
   await fs.writeFile(
     path.join(stage, "audio.ts"),
     await fs.readFile(
@@ -158,6 +160,7 @@ try {
       JSON.stringify(meta, null, 2) +
       ", load: () => import('./scene')" +
       (audio === "generated" ? ", loadAudio: () => import('./audio')" : "") +
+      (renderer === "composition" ? ", loadVisual: () => import('./visual.json')" : "") +
       " };\nexport default project;\n",
   );
   await fs.writeFile(
@@ -170,7 +173,7 @@ try {
   );
   await fs.writeFile(
     path.join(stage, "production/brief.md"),
-    "# 制作说明\n\n## 本次任务\n记录用户要求与已确认的选择；未确认的内容标为待定。\n\n## 镜头和声音\n记录镜头时间、画面变化、音轨及资源来源。\n\n修改记录、验证报告和审查结论统一放在 [records](../records/README.md)。\n",
+    "# 制作说明\n\n记录本项目的用户需求与已确认选择。运行素材放 public/，原始材料和许可放 production/。\n\n修改记录、验证报告和审查结论统一放在 [records](../records/README.md)。\n",
   );
   await fs.writeFile(
     path.join(stage, "records/README.md"),

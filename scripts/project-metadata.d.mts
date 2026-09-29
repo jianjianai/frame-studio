@@ -4,7 +4,8 @@ export interface StaticProjectMeta {
   title: string;
   subtitle: string;
   description: string;
-  renderer: "canvas" | "pixi" | "three";
+  renderer: import("../src/engine/adapters.mjs").RendererId;
+  visual?: import("../src/engine/compositor").VisualDocument;
   status: "draft" | "demo" | "film";
   duration: number;
   fps: number;
@@ -23,6 +24,7 @@ export interface StaticProject {
   meta: StaticProjectMeta;
   loadPath?: string;
   audioLoadPath?: string;
+  visualLoadPath?: string;
 }
 export function validProjectId(id: unknown): boolean;
 export function sourceFile(file: string): ReturnType<typeof parse>;

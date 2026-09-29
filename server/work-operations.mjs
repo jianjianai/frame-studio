@@ -1,5 +1,7 @@
 import { workSourceTools } from "./work-source-tools.mjs";
 import { compactTask, TASK_SUMMARY_COLUMNS } from "./agent-toolkit.mjs";
+import { visualOperations } from "./visual-operations.mjs";
+import { rendererIds } from "../src/engine/adapters.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
 import {
@@ -28,6 +30,7 @@ export function workOperations({
 }) {
   const works = new Works(db, data, repos, assets, tasks),
     uuid = z.string().uuid();
+  visualOperations({add,db,repos,works,registry});
   const invoke = (name, args) =>
     registry[name].fn(registry[name].schema.parse(args));
   const resolve = async (id) => {
@@ -55,7 +58,7 @@ export function workOperations({
     {
       title: z.string().trim().min(1).max(150),
       repo: uuid,
-      renderer: z.enum(["canvas", "pixi", "three"]).default("canvas"),
+      renderer: z.enum(rendererIds).default("composition"),
       duration: z.number().positive().max(3600).default(12),
       fps: z.number().int().min(12).max(60).default(30),
       audio: z.enum(["silent", "generated"]).default("silent"),
@@ -122,9 +125,10 @@ export function workOperations({
       return {
         work,
         ...context,
+        composition: await invoke("works_composition", { id: a.id }),
         authoring: a.detail
           ? context.authoring
-          : "createScene({width,height,quality}) returns {canvas,render(time),dispose()}; render uses absolute seconds, no independent clock. Keep all source/media under this work. Use detail:true for the complete scene/audio/export reference.",
+          : "createScene({width,height,quality}) returns {canvas,render(time),dispose()} or a Promise; prepareFrame(time,{signal}) and render may be async. Default works use editable visual.json composition; all media share absolute seconds, with no independent clock. Keep all source/media under this work. Use detail:true for the complete scene/audio/export reference.",
         instructions:
           "Use frame_works_files_page, frame_works_search and frame_works_read. Paths are work-relative; id is the work UUID. A partial read is NOT a replacement file. Prefer frame_works_patch with the whole-file expectedSha256. Validate and render with frame_works_task; wait with frame_task_status, then inspect artifacts. Tasks survive MCP disconnection.",
         assets: await assets.list({ ...args, limit: 20 }),

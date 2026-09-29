@@ -3,6 +3,7 @@ import { readUpload } from "./upload-state.mjs";
 import { projectTextOperations, readSource } from "./project-text.mjs";
 import { agentToolkitOperations } from "./agent-toolkit.mjs";
 import fs from "node:fs";
+import { rendererIds } from "../src/engine/adapters.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -149,7 +150,7 @@ export function operations({
       input: z
         .strictObject({
           title: z.string().max(150).optional(),
-          renderer: z.enum(["canvas", "pixi", "three"]).optional(),
+          renderer: z.enum(rendererIds).optional(),
           duration: z.number().positive().max(3600).optional(),
           time: z.number().nonnegative().max(3600).optional(),
           width: z.number().int().min(2).max(3840).multipleOf(2).optional(),

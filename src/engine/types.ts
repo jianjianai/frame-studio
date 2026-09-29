@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { rendererIds } from "./adapters.mjs";
+import { visualAudioTracks } from "./visual-audio.mjs";
+import type { VisualDocument } from "./compositor";
 import { ENGINE_PROTOCOL_VERSION } from "./protocol.mjs";
 import { compositionSchema } from "./dimensions.mjs";
 import { shotIdSchema } from "../contracts/workflow.mjs";
@@ -16,6 +19,9 @@ const trackTiming = {
   offset: z.number().nonnegative().optional(),
   duration: z.number().positive().optional(),
   gain: z.number().min(0).max(4).optional(),
+  playbackRate: z.number().min(0.05).max(16).optional(),
+  phase: z.number().nonnegative().optional(),
+  loop: z.number().positive().optional(),
   muted: z.boolean().optional(),
 };
 export const audioTrackSchema = z.discriminatedUnion("kind", [
@@ -29,7 +35,7 @@ export const projectSchema = z
     title: z.string().min(1),
     subtitle: z.string(),
     description: z.string(),
-    renderer: z.enum(["pixi", "three", "canvas"]),
+    renderer: z.enum(rendererIds),
     engineProtocol: z.literal(ENGINE_PROTOCOL_VERSION).optional(),
     composition: compositionSchema.optional(),
     duration: z.number().positive().max(3600),
@@ -92,7 +98,9 @@ export interface SceneOptions {
 }
 export interface Scene {
   canvas: HTMLCanvasElement;
-  render(time: number): void;
+  /** Prepare asynchronous media; renderer serializes requests and aborts stale frames. */
+  prepareFrame?(time: number, options: { signal: AbortSignal }): Promise<void>;
+  render(time: number): void | Promise<void>;
   dispose(): void;
   /** Optional author-defined controls; these do not change the scene protocol. */
   debug?: {
@@ -111,6 +119,8 @@ export interface SceneModule {
 export interface AnimationProject extends ProjectMeta {
   load: () => Promise<SceneModule>;
   loadAudio?: () => Promise<GeneratedAudioModule>;
+  loadVisual?: () => Promise<{default:unknown}>;
+  visual?: VisualDocument;
 }
 /** Schedule this source-time segment and release every owned node on dispose. */
 export interface GeneratedAudioOptions {
@@ -137,14 +147,14 @@ export interface GeneratedAudioModule {
   disposeAudio?(context: BaseAudioContext): void;
 }
 export function projectAudioTracks(
-  project: Pick<AnimationProject, "audio" | "audioTracks">,
+  project: Pick<AnimationProject, "audio" | "audioTracks" | "visual">,
 ): AudioTrack[] {
-  return (
+  return [...(
     project.audioTracks ??
     (project.audio
       ? [{ id: "main", name: "配乐与音效", kind: "file", src: project.audio }]
       : [])
-  );
+  ), ...visualAudioTracks(project.visual)];
 }
 export const assetUrl = (relative: string): string =>
   import.meta.env.BASE_URL + relative.replace(/^\//, "");

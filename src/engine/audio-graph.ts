@@ -71,8 +71,8 @@ export function trackSegment(
   return end > start
     ? {
         delay: start - from,
-        offset: (track.offset ?? 0) + start - (track.start ?? 0),
-        duration: end - start,
+        offset: (track.offset ?? 0) + (track.loop ? (((start-(track.start??0))*(track.playbackRate??1)+(track.phase??0))%track.loop) : ((start-(track.start??0))*(track.playbackRate??1)+(track.phase??0))),
+        duration: (end - start)*(track.playbackRate??1),
       }
     : undefined;
 }
@@ -101,7 +101,7 @@ export function prepareAudioSegment(
         context,
         offset: segment.offset,
         duration: segment.duration,
-        rate,
+        rate: rate*(track.playbackRate??1),
         signal,
       });
     }),
@@ -144,12 +144,16 @@ export function scheduleAudio(
         const buffer = prepared.buffers.get(track.id)!;
         const duration = Math.min(
           segment.duration,
-          buffer.duration - segment.offset,
+          track.loop ? segment.duration : buffer.duration - segment.offset,
         );
         if (duration <= 0) continue;
         const source = context.createBufferSource();
         source.buffer = buffer;
-        source.playbackRate.value = rate;
+        source.playbackRate.value = rate*(track.playbackRate??1);
+        if(track.loop){
+          if((track.offset??0)+track.loop>buffer.duration+0.001)throw new Error("Audio loop exceeds source duration: "+track.id);
+          source.loop=true;source.loopStart=track.offset??0;source.loopEnd=(track.offset??0)+track.loop;
+        }
         source.connect(gain);
         cleanups.push(() => {
           source.stop();
@@ -164,7 +168,7 @@ export function scheduleAudio(
           when: at,
           offset: segment.offset,
           duration: segment.duration,
-          rate,
+          rate: rate*(track.playbackRate??1),
           onError,
         });
         cleanups.push(() => voice.dispose());

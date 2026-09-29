@@ -29,9 +29,9 @@ export function ShotThumbnail({
         renderer = new FrameRenderer(canvas.current, project);
         void renderer
           .init(size.width, size.height, "draft")
-          .then(() => {
+          .then(async () => {
             if (cancelled) return;
-            renderer?.render(time, false);
+            await renderer?.render(time, false);
             setState("");
           })
           .catch(() => {

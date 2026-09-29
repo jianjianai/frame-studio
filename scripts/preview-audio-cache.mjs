@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import {visualAudioTracks} from "../src/engine/visual-audio.mjs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { parse } from "@babel/parser";
@@ -38,7 +39,7 @@ async function resolveModule(file) {
 export async function audioCacheKeys(root, id, runtime = {}) {
   root = path.resolve(root);
   const projectFile = projectPath(root, id, "project.ts"), record = readProject(projectFile);
-  const tracks = record.meta.audioTracks ?? (record.meta.audio ? [{ id: "main", kind: "file", src: record.meta.audio }] : []);
+  const tracks = [...(record.meta.audioTracks ?? (record.meta.audio ? [{ id: "main", kind: "file", src: record.meta.audio }] : [])), ...visualAudioTracks(record.meta.visual)];
   const common = new Map();
   for (const name of ["src/engine", "src/contracts", "public", "package.json", "pnpm-lock.yaml", "scripts/preview-audio.mjs", "scripts/preview-audio-cache.mjs"])
     await inventory(root, common, path.join(root, name));

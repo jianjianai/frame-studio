@@ -63,13 +63,53 @@ export function projectAssets({ project } = {}) {
             ".webp": "image/webp",
             ".png": "image/png",
             ".jpg": "image/jpeg",
+            ".mp4": "video/mp4",
+            ".webm": "video/webm",
+            ".ogg": "audio/ogg",
+            ".m4a": "audio/mp4",
           };
           res.setHeader(
             "Content-Type",
             types[path.extname(file)] || "application/octet-stream",
           );
-          res.setHeader("Content-Length", fs.statSync(file).size);
-          fs.createReadStream(file).pipe(res);
+          const size = fs.statSync(file).size;
+          res.setHeader("Accept-Ranges", "bytes");
+          let start = 0,
+            end = size - 1;
+          if (req.headers.range) {
+            const match = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+            if (match?.[1]) {
+              start = Number(match[1]);
+              end = Math.min(match[2] ? Number(match[2]) : end, end);
+            } else if (match?.[2]) start = Math.max(0, size - Number(match[2]));
+            else start = NaN;
+            if (
+              !Number.isSafeInteger(start) ||
+              !Number.isSafeInteger(end) ||
+              start < 0 ||
+              start > end ||
+              start >= size
+            ) {
+              res.statusCode = 416;
+              res.setHeader("Content-Range", "bytes */" + size);
+              res.end();
+              return;
+            }
+            res.statusCode = 206;
+            res.setHeader(
+              "Content-Range",
+              "bytes " + start + "-" + end + "/" + size,
+            );
+          }
+          res.setHeader("Content-Length", size ? end - start + 1 : 0);
+          if (req.method === "HEAD" || !size) {
+            res.end();
+            return;
+          }
+          const stream = fs.createReadStream(file, { start, end });
+          res.once("close", () => stream.destroy());
+          stream.on("error", () => res.destroy());
+          stream.pipe(res);
         } catch {
           res.statusCode = 403;
           res.end("Invalid project asset");

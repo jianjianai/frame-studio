@@ -1,0 +1,13 @@
+import { Scene, Color4, ArcRotateCamera, Vector3, HemisphericLight, MeshBuilder } from "@babylonjs/core";
+import { createBabylonScene } from "../../src/engine/babylon-adapter";
+import type { SceneOptions } from "../../src/engine/types";
+export function createScene(options: SceneOptions) {
+  return createBabylonScene(options, engine => {
+    const scene = new Scene(engine);
+    scene.clearColor = new Color4(0, 0, 0, 0);
+    new ArcRotateCamera("camera", 0, Math.PI / 3, 5, Vector3.Zero(), scene);
+    new HemisphericLight("light", new Vector3(0, 1, 0), scene);
+    const mesh = MeshBuilder.CreateBox("box", {}, scene);
+    return { scene, update(time) { mesh.rotation.y = time; } };
+  });
+}

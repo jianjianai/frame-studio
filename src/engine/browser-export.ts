@@ -11,6 +11,7 @@ import {
   canEncodeAudio,
 } from "mediabunny";
 import { FrameRenderer } from "./renderer";
+import { resolveProject } from "./resolve-project";
 import { OfflineAudioRenderer } from "./audio-graph";
 import { projectAudioTracks, type AnimationProject } from "./types";
 import { createExportPlan } from "./export-plan.mjs";
@@ -39,6 +40,7 @@ export async function exportWebm(
   project: AnimationProject,
   options: BrowserExportOptions,
 ): Promise<Blob | null> {
+  project = await resolveProject(project);
   const plan = createExportPlan({
     duration: project.duration,
     composition: project.composition,
@@ -126,7 +128,7 @@ export async function exportWebm(
           );
         for (let frame = 0; frame < trialFrames; frame++) {
           signal.throwIfAborted();
-          renderer.render(plan.start + frame / plan.fps, options.subtitles);
+          await renderer.render(plan.start + frame / plan.fps, options.subtitles, signal);
           await video.add(frame / plan.fps, 1 / plan.fps);
         }
         video.close();
@@ -173,7 +175,7 @@ export async function exportWebm(
         audioSamples += samples;
       }
       signal.throwIfAborted();
-      renderer.render(plan.start + frame / plan.fps, options.subtitles);
+      await renderer.render(plan.start + frame / plan.fps, options.subtitles, signal);
       await video.add(frame / plan.fps, 1 / plan.fps);
       progress("rendering", frame + 1);
       // Yield to cancellation/progress without using the display refresh clock.

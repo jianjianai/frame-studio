@@ -35,6 +35,7 @@ test(
       });
       const work = await actions.call("works_create", {
         title: "工具闭环测试",
+        renderer: "canvas",
         repo: repo.id,
         duration: 1.2,
       });
