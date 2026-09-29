@@ -466,7 +466,7 @@ export async function createApp({
     retention.start();
   }
   app.addHook("onClose", async () => {
-    tasks.close();
+    await tasks.close();
     retention.close();
     connections.close();
     await mcp.close();

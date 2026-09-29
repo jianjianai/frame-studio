@@ -16,9 +16,14 @@ import { seedPreviewAudio } from "./preview-audio-seed.mjs";
 import { executionRuntime } from "./execution-runtime.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { taskKindSchema } from "../src/contracts/platform.mjs";
+import { ControllerLease } from "./controller-lease.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets, { runCommand = command } = {}) {
-    this.command = runCommand;
+    this.command = async (...args) => {
+      if (args[0] === "docker" && ["run", "stop", "rm"].includes(args[1]?.[0])) await this.assertLeadership();
+      return runCommand(...args);
+    };
+    this.controllerId = randomUUID();
     this.limits = runtimeLimits();
     this.queueBlocked = null;
     this.db = db;
@@ -117,8 +122,34 @@ export class Tasks {
   host(relative) {
     return path.posix.join(process.env.FRAME_HOST_DATA || this.data, relative);
   }
+  async assertLeadership() {
+    if (this.closed) throw Object.assign(new Error("Controller is stopping"), { leadershipLost: true });
+    if (this.lease) await this.lease.assert();
+  }
   async start(t) {
-    if ((await this.get(t.id)).state !== "queued") return;
+    await this.assertLeadership();
+    const lock = this.db.lock ? fn => this.db.lock(t.repo ? `${t.repo}:${t.project}` : "tools-update", fn) : fn => fn();
+    return lock(async () => {
+      const container = "frame-task-" + t.id;
+      const claimed = await this.db.one(
+        "UPDATE tasks SET state='running',started=now(),container=$2,controller_id=$3,progress=$4 WHERE id=$1 AND state='queued' RETURNING id",
+        [t.id, container, this.controllerId, { stage: "准备隔离工作副本" }],
+      );
+      if (!claimed) return;
+      try { return await this.prepareAndLaunch(t, container); }
+      catch (error) {
+        const current = await this.get(t.id);
+        if (!error.leadershipLost && !current.launch_attempted_at) {
+          await this.assertLeadership();
+          await this.failTask(current, error.message);
+        }
+        throw error;
+      }
+    });
+  }
+  async prepareAndLaunch(t, container) {
+    if ((await this.get(t.id)).state === "cancelling") { await this.finishCancellation(t.id); return; }
+    await this.assertLeadership();
     const run = path.join(this.data, "runs", t.id);
     fs.mkdirSync(run, { recursive: true });
     let fingerprint = null;
@@ -222,13 +253,14 @@ export class Tasks {
         flags.push("-e", key);
       }
     }
-    const image = runtime.image,
-      container = "frame-task-" + t.id;
-    const claimed = await this.db.one(
-      "UPDATE tasks SET state='running',started=now(),container=$2,fingerprint=$3,source_commit=$4,runtime=$5 WHERE id=$1 AND state='queued' RETURNING id",
-      [t.id, container, fingerprint, sourceCommit, runtime],
+    const image = runtime.image;
+    await this.assertLeadership();
+    const prepared = await this.db.one(
+      "UPDATE tasks SET fingerprint=$2,source_commit=$3,runtime=$4 WHERE id=$1 AND state='running' AND controller_id=$5 RETURNING id",
+      [t.id, fingerprint, sourceCommit, runtime, this.controllerId],
     );
-    if (!claimed) {
+    if (!prepared) {
+      if ((await this.get(t.id)).state === "cancelling") await this.finishCancellation(t.id);
       await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
       return;
     }
@@ -276,6 +308,15 @@ export class Tasks {
       await this.finishCancellation(t.id);
       return;
     }
+    await this.assertLeadership();
+    const launch = await this.db.one(
+      "UPDATE tasks SET launch_attempted_at=now() WHERE id=$1 AND state='running' AND controller_id=$2 AND launch_attempted_at IS NULL RETURNING id",
+      [t.id, this.controllerId],
+    );
+    if (!launch) {
+      if ((await this.get(t.id)).state === "cancelling") await this.finishCancellation(t.id);
+      return;
+    }
     await this.command("docker", args, { env, timeout: 120000 });
     // Cancellation after this last check remains durable as 'cancelling'; the
     // scheduler stops the container instead of overwriting it with 'running'.
@@ -283,8 +324,8 @@ export class Tasks {
   }
   retryPublication(id) { return this.publication.retryPublication(id); }
   publicationError(task, error) { return this.publication.publicationError(task, error); }
-  complete(task, exit) { return this.publication.complete(task, exit); }
-  publish(task) { return this.publication.publish(task); }
+  async complete(task, exit) { await this.assertLeadership(); return this.publication.complete(task, exit); }
+  async publish(task) { await this.assertLeadership(); return this.publication.publish(task); }
   monitorWarning(task, phase, error) { return this.monitor.monitorWarning(task, phase, error); }
   observeTask(task) { return this.monitor.observeTask(task); }
   collectEvents(task) { return this.monitor.collectEvents(task); }
@@ -304,8 +345,10 @@ export class Tasks {
     if (this.ticking || this.closed) return;
     this.ticking = true;
     try {
+      await this.assertLeadership();
       const running = await this.db.all("SELECT * FROM tasks WHERE state IN ('running','cancelling','publishing') AND (publication_retry_at IS NULL OR publication_retry_at<=now()) ORDER BY created");
       for (const t of running) {
+        await this.assertLeadership();
         try {
           if (t.state === "publishing") {
             await this.complete(t, 0);
@@ -329,6 +372,7 @@ export class Tasks {
           ORDER BY t.created LIMIT 1`,
         );
         if (t) {
+          await this.assertLeadership();
           try { await this.start(t); }
           catch (e) {
             const current = await this.get(t.id);
@@ -344,15 +388,35 @@ export class Tasks {
       }
     } finally { this.ticking = false; }
   }
-  startLoop() {
-    this.timer = setInterval(
-      () => this.tick().catch((e) => console.error("Scheduler:", e.message)),
-      1500,
-    );
-    this.tick().catch(console.error);
+  startLoop({ onLeadership = () => {}, onCycle = () => {} } = {}) {
+    if (this.loopStarted) return;
+    this.loopStarted = true;
+    this.lease = new ControllerLease(this.db.pool);
+    this.controllerId = this.lease.id;
+    const cycle = async () => {
+      if (this.closed || this.loopPromise) return;
+      this.loopPromise = (async () => {
+        let leader = false;
+        try {
+          leader = await this.lease.acquire();
+          await onLeadership(leader);
+          if (leader) await this.tick();
+        } catch (error) { console.error("Scheduler:", error.message); }
+        finally {
+          if (!this.lease.held || this.closed) await onLeadership(false);
+          await Promise.resolve().then(() => onCycle({ leader: this.lease.held && !this.closed, controllerId: this.controllerId })).catch(error => console.error("Controller status:", error.message));
+        }
+      })();
+      try { await this.loopPromise; }
+      finally { this.loopPromise = null; }
+    };
+    this.timer = setInterval(() => void cycle(), 1500);
+    void cycle();
   }
-  close() {
+  async close() {
     this.closed = true;
     clearInterval(this.timer);
+    await this.loopPromise?.catch(() => {});
+    this.lease?.close();
   }
 }

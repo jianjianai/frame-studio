@@ -11,7 +11,7 @@ for (const moment of ["before-preparation", "during-preparation", "after-claim"]
     const task = { id: "fixture", kind: "build", state: "queued", input: {} };
     let dockerRuns = 0;
     const db = {
-      async one(sql) {
+      async one(sql, params) {
         if (sql.startsWith("SELECT")) return { ...task };
         if (sql.includes("SET state=CASE")) {
           if (!["queued", "running"].includes(task.state)) return undefined;
@@ -21,6 +21,12 @@ for (const moment of ["before-preparation", "during-preparation", "after-claim"]
         if (sql.includes("SET state='running'")) {
           if (task.state !== "queued") return undefined;
           task.state = moment === "after-claim" ? "cancelling" : "running";
+          task.controller_id = params[2];
+          return { id: task.id };
+        }
+        if (sql.includes("SET fingerprint=") || sql.includes("SET launch_attempted_at=")) {
+          if (task.state !== "running") return undefined;
+          if (sql.includes("SET launch_attempted_at=")) task.launch_attempted_at = new Date();
           return { id: task.id };
         }
         throw Error("Unexpected query: " + sql);
