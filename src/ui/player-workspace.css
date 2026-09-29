@@ -33,3 +33,8 @@
   .review-layout .timeline-panel { padding: 8px; }
   .review-layout .current-shot { margin-bottom: 4px; }
 }
+
+.shot-thumbnail-popover { position: fixed; z-index: 25; width: 216px; padding: 7px; border: 1px solid #b4c3a6; border-radius: 8px; background: #fcfdf9; color: #263b32; box-shadow: 0 6px 25px #263b3230; pointer-events: none; display: grid; gap: 4px; font-size: 12px; }
+.shot-thumbnail-popover canvas { width: 200px; height: 112.5px; background: #e8eedf; }
+.shot-thumbnail-popover strong { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.shot-thumbnail-popover small, .shot-thumbnail-popover > span { color: #55634c; font-size: 11px; }

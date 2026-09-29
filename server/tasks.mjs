@@ -13,6 +13,7 @@ import {
 } from "./security.mjs";
 import { applyProject } from "./apply-project.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
+import { snapshotVersion, versionTree } from "./version-review.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets) {
     this.db = db;
@@ -54,6 +55,10 @@ export class Tasks {
       )
         throw problem(400, "Choose a provider and explicit semver version");
     } else await this.repos.project(repo, project, { exists: kind !== "new" });
+    if (input.version) {
+      if (kind !== "build") throw problem(400, "历史版本只支持只读预览");
+      await versionTree(this.repos, { repo, project }, input.version);
+    }
     const id = randomUUID();
     const insert = async () => {
       if (requestKey) {
@@ -72,7 +77,7 @@ export class Tasks {
           return existing;
         }
       }
-      if (repo && kind !== "agent") await this.repos.writable(repo, project);
+      if (repo && kind !== "agent" && !input.version) await this.repos.writable(repo, project);
       if (
         kind === "tools-update" &&
         (await this.db.one(
@@ -114,7 +119,12 @@ export class Tasks {
     fs.mkdirSync(run, { recursive: true });
     let fingerprint = null;
     let sourceCommit = null;
-    if (t.repo) {
+    if (t.repo && t.kind === "build" && t.input.version) {
+      const destination = path.join(run, "projects", t.project);
+      await snapshotVersion(this.repos, t, t.input.version, destination);
+      fingerprint = treeHash(destination);
+      sourceCommit = t.input.version;
+    } else if (t.repo) {
       const { dir } = await this.repos.project(t.repo, t.project, {
         exists: t.kind !== "new",
       });
@@ -315,7 +325,7 @@ export class Tasks {
       }
     };
     walk(base);
-    result = { ...result, artifacts };
+    result = { ...result, artifacts, ...(t.input.version ? { readonlyVersion: t.input.version } : {}) };
     await this.db.pool.query(
       "UPDATE tasks SET state='succeeded',result=$2,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days' WHERE id=$1",
       [t.id, result, result.commit || null],

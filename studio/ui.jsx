@@ -289,3 +289,9 @@ export function useDebouncedValue(value, delay = 220) {
   useEffect(() => { const timer = setTimeout(() => setCurrent(value), delay); return () => clearTimeout(timer); }, [value, delay]);
   return current;
 }
+
+export function useMediaQuery(query) {
+  const [matches, setMatches] = useState(() => window.matchMedia(query).matches);
+  useEffect(() => { const media = window.matchMedia(query); const change = () => setMatches(media.matches); change(); media.addEventListener("change", change); return () => media.removeEventListener("change", change); }, [query]);
+  return matches;
+}

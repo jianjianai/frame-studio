@@ -294,6 +294,11 @@ export function workbenchOperations({
             ))
           )
             throw problem(400, "素材不属于当前仓库");
+      const assetNames = {};
+      for (const id of a.context?.assets || []) {
+        const asset = await db.one("SELECT name FROM assets WHERE id=$1", [id]);
+        if (asset) assetNames[id] = asset.name;
+      }
       return tasks.create({
         repo: w.repo,
         project: w.project,
@@ -304,7 +309,7 @@ export function workbenchOperations({
           provider: chat.provider,
           connection: chat.connection,
           prompt: a.prompt,
-          context: a.context,
+          context: a.context ? { ...a.context, assetNames } : undefined,
         },
       });
     },

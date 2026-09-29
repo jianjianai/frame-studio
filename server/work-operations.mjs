@@ -3,6 +3,7 @@ import { Works } from "./works.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { treeHash } from "./security.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
+import { compareVersion, versionTree } from "./version-review.mjs";
 export function workOperations({
   add,
   registry,
@@ -245,6 +246,15 @@ export function workOperations({
     { id: uuid, name: z.string().trim().min(1).max(150) },
     (a) => works.version(a.id, a.name),
   );
+  add("works_version_compare", "Compare a work version to the current work without modifying either", { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) }, async (a) => compareVersion(repos, await works.get(a.id), a.version));
+  add("works_version_preview", "Build an immutable historical preview; does not restore or save the current work", { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) }, async (a) => {
+    const work = await works.get(a.id, { active: true });
+    await versionTree(repos, work, a.version);
+    return db.lock("version-preview:" + work.id + ":" + a.version, async () => {
+      const existing = await db.one("SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running') OR (state='succeeded' AND result->>'previewVersion'=$4)) ORDER BY created DESC LIMIT 1", [work.repo, work.project, a.version, String(PREVIEW_VERSION)]);
+      return existing || tasks.create({ repo: work.repo, project: work.project, kind: "build", input: { version: a.version } });
+    });
+  });
   add(
     "works_restore",
     "Restore a work snapshot, saving the current version first",
@@ -269,7 +279,7 @@ export function workOperations({
       const w = await works.get(a.id, { active: true });
       const { dir } = await repos.project(w.repo, w.project);
       const latest = await db.one(
-        "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND state='succeeded' AND result->>'previewVersion'=$3 ORDER BY created DESC LIMIT 1",
+        "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version' IS NULL AND state='succeeded' AND result->>'previewVersion'=$3 ORDER BY created DESC LIMIT 1",
         [w.repo, w.project, String(PREVIEW_VERSION)],
       );
       if (latest && !a.rebuild && latest.fingerprint === treeHash(dir)) {

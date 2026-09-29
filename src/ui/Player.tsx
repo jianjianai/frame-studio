@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ResizeHandle } from "./ResizeHandle";
+import { ShotThumbnail } from "./ShotThumbnail";
 import { readPreference, writePreference, boundedPreference } from "./view-preferences";
 import {
   Play,
@@ -93,6 +94,7 @@ export function Player({
   const [timelineVisible, setTimelineVisible] = useState(initialView.current.timelineVisible !== false);
   const [videoRatio, setVideoRatio] = useState(() => boundedPreference(initialView.current.videoRatio, 68, 25, 85));
   const [resizing, setResizing] = useState(false);
+  const [hoverShot, setHoverShot] = useState<{ time: number; title: string; x: number; y: number } | null>(null);
   const [quality, setQuality] = useState<Quality>(() => ["draft", "standard", "high"].includes(String(initialView.current.quality)) ? initialView.current.quality as Quality : "standard");
   const qualityRef = useRef(quality); qualityRef.current = quality;
   const viewConfigured = useRef(!embedded);
@@ -1016,7 +1018,12 @@ export function Player({
                         }}
                         className={currentBeat === b ? "selected" : ""}
                         disabled={exporting}
-                        onClick={() => seek(b.at)}
+                        onClick={() => { setHoverShot(null); seek(b.at); }}
+                        onMouseEnter={(event) => { const r = event.currentTarget.getBoundingClientRect(); setHoverShot({ time: b.at, title: b.title, x: r.left + r.width / 2, y: r.top }); }}
+                        onMouseLeave={() => setHoverShot(null)}
+                        onFocus={(event) => { const r = event.currentTarget.getBoundingClientRect(); setHoverShot({ time: b.at, title: b.title, x: r.left + r.width / 2, y: r.top }); }}
+                        onBlur={() => setHoverShot(null)}
+                        aria-label={b.title + "，" + b.at.toFixed(2) + " 秒"}
                         title={b.detail}
                       >
                         <span>{String(i + 1).padStart(2, "0")}</span>
@@ -1255,6 +1262,7 @@ export function Player({
           </aside>
         )}
       </div>
+      {hoverShot && timelineVisible && !exporting && <ShotThumbnail key={hoverShot.time} project={project} {...hoverShot} />}
       {exportOpen && (
         <div
           className="modal-backdrop"
