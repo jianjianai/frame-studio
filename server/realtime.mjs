@@ -13,6 +13,7 @@ const watched = {
   task_get: ["events", "tasks"],
   tools_info: ["settings"],
   works_sync_status: ["work_sync"],
+  works_scm_status: ["works", "work_sync", "tasks"],
 };
 export async function installRealtime(app, db, actions, origin) {
   const wss = new WebSocketServer({
@@ -143,7 +144,8 @@ export async function installRealtime(app, db, actions, origin) {
       }, 80);
     };
     ws.on("message", async (data) => {
-      let message, counted = false;
+      let message,
+        counted = false;
       try {
         message = JSON.parse(data.toString());
         if (typeof message.id !== "string" || message.id.length > 80)

@@ -1,6 +1,7 @@
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
 import { Works } from "./works.mjs";
+import { sourceControlOperations } from "./source-control.mjs";
 import { compositionSchema } from "../src/engine/dimensions.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { readWorkPreview } from "./preview-state.mjs";
@@ -253,7 +254,13 @@ export function workOperations({
         async () => {
           const existing = await db.one(
             "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running','publishing','publish_failed') OR (state='succeeded' AND result->>'previewVersion'=$4 AND result->>'runtimeFingerprint'=$5)) ORDER BY created DESC LIMIT 1",
-            [work.repo, work.project, a.version, String(PREVIEW_VERSION), runtime.fingerprint],
+            [
+              work.repo,
+              work.project,
+              a.version,
+              String(PREVIEW_VERSION),
+              runtime.fingerprint,
+            ],
           );
           return (
             existing ||
@@ -271,8 +278,15 @@ export function workOperations({
   add(
     "works_restore",
     "Restore a work snapshot, saving the current version first",
-    { id: uuid, version: z.union([uuid, z.string().regex(/^[a-f0-9]{40}$/)]) },
-    (a) => works.restore(a.id, a.version),
+    {
+      id: uuid,
+      version: z.union([uuid, z.string().regex(/^[a-f0-9]{40}$/)]),
+      expectedRevision: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional(),
+    },
+    (a) => works.restore(a.id, a.version, a.expectedRevision),
   );
   add(
     "repositories_default",
@@ -284,14 +298,19 @@ export function workOperations({
       return { ok: true };
     },
   );
-  add("works_preview_status", "Read indexed source and preview revisions; refresh explicitly scans external changes", { id: uuid, refresh: z.boolean().default(false) }, async (a) => {
-    let work = await works.get(a.id, { active: true });
-    if (a.refresh) {
-      await repos.revisions?.refresh(work.repo, work.project);
-      work = await works.get(a.id, { active: true });
-    }
-    return readWorkPreview({ db, work });
-  });
+  add(
+    "works_preview_status",
+    "Read indexed source and preview revisions; refresh explicitly scans external changes",
+    { id: uuid, refresh: z.boolean().default(false) },
+    async (a) => {
+      let work = await works.get(a.id, { active: true });
+      if (a.refresh) {
+        await repos.revisions?.refresh(work.repo, work.project);
+        work = await works.get(a.id, { active: true });
+      }
+      return readWorkPreview({ db, work });
+    },
+  );
   add(
     "works_browser",
     "Get a private AI browser URL with FRAME_AI console controls. Rendering, segment playback, screenshots and WebM exports execute in the client browser. If compilation is needed, returns a durable task; poll and call again.",
@@ -340,5 +359,6 @@ export function workOperations({
       };
     },
   );
+  sourceControlOperations({ add, db, repos, works });
   return works;
 }
