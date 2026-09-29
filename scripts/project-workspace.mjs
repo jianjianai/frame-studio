@@ -42,6 +42,11 @@ export function createProjectWorkspace(root, id) {
       return result.stdout.trim();
     };
     git(["init", "-b", "codex/" + id]);
+    // Track only this work; do not force-add private or generated files.
+    fs.appendFileSync(
+      path.join(snapshot.root, ".gitignore"),
+      `\n# This isolated workspace owns exactly one work\n!/projects/\n/projects/*\n!/projects/${id}/\n`,
+    );
     fs.mkdirSync(path.join(snapshot.root, ".cache"), { recursive: true });
     fs.renameSync(
       path.join(snapshot.root, "input.json"),
@@ -60,6 +65,8 @@ export function createProjectWorkspace(root, id) {
       "package.json",
       ...names.filter((name) => !["src"].includes(name)),
       "pnpm-lock.yaml",
+      "pnpm-workspace.yaml",
+      ".npmrc",
       "tsconfig.json",
     ].filter((name) => fs.existsSync(path.join(snapshot.root, name)));
     git(["add", "--", ...new Set(tracked)]);

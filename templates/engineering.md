@@ -21,11 +21,13 @@ pnpm film storyboard {{PROJECT_ID}}
 pnpm film poster {{PROJECT_ID}}
 pnpm film render {{PROJECT_ID}} --width 1280
 pnpm film frame {{PROJECT_ID}} --frame 0
-pnpm exec playwright test --project {{PROJECT_ID}}
+pnpm --silent film test-e2e {{PROJECT_ID}} --json
 ```
 
 检查命令只读；封面命令覆盖本工程封面，视频/单帧默认拒绝覆盖已存在输出。导出保存到本工程 exports/。新增专用脚本请在此记录输入、输出、命令与覆盖行为。
 
 浏览器与命令都按固定帧时间导出。浏览器可单独选择尺寸和帧率，使用当前混音；命令导出使用元数据音轨设置。先核对分镜预览和关键帧，再按需要导出片段或全片。完整工具用法见根 docs/AI-WORKFLOW.md。
 
-需要旁白或人物对白时，可运行 `pnpm film speech {{PROJECT_ID}} init --provider edge` 创建本项目配置，再用 `pnpm film speech {{PROJECT_ID}} say --text "你好"` 试听。支持公共 Edge、OpenAI/兼容接口、Azure 和自己的 `.mjs` 合成器；角色声线保存在 production/speech.json，私有凭据放忽略的本项目 .env。完整时序、缓存与 MCP 用法见根 docs/SPEECH.md。
+平台 AI 任务内先运行 `node scripts/work-tool.mjs context` 读取本次定位与可用工具；用 `node scripts/work-tool.mjs engines` 发现已配置的语音服务，无需重复配置账户。素材导入后仍需将返回 URL 接入画面或 audioTracks。集中检查、恢复与交付见根 docs/CREATOR-WORKFLOW.md。
+
+独立命令行需要旁白或人物对白时，可运行 `pnpm film speech {{PROJECT_ID}} init --provider edge` 创建本项目配置，再用 `pnpm film speech {{PROJECT_ID}} say --text "你好"` 试听。支持公共 Edge、OpenAI/兼容接口、Azure 和自己的 `.mjs` 合成器；角色声线保存在 production/speech.json，私有凭据放忽略的本项目 .env。完整时序、缓存与 MCP 用法见根 docs/SPEECH.md。

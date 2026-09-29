@@ -8,11 +8,29 @@ export function agentTools({ app, db, data, assets, actions }) {
     const task = req.agentTask;
     if (!task) throw problem(403, "Task credential required");
     const { name, args = {} } = req.body || {};
-    if (name === "assets")
+    if (!args || typeof args !== "object" || Array.isArray(args))
+      throw problem(400, "Tool args must be a JSON object");
+    if (name === "assets") {
+      const limit = args.limit ?? 60,
+        offset = args.offset ?? 0;
+      if (
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 200 ||
+        !Number.isSafeInteger(offset) ||
+        offset < 0
+      )
+        throw problem(
+          400,
+          "assets requires limit 1..200 and a nonnegative integer offset",
+        );
       return actions.call("assets_list", {
         search: args.search || "",
+        limit,
+        offset,
         repo: task.repo,
       });
+    }
     if (name === "engines") return actions.call("engines_list", {});
     if (name === "engine_add") {
       if (args.id)
@@ -70,7 +88,7 @@ export function agentTools({ app, db, data, assets, actions }) {
         dest = confined(root, relative);
       return db.lock("agent-material:" + task.id, async () => {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
-        if (fs.existsSync(dest) && await fileSha256(dest) !== asset.sha)
+        if (fs.existsSync(dest) && (await fileSha256(dest)) !== asset.sha)
           throw problem(409, "Material file was modified");
         await fs.promises.copyFile(path.join(data, "blobs", asset.sha), dest);
         const manifest = confined(root, "production/materials.json");
@@ -109,6 +127,14 @@ export function agentTools({ app, db, data, assets, actions }) {
           asset: asset.id,
           path: `projects/${task.project}/${relative}`,
           url: `films/${task.project}/${relative.slice(7)}`,
+          name: asset.name,
+          mime: asset.mime,
+          bytes: Number(asset.bytes),
+          source: asset.license,
+          nextAction:
+            name === "speech" || asset.mime?.startsWith("audio/")
+              ? "Add this URL to a file audioTrack in project.ts and measure its duration before aligning subtitles. Importing a material does not enable playback."
+              : "Reference this URL from the current work's scene; importing does not modify the scene.",
         };
       });
     }
