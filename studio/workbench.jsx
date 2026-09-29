@@ -62,7 +62,14 @@ function Background({ notify }) {
             </div>
           </div>
           <div className="row">
-            <a className="button" href={"#/work/" + w.id} target="_blank" rel="noopener">打开作品 ↗</a>
+            <a
+              className="button"
+              href={"#/work/" + w.id}
+              target="_blank"
+              rel="noopener"
+            >
+              打开作品 ↗
+            </a>
             <Button
               icon={Square}
               disabled={busy}
@@ -200,58 +207,61 @@ function App() {
       ["settings", Settings2, "设置"],
     ];
   return (
-    <div className={"workbench " + (isWork ? "work-focus" : collapsed ? "nav-collapsed" : "")}>
-      {!isWork && <aside className="navigation">
-        <a className="brand" href="#/recent">
-          <Film size={25} />
-          <span>FRAME</span>
-        </a>
-        <nav>
-          {navigation.map(([id, Icon, label]) => (
-            <a
-              href={"#/" + id}
-              key={id}
-              title={label}
-              className={
-                section === id ||
-                (id === "repositories" &&
-                  ["repository", "work"].includes(section))
-                  ? "selected"
-                  : ""
-              }
+    <div
+      className={
+        "workbench " +
+        (isWork ? "work-focus" : collapsed ? "nav-collapsed" : "")
+      }
+    >
+      {!isWork && (
+        <aside className="navigation">
+          <a className="brand" href="#/recent">
+            <Film size={25} />
+            <span>FRAME</span>
+          </a>
+          <nav>
+            {navigation.map(([id, Icon, label]) => (
+              <a
+                href={"#/" + id}
+                key={id}
+                title={label}
+                className={
+                  section === id ||
+                  (id === "repositories" &&
+                    ["repository", "work"].includes(section))
+                    ? "selected"
+                    : ""
+                }
+              >
+                <Icon size={20} />
+                <span>{label}</span>
+              </a>
+            ))}
+          </nav>
+          <footer>
+            <Button
+              icon={collapsed ? PanelLeftOpen : PanelLeftClose}
+              aria-label={collapsed ? "展开导航" : "收起导航"}
+              onClick={() => setCollapsed(!collapsed)}
             >
-              <Icon size={20} />
-              <span>{label}</span>
-            </a>
-          ))}
-        </nav>
-        <footer>
-          <Button
-            icon={collapsed ? PanelLeftOpen : PanelLeftClose}
-            aria-label={collapsed ? "展开导航" : "收起导航"}
-            onClick={() => setCollapsed(!collapsed)}
-          >
-            <span>{collapsed ? "展开" : "收起导航"}</span>
-          </Button>
-          <Button
-            icon={LogOut}
-            aria-label="退出登录"
-            onClick={async () => {
-              await request("/api/logout", { method: "POST" });
-              setMe(null);
-            }}
-          >
-            <span>退出登录</span>
-          </Button>
-        </footer>
-      </aside>}
+              <span>{collapsed ? "展开" : "收起导航"}</span>
+            </Button>
+            <Button
+              icon={LogOut}
+              aria-label="退出登录"
+              onClick={async () => {
+                await request("/api/logout", { method: "POST" });
+                setMe(null);
+              }}
+            >
+              <span>退出登录</span>
+            </Button>
+          </footer>
+        </aside>
+      )}
       <main className={isWork ? "workspace" : "page"}>
         {section === "work" ? (
-          <Creation
-            key={route[1]}
-            id={route[1]}
-            notify={notify}
-          />
+          <Creation key={route[1]} id={route[1]} notify={notify} />
         ) : section === "repository" ? (
           <RepositoryWorks key={route[1]} id={route[1]} notify={notify} />
         ) : section === "repositories" ? (

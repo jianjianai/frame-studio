@@ -178,7 +178,13 @@ export function workOperations({
       return assets.attach(a.asset, w.repo, w.project);
     },
   );
-  add("works_speech_adopt", "Adopt the exact temporary audition as a work resource", { id: uuid, task: uuid, name: z.string().trim().min(1).max(180) }, async ({ id, ...a }) => invoke("speech_adopt", { ...(await resolve(id)), ...a }));
+  add(
+    "works_speech_adopt",
+    "Adopt the exact temporary audition as a work resource",
+    { id: uuid, task: uuid, name: z.string().trim().min(1).max(180) },
+    async ({ id, ...a }) =>
+      invoke("speech_adopt", { ...(await resolve(id)), ...a }),
+  );
   add(
     "works_speech",
     "Synthesize a narration and save it in this work and the global material library",
@@ -249,15 +255,39 @@ export function workOperations({
     { id: uuid, name: z.string().trim().min(1).max(150) },
     (a) => works.version(a.id, a.name),
   );
-  add("works_version_compare", "Compare a work version to the current work without modifying either", { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) }, async (a) => compareVersion(repos, await works.get(a.id), a.version));
-  add("works_version_preview", "Build an immutable historical preview; does not restore or save the current work", { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) }, async (a) => {
-    const work = await works.get(a.id, { active: true });
-    await versionTree(repos, work, a.version);
-    return db.lock("version-preview:" + work.id + ":" + a.version, async () => {
-      const existing = await db.one("SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running') OR (state='succeeded' AND result->>'previewVersion'=$4)) ORDER BY created DESC LIMIT 1", [work.repo, work.project, a.version, String(PREVIEW_VERSION)]);
-      return existing || tasks.create({ repo: work.repo, project: work.project, kind: "build", input: { version: a.version } });
-    });
-  });
+  add(
+    "works_version_compare",
+    "Compare a work version to the current work without modifying either",
+    { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) },
+    async (a) => compareVersion(repos, await works.get(a.id), a.version),
+  );
+  add(
+    "works_version_preview",
+    "Build an immutable historical preview; does not restore or save the current work",
+    { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) },
+    async (a) => {
+      const work = await works.get(a.id, { active: true });
+      await versionTree(repos, work, a.version);
+      return db.lock(
+        "version-preview:" + work.id + ":" + a.version,
+        async () => {
+          const existing = await db.one(
+            "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running') OR (state='succeeded' AND result->>'previewVersion'=$4)) ORDER BY created DESC LIMIT 1",
+            [work.repo, work.project, a.version, String(PREVIEW_VERSION)],
+          );
+          return (
+            existing ||
+            tasks.create({
+              repo: work.repo,
+              project: work.project,
+              kind: "build",
+              input: { version: a.version },
+            })
+          );
+        },
+      );
+    },
+  );
   add(
     "works_restore",
     "Restore a work snapshot, saving the current version first",

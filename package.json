@@ -35,7 +35,8 @@
     "server": "node server/app.mjs",
     "build:studio": "vite build --config studio/vite.config.mjs",
     "test:server": "node --test --test-concurrency=1 tests/server/*.test.mjs",
-    "verify:content": "pnpm project:check --strict && pnpm exec vitest run --config vitest.content.config.ts && pnpm build && pnpm test:e2e"
+    "verify:content": "pnpm project:check --strict && pnpm exec vitest run --config vitest.content.config.ts && pnpm build && pnpm test:e2e",
+    "test:workspace": "node tests/ui/workspace-review.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

@@ -1,7 +1,11 @@
 import { Fragment, useEffect, useRef, useState } from "react";
 import { ResizeHandle } from "./ResizeHandle";
 import { ShotThumbnail } from "./ShotThumbnail";
-import { readPreference, writePreference, boundedPreference } from "./view-preferences";
+import {
+  readPreference,
+  writePreference,
+  boundedPreference,
+} from "./view-preferences";
 import {
   Play,
   Pause,
@@ -89,21 +93,41 @@ export function Player({
       canceled = true;
     };
   }, [project.id]);
-  const initialView = useRef(readPreference<Record<string, unknown>>("frame.player-view", {}));
+  const initialView = useRef(
+    readPreference<Record<string, unknown>>("frame.player-view", {}),
+  );
   const editingArea = useRef<HTMLDivElement>(null);
-  const [timelineVisible, setTimelineVisible] = useState(initialView.current.timelineVisible !== false);
-  const [videoRatio, setVideoRatio] = useState(() => boundedPreference(initialView.current.videoRatio, 68, 25, 85));
+  const [timelineVisible, setTimelineVisible] = useState(
+    initialView.current.timelineVisible !== false,
+  );
+  const [videoRatio, setVideoRatio] = useState(() =>
+    boundedPreference(initialView.current.videoRatio, 68, 25, 85),
+  );
   const [resizing, setResizing] = useState(false);
-  const [hoverShot, setHoverShot] = useState<{ time: number; title: string; x: number; y: number } | null>(null);
-  const [quality, setQuality] = useState<Quality>(() => ["draft", "standard", "high"].includes(String(initialView.current.quality)) ? initialView.current.quality as Quality : "standard");
-  const qualityRef = useRef(quality); qualityRef.current = quality;
+  const [hoverShot, setHoverShot] = useState<{
+    time: number;
+    title: string;
+    x: number;
+    y: number;
+  } | null>(null);
+  const [quality, setQuality] = useState<Quality>(() =>
+    ["draft", "standard", "high"].includes(String(initialView.current.quality))
+      ? (initialView.current.quality as Quality)
+      : "standard",
+  );
+  const qualityRef = useRef(quality);
+  qualityRef.current = quality;
   const viewConfigured = useRef(!embedded);
   const preferences = useRef({ timelineVisible, videoRatio, quality });
   preferences.current = { timelineVisible, videoRatio, quality };
   useEffect(() => {
     if (!viewConfigured.current) return;
     writePreference("frame.player-view", preferences.current);
-    if (embedded && parent !== window) parent.postMessage({ type: "frame-player-preferences", preferences: preferences.current }, "*");
+    if (embedded && parent !== window)
+      parent.postMessage(
+        { type: "frame-player-preferences", preferences: preferences.current },
+        "*",
+      );
   }, [timelineVisible, videoRatio, quality, embedded]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -154,7 +178,13 @@ export function Player({
   }, [view.time, view.playing, zoom, project.duration]);
   const exportAbort = useRef<AbortController | null>(null);
   const lastExport = useRef<Blob | null>(null);
-  const reportExport = (id: string | undefined, result: Record<string, unknown>) => { if (id && embedded && parent !== window) parent.postMessage({ type: "frame-export-state", id, ...result }, "*"); };
+  const reportExport = (
+    id: string | undefined,
+    result: Record<string, unknown>,
+  ) => {
+    if (id && embedded && parent !== window)
+      parent.postMessage({ type: "frame-export-state", id, ...result }, "*");
+  };
   const publish = () => {
     const a = transport.current;
     if (a) {
@@ -187,38 +217,83 @@ export function Player({
   const commandHandler = useRef<(data: Record<string, any>) => void>(() => {});
   commandHandler.current = (data) => {
     if (data.command === "export") setExportOpen(true);
-    if (data.command === "export-start") void renderWebm({ ...data.options, requestId: String(data.id || "") });
+    if (data.command === "export-start")
+      void renderWebm({ ...data.options, requestId: String(data.id || "") });
     if (data.command === "export-cancel") exportAbort.current?.abort();
-    if (data.command === "export-download" && lastExport.current) downloadBlob(lastExport.current, project.id + ".webm");
-    if (data.command === "snapshot" && canvas.current) void downloadCanvas(canvas.current, project.id + "-frame-" + Math.round(view.time * project.fps) + ".png").catch(error => parent.postMessage({ type: "frame-download-error", message: String(error) }, "*"));
-    if (data.command === "subtitles") downloadBlob(new Blob([toSrt(project.subtitles)], { type: "text/plain;charset=utf-8" }), project.id + ".srt");
-    if (data.command === "pause") { transport.current?.pause(); publish(); }
+    if (data.command === "export-download" && lastExport.current)
+      downloadBlob(lastExport.current, project.id + ".webm");
+    if (data.command === "snapshot" && canvas.current)
+      void downloadCanvas(
+        canvas.current,
+        project.id + "-frame-" + Math.round(view.time * project.fps) + ".png",
+      ).catch((error) =>
+        parent.postMessage(
+          { type: "frame-download-error", message: String(error) },
+          "*",
+        ),
+      );
+    if (data.command === "subtitles")
+      downloadBlob(
+        new Blob([toSrt(project.subtitles)], {
+          type: "text/plain;charset=utf-8",
+        }),
+        project.id + ".srt",
+      );
+    if (data.command === "pause") {
+      transport.current?.pause();
+      publish();
+    }
     if (data.command === "seek" && Number.isFinite(data.time)) {
       transport.current?.pause();
-      if (data.selection && Number.isFinite(data.selection.start) && Number.isFinite(data.selection.end) && data.selection.end > data.selection.start)
-        setSelection({ start: Math.max(0, data.selection.start), end: Math.min(project.duration, data.selection.end) });
+      if (
+        data.selection &&
+        Number.isFinite(data.selection.start) &&
+        Number.isFinite(data.selection.end) &&
+        data.selection.end > data.selection.start
+      )
+        setSelection({
+          start: Math.max(0, data.selection.start),
+          end: Math.min(project.duration, data.selection.end),
+        });
       seek(data.time);
     }
-    if (data.command === "configure-view" && data.preferences && typeof data.preferences === "object") {
+    if (
+      data.command === "configure-view" &&
+      data.preferences &&
+      typeof data.preferences === "object"
+    ) {
       const p = data.preferences;
       viewConfigured.current = true;
-      if (typeof p.timelineVisible === "boolean") setTimelineVisible(p.timelineVisible);
-      if (Number.isFinite(p.videoRatio)) setVideoRatio(boundedPreference(p.videoRatio, 68, 25, 85));
-      if (["draft", "standard", "high"].includes(p.quality) && p.quality !== qualityRef.current) {
-        transport.current?.pause(); publish(); setQuality(p.quality);
+      if (typeof p.timelineVisible === "boolean")
+        setTimelineVisible(p.timelineVisible);
+      if (Number.isFinite(p.videoRatio))
+        setVideoRatio(boundedPreference(p.videoRatio, 68, 25, 85));
+      if (
+        ["draft", "standard", "high"].includes(p.quality) &&
+        p.quality !== qualityRef.current
+      ) {
+        transport.current?.pause();
+        publish();
+        setQuality(p.quality);
       }
     }
   };
   useEffect(() => {
     if (!embedded || parent === window) return;
     const receive = (event: MessageEvent) => {
-      if (event.source === parent && event.data?.type === "frame-player-command") commandHandler.current(event.data);
+      if (
+        event.source === parent &&
+        event.data?.type === "frame-player-command"
+      )
+        commandHandler.current(event.data);
     };
     window.addEventListener("message", receive);
     parent.postMessage({ type: "frame-player-ready" }, "*");
     return () => window.removeEventListener("message", receive);
   }, [embedded]);
-  useEffect(() => { publish(); }, [selection]);
+  useEffect(() => {
+    publish();
+  }, [selection]);
   const seek = (t: number) => {
     if (exporting) return;
     transport.current?.seek(t);
@@ -535,10 +610,38 @@ export function Player({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   });
-  async function renderWebm(options?: { requestId: string; width: number; fps: number; start?: number; end?: number; subtitles: boolean }) {
+  async function renderWebm(options?: {
+    requestId: string;
+    width: number;
+    fps: number;
+    start?: number;
+    end?: number;
+    subtitles: boolean;
+  }) {
     const sound = transport.current;
-    if (!sound || loading || exportAbort.current) { reportExport(options?.requestId, { state: "failed", error: "播放器未就绪或已有导出正在进行" }); return; }
-    if (options && (!Number.isInteger(options.width) || options.width < 320 || options.width > 3840 || !Number.isInteger(options.fps) || options.fps < 1 || options.fps > 120 || typeof options.subtitles !== "boolean")) { reportExport(options.requestId, { state: "failed", error: "导出参数无效" }); return; }
+    if (!sound || loading || exportAbort.current) {
+      reportExport(options?.requestId, {
+        state: "failed",
+        error: "播放器未就绪或已有导出正在进行",
+      });
+      return;
+    }
+    if (
+      options &&
+      (!Number.isInteger(options.width) ||
+        options.width < 320 ||
+        options.width > 3840 ||
+        !Number.isInteger(options.fps) ||
+        options.fps < 1 ||
+        options.fps > 120 ||
+        typeof options.subtitles !== "boolean")
+    ) {
+      reportExport(options.requestId, {
+        state: "failed",
+        error: "导出参数无效",
+      });
+      return;
+    }
     lastExport.current = null;
     const abort = new AbortController();
     exportAbort.current = abort;
@@ -548,7 +651,10 @@ export function Player({
     setExporting(true);
     setExportOpen(false);
     setExportProgress({ phase: "preparing", completed: 0, total: 0 });
-    reportExport(options?.requestId, { state: "running", progress: { phase: "preparing", completed: 0, total: 0 } });
+    reportExport(options?.requestId, {
+      state: "running",
+      progress: { phase: "preparing", completed: 0, total: 0 },
+    });
     try {
       type FileWriter = {
         write(chunk: unknown): Promise<void>;
@@ -588,7 +694,10 @@ export function Player({
           controls: options ? undefined : new Map(sound.controls),
           volume: options ? 1 : sound.muted ? 0 : sound.volume,
           signal: abort.signal,
-          onProgress: progress => { setExportProgress(progress); reportExport(options?.requestId, { state: "running", progress }); },
+          onProgress: (progress) => {
+            setExportProgress(progress);
+            reportExport(options?.requestId, { state: "running", progress });
+          },
           writable: writer
             ? new WritableStream({ write: (chunk) => writer.write(chunk) })
             : undefined,
@@ -599,11 +708,22 @@ export function Player({
         await writer?.abort().catch(() => {});
         throw error;
       }
-      if (blob && !abort.signal.aborted) { lastExport.current = blob; downloadBlob(blob, project.id + ".webm"); }
-      reportExport(options?.requestId, { state: "succeeded", filename: project.id + ".webm", bytes: blob?.size || 0, blob });
+      if (blob && !abort.signal.aborted) {
+        lastExport.current = blob;
+        downloadBlob(blob, project.id + ".webm");
+      }
+      reportExport(options?.requestId, {
+        state: "succeeded",
+        filename: project.id + ".webm",
+        bytes: blob?.size || 0,
+        blob,
+      });
     } catch (error) {
       if (!abort.signal.aborted) setError("逐帧导出失败：" + String(error));
-      reportExport(options?.requestId, { state: abort.signal.aborted ? "cancelled" : "failed", ...(!abort.signal.aborted ? { error: String(error) } : {}) });
+      reportExport(options?.requestId, {
+        state: abort.signal.aborted ? "cancelled" : "failed",
+        ...(!abort.signal.aborted ? { error: String(error) } : {}),
+      });
     } finally {
       if (exportAbort.current === abort) {
         exportAbort.current = null;
@@ -652,16 +772,38 @@ export function Player({
         </header>
       )}
       <div className="studio-layout">
-        <div ref={editingArea} className={"editing-area review-layout " + (resizing ? "dragging" : "") + (timelineVisible ? "" : " timeline-hidden")}
-          style={{ gridTemplateRows: timelineVisible ? `minmax(0, ${videoRatio}fr) 1px minmax(0, ${100 - videoRatio}fr) auto` : "minmax(0,1fr) auto" }}>
+        <div
+          ref={editingArea}
+          className={
+            "editing-area review-layout " +
+            (resizing ? "dragging" : "") +
+            (timelineVisible ? "" : " timeline-hidden")
+          }
+          style={{
+            gridTemplateRows: timelineVisible
+              ? `minmax(0, ${videoRatio}fr) 1px minmax(0, ${100 - videoRatio}fr) auto`
+              : "minmax(0,1fr) auto",
+          }}
+        >
           <div className="theater" ref={theater}>
             <div className="stage-top">
               <span>
                 <i className="status-dot" /> 实时画面
-                <select className="preview-quality" aria-label="预览画质" value={quality} disabled={loading || exporting} onChange={(event) => {
-                  viewConfigured.current = true; transport.current?.pause(); publish(); setQuality(event.target.value as Quality);
-                }}>
-                  <option value="draft">流畅 360p</option><option value="standard">标准 720p</option><option value="high">精细 1080p</option>
+                <select
+                  className="preview-quality"
+                  aria-label="预览画质"
+                  value={quality}
+                  disabled={loading || exporting}
+                  onChange={(event) => {
+                    viewConfigured.current = true;
+                    transport.current?.pause();
+                    publish();
+                    setQuality(event.target.value as Quality);
+                  }}
+                >
+                  <option value="draft">流畅 360p</option>
+                  <option value="standard">标准 720p</option>
+                  <option value="high">精细 1080p</option>
                 </select>
               </span>
               <span>
@@ -733,10 +875,25 @@ export function Player({
               )}
             </div>
             <div className="video-progress-wrap">
-              <input className="video-progress" type="range" min={0} max={project.duration} step={1 / project.fps}
-                aria-label="视频播放进度" aria-valuetext={frameTime(view.time) + " / " + frameTime(project.duration)}
-                value={view.time} disabled={loading || exporting} onChange={(event) => seek(Number(event.target.value))}
-                style={{ "--progress": (view.time / project.duration) * 100 + "%" } as React.CSSProperties} />
+              <input
+                className="video-progress"
+                type="range"
+                min={0}
+                max={project.duration}
+                step={1 / project.fps}
+                aria-label="视频播放进度"
+                aria-valuetext={
+                  frameTime(view.time) + " / " + frameTime(project.duration)
+                }
+                value={view.time}
+                disabled={loading || exporting}
+                onChange={(event) => seek(Number(event.target.value))}
+                style={
+                  {
+                    "--progress": (view.time / project.duration) * 100 + "%",
+                  } as React.CSSProperties
+                }
+              />
             </div>
             <div className="transport">
               <div className="transport-left">
@@ -771,10 +928,22 @@ export function Player({
                 </div>
               </div>
               <div className="transport-right">
-                <button className={"icon-button timeline-toggle " + (timelineVisible ? "active" : "")}
-                  aria-label={timelineVisible ? "隐藏时间轴" : "显示时间轴"} aria-controls="work-timeline" aria-expanded={timelineVisible}
+                <button
+                  className={
+                    "icon-button timeline-toggle " +
+                    (timelineVisible ? "active" : "")
+                  }
+                  aria-label={timelineVisible ? "隐藏时间轴" : "显示时间轴"}
+                  aria-controls="work-timeline"
+                  aria-expanded={timelineVisible}
                   title={timelineVisible ? "隐藏时间轴" : "显示时间轴"}
-                  onClick={() => { viewConfigured.current = true; setTimelineVisible(!timelineVisible); }}><SlidersHorizontal size={18} /></button>
+                  onClick={() => {
+                    viewConfigured.current = true;
+                    setTimelineVisible(!timelineVisible);
+                  }}
+                >
+                  <SlidersHorizontal size={18} />
+                </button>
                 <select
                   aria-label="播放速度"
                   value={view.rate}
@@ -844,9 +1013,26 @@ export function Player({
               </div>
             </div>
           </div>
-          {timelineVisible && <ResizeHandle axis="horizontal" value={videoRatio} min={25} max={85} containerRef={editingArea}
-            onChange={(value) => { viewConfigured.current = true; setVideoRatio(value); }} onDragChange={setResizing} label="调整视频与时间轴高度" />}
-          <section id="work-timeline" className="timeline-panel" hidden={!timelineVisible}>
+          {timelineVisible && (
+            <ResizeHandle
+              axis="horizontal"
+              value={videoRatio}
+              min={25}
+              max={85}
+              containerRef={editingArea}
+              onChange={(value) => {
+                viewConfigured.current = true;
+                setVideoRatio(value);
+              }}
+              onDragChange={setResizing}
+              label="调整视频与时间轴高度"
+            />
+          )}
+          <section
+            id="work-timeline"
+            className="timeline-panel"
+            hidden={!timelineVisible}
+          >
             <div className="panel-heading">
               <div>
                 <SlidersHorizontal size={15} />
@@ -886,7 +1072,9 @@ export function Player({
                 </button>
               </div>
             </div>
-            <p className="current-shot" title={currentBeat?.detail}>当前镜头 · {currentBeat?.title || "全片"}</p>
+            <p className="current-shot" title={currentBeat?.detail}>
+              当前镜头 · {currentBeat?.title || "全片"}
+            </p>
             <details className="timeline-options">
               <summary>
                 定位与选段
@@ -1031,10 +1219,29 @@ export function Player({
                         }}
                         className={currentBeat === b ? "selected" : ""}
                         disabled={exporting}
-                        onClick={() => { setHoverShot(null); seek(b.at); }}
-                        onMouseEnter={(event) => { const r = event.currentTarget.getBoundingClientRect(); setHoverShot({ time: b.at, title: b.title, x: r.left + r.width / 2, y: r.top }); }}
+                        onClick={() => {
+                          setHoverShot(null);
+                          seek(b.at);
+                        }}
+                        onMouseEnter={(event) => {
+                          const r = event.currentTarget.getBoundingClientRect();
+                          setHoverShot({
+                            time: b.at,
+                            title: b.title,
+                            x: r.left + r.width / 2,
+                            y: r.top,
+                          });
+                        }}
                         onMouseLeave={() => setHoverShot(null)}
-                        onFocus={(event) => { const r = event.currentTarget.getBoundingClientRect(); setHoverShot({ time: b.at, title: b.title, x: r.left + r.width / 2, y: r.top }); }}
+                        onFocus={(event) => {
+                          const r = event.currentTarget.getBoundingClientRect();
+                          setHoverShot({
+                            time: b.at,
+                            title: b.title,
+                            x: r.left + r.width / 2,
+                            y: r.top,
+                          });
+                        }}
                         onBlur={() => setHoverShot(null)}
                         aria-label={b.title + "，" + b.at.toFixed(2) + " 秒"}
                         title={b.detail}
@@ -1275,7 +1482,9 @@ export function Player({
           </aside>
         )}
       </div>
-      {hoverShot && timelineVisible && !exporting && <ShotThumbnail key={hoverShot.time} project={project} {...hoverShot} />}
+      {hoverShot && timelineVisible && !exporting && (
+        <ShotThumbnail key={hoverShot.time} project={project} {...hoverShot} />
+      )}
       {exportOpen && (
         <div
           className="modal-backdrop"

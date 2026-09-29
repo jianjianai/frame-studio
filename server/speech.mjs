@@ -257,7 +257,20 @@ export function speechOperations({ add, db, data, secrets, assets }) {
             id,
             { engine: a.engine, voice: s.voice },
             {
-              speech: { mime: s.mime, name: s.row.name, license: "Generated with " + s.row.name + (builtinSpeech.find(x => x.key === s.row.builtin) ? "; " + builtinSpeech.find(x => x.key === s.row.builtin).license + "; " + builtinSpeech.find(x => x.key === s.row.builtin).source : "") },
+              speech: {
+                mime: s.mime,
+                name: s.row.name,
+                license:
+                  "Generated with " +
+                  s.row.name +
+                  (builtinSpeech.find((x) => x.key === s.row.builtin)
+                    ? "; " +
+                      builtinSpeech.find((x) => x.key === s.row.builtin)
+                        .license +
+                      "; " +
+                      builtinSpeech.find((x) => x.key === s.row.builtin).source
+                    : ""),
+              },
               artifacts: [
                 {
                   name: `preview.${s.ext}`,
@@ -285,25 +298,56 @@ export function speechOperations({ add, db, data, secrets, assets }) {
       };
     },
   );
-  add("speech_adopt", "Save the exact audition audio in a work without a second synthesis", { task: uuid, repo: uuid, project: modelId, name: z.string().trim().min(1).max(180) }, async (a) => db.lock("artifact:" + a.task, async () => {
-    const task = await db.one("SELECT * FROM tasks WHERE id=$1 AND kind='speech-test' AND state='succeeded'", [a.task]);
-    if (!task || task.cleaned || !task.expires || new Date(task.expires) <= new Date()) throw problem(410, "试听文件已过期，请重新生成试听");
-    if (!task.result?.speech?.license) throw problem(409, "该试听为旧版本生成，请重新试听后采用");
-    const artifact = task.result.artifacts?.find(file => /^projects\/speech-test\/exports\/preview\.(wav|mp3)$/.test(file.path));
-    if (!artifact) throw problem(404, "试听文件不存在");
-    const key = "speech-adopt:" + a.task + ":" + a.repo + ":" + a.project;
-    const adopted = await db.setting(key);
-    let asset = adopted?.asset ? await assets.get(adopted.asset) : null;
-    if (asset?.deleted) throw problem(409, "已采用的素材在回收站中，请先恢复");
-    if (!asset) {
-      const file = confined(path.join(data, "runs", a.task), artifact.path);
-      const ext = path.extname(file);
-      asset = await assets.register(file, { name: a.name + (a.name.endsWith(ext) ? "" : ext), mime: task.result.speech.mime, license: task.result.speech.license, repo: a.repo });
-      await db.setting(key, { asset: asset.id });
-    }
-    await assets.attach(asset.id, a.repo, a.project);
-    return { asset, adopted: true, resynthesized: false };
-  }));
+  add(
+    "speech_adopt",
+    "Save the exact audition audio in a work without a second synthesis",
+    {
+      task: uuid,
+      repo: uuid,
+      project: modelId,
+      name: z.string().trim().min(1).max(180),
+    },
+    async (a) =>
+      db.lock("artifact:" + a.task, async () => {
+        const task = await db.one(
+          "SELECT * FROM tasks WHERE id=$1 AND kind='speech-test' AND state='succeeded'",
+          [a.task],
+        );
+        if (
+          !task ||
+          task.cleaned ||
+          !task.expires ||
+          new Date(task.expires) <= new Date()
+        )
+          throw problem(410, "试听文件已过期，请重新生成试听");
+        if (!task.result?.speech?.license)
+          throw problem(409, "该试听为旧版本生成，请重新试听后采用");
+        const artifact = task.result.artifacts?.find((file) =>
+          /^projects\/speech-test\/exports\/preview\.(wav|mp3)$/.test(
+            file.path,
+          ),
+        );
+        if (!artifact) throw problem(404, "试听文件不存在");
+        const key = "speech-adopt:" + a.task + ":" + a.repo + ":" + a.project;
+        const adopted = await db.setting(key);
+        let asset = adopted?.asset ? await assets.get(adopted.asset) : null;
+        if (asset?.deleted)
+          throw problem(409, "已采用的素材在回收站中，请先恢复");
+        if (!asset) {
+          const file = confined(path.join(data, "runs", a.task), artifact.path);
+          const ext = path.extname(file);
+          asset = await assets.register(file, {
+            name: a.name + (a.name.endsWith(ext) ? "" : ext),
+            mime: task.result.speech.mime,
+            license: task.result.speech.license,
+            repo: a.repo,
+          });
+          await db.setting(key, { asset: asset.id });
+        }
+        await assets.attach(asset.id, a.repo, a.project);
+        return { asset, adopted: true, resynthesized: false };
+      }),
+  );
   add(
     "speech_generate",
     "Generate final narration into a repository; use speech_test for temporary auditions",

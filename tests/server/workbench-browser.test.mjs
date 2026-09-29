@@ -99,14 +99,11 @@ test(
       await page.getByRole("button", { name: "进入工作台" }).click();
       await page.getByRole("link", { name: "作品仓库", exact: true }).click();
       await page.getByRole("button", { name: /作品浏览器测试/ }).click();
-      await page
-        .getByRole("button", { name: /MCP 测试/ })
-        .first()
-        .click();
+      const workLink = page.getByRole("link", { name: /MCP 测试/ }).first();
+      assert.equal(await workLink.getAttribute("target"), "_blank");
+      await page.goto(origin + "/" + (await workLink.getAttribute("href")));
       const player = page.frameLocator('iframe[title="作品播放器"]');
-      await page
-        .getByRole("button", { name: "刷新预览", exact: true })
-        .waitFor();
+      await page.getByRole("button", { name: "导出", exact: true }).waitFor();
       await page.getByRole("button", { name: "后台任务", exact: true }).click();
       await page.getByRole("dialog", { name: "后台任务" }).waitFor();
       assert.equal(await page.locator(".creation-status").count(), 0);
@@ -151,24 +148,35 @@ test(
         (await page.locator(".preview-pane").boundingBox()).width <
           before.width - 70,
       );
-      await page.getByRole("button", { name: "切换左右或上下布局" }).click();
+      assert.equal(await page.locator(".navigation").count(), 0);
       assert.equal(
-        await separator.getAttribute("aria-orientation"),
-        "horizontal",
+        await page.getByRole("button", { name: "切换左右或上下布局" }).count(),
+        0,
       );
+      await page
+        .locator(".creation-toolbar")
+        .getByRole("button", { name: "关闭 AI 对话" })
+        .click();
+      await page.getByRole("button", { name: "打开 AI 对话" }).click();
+      await page.locator(".work-more > summary").click();
       await page.getByRole("button", { name: "版本", exact: true }).click();
       const versions = page.getByRole("dialog", { name: "版本管理" });
       await versions.getByLabel("版本名称").fill("审片确认");
       await versions.getByRole("button", { name: "保存当前版本" }).click();
       await versions.getByText("审片确认", { exact: true }).waitFor();
       await versions.getByRole("button", { name: "关闭弹窗" }).click();
-      await page.getByRole("button", { name: "同步", exact: true }).click();
+      await page
+        .getByRole("button", { name: "查看同步状态", exact: true })
+        .click();
       await page
         .getByRole("dialog")
         .getByText(work.branch, { exact: true })
         .waitFor();
       await page.getByRole("button", { name: "关闭弹窗" }).click();
-      await page.getByRole("button", { name: "切换左右或上下布局" }).click();
+      await page
+        .locator(".creation-toolbar")
+        .getByRole("button", { name: "关闭 AI 对话" })
+        .click();
       fs.mkdirSync(path.join(platformRoot, ".cache/validation"), {
         recursive: true,
       });
@@ -221,9 +229,7 @@ test(
         prompt: "继续制作",
         requestKey: randomUUID(),
       });
-      await page
-        .getByRole("button", { name: "后台任务 · 1", exact: true })
-        .click();
+      await page.getByRole("button", { name: "后台任务", exact: true }).click();
       await page.getByRole("progressbar", { name: "后台任务进度" }).waitFor();
       await db.pool.query("UPDATE tasks SET progress=$2 WHERE id=$1", [
         queued.id,
@@ -244,7 +250,7 @@ test(
       await page.close();
       const reopened = await context.newPage();
       await reopened.goto(origin + "/#/background");
-      await reopened.getByRole("button", { name: "打开作品" }).waitFor();
+      await reopened.getByRole("link", { name: /打开作品/ }).waitFor();
       assert.equal(
         (await db.one("SELECT state FROM tasks WHERE id=$1", [queued.id]))
           .state,
@@ -260,6 +266,7 @@ test(
       await confirm.getByRole("button", { name: "确认删除" }).click();
       await reopened
         .getByText("请输入完整作品名称确认删除", { exact: true })
+        .first()
         .waitFor();
       await confirm.getByLabel("输入作品名称确认").fill(work.title);
       await confirm.getByRole("button", { name: "确认删除" }).click();

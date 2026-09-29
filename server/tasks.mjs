@@ -77,7 +77,8 @@ export class Tasks {
           return existing;
         }
       }
-      if (repo && kind !== "agent" && !input.version) await this.repos.writable(repo, project);
+      if (repo && kind !== "agent" && !input.version)
+        await this.repos.writable(repo, project);
       if (
         kind === "tools-update" &&
         (await this.db.one(
@@ -325,7 +326,13 @@ export class Tasks {
       }
     };
     walk(base);
-    result = { ...result, artifacts, ...(t.kind === "build" && t.input.version ? { readonlyVersion: t.input.version } : {}) };
+    result = {
+      ...result,
+      artifacts,
+      ...(t.kind === "build" && t.input.version
+        ? { readonlyVersion: t.input.version }
+        : {}),
+    };
     await this.db.pool.query(
       "UPDATE tasks SET state='succeeded',result=$2,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days' WHERE id=$1",
       [t.id, result, result.commit || null],

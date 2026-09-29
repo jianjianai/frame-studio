@@ -30,7 +30,8 @@ export class Retention {
       )
         return false;
       if (
-        task.kind === "build" && !task.input?.version &&
+        task.kind === "build" &&
+        !task.input?.version &&
         (await this.db
           .one(
             "SELECT id FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version' IS NULL AND state='succeeded' AND cleaned IS NULL ORDER BY created DESC LIMIT 1",
