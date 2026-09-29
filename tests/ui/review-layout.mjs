@@ -145,7 +145,7 @@ export async function layoutChecks(h) {
     await page
       .getByRole("textbox", { name: "创作要求" })
       .fill("按当前选段调整");
-    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await page.getByRole("button", { name: "排队发送", exact: true }).click();
     await expect(page.getByRole("textbox", { name: "创作要求" })).toHaveValue(
       "",
     );

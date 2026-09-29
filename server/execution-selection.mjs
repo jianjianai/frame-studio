@@ -9,7 +9,7 @@ export async function freezeExecution({ db, connections, secrets, input }) {
   let config;
   if (input.connection) {
     if (!connections) throw problem(503, "模型连接服务不可用");
-    config = await connections.resolve(input.connection, input.model);
+    config = connections.selection ? await connections.selection(input.connection, input.model) : await connections.resolve(input.connection);
   } else {
     const legacy = await db.setting(input.provider);
     config = { ...(legacy?.encrypted ? secrets.decrypt(legacy.encrypted) : {}), tool: input.provider, mode: "api" };
@@ -21,7 +21,7 @@ export async function freezeExecution({ db, connections, secrets, input }) {
     provider: input.provider,
     connection: input.connection || null,
     connectionName: config.name || input.provider,
-    model: String(input.model || config.model || ""),
+    model: String(input.model ?? config.model ?? ""),
     baseUrl: endpoint(config.baseUrl),
     authMode: config.mode || "api",
     authGeneration: String(config.auth_generation || "0"),

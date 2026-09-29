@@ -199,7 +199,7 @@ export class Tasks {
     let config = {};
     if (t.kind === "agent") {
       if (t.input.connection)
-        config = await this.connections.resolve(t.input.connection);
+        config = await this.connections.selection(t.input.connection, t.execution?.model ?? t.input.model);
       else {
         const stored = await this.db.setting(t.input.provider);
         config = stored?.encrypted

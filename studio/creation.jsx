@@ -495,6 +495,8 @@ export function Creation({ id, notify }) {
               notify={notify}
               position={position}
               selectedAssets={assets}
+              onAddAssets={() => openTool("materials")}
+              onPausePreview={() => sendPlayer("pause")}
               suggestion={suggestion}
               visible={chatOpen}
               onClose={closeChat}
