@@ -12,6 +12,14 @@ export class ProjectRevisions {
   read(repo, project) {
     return this.db.one("SELECT source_generation,source_revision,source_indexed_at FROM works WHERE repo=$1 AND project=$2", [repo, project]);
   }
+  async refreshIfIdle(repo, project) {
+    try { return await this.refresh(repo, project); }
+    catch (error) {
+      if (error.statusCode !== 409) throw error;
+      // A busy or concurrently changing work stays unindexed/stale, never falsely current.
+      return this.read(repo, project);
+    }
+  }
   async refresh(repo, project, { locked = false } = {}) {
     const key = repo + ":" + project;
     if (this.pending.has(key)) return this.pending.get(key);

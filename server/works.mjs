@@ -63,7 +63,7 @@ export class Works {
           );
         if (inserted.rowCount || migrated || repository)
           await this.assets.importProject(repo.id, project.id);
-        await this.repos.revisions?.refresh(repo.id, project.id);
+        await this.repos.revisions?.refreshIfIdle(repo.id, project.id);
       }
     }
     if (!repository) this.discovered = true;
@@ -506,10 +506,10 @@ export class Works {
         throw error;
       }
     });
-    await this.discover(w.repo, w.project);
     await this.db.pool.query("UPDATE works SET updated=now() WHERE id=$1", [
       w.id,
     ]);
+    await this.discover(w.repo, w.project);
     return this.get(w.id);
   }
 }
