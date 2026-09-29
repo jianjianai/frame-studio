@@ -79,7 +79,7 @@ try {
         "running worker must not write original",
       );
     }
-    if (!["running", "queued"].includes(t.state)) {
+    if (!["running", "queued", "cancelling", "publishing"].includes(t.state)) {
       assert.equal(t.state, "succeeded", JSON.stringify(t));
       result = t;
       break;

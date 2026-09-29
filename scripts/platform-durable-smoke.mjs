@@ -58,7 +58,7 @@ async function wait(id) {
   const end = Date.now() + 300000;
   for (;;) {
     const { task, events } = await call("task_get", { id });
-    if (!["running", "queued"].includes(task.state)) {
+    if (!["running", "queued", "cancelling", "publishing"].includes(task.state)) {
       assert.equal(task.state, "succeeded", JSON.stringify({ task, events }));
       return task;
     }

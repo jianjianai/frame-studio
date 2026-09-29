@@ -32,7 +32,7 @@ const api = (name, args = {}) => request("/api/action", { name, args });
 const wait = async (id) => {
   for (let i = 0; i < 360; i++) {
     const { task } = await api("task_get", { id });
-    if (!["queued", "running", "cancelling"].includes(task.state)) {
+    if (!["queued", "running", "cancelling", "publishing"].includes(task.state)) {
       assert.equal(task.state, "succeeded", JSON.stringify(task));
       return task;
     }

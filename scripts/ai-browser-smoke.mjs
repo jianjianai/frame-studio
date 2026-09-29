@@ -30,7 +30,7 @@ let link = await api("works_browser", { id: work.id });
 while (link.state !== "ready") {
   for (let n = 0; n < 120; n++) {
     const { task } = await api("task_get", { id: link.task });
-    if (!["queued", "running"].includes(task.state)) {
+    if (!["queued", "running", "cancelling", "publishing"].includes(task.state)) {
       assert.equal(task.state, "succeeded", JSON.stringify(task));
       break;
     }

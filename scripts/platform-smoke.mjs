@@ -44,7 +44,7 @@ async function task(kind, input = {}) {
   const deadline = Date.now() + 300000;
   for (;;) {
     const detail = await action("task_get", { id: t.id });
-    if (!["queued", "running"].includes(detail.task.state)) {
+    if (!["queued", "running", "cancelling", "publishing"].includes(detail.task.state)) {
       assert.equal(detail.task.state, "succeeded", JSON.stringify(detail));
       evidence.tasks[kind] = detail.task;
       console.log(

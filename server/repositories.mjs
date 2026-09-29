@@ -182,7 +182,7 @@ export class Repositories {
         [id, project],
       )
     )
-      throw problem(409, "作品正在运行，请等待完成或停止后再修改");
+      throw problem(409, "作品存在运行中或待恢复的任务，请等待完成、停止执行或恢复发布后再修改");
   }
   async checkpoint(id, project, message, { named = false } = {}) {
     const { repo } = await this.project(id, project);
