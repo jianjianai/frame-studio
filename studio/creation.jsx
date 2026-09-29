@@ -3,7 +3,7 @@ import { WorkChat } from "./work-chat";
 import { WorkTools } from "./work-tools";
 import { WorkDock } from "./work-dock";
 import { ExportProgress, exportState } from "./exports";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { previewCacheBridge } from "./preview-cache";
 import { ResizeHandle } from "../src/ui/ResizeHandle";
 import {
@@ -28,14 +28,13 @@ import {
   date,
   useMediaQuery,
 } from "./ui";
-import {
-  Materials,
-  SyncPanel,
-  Versions,
-  Details,
-  Voice,
-  Exports,
-} from "./work-panels";
+import { Materials, Details, Voice, Exports } from "./work-panels";
+
+const SourceControl = lazy(() =>
+  import("./source-control").then((module) => ({
+    default: module.SourceControl,
+  })),
+);
 
 export function Creation({ id, notify }) {
   const query = useQuery("works_open", { id }),
@@ -149,6 +148,21 @@ export function Creation({ id, notify }) {
       )?.focus();
     });
   };
+  useEffect(() => {
+    const shortcut = (event) => {
+      if (
+        (event.ctrlKey || event.metaKey) &&
+        event.shiftKey &&
+        event.key.toLowerCase() === "g" &&
+        !document.querySelector("dialog[open]")
+      ) {
+        event.preventDefault();
+        openTool("sync");
+      }
+    };
+    window.addEventListener("keydown", shortcut);
+    return () => window.removeEventListener("keydown", shortcut);
+  }, []);
   const playerPreferences = useRef(readPreference("frame.player-view", {}));
   const sendPlayer = (command, extra = {}) =>
     iframe.current?.contentWindow?.postMessage(
@@ -360,7 +374,6 @@ export function Creation({ id, notify }) {
   if (!work) return null;
   const running = tasks.filter(active),
     title = {
-      versions: "版本管理",
       exports: "导出",
       details: "作品资料",
     }[panel];
@@ -683,16 +696,26 @@ export function Creation({ id, notify }) {
           </div>
           {visited.sync && (
             <div
-              className="work-tool-pane dock-content"
+              className="work-tool-pane scm-pane"
               data-dock-pane="sync"
               hidden={tool !== "sync"}
             >
-              <SyncPanel
-                work={work}
-                notify={notify}
-                visible={tool === "sync"}
-                onChange={syncQuery.refresh}
-              />
+              <Suspense fallback={<Loading />}>
+                <SourceControl
+                  work={work}
+                  notify={notify}
+                  visible={tool === "sync"}
+                  currentPreview={preview?.url}
+                  position={position}
+                  onPause={() => sendPlayer("pause")}
+                  onChange={({ reloadWork = false } = {}) => {
+                    syncQuery.refresh();
+                    previewQuery.refresh();
+                    if (reloadWork) query.refresh();
+                    taskQuery.refresh();
+                  }}
+                />
+              </Suspense>
             </div>
           )}
         </WorkDock>
@@ -701,21 +724,9 @@ export function Creation({ id, notify }) {
         <Modal
           title={title}
           onClose={() => setPanel("")}
-          wide={["exports", "versions"].includes(panel)}
+          wide={panel === "exports"}
         >
-          {panel === "versions" ? (
-            <Versions
-              work={work}
-              notify={notify}
-              onRestore={() => {
-                taskQuery.refresh();
-                query.refresh();
-              }}
-              currentPreview={preview?.url}
-              position={position}
-              onPause={() => sendPlayer("pause")}
-            />
-          ) : panel === "details" ? (
+          {panel === "details" ? (
             <Details work={work} notify={notify} onSave={query.refresh} />
           ) : (
             <Exports

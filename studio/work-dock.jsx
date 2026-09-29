@@ -7,7 +7,7 @@ export const toolNames = {
   materials: "素材",
   voice: "配音",
   tasks: "后台任务",
-  sync: "同步状态",
+  sync: "源代码管理",
 };
 
 /** Keep tool children mounted; only one occupies the shared work area at a time. */

@@ -116,7 +116,10 @@ export async function flowChecks(h) {
   });
   await check("版本先比较预览，不触发恢复", async () => {
     await more("版本");
-    const dialog = page.getByRole("dialog", { name: "版本管理", exact: true });
+    const dialog = page.getByRole("complementary", {
+      name: "源代码管理",
+      exact: true,
+    });
     await dialog
       .getByRole("button", { name: /预览与比较/ })
       .first()
@@ -132,8 +135,10 @@ export async function flowChecks(h) {
       0,
     );
     await screenshot("03-version-comparison");
-    await closeModal(); // Close comparison, then the still-open version manager.
-    await closeModal();
+    await closeModal(); // Comparison closes back into the persistent source-control panel.
+    await page
+      .getByRole("button", { name: "关闭源代码管理", exact: true })
+      .click();
   });
   await check("导出状态准确、后台参数统一且停止可用", async () => {
     await page
