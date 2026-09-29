@@ -17,7 +17,7 @@ export async function mockApi(context, playerUrl, uiUrl) {
     id: randomUUID(),
     repo: repo.id,
     project: "test-film",
-    title: "前端交互验收",
+    title: "前端交互验收 · 长标题与连续创作工作流",
     description: "已保存的作品简介",
     status: "review",
     category: "科普",
@@ -151,7 +151,8 @@ export async function mockApi(context, playerUrl, uiUrl) {
           repository: repo,
         };
       case "works_preview_status":
-        return { latest: build, stale: false };
+        if (state.previewError) throw Error("验收：预览版本核对失败");
+        return { latest: build, stale: !!state.previewStale };
       case "system_status":
         return { warnings: [] };
       case "works_tasks":
@@ -240,6 +241,8 @@ export async function mockApi(context, playerUrl, uiUrl) {
         return t;
       }
       case "works_task": {
+        if (args.kind === "build" && state.failBuild)
+          throw Error("验收：预览更新失败");
         const t = {
           id: randomUUID(),
           kind: args.kind,
@@ -395,6 +398,7 @@ export async function mockApi(context, playerUrl, uiUrl) {
         if (s.route === route) subscriptions.delete(s);
     });
   });
+  state.broadcast = updateAll;
   return state;
 }
 function wave() {

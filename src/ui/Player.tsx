@@ -33,6 +33,7 @@ import {
   ArrowLeft,
   LoaderCircle,
   SlidersHorizontal,
+  RefreshCw,
 } from "lucide-react";
 import {
   assetUrl,
@@ -62,6 +63,12 @@ export function Player({
   project: AnimationProject;
   embedded?: boolean;
 }) {
+  const [workContext, setWorkContext] = useState<{
+    title: string;
+    compact: boolean;
+    previewStatus: "ready" | "stale" | "building" | "unknown";
+    updateDisabled: boolean;
+  } | null>(null);
   const audioTracks = projectAudioTracks(project);
   const composition = compositionSize(project);
   const exportSizes = [640, 1280, 1920, 3840].map((edge) =>
@@ -279,6 +286,7 @@ export function Player({
         });
       seek(data.time);
     }
+    if (data.command === "configure-work") setWorkContext(data.context);
     if (
       data.command === "configure-view" &&
       data.preferences &&
@@ -518,9 +526,22 @@ export function Player({
           }}
         >
           <div className="theater" ref={theater}>
-            <div className="stage-top">
+            <div className={"stage-top" + (embedded ? " work-stage-top" : "")}>
               <span>
-                <i className="status-dot" /> 实时画面
+                {embedded && !workContext?.compact ? (
+                  <span
+                    className="work-preview-title"
+                    role="heading"
+                    aria-level={1}
+                    title={workContext?.title || project.title}
+                  >
+                    {workContext?.title || project.title}
+                  </span>
+                ) : (
+                  <>
+                    <i className="status-dot" /> 实时画面
+                  </>
+                )}
                 <select
                   className="preview-quality"
                   aria-label="预览画质"
@@ -538,7 +559,46 @@ export function Player({
                   <option value="high">精细 1080p</option>
                 </select>
               </span>
-              <span>
+              {embedded && workContext && (
+                <div className="preview-update-controls">
+                  <span
+                    className={
+                      "work-preview-status " + workContext.previewStatus
+                    }
+                    role="status"
+                  >
+                    {
+                      {
+                        ready: "预览最新",
+                        stale: "预览待更新",
+                        building: "正在更新预览",
+                        unknown: "版本核对失败",
+                      }[workContext.previewStatus]
+                    }
+                  </span>
+                  <button
+                    type="button"
+                    className="preview-update-button"
+                    aria-label="更新预览"
+                    title="根据最新作品代码重新生成预览，不改变保存或远端同步状态"
+                    disabled={workContext.updateDisabled || exporting}
+                    onClick={() =>
+                      parent.postMessage(
+                        { type: "frame-preview-update-request" },
+                        "*",
+                      )
+                    }
+                  >
+                    {workContext.previewStatus === "building" ? (
+                      <LoaderCircle className="spin" size={13} />
+                    ) : (
+                      <RefreshCw size={13} />
+                    )}
+                    <span>更新预览</span>
+                  </button>
+                </div>
+              )}
+              <span className="stage-diagnostics">
                 {(() => {
                   const size = fitComposition(
                     project,

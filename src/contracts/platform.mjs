@@ -148,6 +148,7 @@ export const playerStateSchema = z.looseObject({
     .optional(),
 });
 export const previewMessageSchema = z.discriminatedUnion("type", [
+  z.strictObject({ type: z.literal("frame-preview-update-request") }),
   playerStateSchema,
   z.looseObject({
     type: z.literal("frame-preview-loading"),
@@ -163,8 +164,19 @@ export const playerViewSchema = z.strictObject({
   videoRatio: z.number().finite().min(25).max(85).optional(),
   quality: z.enum(["draft", "standard", "high"]).optional(),
 });
+export const workContextSchema = z.strictObject({
+  title: z.string().max(400),
+  compact: z.boolean(),
+  previewStatus: z.enum(["ready", "stale", "building", "unknown"]),
+  updateDisabled: z.boolean(),
+});
 const playerType = z.literal("frame-player-command");
 export const playerCommandSchema = z.discriminatedUnion("command", [
+  z.strictObject({
+    type: playerType,
+    command: z.literal("configure-work"),
+    context: workContextSchema,
+  }),
   z.strictObject({ type: playerType, command: z.literal("export") }),
   z.strictObject({ type: playerType, command: z.literal("pause") }),
   z.strictObject({ type: playerType, command: z.literal("export-cancel") }),

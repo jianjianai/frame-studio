@@ -178,6 +178,7 @@ export function Materials({
   onSelect,
   selectedAssets = [],
   onDone,
+  visible = true,
 }) {
   const [repo, setRepo] = useState(
       initialRepo?.id || initialRepo || work?.repo || "",
@@ -205,6 +206,9 @@ export function Materials({
           offset: page * 30,
         },
   );
+  useEffect(() => {
+    if (visible) query.refresh();
+  }, [visible]);
   const selectScope = (next) => {
     setScope(next);
     setPage(0);

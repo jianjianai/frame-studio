@@ -9,6 +9,7 @@ import { layoutChecks, responsiveChecks } from "./review-layout.mjs";
 import { flowChecks, libraryChecks } from "./review-flows.mjs";
 import { populateTimelineFixture, timelineChecks } from "./review-timeline.mjs";
 import { persistenceChecks } from "./review-persistence.mjs";
+import { workToolsChecks } from "./review-work-tools.mjs";
 const reportDir = path.join(root, ".cache/frontend-validation/workspace");
 fs.mkdirSync(reportDir, { recursive: true });
 const results = [],
@@ -72,11 +73,22 @@ try {
     }
   };
   h.more = async (name) => {
-    await h.page.locator(".work-more > summary").click();
-    await h.page
-      .locator(".work-more-menu")
-      .getByRole("button", { name, exact: true })
-      .click();
+    if (["素材", "配音"].includes(name)) {
+      await h.page
+        .locator(".creation-toolbar")
+        .getByRole("button", { name, exact: true })
+        .click();
+    } else {
+      await h.page
+        .getByRole("button", { name: "作品菜单", exact: true })
+        .click();
+      await h.page
+        .getByRole("menuitem", {
+          name: name === "版本" ? "版本管理" : name,
+          exact: true,
+        })
+        .click();
+    }
   };
   h.closeModal = async () =>
     h.page
@@ -92,6 +104,7 @@ try {
     "Timeline gestures must not rewrite source code",
   );
   await flowChecks(h);
+  await workToolsChecks(h);
   await persistenceChecks(h);
   await responsiveChecks(h);
   await libraryChecks(h);

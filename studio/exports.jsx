@@ -40,7 +40,7 @@ export const exportState = (task) =>
       }[task.state] || "状态未知，请刷新";
 const isRunning = (state) =>
   ["queued", "running", "cancelling", "publishing"].includes(state);
-function Progress({ value, label }) {
+export function ExportProgress({ value, label }) {
   const total = Number(value?.total),
     completed = Number(value?.completed);
   const measured = total > 0 && Number.isFinite(completed);
@@ -79,7 +79,9 @@ export function Exports({
   onSubtitles,
 }) {
   const composition = { composition: position.composition || work.composition };
-  const sizes = [640, 1280, 1920, 3840].map(edge => fitComposition(composition, edge));
+  const sizes = [640, 1280, 1920, 3840].map((edge) =>
+    fitComposition(composition, edge),
+  );
   const query = useQuery("works_exports", { id: work.id }, 1),
     [run, busy] = useAction(notify);
   const [release, setRelease] = useState(null),
@@ -268,7 +270,7 @@ export function Exports({
             </span>
           </div>
           {browserBusy && (
-            <Progress value={browserJob.progress} label="本机导出进度" />
+            <ExportProgress value={browserJob.progress} label="本机导出进度" />
           )}
           <ErrorNote error={browserJob.error} />
           {browserBusy && (
@@ -314,7 +316,7 @@ export function Exports({
                 : " · 全片"}
             </p>
             {!task.cleaned && isRunning(task.state) && (
-              <Progress value={task.progress} label="后台导出进度" />
+              <ExportProgress value={task.progress} label="后台导出进度" />
             )}
             <ErrorNote error={task.error} />
             {cancellable(task) && !task.cleaned && (

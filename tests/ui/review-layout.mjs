@@ -9,12 +9,12 @@ export async function layoutChecks(h) {
     ).toBeVisible();
     const opened = context.waitForEvent("page");
     await page
-      .getByRole("link", { name: /前端交互验收（在新标签页打开）/ })
+      .getByRole("link", { name: /前端交互验收.*（在新标签页打开）/ })
       .click();
     const library = page;
     page = h.page = await opened;
     await page.waitForLoadState("domcontentloaded");
-    await expect(page.locator(".creation-toolbar h1")).toHaveText(
+    await expect(player().getByRole("heading", { level: 1 })).toHaveText(
       state.work.title,
     );
     assert.equal(await page.locator(".navigation").count(), 0);
@@ -44,7 +44,7 @@ export async function layoutChecks(h) {
   });
   await check("细分割线鼠标与键盘调整AI宽度", async () => {
     const handle = page.getByRole("separator", {
-        name: "调整播放器和 AI 区域大小",
+        name: "调整播放器和工作面板大小",
       }),
       box = await handle.boundingBox();
     assert.equal(box.width, 1);
@@ -160,7 +160,7 @@ export async function responsiveChecks(h) {
     for (const width of [1440, 1280, 1024, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 844 });
       const close = page
-        .locator(".creation-actions")
+        .locator("#work-chat")
         .getByRole("button", { name: "关闭 AI 对话", exact: true });
       if (await close.count()) await close.click();
       await expect(
@@ -171,6 +171,9 @@ export async function responsiveChecks(h) {
           () => document.documentElement.scrollWidth <= innerWidth + 1,
         ),
       );
+      await expect(
+        page.locator(".work-menu-trigger .work-tool-label"),
+      ).toBeVisible();
       const stage = await player().getByTestId("stage-canvas").boundingBox();
       assert(stage.height > 120, "Useful video height");
       if (width <= 768) {

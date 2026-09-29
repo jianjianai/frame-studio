@@ -33,6 +33,7 @@ import { Materials } from "./work-panels";
 import { Settings } from "./accounts";
 import "./workbench.css";
 import "./workspace.css";
+import "./work-tools.css";
 
 function Background({ notify }) {
   const query = useQuery("works_background", {}, 2000),
@@ -72,7 +73,12 @@ function Background({ notify }) {
             </a>
             <Button
               icon={Square}
-              disabled={busy || !w.tasks.some((t) => ["queued", "running", "cancelling"].includes(t.state))}
+              disabled={
+                busy ||
+                !w.tasks.some((t) =>
+                  ["queued", "running", "cancelling"].includes(t.state),
+                )
+              }
               onClick={() =>
                 run(async () => {
                   await api("works_stop", { id: w.id });
