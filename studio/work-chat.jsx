@@ -179,7 +179,7 @@ function Turn({
               查看本轮预览与修改
             </Button>
             <small>
-              {task.result.commit
+              {typeof task.result?.commit === "string"
                 ? `版本 ${task.result.commit.slice(0, 7)}`
                 : "独立结果，不跳转到其他轮次"}
             </small>

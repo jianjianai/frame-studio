@@ -53,6 +53,11 @@ try {
     acceptDownloads: true,
   });
   h.context.on("page", (p) => p.on("pageerror", (e) => errors.push(e.message)));
+  // React error boundaries consume pageerror; retain console diagnostics to identify real render failures.
+  h.context.on("page", (p) => p.on("console", (message) => {
+    if (message.type() === "error" && !message.text().includes("Failed to load resource"))
+      console.error("BROWSER:", message.text());
+  }));
   h.state = await mockApi(h.context, h.playerUrl, h.uiUrl);
   h.page = await h.context.newPage();
   await h.page.goto(h.uiUrl);
