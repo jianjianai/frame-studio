@@ -1,3 +1,5 @@
+import { visualOperations } from "./visual-operations.mjs";
+import { rendererIds } from "../src/engine/adapters.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
 import { workIdRequestSchema, workTaskRequestSchema, workPreviewRequestSchema, workVersionsRequestSchema, workVersionRequestSchema, workRestoreRequestSchema } from "../src/contracts/platform.mjs";
@@ -19,6 +21,7 @@ export function workOperations({
 }) {
   const works = new Works(db, data, repos, assets, tasks),
     uuid = z.string().uuid();
+  visualOperations({add,db,repos,works,registry});
   const invoke = (name, args) =>
     registry[name].fn(registry[name].schema.parse(args));
   const resolve = async (id) => {
@@ -46,7 +49,7 @@ export function workOperations({
     {
       title: z.string().trim().min(1).max(150),
       repo: uuid,
-      renderer: z.enum(["canvas", "pixi", "three"]).default("canvas"),
+      renderer: z.enum(rendererIds).default("composition"),
       duration: z.number().positive().max(3600).default(12),
       composition: compositionSchema.optional(),
       category: z.string().max(80).default(""),
@@ -100,6 +103,7 @@ export function workOperations({
       return {
         work,
         ...(await invoke("project_context", args)),
+        composition: await invoke("works_composition", {id:a.id}),
         assets: await assets.list({
           repo: work.repo,
           project: work.project,

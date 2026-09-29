@@ -319,7 +319,7 @@ try {
         args.push(
           input.title || task.project,
           "--renderer",
-          input.renderer || "canvas",
+          input.renderer || "composition",
           "--duration",
           String(input.duration || 12),
         );

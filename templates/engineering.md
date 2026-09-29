@@ -1,31 +1,37 @@
 # {{PROJECT_TITLE}} · 工程说明
 
-工程 id：`{{PROJECT_ID}}`。本项目的修改只允许发生在 `projects/{{PROJECT_ID}}/`。
+工程 id：`{{PROJECT_ID}}`。文件修改范围：`projects/{{PROJECT_ID}}/`。
 
-- `project.ts`：静态元数据，`scene.ts`：绝对时间场景。
-- `audio.ts`：可选实时生成音轨示例，在元数据配置 audioTracks 和 loadAudio 后启用。
-- `public/`：运行素材，URL 为 `films/{{PROJECT_ID}}/`，assets.json 和 waveforms.json 属于本项目。
-- `production/`：原始源文件、参数与来源/许可证。
-- `production/brief.md`：需求与镜头、声音设计说明，可按任务需要填写。
-- [records/](records/README.md)：独立保存修改记录、验证报告和审查结论，不追加到本文。
-- `scripts/`：专属工具；`tests/`：单元/浏览器测试。
-- `exports/`、`.cache/`：忽略的生成结果和临时文件。
+默认工程是空白合成，不预选 2D 或 3D 引擎。可以按需求选择已安装框架、组合素材，或使用项目内的程序化场景。本文只说明工程结构、接口与工具。
 
-依赖由工作台统一维护；本工程不修改共享配置、引擎、UI 或其他工程。场景/音频接口见根 docs/AUTHORING.md。
+| 路径 | 用途 |
+|---|---|
+| `project.ts` | 静态元数据、尺寸、时长、音轨与加载入口 |
+| `scene.ts` | 绝对时间场景入口，可注册项目内多个场景模块 |
+| `visual.json` | 默认合成的权威片段数据；通过 loadVisual 加载；显式引擎模板可无此文件 |
+| `audio.ts` | 可选生成音轨，在 audioTracks/loadAudio 配置后启用 |
+| `public/` | 运行素材，URL 为 films/{{PROJECT_ID}}/；assets.json、waveforms.json 属于本项目 |
+| `production/` | 原始材料、参数、来源和许可；brief.md 保存需求 |
+| `records/` | 修改记录、验证报告、审查结论 |
+| `scripts/`、`tests/` | 本项目的工具和测试 |
+| `exports/`、`.cache/` | 忽略的导出结果和临时文件 |
 
-```powershell
+可以使用共享依赖和公共引擎接口：Canvas、PixiJS、Three.js、Babylon.js，视频/图片/图像序列、Lottie，GLB/glTF 加载、后处理，多轨文件音频与 Web Audio 生成音频。完整能力以 `pnpm film composition engines --json` 为准。复杂逻辑可保留在项目代码中；公开参数可接入合成片段。不修改共享引擎、UI、配置、依赖或其他项目；缺少公共能力时提出维护需求。
+
+场景可同步或异步初始化；提供 canvas、render(time)、dispose()，可选 prepareFrame(time,{signal})。公共播放器负责绝对时间和取消；初始化失败及退出释放本实例资源。参数与时间映射见根 [docs/COMPOSITION.md](../../docs/COMPOSITION.md)，音频、资源和输出接口见 [docs/AUTHORING.md](../../docs/AUTHORING.md)。这些接口要求不限定创作方法或风格。
+
+```sh
 pnpm --silent film context {{PROJECT_ID}} --json
+pnpm film composition {{PROJECT_ID}} --json
+pnpm film composition engines --json
 pnpm film check {{PROJECT_ID}} --strict
 pnpm film scope {{PROJECT_ID}}
+pnpm film dev {{PROJECT_ID}}
+pnpm film frame {{PROJECT_ID}} --time 0
 pnpm film storyboard {{PROJECT_ID}}
-pnpm film poster {{PROJECT_ID}}
 pnpm film render {{PROJECT_ID}} --width 1280
-pnpm film frame {{PROJECT_ID}} --frame 0
-pnpm exec playwright test --project {{PROJECT_ID}}
 ```
 
-检查命令只读；封面命令覆盖本工程封面，视频/单帧默认拒绝覆盖已存在输出。导出保存到本工程 exports/。新增专用脚本请在此记录输入、输出、命令与覆盖行为。
+GUI、CLI、MCP 对合成数据使用同一套编辑操作与 SHA-256 版本检查；冲突时重新读取。检查只读；封面命令更新本项目封面；视频/单帧默认拒绝覆盖，输出保存在本项目 exports/。浏览器导出使用当前混音，命令导出使用元数据音轨设置。
 
-浏览器与命令都按固定帧时间导出。浏览器可单独选择尺寸和帧率，使用当前混音；命令导出使用元数据音轨设置。先核对分镜预览和关键帧，再按需要导出片段或全片。完整工具用法见根 docs/AI-WORKFLOW.md。
-
-需要旁白或人物对白时，可运行 `pnpm film speech {{PROJECT_ID}} init --provider edge` 创建本项目配置，再用 `pnpm film speech {{PROJECT_ID}} say --text "你好"` 试听。支持公共 Edge、OpenAI/兼容接口、Azure 和自己的 `.mjs` 合成器；角色声线保存在 production/speech.json，私有凭据放忽略的本项目 .env。完整时序、缓存与 MCP 用法见根 docs/SPEECH.md。
+更多工具见 [docs/AI-WORKFLOW.md](../../docs/AI-WORKFLOW.md)。语音提供商、项目内配置、私有凭据位置及接口见 [docs/SPEECH.md](../../docs/SPEECH.md)。

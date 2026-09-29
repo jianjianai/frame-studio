@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
+import { validateLottie } from "../src/engine/lottie-document.mjs";
 import { fail } from "./mcp/workspace.mjs";
 
 const groups = [
@@ -26,6 +27,7 @@ const groups = [
     },
   ],
   ["video", { mp4: "video/mp4", webm: "video/webm" }],
+  ["animation", { json: "application/json" }],
   ["model", { glb: "model/gltf-binary", gltf: "model/gltf+json" }],
   [
     "font",
@@ -72,6 +74,10 @@ export async function validateAsset(file, filename, bytes) {
       meta.format === ({ jpg: "jpeg", avif: "heif" }[info.ext] ?? info.ext) &&
       !!meta.width &&
       !!meta.height;
+  } else if (info.type === "animation") {
+    if(bytes > 16*1024*1024) fail("TOO_LARGE","Lottie limit is 16 MiB");
+    validateLottie(JSON.parse(fs.readFileSync(file,"utf8")));
+    valid = true;
   } else if (["gltf", "glb"].includes(info.ext)) {
     let json;
     if (info.ext === "gltf") {

@@ -131,6 +131,7 @@ export async function executeProject(root, id, action, options = {}) {
       JSON.stringify({
         extends: path.join(root, "tsconfig.json"),
         include: [
+          path.join(root, "src", "**", "*.d.ts").replaceAll("\\", "/"),
           folder.replaceAll("\\", "/") + "/**/*.ts",
           folder.replaceAll("\\", "/") + "/**/*.tsx",
         ],

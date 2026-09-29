@@ -338,7 +338,7 @@ export function Player({
     renderer.current?.render(
       transport.current?.clock.time() ?? 0,
       subtitleRef.current,
-    );
+    ).catch((error) => { transport.current?.pause(); setError(String(error)); });
     publish();
   };
   const toggle = async () => {
@@ -354,6 +354,7 @@ export function Player({
     }
     setStarting(true);
     try {
+      await renderer.current?.render(a.clock.time(),subtitleRef.current);
       await a.play();
       publish();
     } catch (e) {
@@ -1069,11 +1070,11 @@ export function Player({
                 </select>
               </label>
             </div>
-            <div className="info-block director">
+            {currentBeat && <div className="info-block director">
               <span className="eyebrow">当前镜头</span>
               <h4>{currentBeat.title}</h4>
               <p>{currentBeat.detail}</p>
-            </div>
+            </div>}
             <div className="info-block subtitle-preview">
               <span className="eyebrow">中文字幕</span>
               <p>

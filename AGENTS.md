@@ -12,9 +12,9 @@
 
 ## 新建和接口
 
-新增使用 `pnpm animation:new <id> "标题" --renderer pixi|three|canvas`。脚手架先准备完整目录再注册，拒绝覆盖已有目录。自动发现 `projects/*/project.ts`，不改公共列表或路由。
+新增使用 `pnpm film new <id> "标题"`，默认空白合成，不预选 2D/3D 引擎。可用能力见 `pnpm film composition engines --json`；显式指定 `--renderer` 仅用于选取已有引擎示例。脚手架先准备完整目录再注册，拒绝覆盖已有目录。自动发现 `projects/*/project.ts`，不改公共列表或路由。
 
-`project.ts` 保持静态元数据；`load: () => import('./scene')`，可选 `loadAudio: () => import('./audio')`。场景接口保持 `createScene({width,height,quality}) -> {canvas,render(time),dispose()}`。画面和声音共用绝对时间，场景不自建动画或音频时钟；随机数据可确定性重建。
+`project.ts` 保持静态元数据；`load: () => import('./scene')`，可选 `loadAudio: () => import('./audio')`。场景接口兼容 `createScene({width,height,quality}) -> {canvas,render(time),dispose()}`，支持异步初始化、`prepareFrame(time,{signal})` 和异步 render。合成项目通过 `loadVisual: () => import("./visual.json")` 声明可编辑文档；GUI/CLI/MCP 共用该文档，保存检查 SHA-256 版本。画面和声音共用绝对时间，场景不自建动画或音频时钟；随机数据可确定性重建。
 
 音频支持 `audioTracks` 的多条文件/代码音轨。生成器使用公共播放器提供的上下文和调度时间，必须支持任意片段、变速与释放；正常播放不需要预先合成音频文件。
 

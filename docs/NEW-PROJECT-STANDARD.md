@@ -9,7 +9,8 @@ projects/<id>/
   AGENTS.md                 仅允许修改本项目的约定
   README.md                 工程入口、依赖、脚本与测试用法
   project.ts                静态元数据
-  scene.ts                  场景入口
+  visual.json               默认空白合成数据；程序化项目可省略
+  scene.ts                  场景入口，可注册多个项目内模块
   audio.ts                  可选的浏览器音频生成器
   music/                    可选的程序乐谱、音色和音效源码
   public/                   浏览器运行素材、音轨、封面、独立索引
@@ -27,11 +28,11 @@ projects/<id>/
 ## 2. 创建与资源映射
 
 ```powershell
-pnpm animation:new my-film "我的动画" --renderer canvas
+pnpm film new my-film "我的动画"
 pnpm project:check my-film --strict
 ```
 
-脚手架创建全部必需文件后一次发布项目目录，拒绝覆盖已有目录。同 id 的创建锁在 `projects/.cache/new-project-locks/`；不清理不属于本次调用的锁。模板附带可选 `audio.ts` 示例，默认不启用声音。
+默认创建空白合成，不预选引擎、镜头或风格。能力清单通过 `pnpm film composition engines --json` 查询，接口见 [混合合成](COMPOSITION.md)。脚手架创建全部必需文件后一次发布项目目录，拒绝覆盖已有目录。同 id 的创建锁在 `projects/.cache/new-project-locks/`；不清理不属于本次调用的锁。模板附带可选 `audio.ts` 示例，默认不启用声音。
 
 工作台自动发现 `projects/*/project.ts`；素材直接从 `projects/<id>/public/` 映射到 `films/<id>/`，构建时复制进 dist，不在源码里生成第二份镜像。各项目保存自己的 `public/assets.json` 和 `public/waveforms.json`，工作台只读汇总，无需修改公共索引。
 
@@ -39,9 +40,9 @@ pnpm project:check my-film --strict
 
 ## 3. 代码协议
 
-`project.ts` 只包含静态字面量或本文件常量、`load: () => import('./scene')` 和可选 `loadAudio: () => import('./audio')`。元数据导入不执行网络或文件写入。
+`project.ts` 只包含静态字面量或本文件常量、`load: () => import('./scene')` 、可选 `loadAudio: () => import('./audio')` 和 `loadVisual: () => import('./visual.json')`。元数据导入不执行网络或文件写入。
 
-场景保持 `createScene({width,height,quality}) -> {canvas,render(time),dispose()}`。支持任意绝对时间的直接、倒退和重复绘制。适配 GSAP、骨骼、粒子等库时关闭独立循环；所有调度由公共播放器负责。
+场景兼容 `createScene({width,height,quality}) -> {canvas,render(time),dispose()}`，createScene/render 支持 Promise，可选 `prepareFrame(time,{signal})` 等待资源并响应取消。支持任意绝对时间的直接、倒退和重复绘制。适配 GSAP、骨骼、粒子等库时关闭独立循环；所有调度由公共播放器负责。
 
 声音通过 `audioTracks` 配置多条文件或生成音轨，使用同一时间轴。生成音轨在浏览器直接创建和播放，导出复用同一生成器，无需先生成 WAV。单条旧 `audio` 字段保留兼容，不能与非空 `audioTracks` 同时使用。具体协议见 [AUTHORING.md](AUTHORING.md)。
 

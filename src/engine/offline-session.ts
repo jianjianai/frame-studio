@@ -1,4 +1,5 @@
 import { FrameRenderer } from "./renderer";
+import { resolveProject } from "./resolve-project";
 import { OfflineAudioRenderer } from "./audio-graph";
 import { projectAudioTracks, type AnimationProject } from "./types";
 import { waitForStudio, type StudioApi } from "./debug";
@@ -6,6 +7,7 @@ import { frameDimensions, fitComposition } from "./dimensions.mjs";
 
 /** Production entry without a studio registry, UI, HMR, or playback clock. */
 export async function installOffline(project: AnimationProject) {
+  project=await resolveProject(project);
   const requested = new URLSearchParams(location.search).get("width");
   const { width, height } = frameDimensions(project, requested ? Number(requested) : fitComposition(project, 1280).width);
   const canvas = document.createElement("canvas");
@@ -17,14 +19,14 @@ export async function installOffline(project: AnimationProject) {
     ready: false,
     projectId: project.id,
     duration: project.duration,
-    frame(t, subtitles = false) {
+    async frame(t, subtitles = false) {
       if (!Number.isFinite(t) || t < 0 || t > project.duration)
         throw new Error("Invalid frame time");
       time = t;
-      renderer.render(t, subtitles);
+      await renderer.render(t, subtitles);
     },
-    seek(t) {
-      this.frame(t);
+    async seek(t) {
+      await this.frame(t);
     },
     async play() {},
     pause() {},
@@ -45,7 +47,7 @@ export async function installOffline(project: AnimationProject) {
     },
     async captureAt(t, options = {}) {
       await waitForStudio(api, options);
-      api.frame(t, options.subtitles);
+      await api.frame(t, options.subtitles);
       await api.waitUntilReady!(options);
       return {
         time,
@@ -58,13 +60,13 @@ export async function installOffline(project: AnimationProject) {
       audio: { state: "offline", bufferedRanges: null },
     }),
     getParameters: () => renderer.parameters(),
-    setParameters(values) {
+    async setParameters(values) {
       renderer.setParameters(values);
-      renderer.render(time);
+      await renderer.render(time);
     },
-    setOverlay(enabled) {
+    async setOverlay(enabled) {
       renderer.setOverlay(enabled);
-      renderer.render(time);
+      await renderer.render(time);
     },
     async audioChunk(start, duration, trackId) {
       const key = trackId ?? "__mix__";

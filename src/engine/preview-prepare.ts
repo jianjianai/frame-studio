@@ -15,7 +15,7 @@ export function installPreviewPreparation(project: AnimationProject) {
         renderer?.dispose();
         current = id;
         renderer = new OfflineAudioRenderer(
-          { ...project, audio: undefined, audioTracks: [track] },
+          { ...project, audio: undefined, audioTracks: [track], visual: undefined, loadVisual: undefined },
           new Map([[id, { gain: 1, muted: false }]]),
           1,
         );

@@ -101,7 +101,7 @@ export class MediaTracks {
           return;
         const segment = trackSegment(track, this.duration, from, 0.15);
         if (!segment || segment.delay > 0) return;
-        await this.ready(this.entry(track), segment.offset, rate, signal);
+        await this.ready(this.entry(track), segment.offset, rate*(track.playbackRate??1), signal);
       }),
     );
   }
@@ -153,7 +153,7 @@ export class MediaTracks {
           this.context.currentTime,
           0.012,
         );
-        media.playbackRate = rate;
+        media.playbackRate = rate*(track.playbackRate??1);
         if (media.error) {
           this.onError(new Error(`音轨 ${track.name} 加载失败`));
           return;

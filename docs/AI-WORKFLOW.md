@@ -30,11 +30,11 @@ pnpm --silent film inspect tiny-seed --json
 ## 创建完整工程
 
 ```powershell
-pnpm film new my-film "我的动画" --renderer canvas --duration 12 --fps 24 --audio generated
+pnpm film new my-film "我的动画" --duration 12 --fps 24
 pnpm film check my-film --strict --json
 ```
 
-renderer 支持 canvas、pixi、three；默认 pixi。默认 24 秒、30 fps、静音。`--audio generated` 自动连接模板生成器，也可保留默认 silent 后自行添加多音轨。创建会同时准备代码、封面、说明、私有测试和独立记录目录，再一次性注册；不会覆盖已有项目。原 `pnpm animation:new` 保持兼容。
+默认创建不预选引擎的空白合成（composition）。显式模板可选 canvas、pixi、three、babylon；视频、图片、图像序列和 Lottie 可作为合成素材。通过 `pnpm film composition engines --json` 查询能力，通过 `pnpm film composition <id> --json` 读取可编辑片段，接口见 [COMPOSITION.md](COMPOSITION.md)。默认 24 秒、30 fps、静音。`--audio generated` 自动连接模板生成器，也可保留默认 silent 后自行添加多音轨。创建会同时准备代码、封面、说明、私有测试和独立记录目录，再一次性注册；不会覆盖已有项目。原 `pnpm animation:new` 保持兼容。
 
 `project.ts` 保存可静态读取的元数据和时间标记；`scene.ts` 是绘制入口。复杂项目可在本目录拆分 shots、characters、motion 等模块，无需修改公共注册表。素材在 public，原始材料与许可在 production，项目脚本与测试在 scripts、tests。新增脚本在 README 声明输入、输出和覆盖行为。
 

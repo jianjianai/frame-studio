@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { rendererIds } from "../src/engine/adapters.mjs";
+import { validateVisualDocument } from "../src/engine/visual-document.mjs";
 import { assertEngineProtocol } from "../src/engine/protocol.mjs";
 import { shotIdSchema } from "../src/contracts/workflow.mjs";
 import { compositionSize } from "../src/engine/dimensions.mjs";
@@ -150,6 +152,11 @@ export function checkProjects(root = process.cwd(), options = {}) {
       continue;
     }
     const { meta, loadPath } = record;
+    const visualFile=path.join(folder,"visual.json");
+    if(fs.existsSync(visualFile)) try {
+      const visual=validateVisualDocument(JSON.parse(fs.readFileSync(visualFile,"utf8")),{projectId:directory,duration:meta.duration});
+      for(const clip of visual.clips) for(const src of clip.source.frames??(clip.source.src?[clip.source.src]:[])) localAsset(root,src,directory);
+    } catch(error){ report("error","VISUAL_DOCUMENT",visualFile,error.message); }
     try { compositionSize(meta); }
     catch (error) { report("error", "COMPOSITION", file, error.message); }
     try { assertEngineProtocol(meta); }
@@ -256,7 +263,7 @@ export function checkProjects(root = process.cwd(), options = {}) {
         file,
         "status must match the project schema enum when supplied",
       );
-    if (!["canvas", "pixi", "three"].includes(meta.renderer))
+    if (!rendererIds.includes(meta.renderer))
       report("error", "RENDERER", file, "Unknown renderer");
     for (const key of ["title", "subtitle", "description"])
       if (
