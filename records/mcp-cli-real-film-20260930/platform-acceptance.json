@@ -1,0 +1,30 @@
+{
+  "passed": true,
+  "source": "actual HTTP MCP + platform CLI + pinned Docker executor",
+  "project": "work-85663323",
+  "work": "85663323-acba-4adf-86f3-4648d7e953f1",
+  "sourceEditFiles": 3,
+  "uploadedAsset": "de9d8a8d-2d83-4d6d-ba5b-03c841642993",
+  "frame": {
+    "task": "633efaa6-105b-4033-b793-f1f5457c6a47",
+    "nativeImage": true,
+    "bytes": 266354,
+    "sha256": "d82273e7ad55b59c663e958f30c5cf4e00273ca1ee34eab72f87a883efa80901"
+  },
+  "render": {
+    "task": "4a9f2842-73a2-4fc2-8847-89d29a46ae9f",
+    "bytes": 191539,
+    "sha256": "c86e244bc6d9ee3bce595b7abde9418735fede19f8738fdd13ff990520920d83",
+    "runtimeImage": "sha256:87af961ea8eab6a97714319f72603a29972a726dce91af43999a5883dcd0e4e8",
+    "width": 640,
+    "height": 360,
+    "frames": 48,
+    "fps": "24/1",
+    "duration": "2.000000",
+    "audioChannels": 2,
+    "serverChecksumAvailable": false
+  },
+  "checkpoint": "3b9ac35f86679c467530a73c6d21161e71d5d65b",
+  "tickErrors": [],
+  "artifactDirectory": ".cache/toolchain-real-film/10b6a692-a179-484f-b228-c23ef48e9f58"
+}
