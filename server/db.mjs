@@ -63,7 +63,7 @@ export async function database(url, password) {
         END IF;
       END LOOP;
     END $$;
-    CREATE OR REPLACE FUNCTION frame_notify_preview() RETURNS trigger LANGUAGE plpgsql AS $
+    CREATE OR REPLACE FUNCTION frame_notify_preview() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN
       IF NEW.kind='build' AND NEW.state='succeeded' THEN
         IF TG_OP='INSERT' THEN PERFORM pg_notify('frame_changes', 'previews');
@@ -72,12 +72,12 @@ export async function database(url, password) {
         END IF;
       END IF;
       RETURN NULL;
-    END $;
-    DO $ BEGIN
+    END $$;
+    DO $$ BEGIN
       IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='frame_preview_changed') THEN
         CREATE TRIGGER frame_preview_changed AFTER INSERT OR UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION frame_notify_preview();
       END IF;
-    END $;
+    END $$;
     CREATE OR REPLACE FUNCTION frame_notify_work_sync() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN IF NEW.state IS DISTINCT FROM OLD.state THEN PERFORM pg_notify('frame_changes', 'work_sync'); END IF; RETURN NULL; END $$;
     DO $$ BEGIN
