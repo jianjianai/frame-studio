@@ -1,0 +1,46 @@
+/* Focused work tabs never include the library navigation. */
+[hidden] { display: none !important; }
+.workbench.work-focus { display: block; height: 100dvh; overflow: hidden; }
+.work-focus > .workspace { height: 100%; min-width: 0; overflow: hidden; }
+.work-focus .creation { height: 100%; min-height: 0; }
+.work-focus .creation-toolbar { padding: 11px 18px; min-height: 66px; gap: 20px; flex-wrap: nowrap; }
+.work-identity { min-width: 110px; flex: 1; }
+.work-focus .creation-toolbar h1 { max-width: none; font-size: 18px; }
+.work-focus .creation-actions { flex-shrink: 0; flex-wrap: nowrap; align-items: center; gap: 8px; }
+.work-focus .creation-actions button { min-height: 35px; padding: 7px 10px; }
+.work-focus .creation-actions button span { display: inline; }
+.work-focus .creation-split { position: relative; flex: 1; min-height: 0; height: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, var(--video-share)) 1px minmax(300px, var(--chat-share)); grid-template-rows: minmax(0,1fr); overflow: hidden; }
+.work-focus .creation-split.chat-closed { grid-template-columns: minmax(0,1fr); }
+.work-focus .preview-pane { background: #edf0e9; }
+.work-focus .preview-pane iframe { height: 100%; }
+.work-focus .chat-header { gap: 8px; padding: 14px 16px 10px; }
+.work-focus .chat-header > .row { margin-right: auto; }
+.work-focus .creation-chat { min-height: 0; }
+.work-focus .chat-composer { flex-shrink: 0; }
+.work-focus .chat-messages { min-height: 0; }
+.work-more { position: relative; }
+.work-more > summary { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; list-style: none; background: #fff; min-height: 35px; font-size: 12px; }
+.work-more summary::-webkit-details-marker { display: none; }
+.work-more-menu { position: absolute; top: calc(100% + 7px); right: 0; z-index: 12; display: grid; min-width: 165px; padding: 5px; background: #fcfdf9; box-shadow: 0 8px 25px #263b3220; border: 1px solid var(--line); border-radius: 10px; }
+.work-more-menu button { border: none; justify-content: flex-start; }
+.work-focus .sync-attention { color: #76541f; border-color: #c9ad71; background: #fff5df; }
+.work-focus .sync-error { color: #983c37; background: #fff0ed; border-color: #d6a49d; }
+.work-focus .sync-status { color: #426046; background: transparent; border-color: transparent; }
+.work-focus .preview-loading { inset: 0; background: #f5f5ef; color: #263b32; }
+.chat-scrim { display: none; }
+.work-open { text-decoration: none; color: inherit; cursor: pointer; }
+.work-open[aria-disabled="true"] { opacity: .55; cursor: default; }
+@media (max-width: 1050px) { .work-focus .creation-toolbar { gap: 12px; } .work-focus .creation-actions { gap: 5px; } }
+@media (max-width: 900px) {
+  .work-focus .creation-split { grid-template-columns: minmax(0,1fr); }
+  .creation-split > .resize-handle { display: none; }
+  .work-focus .creation-chat:not([hidden]) { position: absolute; top: 0; bottom: 0; right: 0; width: min(440px, 100%); z-index: 8; box-shadow: -8px 0 30px #263b3220; }
+  .chat-scrim { display: block; position: absolute; inset: 0; z-index: 7; padding: 0; border: none; border-radius: 0; background: #263b322b; }
+  .work-focus .creation-toolbar { flex-wrap: wrap; gap: 8px; padding: 9px 12px; }
+  .work-focus .work-identity { flex-basis: 100%; }
+  .work-focus .creation-actions { width: 100%; justify-content: flex-end; flex-wrap: wrap; }
+  .work-focus .creation-toolbar h1 { font-size: 16px; }
+  .work-focus .creation-actions > .sync-status, .work-focus .creation-actions > .sync-attention, .work-focus .creation-actions > .sync-error { margin-right: auto; }
+  .work-focus .chat-composer textarea { height: 90px; }
+  .work-focus .chat-composer > small { display: block; }
+}

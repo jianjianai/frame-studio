@@ -123,9 +123,9 @@ export function useAction(notify = () => {}) {
   };
   return [run, busy];
 }
-export function Button({ icon: Icon, children, ...props }) {
+export function Button({ icon: Icon, children, ref, ...props }) {
   return (
-    <button {...props}>
+    <button ref={ref} {...props}>
       {Icon && <Icon size={17} />} {children}
     </button>
   );

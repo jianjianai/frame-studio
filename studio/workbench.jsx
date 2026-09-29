@@ -31,6 +31,7 @@ import { Creation } from "./creation";
 import { Materials } from "./work-panels";
 import { Settings } from "./accounts";
 import "./workbench.css";
+import "./workspace.css";
 
 function Background({ notify }) {
   const query = useQuery("works_background", {}, 2000),
@@ -45,7 +46,7 @@ function Background({ notify }) {
       {query.data?.map((w) => (
         <article className="background-project panel" key={w.id}>
           <div>
-            <a href={"#/work/" + w.id}>
+            <a href={"#/work/" + w.id} target="_blank" rel="noopener">
               <h2>
                 {w.title} <ArrowUpRight size={16} />
               </h2>
@@ -60,7 +61,7 @@ function Background({ notify }) {
             </div>
           </div>
           <div className="row">
-            <Button onClick={() => go("work/" + w.id)}>打开作品</Button>
+            <a className="button" href={"#/work/" + w.id} target="_blank" rel="noopener">打开作品 ↗</a>
             <Button
               icon={Square}
               disabled={busy}
@@ -198,8 +199,8 @@ function App() {
       ["settings", Settings2, "设置"],
     ];
   return (
-    <div className={"workbench " + (collapsed ? "nav-collapsed" : "")}>
-      <aside className="navigation">
+    <div className={"workbench " + (isWork ? "work-focus" : collapsed ? "nav-collapsed" : "")}>
+      {!isWork && <aside className="navigation">
         <a className="brand" href="#/recent">
           <Film size={25} />
           <span>FRAME</span>
@@ -242,14 +243,13 @@ function App() {
             <span>退出登录</span>
           </Button>
         </footer>
-      </aside>
+      </aside>}
       <main className={isWork ? "workspace" : "page"}>
         {section === "work" ? (
           <Creation
             key={route[1]}
             id={route[1]}
             notify={notify}
-            onToggleNav={() => setCollapsed(!collapsed)}
           />
         ) : section === "repository" ? (
           <RepositoryWorks key={route[1]} id={route[1]} notify={notify} />

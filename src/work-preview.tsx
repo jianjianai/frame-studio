@@ -4,6 +4,7 @@ import { projects } from "./projects";
 import { Player } from "./ui/Player";
 import "./styles.css";
 import "./work-preview.css";
+import "./ui/player-workspace.css";
 import { installAiBrowser } from "./engine/ai-browser";
 import { installPreviewPreparation } from "./engine/preview-prepare";
 

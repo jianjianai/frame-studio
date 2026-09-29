@@ -56,21 +56,27 @@ export function RepoPicker({ value, onChange }) {
 }
 export function NewWork({ repo, onClose, notify }) {
   const [selected, setSelected] = useState(repo?.id || ""),
+    [created, setCreated] = useState(null),
     [run, busy] = useAction(notify);
   return (
     <Modal title="新建作品" onClose={onClose}>
+      {created && <p role="status">作品已创建。浏览器未打开新标签页，<a href={"#/work/" + created.id} target="_blank" rel="noopener" onClick={onClose}>点击打开作品 ↗</a></p>}
       <p>{repo ? `保存到 ${repo.name}` : "选择一个仓库保存作品"}</p>
       <Form
         busy={busy}
         submit="创建并开始创作"
         onSubmit={(a) =>
           run(async () => {
-            const work = await api("works_create", {
+            const tab = window.open("about:blank", "_blank");
+            if (tab) { tab.opener = null; tab.document.title = "正在创建作品…"; }
+            let work;
+            try { work = await api("works_create", {
               title: a.title,
               repo: selected,
-            });
-            onClose();
-            go("work/" + work.id);
+            }); } catch (error) { tab?.close(); throw error; }
+            if (tab && !tab.closed) tab.location.replace(new URL("#/work/" + work.id, location.href).href);
+            else setCreated(work);
+            if (tab && !tab.closed) onClose();
           })
         }
       >
@@ -160,10 +166,12 @@ export function WorkLibrary({ repo, recent = false, notify }) {
         <div className="work-grid">
           {query.data.items.map((w) => (
             <article className="work-card" key={w.id}>
-              <button
+              <a
                 className="work-open"
-                disabled={deleted}
-                onClick={() => go("work/" + w.id)}
+                href={deleted ? undefined : "#/work/" + w.id}
+                aria-disabled={deleted || undefined}
+                target="_blank" rel="noopener"
+                aria-label={w.title + "（在新标签页打开）"}
               >
                 <div className="work-cover">
                   {w.cover ? (
@@ -179,7 +187,7 @@ export function WorkLibrary({ repo, recent = false, notify }) {
                   </p>
                   {recent && <small>打开于 {date(w.opened)}</small>}
                 </div>
-              </button>
+              </a>
               <details className="card-menu">
                 <summary aria-label={`${w.title}操作`}>
                   <MoreHorizontal size={19} />

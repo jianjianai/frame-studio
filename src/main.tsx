@@ -4,6 +4,7 @@ import { Player } from "./ui/Player";
 import { findProject } from "./projects";
 import { RenderPage } from "./ui/RenderPage";
 import "./styles.css";
+import "./ui/player-workspace.css";
 class ErrorBoundary extends Component<
   { children: ReactNode },
   { error: string }

@@ -1,4 +1,6 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { ResizeHandle } from "./ResizeHandle";
+import { readPreference, writePreference, boundedPreference } from "./view-preferences";
 import {
   Play,
   Pause,
@@ -86,7 +88,21 @@ export function Player({
       canceled = true;
     };
   }, [project.id]);
-  const [quality, setQuality] = useState<Quality>("standard");
+  const initialView = useRef(readPreference<Record<string, unknown>>("frame.player-view", {}));
+  const editingArea = useRef<HTMLDivElement>(null);
+  const [timelineVisible, setTimelineVisible] = useState(initialView.current.timelineVisible !== false);
+  const [videoRatio, setVideoRatio] = useState(() => boundedPreference(initialView.current.videoRatio, 68, 25, 85));
+  const [resizing, setResizing] = useState(false);
+  const [quality, setQuality] = useState<Quality>(() => ["draft", "standard", "high"].includes(String(initialView.current.quality)) ? initialView.current.quality as Quality : "standard");
+  const qualityRef = useRef(quality); qualityRef.current = quality;
+  const viewConfigured = useRef(!embedded);
+  const preferences = useRef({ timelineVisible, videoRatio, quality });
+  preferences.current = { timelineVisible, videoRatio, quality };
+  useEffect(() => {
+    if (!viewConfigured.current) return;
+    writePreference("frame.player-view", preferences.current);
+    if (embedded && parent !== window) parent.postMessage({ type: "frame-player-preferences", preferences: preferences.current }, "*");
+  }, [timelineVisible, videoRatio, quality, embedded]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [retry, setRetry] = useState(0);
@@ -156,28 +172,44 @@ export function Player({
             ...value,
             duration: project.duration,
             fps: project.fps,
+            quality: qualityRef.current,
+            subtitles: subtitleRef.current,
             selection: selectionRef.current,
           },
           "*",
         );
     }
   };
+  const commandHandler = useRef<(data: Record<string, any>) => void>(() => {});
+  commandHandler.current = (data) => {
+    if (data.command === "export") setExportOpen(true);
+    if (data.command === "pause") { transport.current?.pause(); publish(); }
+    if (data.command === "seek" && Number.isFinite(data.time)) {
+      transport.current?.pause();
+      if (data.selection && Number.isFinite(data.selection.start) && Number.isFinite(data.selection.end) && data.selection.end > data.selection.start)
+        setSelection({ start: Math.max(0, data.selection.start), end: Math.min(project.duration, data.selection.end) });
+      seek(data.time);
+    }
+    if (data.command === "configure-view" && data.preferences && typeof data.preferences === "object") {
+      const p = data.preferences;
+      viewConfigured.current = true;
+      if (typeof p.timelineVisible === "boolean") setTimelineVisible(p.timelineVisible);
+      if (Number.isFinite(p.videoRatio)) setVideoRatio(boundedPreference(p.videoRatio, 68, 25, 85));
+      if (["draft", "standard", "high"].includes(p.quality) && p.quality !== qualityRef.current) {
+        transport.current?.pause(); publish(); setQuality(p.quality);
+      }
+    }
+  };
   useEffect(() => {
     if (!embedded || parent === window) return;
     const receive = (event: MessageEvent) => {
-      if (
-        event.source !== parent ||
-        event.data?.type !== "frame-player-command"
-      )
-        return;
-      if (event.data.command === "export") setExportOpen(true);
-      if (event.data.command === "pause") transport.current?.pause();
-      if (event.data.command === "seek" && Number.isFinite(event.data.time))
-        seek(event.data.time);
+      if (event.source === parent && event.data?.type === "frame-player-command") commandHandler.current(event.data);
     };
     window.addEventListener("message", receive);
+    parent.postMessage({ type: "frame-player-ready" }, "*");
     return () => window.removeEventListener("message", receive);
   }, [embedded]);
+  useEffect(() => { publish(); }, [selection]);
   const seek = (t: number) => {
     if (exporting) return;
     transport.current?.seek(t);
@@ -605,11 +637,17 @@ export function Player({
         </header>
       )}
       <div className="studio-layout">
-        <div className="editing-area">
+        <div ref={editingArea} className={"editing-area review-layout " + (resizing ? "dragging" : "") + (timelineVisible ? "" : " timeline-hidden")}
+          style={{ gridTemplateRows: timelineVisible ? `minmax(0, ${videoRatio}fr) 1px minmax(0, ${100 - videoRatio}fr) auto` : "minmax(0,1fr) auto" }}>
           <div className="theater" ref={theater}>
             <div className="stage-top">
               <span>
                 <i className="status-dot" /> 实时画面
+                <select className="preview-quality" aria-label="预览画质" value={quality} disabled={loading || exporting} onChange={(event) => {
+                  viewConfigured.current = true; transport.current?.pause(); publish(); setQuality(event.target.value as Quality);
+                }}>
+                  <option value="draft">流畅 360p</option><option value="standard">标准 720p</option><option value="high">精细 1080p</option>
+                </select>
               </span>
               <span>
                 {quality === "high"
@@ -679,6 +717,12 @@ export function Player({
                 </div>
               )}
             </div>
+            <div className="video-progress-wrap">
+              <input className="video-progress" type="range" min={0} max={project.duration} step={1 / project.fps}
+                aria-label="视频播放进度" aria-valuetext={frameTime(view.time) + " / " + frameTime(project.duration)}
+                value={view.time} disabled={loading || exporting} onChange={(event) => seek(Number(event.target.value))}
+                style={{ "--progress": (view.time / project.duration) * 100 + "%" } as React.CSSProperties} />
+            </div>
             <div className="transport">
               <div className="transport-left">
                 <button
@@ -712,6 +756,10 @@ export function Player({
                 </div>
               </div>
               <div className="transport-right">
+                <button className={"icon-button timeline-toggle " + (timelineVisible ? "active" : "")}
+                  aria-label={timelineVisible ? "隐藏时间轴" : "显示时间轴"} aria-controls="work-timeline" aria-expanded={timelineVisible}
+                  title={timelineVisible ? "隐藏时间轴" : "显示时间轴"}
+                  onClick={() => { viewConfigured.current = true; setTimelineVisible(!timelineVisible); }}><SlidersHorizontal size={18} /></button>
                 <select
                   aria-label="播放速度"
                   value={view.rate}
@@ -781,7 +829,9 @@ export function Player({
               </div>
             </div>
           </div>
-          <section className="timeline-panel">
+          {timelineVisible && <ResizeHandle axis="horizontal" value={videoRatio} min={25} max={85} containerRef={editingArea}
+            onChange={(value) => { viewConfigured.current = true; setVideoRatio(value); }} onDragChange={setResizing} label="调整视频与时间轴高度" />}
+          <section id="work-timeline" className="timeline-panel" hidden={!timelineVisible}>
             <div className="panel-heading">
               <div>
                 <SlidersHorizontal size={15} />
@@ -821,6 +871,7 @@ export function Player({
                 </button>
               </div>
             </div>
+            <p className="current-shot" title={currentBeat?.detail}>当前镜头 · {currentBeat?.title || "全片"}</p>
             <details className="timeline-options">
               <summary>
                 定位与选段
@@ -1168,7 +1219,7 @@ export function Player({
               <label className="quality-label">
                 预览画质
                 <select
-                  aria-label="预览画质"
+                  aria-label="信息栏预览画质"
                   value={quality}
                   disabled={exporting}
                   onChange={(e) => {

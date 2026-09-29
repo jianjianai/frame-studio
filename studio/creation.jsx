@@ -2,6 +2,8 @@ import { subscribe } from "./realtime";
 import { useEffect, useRef, useState } from "react";
 import { PREVIEW_VERSION } from "../server/preview-version.mjs";
 import { previewCacheBridge } from "./preview-cache";
+import { ResizeHandle } from "../src/ui/ResizeHandle";
+import { readPreference, writePreference, boundedPreference } from "../src/ui/view-preferences";
 import {
   ArrowUp,
   Square,
@@ -11,9 +13,8 @@ import {
   X,
   Play,
   RefreshCw,
-  PanelLeftClose,
-  Columns2,
-  Rows2,
+  MoreHorizontal,
+  PanelRightClose,
   History,
   Image,
   Download,
@@ -194,6 +195,8 @@ export function WorkChat({
   position,
   selectedAssets,
   onClearAssets,
+  onClose,
+  visible = true,
 }) {
   const chats = useQuery("works_chats", { id: work.id }),
     connections = useQuery("connections_list"),
@@ -295,7 +298,7 @@ export function WorkChat({
       reload();
     });
   return (
-    <section className="creation-chat">
+    <section id="work-chat" className="creation-chat" hidden={!visible} aria-label="AI 创作对话">
       <header className="chat-header">
         <div className="row">
           <MessageSquare size={18} />
@@ -311,6 +314,7 @@ export function WorkChat({
         >
           新对话
         </Button>
+        <Button icon={PanelRightClose} aria-label="关闭 AI 对话" title="关闭 AI 对话（不会停止创作）" onClick={onClose} />
       </header>
       <div className="chat-selectors">
         <select
@@ -391,7 +395,7 @@ export function WorkChat({
               ))}
             </div>
             {!connections.data?.some((c) => c.configured) && (
-              <a href="#/settings">连接创作模型 →</a>
+              <a href="#/settings" target="_blank" rel="noopener">连接创作模型 →</a>
             )}
           </div>
         )}
@@ -463,7 +467,7 @@ export function WorkChat({
   );
 }
 
-export function Creation({ id, notify, onToggleNav }) {
+export function Creation({ id, notify }) {
   const query = useQuery("works_open", { id }),
     taskQuery = useQuery("works_tasks", { id }, 2000),
     syncQuery = useQuery("works_sync_status", { id }, 1),
@@ -473,16 +477,17 @@ export function Creation({ id, notify, onToggleNav }) {
   const [preview, setPreview] = useState(null),
     [previewStage, setPreviewStage] = useState("正在获取作品…"),
     [panel, setPanel] = useState(""),
-    [layout, setLayout] = useState(
-      () => localStorage.getItem("frame.layout") || "columns",
-    ),
-    [ratio, setRatio] = useState(() =>
-      Number(localStorage.getItem("frame.ratio") || 62),
-    ),
+    [chatOpen, setChatOpen] = useState(() => readPreference("frame.chat-open", window.innerWidth > 900)),
+    [ratio, setRatio] = useState(() => boundedPreference(readPreference("frame.workspace-split", 68), 68, 35, 80)),
     [dragging, setDragging] = useState(false),
     [position, setPosition] = useState({ time: 0 }),
     [assets, setAssets] = useState([]),
     [run, busy] = useAction(notify);
+  const chatToggle = useRef(null);
+  const playerPreferences = useRef(readPreference("frame.player-view", {}));
+  const sendPlayer = (command, extra = {}) => iframe.current?.contentWindow?.postMessage({ type: "frame-player-command", command, ...extra }, "*");
+  const closeChat = () => { setChatOpen(false); chatToggle.current?.focus(); };
+  useEffect(() => { document.title = query.data ? query.data.title + " · FRAME" : "作品 · FRAME"; }, [query.data?.title]);
   useEffect(() => {
     let last = 0,
       pending = false;
@@ -542,6 +547,11 @@ export function Creation({ id, notify, onToggleNav }) {
   useEffect(() => {
     const receive = (e) => {
       if (e.source !== iframe.current?.contentWindow) return;
+      if (e.data?.type === "frame-player-ready") sendPlayer("configure-view", { preferences: playerPreferences.current });
+      if (e.data?.type === "frame-player-preferences") {
+        playerPreferences.current = e.data.preferences;
+        writePreference("frame.player-view", e.data.preferences);
+      }
       if (e.data?.type === "frame-preview-loading")
         setPreviewStage(e.data.message || "");
       if (
@@ -558,9 +568,9 @@ export function Creation({ id, notify, onToggleNav }) {
     [preview?.url],
   );
   useEffect(() => {
-    localStorage.setItem("frame.layout", layout);
-    localStorage.setItem("frame.ratio", String(ratio));
-  }, [layout, ratio]);
+    writePreference("frame.chat-open", chatOpen);
+    writePreference("frame.workspace-split", ratio);
+  }, [chatOpen, ratio]);
   useEffect(() => {
     if (!latest) return;
     const timer = setInterval(
@@ -572,25 +582,6 @@ export function Creation({ id, notify, onToggleNav }) {
     );
     return () => clearInterval(timer);
   }, [latest?.id]);
-  const drag = (e) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setDragging(true);
-  };
-  const move = (e) => {
-    if (!dragging) return;
-    const rect = split.current.getBoundingClientRect();
-    setRatio(
-      Math.max(
-        30,
-        Math.min(
-          78,
-          layout === "columns" && window.innerWidth > 760
-            ? ((e.clientX - rect.left) / rect.width) * 100
-            : ((e.clientY - rect.top) / rect.height) * 100,
-        ),
-      ),
-    );
-  };
   if (query.loading && !query.data) return <Loading />;
   if (query.error) return <ErrorNote error={query.error} />;
   const work = query.data;
@@ -608,86 +599,35 @@ export function Creation({ id, notify, onToggleNav }) {
   return (
     <div className="creation">
       <header className="creation-toolbar">
-        <div className="row">
-          <Button
-            icon={PanelLeftClose}
-            aria-label="收起或展开导航"
-            onClick={onToggleNav}
-          />
-          <div>
-            <a className="breadcrumb" href={"#/repository/" + work.repo}>
-              {work.repository?.name}
-            </a>
-            <h1>{work.title}</h1>
-          </div>
+        <div className="work-identity">
+          <span className="breadcrumb">{work.repository?.name}</span>
+          <h1 title={work.title}>{work.title}</h1>
         </div>
         <div className="creation-actions">
-          <Button
-            icon={RefreshCw}
-            disabled={busy || running.some((t) => t.kind === "build")}
-            onClick={() =>
-              run(async () => {
-                await api("works_task", { id, kind: "build" });
-                taskQuery.refresh();
-              })
-            }
-          >
-            刷新预览
+          <Button icon={GitPullRequest} className={syncQuery.error || syncQuery.data?.error ? "sync-error" : syncQuery.data?.ahead || syncQuery.data?.behind || syncQuery.data?.dirty ? "sync-attention" : "sync-status"}
+            aria-label="查看同步状态" title={syncQuery.error || syncQuery.data?.error || "查看作品保存与同步状态"} onClick={() => setPanel("sync")}>
+            {syncQuery.error || syncQuery.data?.error ? "同步需处理" : syncQuery.data?.dirty ? "有未保存修改" : syncQuery.data?.behind ? "有远端更新" : syncQuery.data?.ahead ? "待同步 " + syncQuery.data.ahead : syncQuery.data ? (syncQuery.data.remote ? "已同步" : "保存在服务器") : "正在检查"}
           </Button>
-          <Button icon={ListTodo} onClick={() => setPanel("tasks")}>
-            后台任务{running.length ? ` · ${running.length}` : ""}
-          </Button>
-
-          {[
-            ["sync", GitPullRequest, "同步"],
-            ["materials", Image, "素材"],
-            ["voice", Mic, "配音"],
-            ["versions", History, "版本"],
-            ["exports", Download, "导出"],
-            ["details", Info, "资料"],
-          ].map(([key, Icon, label]) => (
-            <Button
-              key={key}
-              icon={Icon}
-              title={
-                key === "sync"
-                  ? syncQuery.error || syncQuery.data?.error || label
-                  : label
-              }
-              className={
-                key === "sync" &&
-                (syncQuery.data?.ahead ||
-                  syncQuery.data?.behind ||
-                  syncQuery.data?.dirty)
-                  ? "sync-attention"
-                  : undefined
-              }
-              onClick={() => setPanel(key)}
-            >
-              <span>
-                {label}
-                {key === "sync" && (
-                  <>
-                    {syncQuery.data?.ahead > 0 && ` ↑${syncQuery.data.ahead}`}
-                    {syncQuery.data?.behind > 0 && ` ↓${syncQuery.data.behind}`}
-                    {syncQuery.data?.dirty > 0 &&
-                      ` 待保存 ${syncQuery.data.dirty}`}
-                  </>
-                )}
-              </span>
-            </Button>
-          ))}
-          <Button
-            icon={layout === "columns" ? Rows2 : Columns2}
-            aria-label="切换左右或上下布局"
-            onClick={() => setLayout(layout === "columns" ? "rows" : "columns")}
-          />
+          <Button icon={ListTodo} aria-label="后台任务" onClick={() => setPanel("tasks")}>任务{running.length ? " · " + running.length : ""}</Button>
+          <Button icon={MessageSquare} ref={chatToggle} aria-label={chatOpen ? "关闭 AI 对话" : "打开 AI 对话"} aria-controls="work-chat" aria-expanded={chatOpen} onClick={() => setChatOpen(!chatOpen)}>AI 对话</Button>
+          <details className="work-more">
+            <summary aria-label="更多作品操作"><MoreHorizontal size={19} /> 更多</summary>
+            <div className="work-more-menu">
+              <Button icon={RefreshCw} disabled={busy || running.some(t => t.kind === "build")} onClick={(event) => {
+                event.currentTarget.closest("details").open = false;
+                void run(async () => { await api("works_task", { id, kind: "build" }); taskQuery.refresh(); });
+              }}>刷新预览</Button>
+              {[ ["materials", Image, "素材"], ["voice", Mic, "配音"], ["versions", History, "版本"], ["details", Info, "作品资料"] ].map(([key, Icon, label]) =>
+                <Button key={key} icon={Icon} onClick={(event) => { event.currentTarget.closest("details").open = false; setPanel(key); }}>{label}</Button>)}
+            </div>
+          </details>
+          <Button className="primary" icon={Download} onClick={() => setPanel("exports")}>导出</Button>
         </div>
       </header>
       <div
         ref={split}
-        className={`creation-split ${layout} ${dragging ? "dragging" : ""}`}
-        style={{ "--split": ratio + "%" }}
+        className={`creation-split ${chatOpen ? "chat-open" : "chat-closed"} ${dragging ? "dragging" : ""}`}
+        style={{ "--video-share": ratio + "fr", "--chat-share": (100 - ratio) + "fr" }}
       >
         <div className="preview-pane">
           {preview ? (
@@ -703,6 +643,7 @@ export function Creation({ id, notify, onToggleNav }) {
                 ref={iframe}
                 title="作品播放器"
                 src={preview.url}
+                onLoad={() => sendPlayer("configure-view", { preferences: playerPreferences.current })}
                 sandbox="allow-scripts allow-downloads"
                 allow="autoplay; fullscreen"
                 allowFullScreen
@@ -729,40 +670,8 @@ export function Creation({ id, notify, onToggleNav }) {
             </div>
           )}
         </div>
-        <div
-          className="splitter"
-          role="separator"
-          aria-label="调整播放器和 AI 区域大小"
-          aria-orientation={layout === "columns" ? "vertical" : "horizontal"}
-          aria-valuenow={Math.round(ratio)}
-          aria-valuemin={30}
-          aria-valuemax={78}
-          tabIndex="0"
-          onPointerDown={drag}
-          onPointerMove={move}
-          onPointerUp={() => setDragging(false)}
-          onPointerCancel={() => setDragging(false)}
-          onKeyDown={(e) => {
-            if (
-              ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(
-                e.key,
-              )
-            ) {
-              e.preventDefault();
-              setRatio((r) =>
-                Math.max(
-                  30,
-                  Math.min(
-                    78,
-                    r + (["ArrowLeft", "ArrowUp"].includes(e.key) ? -2 : 2),
-                  ),
-                ),
-              );
-            }
-          }}
-        >
-          <i />
-        </div>
+        {chatOpen && <ResizeHandle axis="vertical" value={ratio} min={35} max={80} containerRef={split} onChange={setRatio} onDragChange={setDragging} label="调整播放器和 AI 区域大小" />}
+        {chatOpen && <button className="chat-scrim" aria-label="收起 AI 对话" onClick={closeChat} tabIndex={-1} />}
         <WorkChat
           key={id}
           work={work}
@@ -771,6 +680,8 @@ export function Creation({ id, notify, onToggleNav }) {
           notify={notify}
           position={position}
           selectedAssets={assets}
+          visible={chatOpen}
+          onClose={closeChat}
           onClearAssets={() => setAssets([])}
         />
       </div>
