@@ -9,6 +9,7 @@ import { projectPath } from "./project-paths.mjs";
 import { checkProjects } from "./check-projects.mjs";
 import { inputManifest } from "./production-input.mjs";
 import { browserOptions } from "./browser.mjs";
+import { buildPreviewAudio, previewProgress } from "./preview-audio.mjs";
 
 export function runProcess(
   command,
@@ -71,6 +72,11 @@ export function projectConfig(root, id, outDir) {
     configFile: false,
     logLevel: "error",
     base: "./",
+    define: {
+      "import.meta.env.VITE_FRAME_PREVIEW_AUDIO": JSON.stringify(
+        process.env.FRAME_PREVIEW_AUDIO || "1",
+      ),
+    },
     plugins: [
       react(),
       projectAssets({ project: id }),
@@ -190,10 +196,18 @@ export async function executeProject(root, id, action, options = {}) {
       }
     }
     if (action === "build") {
+      previewProgress("检查作品代码");
       const checked = await typecheck();
       if (checked.status !== "passed") return checked;
       const output = projectPath(root, id, "exports/build-" + randomUUID());
+      previewProgress("构建画面播放器");
       await build(projectConfig(root, id, output));
+      if (
+        process.env.FRAME_WORK_PREVIEW === "1" &&
+        process.env.FRAME_PREVIEW_AUDIO !== "0"
+      )
+        await buildPreviewAudio(output, options);
+      previewProgress("预览准备完成", 1, 1);
       return { status: "passed", output, input: inputManifest(root, id) };
     }
     if (action !== "validate")

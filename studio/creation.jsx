@@ -1,5 +1,7 @@
+import { subscribe } from "./realtime";
 import { useEffect, useRef, useState } from "react";
 import { PREVIEW_VERSION } from "../server/preview-version.mjs";
+import { previewCacheBridge } from "./preview-cache";
 import {
   ArrowUp,
   Square,
@@ -19,6 +21,7 @@ import {
   Mic,
   GitPullRequest,
   Sparkles,
+  ListTodo,
 } from "lucide-react";
 import {
   api,
@@ -54,45 +57,44 @@ function useEvents(tasks, chat) {
     .map((t) => t.id + ":" + t.state)
     .join(",");
   useEffect(() => {
-    let cancelled = false,
-      timer;
-    const load = async () => {
-      try {
-        for (const t of tasks.filter((t) => t.chat === chat)) {
-          const c = (cache.current[t.id] ||= {
-            after: 0,
-            rows: [],
-            done: false,
-          });
-          if (c.done) continue;
-          let page;
-          do {
-            page = await api("task_get", { id: t.id, after: c.after });
-            if (cancelled) return;
-            c.rows.push(...page.events);
+    const stops = tasks
+      .filter((t) => t.chat === chat)
+      .map((task) => {
+        const c = (cache.current[task.id] ||= { after: 0, rows: [] });
+        return subscribe(
+          "task_get",
+          { id: task.id, after: c.after },
+          ({ result, error }) => {
+            if (error) {
+              setError(error);
+              return;
+            }
+            const rows = new Map(c.rows.map((row) => [row.id, row]));
+            for (const row of result.events) rows.set(row.id, row);
+            c.rows = [...rows.values()];
             c.after = Number(c.rows.at(-1)?.id || 0);
-          } while (page.events.length === 100);
-          c.done = !active(page.task);
-        }
-        if (!cancelled) {
-          setEvents(
-            Object.fromEntries(
-              Object.entries(cache.current).map(([id, c]) => [id, [...c.rows]]),
-            ),
-          );
-          setError("");
-        }
-      } catch (e) {
-        if (!cancelled)
-          setError("连接暂时中断，正在重新连接；服务器上的创作会继续。");
-      } finally {
-        if (!cancelled) timer = setTimeout(load, 1500);
-      }
-    };
-    void load();
+            setEvents(
+              Object.fromEntries(
+                Object.entries(cache.current).map(([id, v]) => [
+                  id,
+                  [...v.rows],
+                ]),
+              ),
+            );
+            setError("");
+          },
+        );
+      });
+    const connection = (e) =>
+      setError(
+        e.detail === "connected"
+          ? ""
+          : "连接暂时中断，正在重新连接；服务器上的创作会继续。",
+      );
+    window.addEventListener("frame-connection", connection);
     return () => {
-      cancelled = true;
-      clearTimeout(timer);
+      stops.forEach((stop) => stop());
+      window.removeEventListener("frame-connection", connection);
     };
   }, [chat, signature]);
   return { events, error };
@@ -464,10 +466,12 @@ export function WorkChat({
 export function Creation({ id, notify, onToggleNav }) {
   const query = useQuery("works_open", { id }),
     taskQuery = useQuery("works_tasks", { id }, 2000),
+    syncQuery = useQuery("works_sync_status", { id }, 1),
     tasks = taskQuery.data || [],
     iframe = useRef(null),
     split = useRef(null);
   const [preview, setPreview] = useState(null),
+    [previewStage, setPreviewStage] = useState("正在获取作品…"),
     [panel, setPanel] = useState(""),
     [layout, setLayout] = useState(
       () => localStorage.getItem("frame.layout") || "columns",
@@ -479,6 +483,24 @@ export function Creation({ id, notify, onToggleNav }) {
     [position, setPosition] = useState({ time: 0 }),
     [assets, setAssets] = useState([]),
     [run, busy] = useAction(notify);
+  useEffect(() => {
+    let last = 0,
+      pending = false;
+    const check = () => {
+      if (pending || document.hidden || Date.now() - last < 300000) return;
+      pending = true;
+      last = Date.now();
+      api("works_sync_status", { id, fetch: true })
+        .then(syncQuery.refresh)
+        .catch(() => {})
+        .finally(() => {
+          pending = false;
+        });
+    };
+    check();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, [id]);
   const latest = tasks.find(
       (t) =>
         t.kind === "build" &&
@@ -495,6 +517,7 @@ export function Creation({ id, notify, onToggleNav }) {
       .then((link) => {
         if (!cancelled) {
           setPreview({ ...link, id: latest.id });
+          setPreviewStage("正在下载播放器…");
           lastPreview.current = latest.id;
         }
       })
@@ -519,6 +542,8 @@ export function Creation({ id, notify, onToggleNav }) {
   useEffect(() => {
     const receive = (e) => {
       if (e.source !== iframe.current?.contentWindow) return;
+      if (e.data?.type === "frame-preview-loading")
+        setPreviewStage(e.data.message || "");
       if (
         e.data?.type === "frame-player-state" &&
         typeof e.data.time === "number"
@@ -528,6 +553,10 @@ export function Creation({ id, notify, onToggleNav }) {
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
   }, []);
+  useEffect(
+    () => (preview ? previewCacheBridge(iframe, preview.url) : undefined),
+    [preview?.url],
+  );
   useEffect(() => {
     localStorage.setItem("frame.layout", layout);
     localStorage.setItem("frame.ratio", String(ratio));
@@ -574,6 +603,7 @@ export function Creation({ id, notify, onToggleNav }) {
       exports: "导出",
       details: "作品资料",
       sync: "同步状态",
+      tasks: "后台任务",
     }[panel];
   return (
     <div className="creation">
@@ -592,6 +622,22 @@ export function Creation({ id, notify, onToggleNav }) {
           </div>
         </div>
         <div className="creation-actions">
+          <Button
+            icon={RefreshCw}
+            disabled={busy || running.some((t) => t.kind === "build")}
+            onClick={() =>
+              run(async () => {
+                await api("works_task", { id, kind: "build" });
+                taskQuery.refresh();
+              })
+            }
+          >
+            刷新预览
+          </Button>
+          <Button icon={ListTodo} onClick={() => setPanel("tasks")}>
+            后台任务{running.length ? ` · ${running.length}` : ""}
+          </Button>
+
           {[
             ["sync", GitPullRequest, "同步"],
             ["materials", Image, "素材"],
@@ -603,10 +649,32 @@ export function Creation({ id, notify, onToggleNav }) {
             <Button
               key={key}
               icon={Icon}
-              title={label}
+              title={
+                key === "sync"
+                  ? syncQuery.error || syncQuery.data?.error || label
+                  : label
+              }
+              className={
+                key === "sync" &&
+                (syncQuery.data?.ahead ||
+                  syncQuery.data?.behind ||
+                  syncQuery.data?.dirty)
+                  ? "sync-attention"
+                  : undefined
+              }
               onClick={() => setPanel(key)}
             >
-              <span>{label}</span>
+              <span>
+                {label}
+                {key === "sync" && (
+                  <>
+                    {syncQuery.data?.ahead > 0 && ` ↑${syncQuery.data.ahead}`}
+                    {syncQuery.data?.behind > 0 && ` ↓${syncQuery.data.behind}`}
+                    {syncQuery.data?.dirty > 0 &&
+                      ` 待保存 ${syncQuery.data.dirty}`}
+                  </>
+                )}
+              </span>
             </Button>
           ))}
           <Button
@@ -616,58 +684,34 @@ export function Creation({ id, notify, onToggleNav }) {
           />
         </div>
       </header>
-      {running.length > 0 && (
-        <div className="creation-status" role="status">
-          <span>
-            {running.length} 项后台工作 · {kinds[running[0].kind]} ·{" "}
-            {states[running[0].state]}
-          </span>
-          <Button
-            icon={Square}
-            onClick={() =>
-              run(async () => {
-                await api("works_stop", { id });
-                taskQuery.refresh();
-              })
-            }
-          >
-            停止
-          </Button>
-        </div>
-      )}
       <div
         ref={split}
         className={`creation-split ${layout} ${dragging ? "dragging" : ""}`}
         style={{ "--split": ratio + "%" }}
       >
         <div className="preview-pane">
-          <div className="preview-tools">
-            <span>{preview ? "作品预览" : "准备预览"}</span>
-            <Button
-              icon={RefreshCw}
-              disabled={busy || running.some((t) => t.kind === "build")}
-              onClick={() =>
-                run(async () => {
-                  await api("works_task", { id, kind: "build" });
-                  taskQuery.refresh();
-                })
-              }
-            >
-              刷新预览
-            </Button>
-          </div>
           {preview ? (
-            <iframe
-              ref={iframe}
-              title="作品播放器"
-              src={preview.url}
-              sandbox="allow-scripts allow-downloads"
-              allow="autoplay; fullscreen"
-              allowFullScreen
-            />
+            <>
+              {previewStage && (
+                <div className="preview-loading" role="status">
+                  <span>{previewStage}</span>
+                  <progress aria-label="作品加载进度" />
+                  <small>首次打开需要下载画面资源，请稍候。</small>
+                </div>
+              )}
+              <iframe
+                ref={iframe}
+                title="作品播放器"
+                src={preview.url}
+                sandbox="allow-scripts allow-downloads"
+                allow="autoplay; fullscreen"
+                allowFullScreen
+              />
+            </>
           ) : (
             <div className="preview-placeholder">
               <Play size={44} />
+              {running.length > 0 && <progress aria-label="准备作品预览" />}
               <p>
                 {running.length ? "正在准备作品预览…" : "还没有可播放的预览"}
               </p>
@@ -736,7 +780,64 @@ export function Creation({ id, notify, onToggleNav }) {
           onClose={() => setPanel("")}
           wide={["materials", "exports"].includes(panel)}
         >
-          {panel === "materials" ? (
+          {panel === "tasks" ? (
+            <div className="task-dialog-list">
+              <p>
+                关闭浏览器后任务继续运行。AI
+                创作显示当前阶段；可计量的处理显示实际进度。
+              </p>
+              {!tasks.length && <p>暂无后台任务</p>}
+              {tasks.map((task) => (
+                <div className="task-dialog-row" key={task.id}>
+                  <div className="row">
+                    <strong>{kinds[task.kind] || task.kind}</strong>
+                    <span>{states[task.state]}</span>
+                    <small>{date(task.created)}</small>
+                  </div>
+                  <p>
+                    {task.progress?.stage ||
+                      (task.kind === "agent" && active(task)
+                        ? "AI 正在分析和制作作品"
+                        : states[task.state])}
+                  </p>
+                  {active(task) && (
+                    <progress
+                      aria-label="后台任务进度"
+                      max={task.progress?.total || 1}
+                      value={
+                        task.progress?.total
+                          ? task.progress.completed
+                          : undefined
+                      }
+                    />
+                  )}
+                  {task.progress?.total && (
+                    <small>
+                      {Math.round(
+                        (task.progress.completed / task.progress.total) * 100,
+                      )}
+                      % · {task.progress.completed}/{task.progress.total}
+                    </small>
+                  )}
+                  {task.error && <ErrorNote error={task.error} />}
+                  {active(task) && (
+                    <Button
+                      disabled={busy}
+                      icon={Square}
+                      onClick={() =>
+                        run(async () => {
+                          await api("task_cancel", { id: task.id });
+                          taskQuery.refresh();
+                        })
+                      }
+                    >
+                      停止任务
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          ) : panel === "materials" ? (
             <Materials
               work={work}
               notify={notify}
@@ -757,7 +858,11 @@ export function Creation({ id, notify, onToggleNav }) {
           ) : panel === "details" ? (
             <Details work={work} notify={notify} onSave={query.refresh} />
           ) : panel === "sync" ? (
-            <SyncPanel work={work} notify={notify} />
+            <SyncPanel
+              work={work}
+              notify={notify}
+              onChange={syncQuery.refresh}
+            />
           ) : (
             <Exports
               work={work}

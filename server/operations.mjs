@@ -549,6 +549,19 @@ export function operations({
     },
   );
   add(
+    "engines_delete",
+    "Delete a speech engine configuration without deleting models or generated audio",
+    { id: uuid },
+    async ({ id }) => {
+      const result = await db.pool.query(
+        "DELETE FROM engines WHERE id=$1 RETURNING id",
+        [id],
+      );
+      if (!result.rowCount) throw problem(404, "语音引擎不存在");
+      return { deleted: id };
+    },
+  );
+  add(
     "speech_test",
     "Synthesize speech, register WAV/MP3 and optionally attach to project",
     {

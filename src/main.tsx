@@ -57,3 +57,5 @@ createRoot(document.getElementById("root")!).render(
     )}
   </ErrorBoundary>,
 );
+
+document.getElementById("frame-boot")?.remove();

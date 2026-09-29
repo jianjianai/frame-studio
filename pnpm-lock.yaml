@@ -220,6 +220,9 @@ importers:
       three:
         specifier: 0.186.1
         version: 0.186.1
+      ws:
+        specifier: 8.22.0
+        version: 8.22.0
       zod:
         specifier: 4.6.5
         version: 4.6.5

@@ -1,7 +1,7 @@
 name: frame
 services:
   studio:
-    image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.0.1}
+    image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.1.0}
     restart: unless-stopped
     environment:
       DATABASE_URL: postgres://frame:${POSTGRES_PASSWORD}@postgres:5432/frame
@@ -10,7 +10,7 @@ services:
       FRAME_PUBLIC_URL: https://frame.nerviloom.com
       FRAME_DATA: /data
       FRAME_HOST_DATA: /opt/stacks/frame/data
-      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.0.1}
+      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.1.0}
       FRAME_TASK_TIMEOUT_SECONDS: ${FRAME_TASK_TIMEOUT_SECONDS:-21600}
       FRAME_SPEECH_URL: http://speech:8000
     volumes:
@@ -43,7 +43,7 @@ services:
       POSTGRES_DB: frame
       POSTGRES_USER: frame
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes: [postgres:/var/lib/postgresql]
+    volumes: [./postgres:/var/lib/postgresql]
     networks: [internal]
     healthcheck:
       test: [CMD-SHELL, pg_isready -U frame]
@@ -54,7 +54,7 @@ services:
     image: ghcr.io/jianjianai/frame-speech:${FRAME_SPEECH_VERSION:-3.0.0}
     restart: unless-stopped
     environment: { OMP_NUM_THREADS: "2", MKL_NUM_THREADS: "2" }
-    volumes: [models:/models]
+    volumes: [./models:/models]
     networks: [internal]
     mem_limit: 4g
     cpus: 2
@@ -75,6 +75,3 @@ networks:
   caddy:
     external: true
     name: caddy_caddy
-volumes:
-  postgres:
-  models:

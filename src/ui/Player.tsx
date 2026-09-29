@@ -242,6 +242,12 @@ export function Player({
     sound.setVolume(saved.current.volume);
     sound.setMuted(saved.current.muted);
     setLoading(true);
+    document.getElementById("frame-boot")?.remove();
+    if (embedded && parent !== window)
+      parent.postMessage(
+        { type: "frame-preview-loading", message: "正在准备画面与素材…" },
+        "*",
+      );
     setError("");
     const w = quality === "high" ? 1920 : quality === "draft" ? 640 : 1280;
     const api: StudioApi = {
@@ -350,6 +356,11 @@ export function Player({
         output.render(sound.clock.time(), subtitleRef.current);
         setLoading(false);
         api.ready = true;
+        if (embedded && parent !== window)
+          parent.postMessage(
+            { type: "frame-preview-loading", message: "" },
+            "*",
+          );
         publish();
         sound.preload();
         const tick = (now: number) => {
@@ -401,6 +412,14 @@ export function Player({
         raf = requestAnimationFrame(tick);
       })
       .catch((e) => {
+        if (embedded && parent !== window)
+          parent.postMessage(
+            {
+              type: "frame-preview-loading",
+              message: "加载失败，请点击刷新预览重试",
+            },
+            "*",
+          );
         diagnosticErrors.push(String(e));
         if (!canceled) {
           setError(
@@ -616,6 +635,7 @@ export function Player({
                 <div className="stage-message">
                   <LoaderCircle className="spin" size={28} />
                   <strong>正在准备场景</strong>
+                  <progress aria-label="画面加载进度" />
                   <span>载入本地素材与渲染器</span>
                 </div>
               )}

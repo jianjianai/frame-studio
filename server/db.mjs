@@ -34,6 +34,7 @@ export async function database(url, password) {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS cleaned timestamptz;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS log_cursor text;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_commit text;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress jsonb;
     ALTER TABLE events ADD COLUMN IF NOT EXISTS source_offset bigint;
     CREATE UNIQUE INDEX IF NOT EXISTS events_source ON events(task,source_offset) WHERE source_offset IS NOT NULL;
     CREATE TABLE IF NOT EXISTS asset_repos (asset uuid REFERENCES assets(id) ON DELETE CASCADE, repo uuid REFERENCES repos(id), PRIMARY KEY(asset,repo));
@@ -47,6 +48,24 @@ export async function database(url, password) {
     CREATE INDEX IF NOT EXISTS tasks_expiration ON tasks(expires) WHERE cleaned IS NULL;
     CREATE INDEX IF NOT EXISTS asset_repos_repo ON asset_repos(repo,asset);
     INSERT INTO asset_repos(asset,repo,catalog_id) SELECT DISTINCT asset,repo,asset FROM asset_refs ON CONFLICT DO NOTHING;
+  `);
+  await pool.query(`
+    CREATE OR REPLACE FUNCTION frame_notify_change() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN PERFORM pg_notify('frame_changes', TG_TABLE_NAME); RETURN NULL; END $$;
+    DO $$ DECLARE t text; BEGIN
+      FOREACH t IN ARRAY ARRAY['tasks','events','auth_flows','settings','engines','connections'] LOOP
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='frame_changed_'||t) THEN
+          EXECUTE format('CREATE TRIGGER %I AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH STATEMENT EXECUTE FUNCTION frame_notify_change()', 'frame_changed_'||t, t);
+        END IF;
+      END LOOP;
+    END $$;
+    CREATE OR REPLACE FUNCTION frame_notify_work_sync() RETURNS trigger LANGUAGE plpgsql AS $$
+    BEGIN IF NEW.state IS DISTINCT FROM OLD.state THEN PERFORM pg_notify('frame_changes', 'work_sync'); END IF; RETURN NULL; END $$;
+    DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='frame_work_sync') THEN
+        CREATE TRIGGER frame_work_sync AFTER UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION frame_notify_work_sync();
+      END IF;
+    END $$;
   `);
   const admin = await pool.query(
     "SELECT value FROM settings WHERE key='admin'",
@@ -66,6 +85,8 @@ export async function database(url, password) {
       [{ password: passwordHash(password) }],
     );
     await pool.query("DELETE FROM sessions");
+    if ((await pool.query("SELECT to_regclass('oauth_grants') AS t")).rows[0].t)
+      await pool.query("UPDATE oauth_grants SET revoked=true");
   }
   return {
     pool,

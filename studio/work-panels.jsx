@@ -415,10 +415,17 @@ function MaterialList({
     </>
   );
 }
-export function SyncPanel({ work, notify }) {
-  return <BranchSync work={work} repo={work.repo} notify={notify} />;
+export function SyncPanel({ work, notify, onChange }) {
+  return (
+    <BranchSync
+      work={work}
+      repo={work.repo}
+      notify={notify}
+      onChange={onChange}
+    />
+  );
 }
-export function BranchSync({ work, repo, notify }) {
+export function BranchSync({ work, repo, notify, onChange }) {
   const args = work ? { id: work.id } : { repo },
     operation = work ? "works_sync" : "repositories_sync",
     status = work ? "works_sync_status" : "repositories_check";
@@ -428,6 +435,7 @@ export function BranchSync({ work, repo, notify }) {
   const sync = (action) =>
     run(async () => {
       await api(operation, { ...args, action });
+      onChange?.();
       query.refresh();
       notify(action === "push" ? "分支已推送" : "分支已拉取");
     });
@@ -470,6 +478,7 @@ export function BranchSync({ work, repo, notify }) {
           onClick={() =>
             run(async () => {
               await api(status, { ...args, fetch: true });
+              onChange?.();
               query.refresh();
             })
           }

@@ -5,6 +5,7 @@ import { Player } from "./ui/Player";
 import "./styles.css";
 import "./work-preview.css";
 import { installAiBrowser } from "./engine/ai-browser";
+import { installPreviewPreparation } from "./engine/preview-prepare";
 
 class PreviewBoundary extends Component<
   { children: ReactNode },
@@ -39,35 +40,44 @@ if (parent !== window) {
   });
 }
 const project = projects[0];
-const aiMode = new URLSearchParams(location.search).get("ai") === "1";
-if (project && aiMode) installAiBrowser(project);
-createRoot(document.getElementById("root")!).render(
-  <PreviewBoundary>
-    {project ? (
-      <>
-        {aiMode && (
-          <section className="ai-browser-header">
-            <div>
-              <h1>{project.title} · AI 审片</h1>
-              <p>
-                画面、声音与导出在当前浏览器运行。控制台入口：
-                <code>await FRAME_AI.ready()</code> ·{" "}
-                <code>FRAME_AI.help()</code>
-              </p>
-            </div>
-            <button onClick={() => void window.FRAME_AI?.play()}>
-              启用声音并播放
-            </button>
-            <details>
-              <summary>控制台调用示例</summary>
-              <pre>{JSON.stringify(window.FRAME_AI?.help(), null, 2)}</pre>
-            </details>
-          </section>
-        )}
-        <Player project={project} embedded />
-      </>
-    ) : (
-      <p role="alert">作品预览暂不可用</p>
-    )}
-  </PreviewBoundary>,
-);
+const preparing =
+  new URLSearchParams(location.search).get("prepare-audio") === "1";
+if (preparing && project) {
+  (window as unknown as Record<string, unknown>).__FRAME_PREPARE_AUDIO__ =
+    installPreviewPreparation(project);
+} else {
+  document.documentElement.dataset.previewAudio =
+    import.meta.env.VITE_FRAME_PREVIEW_AUDIO === "0" ? "0" : "1";
+  const aiMode = new URLSearchParams(location.search).get("ai") === "1";
+  if (project && aiMode) installAiBrowser(project);
+  createRoot(document.getElementById("root")!).render(
+    <PreviewBoundary>
+      {project ? (
+        <>
+          {aiMode && (
+            <section className="ai-browser-header">
+              <div>
+                <h1>{project.title} · AI 审片</h1>
+                <p>
+                  画面、声音与导出在当前浏览器运行。控制台入口：
+                  <code>await FRAME_AI.ready()</code> ·{" "}
+                  <code>FRAME_AI.help()</code>
+                </p>
+              </div>
+              <button onClick={() => void window.FRAME_AI?.play()}>
+                启用声音并播放
+              </button>
+              <details>
+                <summary>控制台调用示例</summary>
+                <pre>{JSON.stringify(window.FRAME_AI?.help(), null, 2)}</pre>
+              </details>
+            </section>
+          )}
+          <Player project={project} embedded />
+        </>
+      ) : (
+        <p role="alert">作品预览暂不可用</p>
+      )}
+    </PreviewBoundary>,
+  );
+}

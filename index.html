@@ -1,2 +1,40 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><meta name="theme-color" content="#171b19"/><meta name="description" content="FRAME 动画工坊：可复用的实时动画制作与放映工作台。"/><link rel="icon" href="/favicon.svg"/><title>FRAME · 动画工坊</title></head><body><div id="root"></div><script type="module" src="/src/main.tsx"></script></body></html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1.0" />
+    <meta name="theme-color" content="#171b19" />
+    <meta
+      name="description"
+      content="FRAME 动画工坊：可复用的实时动画制作与放映工作台。"
+    />
+    <link rel="icon" href="/favicon.svg" />
+    <title>FRAME · 动画工坊</title>
+  </head>
+  <body>
+    <div
+      id="frame-boot"
+      role="status"
+      style="
+        position: fixed;
+        inset: 0;
+        background: #171b19;
+        color: #e5e7e3;
+        display: grid;
+        place-content: center;
+        gap: 16px;
+        text-align: center;
+        font: 15px system-ui;
+      "
+    >
+      <span>正在加载作品播放器…</span
+      ><progress
+        aria-label="作品加载进度"
+        style="width: 240px; accent-color: #c9d798"
+      ></progress
+      ><small>首次加载需要下载画面资源</small>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

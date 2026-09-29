@@ -33,11 +33,13 @@ test(
       const audio=createSampledScoreAudio({bank:'films/test-film/bank.sf2',sha256:'${sha}',score:{id:'fixture',duration:2,bpm:120,meter:4,instruments:[{channel:0,program:73,name:'flute',volume:100,pan:64,reverb:0}],controls:[{t:0,data:[192,73]}],notes:[{channel:0,t:0,end:1.8,pitch:72,velocity:90}],cues:[]},foley:()=>[new Float32Array(96000),new Float32Array(96000)],levels:{master:1,music:1}});export const {prepareAudio,prepareSegment,createAudio,disposeAudio}=audio;`,
       );
       process.env.FRAME_WORK_PREVIEW = "1";
+      process.env.FRAME_PREVIEW_AUDIO = "0"; // Exercise the original sampler, not the compressed preview.
       let built;
       try {
         built = await executeProject(f.root, "test-film", "build");
       } finally {
         delete process.env.FRAME_WORK_PREVIEW;
+        delete process.env.FRAME_PREVIEW_AUDIO;
       }
       assert.equal(built.status, "passed", JSON.stringify(built));
       app.get("/*", (req, res) => {

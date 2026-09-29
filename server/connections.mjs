@@ -270,7 +270,6 @@ export class Connections {
               "--git-protocol",
               "https",
               "--web",
-              "--insecure-storage",
             ]
           : kind === "codex"
             ? ["login", "--device-auth"]

@@ -389,6 +389,33 @@ export class Tasks {
       );
       for (const t of running) {
         try {
+          const progressFile = confined(
+            path.join(this.data, "runs", t.id),
+            "progress.json",
+          );
+          if (
+            fs.existsSync(progressFile) &&
+            fs.statSync(progressFile).size < 4096
+          ) {
+            const value = JSON.parse(fs.readFileSync(progressFile, "utf8"));
+            const progress = {
+              stage: String(value.stage || "正在处理").slice(0, 100),
+            };
+            if (
+              Number.isFinite(value.total) &&
+              value.total > 0 &&
+              Number.isFinite(value.completed)
+            )
+              Object.assign(progress, {
+                total: value.total,
+                completed: Math.max(0, Math.min(value.completed, value.total)),
+              });
+            if (JSON.stringify(progress) !== JSON.stringify(t.progress))
+              await this.db.pool.query(
+                "UPDATE tasks SET progress=$2 WHERE id=$1",
+                [t.id, progress],
+              );
+          }
           if (
             t.state === "running" &&
             Date.now() - new Date(t.started).getTime() >

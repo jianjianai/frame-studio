@@ -1,6 +1,6 @@
 {
   "name": "frame-studio",
-  "version": "4.0.1",
+  "version": "4.1.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@12.4.2",
@@ -56,6 +56,7 @@
     "react-dom": "19.3.0",
     "spessasynth_core": "4.3.22",
     "three": "0.186.1",
+    "ws": "8.22.0",
     "zod": "4.6.5"
   },
   "devDependencies": {

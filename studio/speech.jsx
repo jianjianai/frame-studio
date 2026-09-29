@@ -19,6 +19,7 @@ export function SpeechSettings({ notify }) {
     [result, setResult] = useState(null),
     [upload, setUpload] = useState(false),
     [remove, setRemove] = useState(null),
+    [removeEngine, setRemoveEngine] = useState(null),
     [run, busy] = useAction(notify);
   return (
     <>
@@ -42,6 +43,7 @@ export function SpeechSettings({ notify }) {
             </p>
           </div>
           <Button onClick={() => setEdit(e)}>配置</Button>
+          <Button onClick={() => setRemoveEngine(e)}>删除</Button>
         </div>
       ))}
       <div className="panel">
@@ -196,6 +198,28 @@ export function SpeechSettings({ notify }) {
               </select>
             </Field>
           </Form>
+        </Modal>
+      )}
+      {removeEngine && (
+        <Modal title="删除语音引擎" onClose={() => setRemoveEngine(null)}>
+          <p>
+            确认删除“{removeEngine.name}
+            ”的引擎配置？模型文件和已生成的配音会保留。
+          </p>
+          <Button
+            disabled={busy}
+            onClick={() =>
+              run(async () => {
+                await api("engines_delete", { id: removeEngine.id });
+                if (engine === removeEngine.id) setEngine("");
+                setRemoveEngine(null);
+                engines.refresh();
+                notify("语音引擎已删除");
+              })
+            }
+          >
+            确认删除
+          </Button>
         </Modal>
       )}
       {upload && (

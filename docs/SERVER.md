@@ -71,6 +71,22 @@ FRAME_ASSET_LICENSE=原创 pnpm platform upload ./image.png
 
 ## 播放与临时文件
 
-文件音轨按需加载，服务端支持 Range、条件缓存和文本压缩。大 SF2 音色库在构建时生成无损乐器包，支持的乐谱仅下载所需乐器；特殊 Bank/SysEx 配置回退原始库。首次冷跳转的合成仍受乐谱复杂度影响，不能承诺零等待。
+作品预览在构建时生成压缩分段音频，首播与冷跳转按需加载当前位置；原始文件、SF2 音色与生成器仅用于正式导出和原始模式。服务端继续支持 Range、条件缓存和文本压缩。
 
 成功导出保留 7 天，失败任务产物保留 14 天，可手动删除；最新有效预览、有效审片链接、下载和 Releases 上传期间的文件受保护。清理每分钟执行有界批次，导出不会自动进入素材库。Releases 标签绑定导出所用的源提交，需先把该提交推送到作品分支。浏览器本地 WebM 导出需保持标签页打开，服务器 MP4 导出可后台继续。
+
+## ChatGPT 的 MCP OAuth
+
+ChatGPT 添加远程 MCP `https://frame.nerviloom.com/mcp`，认证选择 OAuth，客户端 ID/密钥留空。通过动态客户端注册（DCR）和授权码 + S256 PKCE，跳转 FRAME 输入管理员密码并明确授权。访问令牌仅用于 MCP，一小时过期；刷新令牌旋转，授权最长 30 天。可以在「设置 → 访问设置 → OAuth 连接」撤销。
+
+元数据：`/.well-known/oauth-protected-resource/mcp` 与 `/.well-known/oauth-authorization-server`。`resource` 必须精确为本站 `/mcp` URL。DCR 仅接受 ChatGPT 的 HTTPS 回调（稳定回调与 connector/oauth 的专属回调），不允许任意重定向。服务器保存令牌散列，拒绝代码重放、错误 PKCE、错误 audience、过期或撤销令牌；刷新令牌重复使用会撤销同一授权。修改环境变量中的管理员密码会撤销现有 OAuth 授权。原有 Bearer API Token 接入继续可用。
+
+接口实现按 [OpenAI 官方认证文档](https://developers.openai.com/plugins/build/auth)；ChatGPT 账号侧最终添加连接需要用户在自己的 ChatGPT 界面完成。
+
+## 4.1 预览与工作台状态
+
+新预览使用构建期生成的压缩音频片段，构建可能比以前耗时，但只在修改后准备一次。生成进度由执行器写入独占工作目录，再持久化为任务状态并经 WebSocket 推送。已有作品升级后需要重新构建预览（运行时版本 6），源码及原始音频不变。开发时可设 `FRAME_PREVIEW_AUDIO=0` 验证原始生成器；线上默认开启。
+
+语音引擎可单独删除配置；模型文件、已生成配音不随之删除。内置配置仅首次初始化，删除后重启不会重新创建，可在模型列表再次「添加为引擎」。GitHub 设备登录兼容镜像自带的 gh，待授权进程保持运行至完成或 15 分钟超时。
+
+Dockge 的持久目录均在项目内：`./data` 为作品与运行目录，`./postgres` 为 PostgreSQL 18 数据，`./models` 为语音模型。升级旧部署需停止写入后完整复制原 named volume，保留所有权与权限，校验复制内容再切换挂载；不要用空目录直接替换现有数据库。

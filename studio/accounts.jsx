@@ -1,3 +1,4 @@
+import { subscribe } from "./realtime";
 import { useEffect, useState } from "react";
 import {
   Plus,
@@ -29,28 +30,29 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
   useEffect(() => {
     let done = false,
       timer;
-    const poll = async (id) => {
-      try {
-        const row = await api("auth_state", { id });
+    let stop;
+    const watch = (id) => {
+      stop = subscribe("auth_state", { id }, ({ result: row, error }) => {
         if (done) return;
+        if (error) {
+          setError(error);
+          return;
+        }
         setFlow(row);
-        if (row.state === "pending") timer = setTimeout(() => poll(id), 1500);
-        else if (row.state === "succeeded") onSuccess?.();
-      } catch (e) {
-        if (!done) setError(e.message);
-      }
+        if (row.state === "succeeded") onSuccess?.();
+      });
     };
     api("auth_begin", { kind, ...(target ? { target } : {}) })
       .then((row) => {
         if (!done) {
           setFlow(row);
-          void poll(row.id);
+          watch(row.id);
         }
       })
       .catch((e) => setError(e.message));
     return () => {
       done = true;
-      clearTimeout(timer);
+      stop?.();
     };
   }, [kind, target]);
   return (
@@ -423,15 +425,43 @@ function ConnectionForm({ initial, onClose, onSave, notify }) {
 
 function AccessTokens({ notify }) {
   const tokens = useQuery("tokens_list"),
+    grants = useQuery("oauth_grants"),
     [newToken, setNewToken] = useState(""),
     [run, busy] = useAction(notify);
   return (
     <>
       <h2>MCP 与 CLI</h2>
       <p>
-        远程 MCP 地址：<code>{location.origin}/mcp</code>。创建令牌后填入 AI
-        客户端的 Bearer 认证。
+        远程 MCP 地址：<code>{location.origin}/mcp</code>。ChatGPT
+        添加此地址并选择 OAuth， 在 FRAME 登录后授权即可，客户端 ID
+        与密钥留空。其他 CLI 客户端也可以使用下方的 Bearer 令牌。
       </p>
+      <h3>OAuth 连接</h3>
+      <ErrorNote error={grants.error} />
+      {grants.data?.map((g) => (
+        <div className="settings-row" key={g.id}>
+          <span>
+            {g.name} ·{" "}
+            {g.revoked
+              ? "已撤销"
+              : new Date(g.refresh_expires) < new Date()
+                ? "已过期"
+                : "已授权"}
+          </span>
+          <Button
+            disabled={busy || g.revoked}
+            onClick={() =>
+              run(async () => {
+                await api("oauth_revoke", { id: g.id });
+                grants.refresh();
+                notify("OAuth 连接已撤销");
+              })
+            }
+          >
+            撤销授权
+          </Button>
+        </div>
+      ))}
       <Form
         busy={busy}
         submit="创建令牌"

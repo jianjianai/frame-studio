@@ -25,6 +25,7 @@ const run = (bin, args, options = {}) =>
       env: {
         ...process.env,
         FRAME_PROJECT: task.project,
+        FRAME_TASK_PROGRESS_FILE: work + "/progress.json",
         ...(task.kind === "build" ? { FRAME_WORK_PREVIEW: "1" } : {}),
       },
       stdio: ["pipe", "pipe", "pipe"],

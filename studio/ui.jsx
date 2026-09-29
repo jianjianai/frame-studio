@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { X, LoaderCircle, ChevronLeft, ChevronRight } from "lucide-react";
+import { socketCall, subscribe } from "./realtime";
 export async function request(url, options = {}) {
   const response = await fetch(url, {
     ...options,
@@ -22,11 +23,7 @@ export async function request(url, options = {}) {
   }
   return result;
 }
-export const api = (name, args = {}) =>
-  request("/api/action", {
-    method: "POST",
-    body: JSON.stringify({ name, args }),
-  });
+export const api = socketCall;
 export const date = (value) =>
   value
     ? new Date(value).toLocaleString("zh-CN", {
@@ -76,6 +73,17 @@ export function useQuery(name, args = {}, interval = 0) {
       setError("");
       return;
     }
+    if (interval) {
+      setLoading(true);
+      return subscribe(name, JSON.parse(key), ({ result, error }) => {
+        if (error) setError(error);
+        else {
+          setData(result);
+          setError("");
+        }
+        setLoading(false);
+      });
+    }
     const load = async () => {
       try {
         const value = await api(name, JSON.parse(key));
@@ -88,7 +96,6 @@ export function useQuery(name, args = {}, interval = 0) {
       } finally {
         if (!cancelled) {
           setLoading(false);
-          if (interval) timer = setTimeout(load, interval);
         }
       }
     };

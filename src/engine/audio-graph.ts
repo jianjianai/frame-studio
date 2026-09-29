@@ -5,7 +5,9 @@ import {
   type AudioTrack,
   type GeneratedAudioModule,
 } from "./types";
+import { preparePreviewAudio } from "./preview-audio";
 export interface PreparedAudio {
+  preview?: boolean;
   tracks: AudioTrack[];
   buffers: Map<string, AudioBuffer>;
   generated?: GeneratedAudioModule;
@@ -17,6 +19,10 @@ export async function prepareAudio(
   signal?: AbortSignal,
   progressive = false,
 ): Promise<PreparedAudio> {
+  if (progressive) {
+    const preview = await preparePreviewAudio(project, context, signal);
+    if (preview) return preview;
+  }
   const tracks = projectAudioTracks(project),
     buffers = new Map<string, AudioBuffer>();
   await Promise.all(

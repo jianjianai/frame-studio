@@ -1,5 +1,6 @@
 import { Clock } from "./clock";
 import { MediaTracks } from "./media-tracks";
+import { PreviewBuffering } from "./preview-audio";
 import {
   prepareAudio,
   prepareAudioSegment,
@@ -96,7 +97,13 @@ export class AudioTransport {
       true,
     )
       .then((prepared) => {
-        if (!this.closed) this.prepared = prepared;
+        if (!this.closed) {
+          this.prepared = prepared;
+          if (prepared.preview) {
+            this.media?.dispose();
+            this.media = undefined;
+          }
+        }
       })
       .catch((error) => {
         this.loadPromise = undefined;
@@ -235,6 +242,13 @@ export class AudioTransport {
   }
   private report(error: unknown, generation: number): void {
     if (this.closed || generation !== this.generation) return;
+    if (error instanceof PreviewBuffering && this.requestedPlay) {
+      // Defer until scheduleAudio has assigned the graph so restart can dispose it.
+      queueMicrotask(() => {
+        if (generation === this.generation) this.restart();
+      });
+      return;
+    }
     this.pause();
     this.onError?.(error instanceof Error ? error : new Error(String(error)));
   }

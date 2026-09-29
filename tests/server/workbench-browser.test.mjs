@@ -71,12 +71,27 @@ test(
       );
       await app.listen({ host: "127.0.0.1", port });
       browser = await launchBrowser();
+      // The test may disconnect the actual socket to exercise client resubscription.
       const context = await browser.newContext({
           viewport: { width: 1500, height: 1000 },
         }),
         page = await context.newPage(),
-        errors = [];
+        errors = [],
+        actionRequests = [];
+      page.on("request", (req) => {
+        if (req.url().endsWith("/api/action")) actionRequests.push(req.url());
+      });
       page.on("pageerror", (e) => errors.push(e.message));
+      await page.addInitScript(() => {
+        const Native = WebSocket;
+        window.fixtureSockets = [];
+        window.WebSocket = class extends Native {
+          constructor(...args) {
+            super(...args);
+            window.fixtureSockets.push(this);
+          }
+        };
+      });
       await page.goto(origin);
       await page
         .getByLabel("登录密码", { exact: true })
@@ -89,6 +104,13 @@ test(
         .first()
         .click();
       const player = page.frameLocator('iframe[title="作品播放器"]');
+      await page
+        .getByRole("button", { name: "刷新预览", exact: true })
+        .waitFor();
+      await page.getByRole("button", { name: "后台任务", exact: true }).click();
+      await page.getByRole("dialog", { name: "后台任务" }).waitFor();
+      assert.equal(await page.locator(".creation-status").count(), 0);
+      await page.getByRole("button", { name: "关闭弹窗" }).click();
       await player.getByTestId("play-toggle").waitFor({ timeout: 30000 });
       await player.getByTestId("play-toggle").click();
       await page.waitForTimeout(350);
@@ -157,10 +179,17 @@ test(
         ),
       });
       await page.setViewportSize({ width: 390, height: 844 });
-      const mobileStage = await player.getByTestId("stage-canvas").boundingBox();
+      const mobileStage = await player
+        .getByTestId("stage-canvas")
+        .boundingBox();
       const mobileTransport = await player.locator(".transport").boundingBox();
-      const mobileTimeline = await player.locator(".timeline-panel").boundingBox();
-      assert(mobileStage.height >= 140, "Mobile video must retain useful height");
+      const mobileTimeline = await player
+        .locator(".timeline-panel")
+        .boundingBox();
+      assert(
+        mobileStage.height >= 140,
+        "Mobile video must retain useful height",
+      );
       assert(
         mobileTransport.y + mobileTransport.height <= mobileTimeline.y + 1,
         "Timeline must not overlap playback controls",
@@ -192,6 +221,26 @@ test(
         prompt: "继续制作",
         requestKey: randomUUID(),
       });
+      await page
+        .getByRole("button", { name: "后台任务 · 1", exact: true })
+        .click();
+      await page.getByRole("progressbar", { name: "后台任务进度" }).waitFor();
+      await db.pool.query("UPDATE tasks SET progress=$2 WHERE id=$1", [
+        queued.id,
+        { stage: "准备轻量预览音频", completed: 3, total: 8 },
+      ]);
+      await page.getByText("38% · 3/8", { exact: true }).waitFor();
+      await page.evaluate(() => window.fixtureSockets.at(-1).close());
+      await db.pool.query("UPDATE tasks SET progress=$2 WHERE id=$1", [
+        queued.id,
+        { stage: "准备轻量预览音频", completed: 5, total: 8 },
+      ]);
+      await page.getByText("63% · 5/8", { exact: true }).waitFor();
+      assert.equal(
+        actionRequests.length,
+        0,
+        "Browser actions and live updates must use WebSocket",
+      );
       await page.close();
       const reopened = await context.newPage();
       await reopened.goto(origin + "/#/background");

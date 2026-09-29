@@ -29,6 +29,8 @@ import { Connections } from "./connections.mjs";
 import { GitHub } from "./github.mjs";
 import { Retention } from "./retention.mjs";
 import { sendMedia } from "./media.mjs";
+import { installRealtime } from "./realtime.mjs";
+import { installOAuth } from "./oauth.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
@@ -77,20 +79,23 @@ export async function createApp({
   await db.pool.query(
     "UPDATE tasks SET expires=finished+interval '7 days' WHERE finished IS NOT NULL AND expires IS NULL",
   );
-  if (!(await db.one("SELECT id FROM engines LIMIT 1")))
-    await db.pool.query(
-      "INSERT INTO engines(id,name,config) VALUES($1,$2,$3)",
-      [
-        randomUUID(),
-        "Kokoro 中文 · 本地 CPU",
-        secrets.encrypt({
-          url: (process.env.FRAME_SPEECH_URL || "http://speech:8000") + "/v1",
-          model: "builtin",
-          voice: "zf_xiaobei",
-          apiKey: "",
-        }),
-      ],
-    );
+  if (!(await db.setting("speech-seeded"))) {
+    if (!(await db.one("SELECT id FROM engines LIMIT 1")))
+      await db.pool.query(
+        "INSERT INTO engines(id,name,config) VALUES($1,$2,$3)",
+        [
+          randomUUID(),
+          "Kokoro 中文 · 本地 CPU",
+          secrets.encrypt({
+            url: (process.env.FRAME_SPEECH_URL || "http://speech:8000") + "/v1",
+            model: "builtin",
+            voice: "zf_xiaobei",
+            apiKey: "",
+          }),
+        ],
+      );
+    await db.setting("speech-seeded", true);
+  }
   const app = Fastify({
     logger: {
       level: "info",
@@ -109,6 +114,8 @@ export async function createApp({
     limits: { fileSize: 1024 * 1024 * 1024, files: 1, fields: 8 },
   });
   await app.register(rateLimit, { global: false });
+  await installRealtime(app, db, actions, origin);
+  const oauth = await installOAuth(app, db, actions, origin);
   app.setErrorHandler((err, req, res) => {
     const status = err.name === "ZodError" ? 400 : err.statusCode || 500;
     res.code(status).send({
@@ -157,7 +164,13 @@ export async function createApp({
         "SELECT hash FROM sessions WHERE hash=$1 AND expires>now()",
         [hash(req.cookies.frame_session)],
       ));
-    if (!authenticated) throw problem(401, "Please sign in");
+    if (!authenticated && bearer && req.url.split("?")[0] === "/mcp")
+      authenticated = await oauth.verify(bearer);
+    if (!authenticated) {
+      if (req.url.startsWith("/mcp"))
+        res.header("WWW-Authenticate", oauth.challenge);
+      throw problem(401, "Please sign in");
+    }
     if (
       !bearer &&
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
@@ -169,7 +182,7 @@ export async function createApp({
     await db.one("SELECT 1");
     return {
       status: "ok",
-      version: "4.0.1",
+      version: "4.1.0",
       revision: process.env.FRAME_REVISION || "development",
     };
   });
@@ -365,7 +378,7 @@ export async function createApp({
   });
   const mcp = createMcpHandler(
     () => {
-      const server = new McpServer({ name: "frame-studio", version: "4.0.1" });
+      const server = new McpServer({ name: "frame-studio", version: "4.1.0" });
       for (const [name, op] of Object.entries(actions.registry)) {
         if (
           !/^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|cancel)$|artifact_read$|engines_list$)/.test(
@@ -375,7 +388,15 @@ export async function createApp({
           continue;
         server.registerTool(
           "frame_" + name,
-          { description: op.description, inputSchema: op.schema },
+          {
+            description: op.description,
+            inputSchema: op.schema,
+            _meta: {
+              securitySchemes: [
+                { type: "oauth2", scopes: ["frame:workbench"] },
+              ],
+            },
+          },
           async (args) => {
             try {
               const value = await op.fn(args);
