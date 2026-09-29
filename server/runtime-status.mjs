@@ -1,0 +1,80 @@
+import fs from "node:fs/promises";
+import path from "node:path";
+import { command } from "./process.mjs";
+
+export function runtimeLimits(env = process.env) {
+  const concurrency = Number(env.FRAME_TASK_CONCURRENCY ?? 2);
+  const minFreeBytes = Number(env.FRAME_MIN_FREE_BYTES ?? 1073741824);
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > 8)
+    throw Error("FRAME_TASK_CONCURRENCY must be an integer from 1 to 8");
+  if (!Number.isSafeInteger(minFreeBytes) || minFreeBytes < 0)
+    throw Error("FRAME_MIN_FREE_BYTES must be a nonnegative safe integer");
+  return { concurrency, minFreeBytes };
+}
+
+export async function diskCapacity(root) {
+  const stat = await fs.statfs(root);
+  return { totalBytes: stat.blocks * stat.bsize, freeBytes: stat.bavail * stat.bsize };
+}
+
+async function usage(root, deadline) {
+  let bytes = 0, entries = 0, partial = false;
+  const pending = [root];
+  while (pending.length) {
+    if (Date.now() >= deadline || entries >= 10000) { partial = true; break; }
+    const dir = pending.pop();
+    try {
+      for await (const entry of await fs.opendir(dir)) {
+        if (++entries > 10000 || Date.now() >= deadline) { partial = true; break; }
+        if (entry.isSymbolicLink()) continue;
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) pending.push(file);
+        else if (entry.isFile()) {
+          try { bytes += (await fs.lstat(file)).size; } catch { partial = true; }
+        }
+      }
+    } catch (error) { if (error.code !== "ENOENT") partial = true; }
+    if (partial) break;
+  }
+  return { bytes, entries, partial };
+}
+
+export class RuntimeStatus {
+  constructor({ db, data, tasks, speechUrl }) {
+    Object.assign(this, { db, data, tasks, speechUrl });
+    this.cached = null;
+    this.pending = null;
+  }
+  async read() {
+    if (this.cached && Date.now() - this.cached.checked < 30000) return this.cached;
+    if (this.pending) return this.pending;
+    this.pending = this.collect().then((value) => (this.cached = value)).finally(() => { this.pending = null; });
+    return this.pending;
+  }
+  async collect() {
+    const probe = async (fn) => {
+      try { return { ok: true, ...(await fn()) }; }
+      catch { return { ok: false }; }
+    };
+    const [docker, speech, disk, queue] = await Promise.all([
+      probe(async () => ({ version: (await command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 3000, max: 65536 })).trim() })),
+      probe(async () => {
+        const response = await fetch(this.speechUrl + "/healthz", { signal: AbortSignal.timeout(3000) });
+        if (!response.ok) throw Error("Speech unavailable");
+        return {};
+      }),
+      probe(() => diskCapacity(this.data)),
+      this.db.one("SELECT count(*) FILTER (WHERE state='queued')::int AS queued,count(*) FILTER (WHERE state IN ('running','cancelling'))::int AS running,count(*) FILTER (WHERE state='publishing')::int AS publishing,count(*) FILTER (WHERE state='publish_failed')::int AS needs_recovery,COALESCE(EXTRACT(epoch FROM now()-(min(created) FILTER (WHERE state='queued'))),0)::float8 AS oldest_wait_seconds FROM tasks"),
+    ]);
+    const sizes = {}, deadline = Date.now() + 2000;
+    for (const name of ["works", "repos", "libraries", "blobs", "runs", "sessions", "tools"])
+      sizes[name] = await usage(path.join(this.data, name), deadline);
+    const schema = await this.db.all("SELECT id,checksum,applied FROM frame_schema_migrations ORDER BY id");
+    const limits = this.tasks.limits;
+    return {
+      checked: Date.now(), docker, speech, disk, queue, schema, sizes, limits,
+      queueBlocked: this.tasks.queueBlocked || null,
+      ready: docker.ok && speech.ok && disk.ok && disk.freeBytes >= limits.minFreeBytes,
+    };
+  }
+}

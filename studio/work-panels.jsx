@@ -20,6 +20,7 @@ import {
   Empty,
   bytes,
   date,
+  states,
 } from "./ui";
 import { RepoPicker } from "./library";
 import { SpeechControls } from "./speech";
@@ -736,7 +737,7 @@ export function Exports({ work, notify, onBrowserExport }) {
                   ? "导出完成"
                   : t.state === "failed"
                     ? "导出失败"
-                    : "正在导出"}
+                    : states[t.state] || "状态待确认"}
             </span>
           </div>
           {t.error && <p className="error">{t.error}</p>}

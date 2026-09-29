@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { problem } from "./security.mjs";
 import { toolBinary } from "./connections.mjs";
 import { command } from "./process.mjs";
+import { RuntimeStatus } from "./runtime-status.mjs";
 
 export function workbenchOperations({
   add,
@@ -16,6 +17,8 @@ export function workbenchOperations({
   retention,
   data,
 }) {
+  const runtime = new RuntimeStatus({ db, data, tasks, speechUrl: process.env.FRAME_SPEECH_URL || "http://speech:8000" });
+  add("system_status", "Read execution readiness, task backlog, disk capacity and migration versions", {}, () => runtime.read());
   const uuid = z.string().uuid(),
     limit = z.number().int().min(1).max(100).default(30),
     offset = z.number().int().min(0).default(0),

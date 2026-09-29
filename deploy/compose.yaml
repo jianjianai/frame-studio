@@ -7,9 +7,11 @@ services:
       DATABASE_URL: postgres://frame:${POSTGRES_PASSWORD}@postgres:5432/frame
       FRAME_MASTER_KEY: ${FRAME_MASTER_KEY}
       FRAME_ADMIN_PASSWORD: ${FRAME_ADMIN_PASSWORD}
-      FRAME_PUBLIC_URL: https://frame.nerviloom.com
+      FRAME_PUBLIC_URL: ${FRAME_PUBLIC_URL:-https://frame.nerviloom.com}
       FRAME_DATA: /data
-      FRAME_HOST_DATA: /opt/stacks/frame/data
+      FRAME_HOST_DATA: ${FRAME_HOST_DATA:-/opt/stacks/frame/data}
+      FRAME_TASK_CONCURRENCY: ${FRAME_TASK_CONCURRENCY:-2}
+      FRAME_MIN_FREE_BYTES: ${FRAME_MIN_FREE_BYTES:-1073741824}
       FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.2.0}
       FRAME_TASK_TIMEOUT_SECONDS: ${FRAME_TASK_TIMEOUT_SECONDS:-21600}
       FRAME_SPEECH_URL: http://speech:8000
@@ -18,7 +20,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks: [internal, caddy]
     labels:
-      caddy: frame.nerviloom.com
+      caddy: ${FRAME_DOMAIN:-frame.nerviloom.com}
       caddy.reverse_proxy: "{{upstreams 3000}}"
       caddy.encode: zstd gzip
     depends_on:
@@ -74,4 +76,4 @@ networks:
   internal:
   caddy:
     external: true
-    name: caddy_caddy
+    name: ${FRAME_PROXY_NETWORK:-caddy_caddy}

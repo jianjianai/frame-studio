@@ -172,6 +172,10 @@ export async function createApp({
       revision: process.env.FRAME_REVISION || "development",
     };
   });
+  app.get("/readyz", async (_req, res) => {
+    const state = await actions.call("system_status", {});
+    return res.code(state.ready ? 200 : 503).send({ status: state.ready ? "ready" : "degraded" });
+  });
   agentTools({ app, db, data, assets, actions });
   app.post(
     "/api/login",

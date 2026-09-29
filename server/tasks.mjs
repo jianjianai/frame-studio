@@ -13,9 +13,12 @@ import {
 } from "./security.mjs";
 import { applyProject } from "./apply-project.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
+import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets, { runCommand = command } = {}) {
     this.command = runCommand;
+    this.limits = runtimeLimits();
+    this.queueBlocked = null;
     this.db = db;
     this.data = data;
     this.repos = repos;
@@ -540,7 +543,14 @@ export class Tasks {
         catch (e) { await this.monitorWarning(t, "controller", e); }
       }
       const count = await this.db.one("SELECT count(*)::int AS n FROM tasks WHERE state IN ('running','cancelling')");
-      if (count.n < 2) {
+      if (count.n < this.limits.concurrency) {
+        try {
+          const disk = await diskCapacity(this.data);
+          this.queueBlocked = disk.freeBytes < this.limits.minFreeBytes ? "可用空间低于安全阈值，新任务保留排队；正在执行的任务不会因此被终止。" : null;
+        } catch {
+          this.queueBlocked = "暂时无法读取磁盘容量，新任务保留排队。";
+        }
+        if (this.queueBlocked) return;
         const t = await this.db.one(
           `SELECT t.* FROM tasks t WHERE t.state='queued' AND NOT EXISTS(SELECT 1 FROM tasks r WHERE (r.repo=t.repo AND r.project=t.project AND r.state IN ('running','cancelling','publishing','publish_failed')) OR (r.state IN ('running','cancelling') AND t.input->>'connection' IS NOT NULL AND r.input->>'connection'=t.input->>'connection'))
           ORDER BY t.created LIMIT 1`,

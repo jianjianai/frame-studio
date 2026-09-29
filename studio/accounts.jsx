@@ -21,6 +21,7 @@ import {
   Empty,
 } from "./ui";
 import { SpeechSettings } from "./speech";
+import { SystemStatus } from "./system-status";
 
 export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
   const [flow, setFlow] = useState(null),
@@ -529,6 +530,7 @@ export function Settings({ notify }) {
           ["github", "GitHub"],
           ["speech", "语音引擎"],
           ["access", "访问设置"],
+          ["system", "运行状态"],
         ].map(([id, label]) => (
           <Button
             key={id}
@@ -546,6 +548,8 @@ export function Settings({ notify }) {
           <GitHubAccounts notify={notify} />
         ) : tab === "speech" ? (
           <SpeechSettings notify={notify} />
+        ) : tab === "system" ? (
+          <SystemStatus />
         ) : (
           <AccessTokens notify={notify} />
         )}
