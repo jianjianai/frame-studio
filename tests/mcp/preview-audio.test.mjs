@@ -51,16 +51,38 @@ test(
         `import type {GeneratedAudioOptions} from '../../src/engine/types'; export function createAudio({context,destination,when,duration,rate}:GeneratedAudioOptions) { const o=context.createOscillator(),g=context.createGain();o.frequency.value=440;g.gain.value=.25;o.connect(g);g.connect(destination);o.start(when);o.stop(when+duration/rate);return{dispose(){o.stop();o.disconnect();g.disconnect()}} }`,
       );
       const old = process.env.FRAME_WORK_PREVIEW;
+      const oldProgress = process.env.FRAME_TASK_PROGRESS_FILE;
+      const progressFile = path.join(f.root, ".cache", "audio-progress.json"),
+        progressValues = [];
+      fs.mkdirSync(path.dirname(progressFile), { recursive: true });
+      const progressWatcher = fs.watch(path.dirname(progressFile), () => {
+        try {
+          progressValues.push(
+            JSON.parse(fs.readFileSync(progressFile, "utf8")),
+          );
+        } catch {}
+      });
+      process.env.FRAME_TASK_PROGRESS_FILE = progressFile;
       process.env.FRAME_WORK_PREVIEW = "1";
       let built;
       try {
         built = await executeProject(f.root, "test-film", "build");
       } finally {
+        progressWatcher.close();
+        if (oldProgress === undefined)
+          delete process.env.FRAME_TASK_PROGRESS_FILE;
+        else process.env.FRAME_TASK_PROGRESS_FILE = oldProgress;
         old === undefined
           ? delete process.env.FRAME_WORK_PREVIEW
           : (process.env.FRAME_WORK_PREVIEW = old);
       }
       assert.equal(built.status, "passed", JSON.stringify(built));
+      assert(
+        progressValues.some(
+          (p) => p.total > 1 && p.completed > 0 && p.completed < p.total,
+        ),
+        "headless execution must report intermediate progress without a log callback",
+      );
       const manifest = JSON.parse(
         fs.readFileSync(path.join(built.output, "preview-audio.json")),
       );

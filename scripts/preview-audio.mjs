@@ -146,7 +146,8 @@ export async function buildPreviewAudio(output, { signal, onLog } = {}) {
             sha256,
             bytes: bytes.length,
           });
-          onLog?.(`Preview audio ${++complete}/${total}\n`);
+          complete++;
+          onLog?.(`Preview audio ${complete}/${total}\n`);
           previewProgress("准备轻量预览音频", complete, total);
         }
         manifest.tracks.push(track);
