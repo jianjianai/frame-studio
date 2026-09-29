@@ -9,7 +9,9 @@ import { confined, problem } from "./security.mjs";
 export async function versionTree(repos, work, version, { detached = false } = {}) {
   if (!/^[a-f0-9]{40}$/.test(version))
     throw problem(400, "只能预览当前作品的 Git 历史版本");
-  const { repo } = await repos.project(work.repo, work.project);
+  const { repo } = await repos.project(work.repo, work.project, {
+    exists: false,
+  });
   const ancestor = await repos
     .git(repo.root, ["merge-base", "--is-ancestor", version, "HEAD"])
     .then(

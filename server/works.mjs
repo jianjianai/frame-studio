@@ -1,3 +1,5 @@
+import { versionTree } from "./version-review.mjs";
+import { assertSourceRevision } from "./source-control.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -168,7 +170,14 @@ export class Works {
             renderer,
             "--duration",
             String(duration),
-            ...(composition ? ["--width", String(composition.width), "--height", String(composition.height)] : []),
+            ...(composition
+              ? [
+                  "--width",
+                  String(composition.width),
+                  "--height",
+                  String(composition.height),
+                ]
+              : []),
           ],
           { cwd: r.root },
         );
@@ -391,7 +400,7 @@ export class Works {
   }
   async history(id, limit = 50, offset = 0) {
     const w = await this.get(id),
-      { repo } = await this.repos.project(w.repo, w.project);
+      { repo } = await this.repos.project(w.repo, w.project, { exists: false });
     const log = await this.repos.git(repo.root, [
       "log",
       `--max-count=${limit}`,
@@ -418,9 +427,10 @@ export class Works {
       );
     return rows;
   }
-  async restore(id, version) {
+  async restore(id, version, expectedRevision) {
     const w = await this.get(id, { active: true });
-    if (/^[a-f0-9]{40}$/.test(version)) return this.restoreCommit(w, version);
+    if (/^[a-f0-9]{40}$/.test(version))
+      return this.restoreCommit(w, version, expectedRevision);
     if (
       !(await this.db.one(
         "SELECT id FROM work_versions WHERE id=$1 AND work=$2",
@@ -430,7 +440,27 @@ export class Works {
       throw problem(404, "Version not found");
     return this.db.lock(`${w.repo}:${w.project}`, async () => {
       await this.repos.writable(w.repo, w.project);
-      const { dir } = await this.repos.project(w.repo, w.project),
+      if (expectedRevision) {
+        const source = await assertSourceRevision(
+          this.repos,
+          w,
+          expectedRevision,
+        );
+        if (
+          source.outside ||
+          source.branch !== w.branch ||
+          source.merging ||
+          source.files.some((file) => !file.untracked && file.index !== ".") ||
+          source.files.some((file) => file.unsafe || file.conflict)
+        )
+          throw problem(
+            409,
+            "存在已暂存更改、作品范围外文件、冲突或不安全文件，请先处理后再恢复",
+          );
+      }
+      const { dir } = await this.repos.project(w.repo, w.project, {
+          exists: false,
+        }),
         backup = randomUUID();
       await copyTree(dir, path.join(this.data, "versions", backup));
       await this.db.pool.query(
@@ -456,10 +486,30 @@ export class Works {
       return this.get(id);
     });
   }
-  async restoreCommit(w, version) {
+  async restoreCommit(w, version, expectedRevision) {
     await this.db.lock(`${w.repo}:${w.project}`, async () => {
       await this.repos.writable(w.repo, w.project);
-      const { repo } = await this.repos.project(w.repo, w.project);
+      if (expectedRevision) {
+        const source = await assertSourceRevision(
+          this.repos,
+          w,
+          expectedRevision,
+        );
+        if (
+          source.outside ||
+          source.branch !== w.branch ||
+          source.merging ||
+          source.files.some((file) => !file.untracked && file.index !== ".") ||
+          source.files.some((file) => file.unsafe || file.conflict)
+        )
+          throw problem(
+            409,
+            "存在已暂存更改、作品范围外文件、冲突或不安全文件，请先处理后再恢复",
+          );
+      }
+      const { repo } = await this.repos.project(w.repo, w.project, {
+        exists: false,
+      });
       const valid = await this.repos
         .git(repo.root, ["merge-base", "--is-ancestor", version, "HEAD"])
         .then(
@@ -472,6 +522,7 @@ export class Works {
         "-e",
         `${version}:projects/${w.project}/project.ts`,
       ]);
+      await versionTree(this.repos, w, version);
       const backup = await this.repos.checkpoint(
         w.repo,
         w.project,

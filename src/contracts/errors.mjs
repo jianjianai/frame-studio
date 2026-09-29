@@ -21,7 +21,8 @@ export function operationError(error, requestId) {
     typeof rawStatus === "number" && rawStatus >= 400 && rawStatus <= 599
       ? rawStatus
       : 500;
-  const safe = status < 500;
+  // Only explicitly sanitized, locally authored failures may expose a 5xx message.
+  const safe = status < 500 || value.expose === true;
   const defaults =
     status === 401
       ? ["AUTH_REQUIRED", "sign-in"]

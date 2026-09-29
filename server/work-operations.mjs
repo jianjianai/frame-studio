@@ -2,6 +2,7 @@ import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
 import { workIdRequestSchema, workTaskRequestSchema, workPreviewRequestSchema, workVersionsRequestSchema, workVersionRequestSchema, workRestoreRequestSchema } from "../src/contracts/platform.mjs";
 import { Works } from "./works.mjs";
+import { sourceControlOperations } from "./source-control.mjs";
 import { compositionSchema } from "../src/engine/dimensions.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { readWorkPreview } from "./preview-state.mjs";
@@ -246,7 +247,13 @@ export function workOperations({
         async () => {
           const existing = await db.one(
             "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running','publishing','publish_failed') OR (state='succeeded' AND result->>'previewVersion'=$4 AND result->>'runtimeFingerprint'=$5)) ORDER BY created DESC LIMIT 1",
-            [work.repo, work.project, a.version, String(PREVIEW_VERSION), runtime.fingerprint],
+            [
+              work.repo,
+              work.project,
+              a.version,
+              String(PREVIEW_VERSION),
+              runtime.fingerprint,
+            ],
           );
           return (
             existing ||
@@ -265,7 +272,7 @@ export function workOperations({
     "works_restore",
     "Restore a work snapshot, saving the current version first",
     workRestoreRequestSchema,
-    (a) => works.restore(a.id, a.version),
+    (a) => works.restore(a.id, a.version, a.expectedRevision),
   );
   add(
     "repositories_default",
@@ -333,5 +340,6 @@ export function workOperations({
       };
     },
   );
+  sourceControlOperations({ add, db, repos, works });
   return works;
 }

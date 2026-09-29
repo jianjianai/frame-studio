@@ -17,7 +17,7 @@ export async function workToolsChecks(h) {
       await expect(player().getByRole("heading", { level: 1 })).toHaveText(
         state.work.title,
       );
-      for (const name of ["素材", "配音", "后台任务", "查看同步状态", "导出"])
+      for (const name of ["素材", "配音", "后台任务", "源代码管理", "导出"])
         await expect(tool(name)).toBeVisible();
       const exporting = await tool("导出").boundingBox();
       assert(
@@ -34,9 +34,9 @@ export async function workToolsChecks(h) {
       ).toBeFocused();
       await page.getByRole("menuitem", { name: "作品资料" }).press("ArrowDown");
       await expect(
-        page.getByRole("menuitem", { name: "版本管理" }),
+        page.getByRole("menuitem", { name: "源代码管理" }),
       ).toBeFocused();
-      await page.getByRole("menuitem", { name: "版本管理" }).press("Escape");
+      await page.getByRole("menuitem", { name: "源代码管理" }).press("Escape");
       await expect(tool("作品菜单")).toBeFocused();
       await expect(page.getByRole("menu")).toHaveCount(0);
       await tool("作品菜单").click();
@@ -93,32 +93,45 @@ export async function workToolsChecks(h) {
       await expect(input).toHaveValue("切换工具后仍保留的创作要求");
     },
   );
-  await check("AI 输入区与工具面板衔接：素材引用、局部展开和分层 Escape", async () => {
-    await ai();
-    const input = page.getByRole("textbox", { name: "创作要求" });
-    const draft = await input.inputValue();
-    await page.getByRole("button", { name: "引用素材", exact: true }).click();
-    await expect(dock).toHaveAttribute("aria-label", "素材");
-    await expect(page.locator("dialog[open]")).toHaveCount(0);
-    await dock.getByRole("button", { name: /返回对话/ }).click();
-    await expect(input).toHaveValue(draft);
-    const assertInsideDock = async (element) => {
-      const bounds = await dock.boundingBox();
-      const box = await element.boundingBox();
-      assert(box.x >= bounds.x - 1 && box.x + box.width <= bounds.x + bounds.width + 1);
-      assert(box.y >= bounds.y - 1 && box.y + box.height <= bounds.y + bounds.height + 1);
-    };
-    await page.getByRole("button", { name: "对话历史", exact: true }).click();
-    await assertInsideDock(page.getByRole("dialog", { name: "选择创作对话" }));
-    await page.getByRole("textbox", { name: "搜索对话" }).press("Escape");
-    await expect(dock).toBeVisible();
-    await page.getByRole("button", { name: "展开输入框", exact: true }).click();
-    await assertInsideDock(page.locator(".composer-expanded .chat-composer"));
-    await input.press("Escape");
-    await expect(page.locator(".composer-expanded")).toHaveCount(0);
-    await expect(dock).toBeVisible();
-    await expect(input).toHaveValue(draft);
-  });
+  await check(
+    "AI 输入区与工具面板衔接：素材引用、局部展开和分层 Escape",
+    async () => {
+      await ai();
+      const input = page.getByRole("textbox", { name: "创作要求" });
+      const draft = await input.inputValue();
+      await page.getByRole("button", { name: "引用素材", exact: true }).click();
+      await expect(dock).toHaveAttribute("aria-label", "素材");
+      await expect(page.locator("dialog[open]")).toHaveCount(0);
+      await dock.getByRole("button", { name: /返回对话/ }).click();
+      await expect(input).toHaveValue(draft);
+      const assertInsideDock = async (element) => {
+        const bounds = await dock.boundingBox();
+        const box = await element.boundingBox();
+        assert(
+          box.x >= bounds.x - 1 &&
+            box.x + box.width <= bounds.x + bounds.width + 1,
+        );
+        assert(
+          box.y >= bounds.y - 1 &&
+            box.y + box.height <= bounds.y + bounds.height + 1,
+        );
+      };
+      await page.getByRole("button", { name: "对话历史", exact: true }).click();
+      await assertInsideDock(
+        page.getByRole("dialog", { name: "选择创作对话" }),
+      );
+      await page.getByRole("textbox", { name: "搜索对话" }).press("Escape");
+      await expect(dock).toBeVisible();
+      await page
+        .getByRole("button", { name: "展开输入框", exact: true })
+        .click();
+      await assertInsideDock(page.locator(".composer-expanded .chat-composer"));
+      await input.press("Escape");
+      await expect(page.locator(".composer-expanded")).toHaveCount(0);
+      await expect(dock).toBeVisible();
+      await expect(input).toHaveValue(draft);
+    },
+  );
   await check("任务/同步是可收起面板，点击画面不误关或中断任务", async () => {
     const cancellations = state.calls.filter(
       (c) => c.name === "task_cancel",
@@ -133,18 +146,41 @@ export async function workToolsChecks(h) {
     ).toContainText("关闭标签页会中断");
     await player().getByTestId("stage-canvas").click();
     await expect(dock).toBeVisible();
-    await tool("查看同步状态").click();
-    await expect(dock).toHaveAttribute("aria-label", "同步状态");
+    await tool("源代码管理").click();
+    await expect(dock).toHaveAttribute("aria-label", "源代码管理");
     await expect(
       dock.getByText(state.work.branch, { exact: true }),
     ).toBeVisible();
-    await dock.getByRole("button", { name: "关闭同步状态" }).click();
+    await dock.getByRole("button", { name: "关闭源代码管理" }).click();
     await expect(dock).toBeHidden();
-    await expect(tool("查看同步状态")).toBeFocused();
+    await expect(tool("源代码管理")).toBeFocused();
     assert.equal(
       state.calls.filter((c) => c.name === "task_cancel").length,
       cancellations,
     );
+    await ai();
+  });
+  await check("大量变更可滚动浏览，选择文件立即看到差异", async () => {
+    state.scmFiles = Array.from({ length: 80 }, (_, i) => ({
+      path: `projects/test-film/scenes/shot-${String(i).padStart(2, "0")}.ts`,
+      index: ".",
+      working: "M",
+      status: "M",
+    }));
+    await tool("源代码管理").click();
+    await page.getByRole("tab", { name: /变更/ }).click();
+    await state.broadcast();
+    await expect(dock.locator(".scm-file-row")).toHaveCount(80);
+    const files = dock.locator(".scm-file-groups");
+    assert(await files.evaluate((el) => el.scrollHeight > el.clientHeight));
+    await dock
+      .getByRole("button", { name: "查看更改：scenes/shot-00.ts", exact: true })
+      .click();
+    await expect(dock.locator(".scm-diff-toolbar")).toBeInViewport();
+    await expect(dock.locator(".scm-diff-table")).toContainText("const n = 2");
+    await screenshot("14-scm-large-change-list");
+    state.scmFiles = [];
+    await state.broadcast();
     await ai();
   });
   await check(

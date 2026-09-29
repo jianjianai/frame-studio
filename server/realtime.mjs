@@ -7,6 +7,7 @@ const watched = {
   agent_questions: ["agent_questions", "tasks"],
   agent_notifications: ["agent_notifications", "works"],
   connections_list: ["connections"],
+  connections_usage: ["connections", "tasks", "auth_flows", "chats"],
   engines_list: ["engines"],
   works_tasks: ["tasks"],
   works_queue_status: ["tasks", "settings", "work_undos"],
@@ -18,6 +19,7 @@ const watched = {
   task_get: ["events", "tasks"],
   tools_info: ["settings"],
   works_sync_status: ["work_sync"],
+  works_scm_status: ["works", "work_sync", "tasks", "work_undos"],
 };
 export async function installRealtime(app, db, actions, origin) {
   const wss = new WebSocketServer({
