@@ -152,15 +152,15 @@ export function Player({
         return;
       const message = playerCommandSchema.safeParse(event.data);
       if (!message.success) return;
-      if (message.data.command === "export") setExportOpen(true);
+      if (message.data.command === "export" && !exportAbort.current) setExportOpen(true);
       if (message.data.command === "pause") transport.current?.pause();
       if (message.data.command === "seek") seek(message.data.time);
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
-  }, [embedded]);
+  }, [embedded, exporting, project]);
   const seek = (t: number) => {
-    if (exporting) return;
+    if (exporting || exportAbort.current) return;
     transport.current?.seek(t);
     renderer.current?.render(
       transport.current?.clock.time() ?? 0,
