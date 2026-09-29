@@ -14,7 +14,8 @@ import {
 import { applyProject } from "./apply-project.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
 export class Tasks {
-  constructor(db, data, repos, secrets) {
+  constructor(db, data, repos, secrets, { runCommand = command } = {}) {
+    this.command = runCommand;
     this.db = db;
     this.data = data;
     this.repos = repos;
@@ -93,23 +94,28 @@ export class Tasks {
     return row;
   }
   async cancel(id) {
-    const t = await this.get(id);
-    if (t.state === "queued")
-      await this.db.pool.query(
-        "UPDATE tasks SET state='cancelled',finished=now(),expires=now()+interval '7 days' WHERE id=$1 AND state='queued'",
-        [id],
-      );
-    else if (t.state === "running")
-      await this.db.pool.query(
-        "UPDATE tasks SET state='cancelling' WHERE id=$1 AND state='running'",
-        [id],
-      );
-    return this.get(id);
+    // One statement decides from the CURRENT state; a stale queued read must not
+    // miss a concurrent transition to running.
+    const changed = await this.db.one(
+      "UPDATE tasks SET state=CASE WHEN state='queued' THEN 'cancelled' ELSE 'cancelling' END,finished=CASE WHEN state='queued' THEN now() ELSE finished END,expires=CASE WHEN state='queued' THEN now()+interval '7 days' ELSE expires END WHERE id=$1 AND state IN ('queued','running') RETURNING *",
+      [id],
+    );
+    if (changed?.state === "cancelled")
+      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [id]);
+    return changed || this.get(id);
+  }
+  async finishCancellation(id) {
+    await this.db.pool.query(
+      "UPDATE tasks SET state='cancelled',finished=now(),expires=now()+interval '7 days' WHERE id=$1 AND state IN ('queued','running','cancelling')",
+      [id],
+    );
+    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [id]);
   }
   host(relative) {
     return path.posix.join(process.env.FRAME_HOST_DATA || this.data, relative);
   }
   async start(t) {
+    if ((await this.get(t.id)).state !== "queued") return;
     const run = path.join(this.data, "runs", t.id);
     fs.mkdirSync(run, { recursive: true });
     let fingerprint = null;
@@ -160,11 +166,11 @@ export class Tasks {
       authMode: config.mode || "api",
     };
     fs.writeFileSync(path.join(run, "task.json"), JSON.stringify(payload));
-    await command("chown", ["-R", "1000:1000", run]);
+    await this.command("chown", ["-R", "1000:1000", run]);
     const session = t.chat || t.id,
       sessionDir = path.join(this.data, "sessions", session);
     fs.mkdirSync(path.join(sessionDir, ".codex"), { recursive: true });
-    await command("chown", ["-R", "1000:1000", sessionDir]);
+    await this.command("chown", ["-R", "1000:1000", sessionDir]);
     const env = {};
     const flags = [];
     if (t.kind === "agent" && config.mode === "official") {
@@ -207,10 +213,14 @@ export class Tasks {
     }
     const image = process.env.FRAME_EXECUTOR_IMAGE || "frame-studio:local",
       container = "frame-task-" + t.id;
-    await this.db.pool.query(
-      "UPDATE tasks SET state='running',started=now(),container=$2,fingerprint=$3,source_commit=$4 WHERE id=$1",
+    const claimed = await this.db.one(
+      "UPDATE tasks SET state='running',started=now(),container=$2,fingerprint=$3,source_commit=$4 WHERE id=$1 AND state='queued' RETURNING id",
       [t.id, container, fingerprint, sourceCommit],
     );
+    if (!claimed) {
+      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
+      return;
+    }
     const args = [
       "run",
       "-d",
@@ -249,27 +259,29 @@ export class Tasks {
     ];
     if (t.kind === "tools-update") {
       fs.mkdirSync(path.join(this.data, "tools"), { recursive: true });
-      await command("chmod", ["a+rwx", path.join(this.data, "tools")]);
+      await this.command("chmod", ["a+rwx", path.join(this.data, "tools")]);
     }
-    await command("docker", args, { env, timeout: 120000 });
-    await this.db.event(t.id, "state", { state: "running" });
+    if ((await this.get(t.id)).state !== "running") {
+      await this.finishCancellation(t.id);
+      return;
+    }
+    await this.command("docker", args, { env, timeout: 120000 });
+    // Cancellation after this last check remains durable as 'cancelling'; the
+    // scheduler stops the container instead of overwriting it with 'running'.
+    await this.db.event(t.id, "state", { state: (await this.get(t.id)).state });
   }
   async complete(t, exit) {
+    t = await this.get(t.id);
+    if (["cancelled", "succeeded"].includes(t.state)) return;
+    if (t.state === "cancelling") {
+      await this.finishCancellation(t.id);
+      return;
+    }
     const run = path.join(this.data, "runs", t.id),
       resultFile = path.join(run, "result.json");
     let result = fs.existsSync(resultFile)
       ? JSON.parse(fs.readFileSync(resultFile, "utf8"))
       : {};
-    if (t.state === "cancelling") {
-      await this.db.pool.query(
-        "UPDATE tasks SET state='cancelled',finished=now(),expires=now()+interval '7 days' WHERE id=$1",
-        [t.id],
-      );
-      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [
-        t.id,
-      ]);
-      return;
-    }
     if (exit !== 0 || result.error || result.status === "failed")
       throw new Error(result.error || "Task failed; inspect task events");
     if (t.repo && ["agent", "new"].includes(t.kind))
@@ -428,7 +440,7 @@ export class Tasks {
               ) *
                 1000
           ) {
-            await command("docker", ["stop", "-t", "5", t.container]).catch(
+            await this.command("docker", ["stop", "-t", "5", t.container]).catch(
               () => {},
             );
             throw new Error(
@@ -436,11 +448,11 @@ export class Tasks {
             );
           }
           if (t.state === "cancelling")
-            await command("docker", ["stop", "-t", "5", t.container]).catch(
+            await this.command("docker", ["stop", "-t", "5", t.container]).catch(
               () => {},
             );
           const state = JSON.parse(
-            await command("docker", [
+            await this.command("docker", [
               "inspect",
               "--format",
               "{{json .State}}",
@@ -455,7 +467,7 @@ export class Tasks {
           const log =
             t.kind === "agent"
               ? ""
-              : await command(
+              : await this.command(
                   "docker",
                   ["logs", "--tail", "1500", t.container],
                   { max: 1024 * 1024, combined: true },
@@ -469,12 +481,12 @@ export class Tasks {
           }
           if (!state.Running) {
             await this.complete(t, state.ExitCode);
-            await command("docker", ["rm", t.container]).catch(() => {});
+            await this.command("docker", ["rm", t.container]).catch(() => {});
             this.logs.delete(t.id);
           }
         } catch (e) {
           await this.db.pool.query(
-            "UPDATE tasks SET state='failed',error=$2,finished=now(),expires=now()+interval '14 days' WHERE id=$1",
+            "UPDATE tasks SET state='failed',error=$2,finished=now(),expires=now()+interval '14 days' WHERE id=$1 AND state IN ('queued','running')",
             [t.id, e.message],
           );
           await this.db.event(t.id, "error", { message: e.message });
@@ -482,7 +494,7 @@ export class Tasks {
             t.id,
           ]);
           if (t.container)
-            await command("docker", ["rm", "-f", t.container]).catch(() => {});
+            await this.command("docker", ["rm", "-f", t.container]).catch(() => {});
         }
       }
       const count = await this.db.one(
@@ -498,7 +510,7 @@ export class Tasks {
             await this.start(t);
           } catch (e) {
             await this.db.pool.query(
-              "UPDATE tasks SET state='failed',error=$2,finished=now(),expires=now()+interval '14 days' WHERE id=$1",
+              "UPDATE tasks SET state='failed',error=$2,finished=now(),expires=now()+interval '14 days' WHERE id=$1 AND state IN ('queued','running')",
               [t.id, e.message],
             );
             await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [
@@ -506,7 +518,7 @@ export class Tasks {
             ]);
             const failed = await this.get(t.id);
             if (failed.container)
-              await command("docker", ["rm", "-f", failed.container]).catch(
+              await this.command("docker", ["rm", "-f", failed.container]).catch(
                 () => {},
               );
             await this.db.event(t.id, "error", { message: e.message });
