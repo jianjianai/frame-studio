@@ -39,8 +39,8 @@ export class TaskPublication {
       } catch (error) { throw Object.assign(error, { executionFailed: true }); }
       if (t.kind === "agent") result.previewTask = randomUUID();
       const claimed = await this.db.one(
-        "UPDATE tasks SET state='publishing',result=$2,expires=NULL,error=NULL,monitor=NULL,progress=$3 WHERE id=$1 AND state='running' RETURNING *",
-        [t.id, result, { stage: "正在保存版本并发布预览" }],
+        "UPDATE tasks SET state='publishing',result=$2,expires=NULL,error=NULL,monitor=NULL,progress=$3,metrics=metrics||$4::jsonb WHERE id=$1 AND state='running' RETURNING *",
+        [t.id, result, { stage: "正在保存版本并发布预览" }, { publicationStartedAt: new Date().toISOString() }],
       );
       if (!claimed) {
         const latest = await this.get(t.id);
@@ -80,9 +80,10 @@ export class TaskPublication {
         );
       });
     if (t.chat && result.upstream)
-      await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
+      await this.db.pool.query("UPDATE chats SET upstream=$2,upstream_execution=$3 WHERE id=$1", [
         t.chat,
         result.upstream,
+        t.execution?.sessionKey || null,
       ]);
     const artifacts = [];
     const base = path.join(run, "projects", t.project || "", "exports");
@@ -156,8 +157,8 @@ export class TaskPublication {
       [t.id, result],
     );
     await this.db.pool.query(
-      "UPDATE tasks SET state='succeeded',result=$2,error=NULL,monitor=NULL,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days',publication_retry_at=NULL WHERE id=$1 AND state='publishing'",
-      [t.id, result, result.commit || null],
+      "UPDATE tasks SET state='succeeded',result=$2,error=NULL,monitor=NULL,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days',publication_retry_at=NULL,metrics=metrics||$4::jsonb WHERE id=$1 AND state='publishing'",
+      [t.id, result, result.commit || null, t.metrics?.publicationStartedAt ? { publicationMs: Math.max(0, Date.now() - new Date(t.metrics.publicationStartedAt).getTime()) } : {}],
     );
     await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
   }

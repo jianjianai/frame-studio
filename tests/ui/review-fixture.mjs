@@ -32,6 +32,10 @@ export async function mockApi(context, playerUrl, uiUrl) {
     name: "验收模型（模拟连接）",
     configured: true,
     tool: "codex",
+    mode: "api",
+    model: "fixture-model",
+    models: [{ id: "fixture-model", name: "验收模型", enabled: true }],
+    state: "ready",
   };
   const chat = {
     id: randomUUID(),
@@ -152,11 +156,26 @@ export async function mockApi(context, playerUrl, uiUrl) {
         };
       case "works_preview_status":
         if (state.previewError) throw Error("验收：预览版本核对失败");
-        return { latest: build, stale: !!state.previewStale };
+        return {
+          latest: build,
+          stale: !!state.previewStale,
+          runtimeFingerprint: "fixture-runtime",
+          sourceRevision: "1".repeat(64),
+          previewRevision: "1".repeat(64),
+          indexedAt: now,
+          indexingRequired: false,
+        };
       case "system_status":
         return { warnings: [] };
       case "works_tasks":
         return state.tasks;
+      case "works_queue_status":
+        return {
+          now, controllerReady: true, concurrency: 2,
+          items: state.tasks.filter(task => task.state === "queued").map(task => ({
+            id: task.id, code: "waiting-claim", reason: "等待测试调度器领取", queuedMs: 0, ahead: 0, blocker: null,
+          })),
+        };
       case "works_chats":
         return [chat];
       case "connections_list":
@@ -265,6 +284,9 @@ export async function mockApi(context, playerUrl, uiUrl) {
       }
       case "works_version_compare":
         return {
+          version: args.version,
+          current: "b".repeat(40),
+          files: [{ status: "M", path: "scene.ts" }],
           total: 1,
           changes: [{ status: "M", path: "scene.ts" }],
           note: "包含当前未提交变化；不修改作品",

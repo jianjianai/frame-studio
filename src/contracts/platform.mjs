@@ -1,4 +1,12 @@
 import { z } from "zod";
+import {
+  commitSchema,
+  shotIdSchema,
+  workResultRequestSchema,
+  workResultResponseSchema,
+  workUndoRequestSchema,
+  workUndoResponseSchema,
+} from "./workflow.mjs";
 import { modelIdSchema } from "./ai-models.mjs";
 
 export const taskStateSchema = z.enum([
@@ -55,6 +63,9 @@ export const reviewContextSchema = z
     start: z.number().min(0).max(3600).optional(),
     end: z.number().min(0).max(3600).optional(),
     assets: z.array(uuid).max(20).optional(),
+    previewTask: uuid.optional(),
+    sourceCommit: commitSchema.optional(),
+    shotId: shotIdSchema.optional(),
   })
   .refine(
     (a) =>
@@ -102,7 +113,155 @@ export const taskGetResponseSchema = z.looseObject({
   task: taskSummarySchema,
   events: z.array(taskEventSchema),
 });
+// Core operations use these exact contracts on both sides of every transport.
+export const workIdRequestSchema = z.strictObject({ id: uuid });
+export const workPreviewRequestSchema = workIdRequestSchema.extend({
+  refresh: z.boolean().default(false),
+});
+export const workSyncStatusRequestSchema = workIdRequestSchema.extend({
+  fetch: z.boolean().default(false),
+});
+export const workVersionsRequestSchema = workIdRequestSchema.extend({
+  limit: z.number().int().min(1).max(100).default(50),
+  offset: z.number().int().min(0).default(0),
+});
+export const workVersionRequestSchema = workIdRequestSchema.extend({
+  version: commitSchema,
+});
+export const workRestoreRequestSchema = workIdRequestSchema.extend({
+  version: z.union([uuid, commitSchema]),
+});
+export const workChatTurnsRequestSchema = workIdRequestSchema.extend({
+  chat: uuid,
+  before: uuid.optional(),
+  limit: z.number().int().min(1).max(100).default(30),
+});
+export const taskInputSchema = z
+  .strictObject({
+    title: z.string().max(150).optional(),
+    renderer: z.enum(["canvas", "pixi", "three"]).optional(),
+    duration: z.number().positive().max(3600).optional(),
+    time: z.number().nonnegative().max(3600).optional(),
+    width: z.number().int().min(2).max(3840).multipleOf(2).optional(),
+    fps: z.number().int().min(1).max(120).optional(),
+    subtitles: z.boolean().optional(),
+    start: z.number().nonnegative().max(3600).optional(),
+    end: z.number().positive().max(3600).optional(),
+  })
+  .refine(
+    (value) =>
+      value.start === undefined ||
+      value.end === undefined ||
+      value.end > value.start,
+    "Invalid render range",
+  );
+export const workTaskRequestSchema = workIdRequestSchema.extend({
+  kind: z.enum(["validate", "frame", "storyboard", "render", "build"]),
+  input: taskInputSchema.default({}),
+  requestKey: uuid.optional(),
+});
+export const workSummarySchema = z.looseObject({
+  id: uuid,
+  repo: uuid,
+  project: z.string().min(1),
+  title: z.string(),
+});
+const timestampSchema = z.union([z.string(), z.date()]);
+const previewStatusSchema = z.looseObject({
+  runtimeFingerprint: z.string(),
+  sourceRevision: z.string().nullable(),
+  previewRevision: z.string().nullable(),
+  indexedAt: timestampSchema.nullable(),
+  indexingRequired: z.boolean(),
+  stale: z.boolean(),
+  latest: taskSummarySchema.nullable(),
+});
+const connectionSummarySchema = z.looseObject({
+  id: uuid,
+  name: z.string(),
+  tool: z.enum(["codex", "claude"]),
+  mode: z.enum(["api", "official"]),
+  model: z.string(),
+  configured: z.boolean(),
+});
 export const operationContracts = Object.freeze({
+  works_open: { request: workIdRequestSchema, response: workSummarySchema },
+  works_tasks: {
+    request: workIdRequestSchema,
+    response: z.array(taskSummarySchema),
+  },
+  works_queue_status: {
+    request: workIdRequestSchema,
+    response: z.strictObject({
+      now: z.string(),
+      controllerReady: z.boolean(),
+      concurrency: z.number().int().positive(),
+      items: z.array(
+        z.looseObject({
+          id: uuid,
+          code: z.string(),
+          reason: z.string(),
+          queuedMs: z.number().nonnegative(),
+        }),
+      ),
+    }),
+  },
+  works_task: { request: workTaskRequestSchema, response: taskSummarySchema },
+  works_preview_status: {
+    request: workPreviewRequestSchema,
+    response: previewStatusSchema,
+  },
+  works_chat_turns: {
+    request: workChatTurnsRequestSchema,
+    response: z.array(taskSummarySchema),
+  },
+  works_exports: {
+    request: workIdRequestSchema,
+    response: z.array(z.looseObject({ id: uuid, state: taskStateSchema })),
+  },
+  works_versions: {
+    request: workVersionsRequestSchema,
+    response: z.array(z.looseObject({ id: z.string(), kind: z.string() })),
+  },
+  works_version_compare: {
+    request: workVersionRequestSchema,
+    response: z.looseObject({
+      version: commitSchema,
+      current: commitSchema,
+      files: z.array(z.looseObject({ path: z.string(), status: z.string() })),
+      total: z.number().int().nonnegative(),
+      truncated: z.boolean(),
+    }),
+  },
+  works_version_preview: {
+    request: workVersionRequestSchema,
+    response: taskSummarySchema,
+  },
+  works_restore: {
+    request: workRestoreRequestSchema,
+    response: workSummarySchema,
+  },
+  works_sync_status: {
+    request: workSyncStatusRequestSchema,
+    response: z.looseObject({}),
+  },
+  task_cancel: { request: workIdRequestSchema, response: taskSummarySchema },
+  task_retry_publish: {
+    request: workIdRequestSchema,
+    response: taskSummarySchema,
+  },
+  connections_list: {
+    request: z.strictObject({}),
+    response: z.array(connectionSummarySchema),
+  },
+  works_result: {
+    request: workResultRequestSchema,
+    response: workResultResponseSchema,
+  },
+  works_undo: {
+    request: workUndoRequestSchema,
+    response: workUndoResponseSchema,
+  },
   works_chat_create: {
     request: workChatCreateSchema,
     response: z.looseObject({
@@ -142,6 +301,7 @@ export const playerStateSchema = z.looseObject({
   loop: z.boolean(),
   volume: z.number().min(0).max(4),
   muted: z.boolean(),
+  shotId: shotIdSchema.optional(),
   selection: z
     .strictObject({
       start: z.number().nonnegative().optional(),
@@ -149,7 +309,45 @@ export const playerStateSchema = z.looseObject({
     })
     .optional(),
 });
+export const playerViewSchema = z.strictObject({
+  timelineVisible: z.boolean().optional(),
+  videoRatio: z.number().finite().min(25).max(85).optional(),
+  quality: z.enum(["draft", "standard", "high"]).optional(),
+});
+export const playerExportStateSchema = z.object({
+  type: z.literal("frame-export-state"),
+  id: z.string().min(1).max(80),
+  state: z.enum([
+    "queued",
+    "running",
+    "cancelling",
+    "cancelled",
+    "succeeded",
+    "failed",
+  ]),
+  progress: z
+    .object({
+      phase: z.enum(["preparing", "rendering", "finalizing"]).optional(),
+      stage: z.string().max(100).optional(),
+      completed: z.number().finite().nonnegative().optional(),
+      total: z.number().finite().nonnegative().optional(),
+    })
+    .optional(),
+  error: z.string().max(6000).optional(),
+  filename: z.string().max(500).optional(),
+  bytes: z.number().int().nonnegative().optional(),
+  blob: z.unknown().optional(),
+});
 export const previewMessageSchema = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("frame-player-ready") }),
+  z.object({
+    type: z.literal("frame-player-preferences"),
+    preferences: playerViewSchema,
+  }),
+  z.object({
+    type: z.literal("frame-download-error"),
+    message: z.string().max(4000),
+  }),
   z.strictObject({ type: z.literal("frame-preview-update-request") }),
   playerStateSchema,
   z.looseObject({
@@ -161,11 +359,6 @@ export const previewMessageSchema = z.discriminatedUnion("type", [
     height: z.number().positive().max(50000),
   }),
 ]);
-export const playerViewSchema = z.strictObject({
-  timelineVisible: z.boolean().optional(),
-  videoRatio: z.number().finite().min(25).max(85).optional(),
-  quality: z.enum(["draft", "standard", "high"]).optional(),
-});
 export const workContextSchema = z.strictObject({
   title: z.string().max(400),
   compact: z.boolean(),
@@ -181,6 +374,11 @@ export const playerCommandSchema = z.discriminatedUnion("command", [
   }),
   z.strictObject({ type: playerType, command: z.literal("export") }),
   z.strictObject({ type: playerType, command: z.literal("pause") }),
+  z.strictObject({
+    type: playerType,
+    command: z.literal("play"),
+    end: z.number().finite().positive().max(3600).optional(),
+  }),
   z.strictObject({ type: playerType, command: z.literal("export-cancel") }),
   z.strictObject({ type: playerType, command: z.literal("export-download") }),
   z.strictObject({ type: playerType, command: z.literal("snapshot") }),

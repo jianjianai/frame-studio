@@ -10,6 +10,7 @@ import {
 import { createPortal } from "react-dom";
 import { X, LoaderCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { socketCall, subscribe } from "./realtime";
+import { clientOperationError } from "../src/contracts/errors.mjs";
 import { isActiveTask, isCancellableTask, taskStateLabels } from "../src/contracts/platform.mjs";
 export async function request(url, options = {}) {
   const response = await fetch(url, {
@@ -27,9 +28,7 @@ export async function request(url, options = {}) {
   if (!response.ok) {
     if (response.status === 401)
       window.dispatchEvent(new Event("frame-auth-required"));
-    const error = new Error(result.error || `请求失败 (${response.status})`);
-    error.status = response.status;
-    throw error;
+    throw clientOperationError({ ...result, status: response.status });
   }
   return result;
 }

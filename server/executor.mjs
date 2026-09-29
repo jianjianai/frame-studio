@@ -19,8 +19,24 @@ const redact = (value) => {
   );
 };
 let actualRuntime = null;
+const executorStarted = performance.now(), validation = [], executorMetrics = {};
+const measured = async (name, fn, { check = false } = {}) => {
+  const started = performance.now();
+  try {
+    const output = await fn();
+    const durationMs = Math.round(performance.now() - started);
+    executorMetrics[name] = durationMs;
+    if (check) validation.push({ check: name, status: "passed", durationMs });
+    return output;
+  } catch (error) {
+    const durationMs = Math.round(performance.now() - started);
+    executorMetrics[name] = durationMs;
+    if (check) validation.push({ check: name, status: "failed", durationMs });
+    throw error;
+  }
+};
 const result = (value) =>
-  fs.writeFileSync(work + "/result.json", JSON.stringify({ ...value, runtime: actualRuntime, runtimeFingerprint: actualRuntime?.fingerprint || null }));
+  fs.writeFileSync(work + "/result.json", JSON.stringify({ ...value, validation, executorMetrics: { ...executorMetrics, totalMs: Math.round(performance.now() - executorStarted) }, runtime: actualRuntime, runtimeFingerprint: actualRuntime?.fingerprint || null }));
 const run = (bin, args, options = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
@@ -123,6 +139,7 @@ try {
       "docs",
       "public",
       "projects",
+      "review",
       "package.json",
       "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
@@ -191,10 +208,13 @@ try {
       const context = task.input.context
         ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}`
         : "";
-      const output = await run(bin, args, {
-        input: prompt + context,
+      const reference = task.reviewReference
+        ? `\n\nVersion-bound review reference: ${JSON.stringify(task.reviewReference)}. Timecodes and shot ids belong to this reference, not automatically to the current work. If disposition is compare-to-latest, inspect the read-only reference source at the supplied path and compare it with projects/${task.project} before mapping the user's request. Never overwrite the current work with the old reference. Do not modify review/; continue editing the latest work directly with the available tools. If a mapping is ambiguous, explain that limitation rather than claiming an exact unaffected range.`
+        : "";
+      const output = await measured("agentMs", () => run(bin, args, {
+        input: prompt + context + reference + (task.previousTurns?.length ? `\n\nPersisted context from earlier turns (new execution session; current instruction above takes precedence):\n${JSON.stringify(task.previousTurns)}` : ""),
         agent: true,
-      });
+      }));
       for (const line of output.split("\n")) {
         try {
           const event = JSON.parse(line);
@@ -221,24 +241,25 @@ try {
           text: "正在验证作品并准备预览",
         }) + "\n",
       );
-      await run("node", [
+      await measured("scope", () => run("node", [
         core + "/scripts/project-scope.mjs",
         task.project,
         "--base",
         baselineCommit,
-      ]);
-      await run("node", [
+      ]), { check: true });
+      await measured("structure", () => run("node", [
         core + "/scripts/check-projects.mjs",
         task.project,
         "--strict",
-      ]);
-      await run("node", [
+      ]), { check: true });
+      await measured("project-tests", () => run("node", [
         core + "/scripts/film.mjs",
         "test",
         task.project,
         "--json",
-      ]);
-      const built = await run(
+      ]), { check: true });
+      const { base, file } = await measured("preview-build", async () => {
+        const built = await run(
         "node",
         [work + "/scripts/film.mjs", "build", task.project, "--json"],
         {
@@ -257,6 +278,7 @@ try {
       }
       if (buildResult.status === "failed" || buildResult.passed === false)
         throw new Error("Preview build failed");
+      value.buildMetrics = buildResult.buildMetrics || null;
       const base = path.join(work, "projects", task.project, "exports");
       const file = path.resolve(buildResult.output || "", "index.html");
       if (
@@ -265,6 +287,8 @@ try {
         fs.lstatSync(file).isSymbolicLink()
       )
         throw new Error("Preview entry missing or outside work output");
+        return { base, file };
+      }, { check: true });
       value.previewVersion = PREVIEW_VERSION;
       value.previewArtifacts = [
         {

@@ -127,9 +127,10 @@ export class TaskMonitor {
           [task.id, event.type, event, offset],
         );
         if (event.type === "session" && task.chat)
-          await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
+          await this.db.pool.query("UPDATE chats SET upstream=$2,upstream_execution=$3 WHERE id=$1", [
             task.chat,
             event.id,
+            task.execution?.sessionKey || null,
           ]);
       } catch (e) {
         if (!(e instanceof SyntaxError)) throw e;

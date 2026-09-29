@@ -196,19 +196,24 @@ export async function executeProject(root, id, action, options = {}) {
       }
     }
     if (action === "build") {
+      const started = performance.now();
       previewProgress("检查作品代码");
       const checked = await typecheck();
       if (checked.status !== "passed") return checked;
+      const typecheckMs = Math.round(performance.now() - started);
       const output = projectPath(root, id, "exports/build-" + randomUUID());
       previewProgress("构建画面播放器");
+      const buildStarted = performance.now();
       await build(projectConfig(root, id, output));
+      const compileMs = Math.round(performance.now() - buildStarted);
+      let audioPreviewMetrics = null;
       if (
         process.env.FRAME_WORK_PREVIEW === "1" &&
         process.env.FRAME_PREVIEW_AUDIO !== "0"
       )
-        await buildPreviewAudio(output, { ...options, root, project: id });
+        audioPreviewMetrics = (await buildPreviewAudio(output, { ...options, root, project: id })).metrics;
       previewProgress("预览准备完成", 1, 1);
-      return { status: "passed", output, input: inputManifest(root, id) };
+      return { status: "passed", output, input: inputManifest(root, id), buildMetrics: { typecheckMs, compileMs, audio: audioPreviewMetrics, totalMs: Math.round(performance.now() - started) } };
     }
     if (action !== "validate")
       throw new Error("Unknown project action: " + action);

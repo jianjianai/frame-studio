@@ -1,4 +1,6 @@
-import { previewMessageSchema } from "../src/contracts/platform.mjs";
+import { usePreviewSession, decodePlayerMessage } from "./preview-session";
+import { useBrowserExport } from "./browser-export-session";
+import { RevisionPreview } from "./revision-preview";
 import { WorkChat } from "./work-chat";
 import { WorkTools } from "./work-tools";
 import { WorkDock } from "./work-dock";
@@ -45,9 +47,8 @@ export function Creation({ id, notify }) {
     tasks = taskQuery.data || [],
     iframe = useRef(null),
     split = useRef(null);
-  const [preview, setPreview] = useState(null),
-    [previewStage, setPreviewStage] = useState("正在获取作品…"),
-    [panel, setPanel] = useState(""),
+  const [panel, setPanel] = useState(""),
+    [referenceReview, setReferenceReview] = useState(null),
     [tool, setTool] = useState(() => {
       const fallback = readPreference(
         "frame.chat-open",
@@ -90,7 +91,6 @@ export function Creation({ id, notify }) {
     }),
     [requestingBuild, setRequestingBuild] = useState(false),
     [suggestion, setSuggestion] = useState(null),
-    [browserJob, setBrowserJob] = useState(null),
     [run, busy] = useAction(notify);
   useEffect(() => {
     try {
@@ -108,17 +108,23 @@ export function Creation({ id, notify }) {
           ? [...old, { id: asset.id, name: asset.name }]
           : old,
     );
-  const browserRequest = useRef(null);
-  const browserFile = useRef(null);
-  useEffect(
-    () => () => {
-      if (browserFile.current) URL.revokeObjectURL(browserFile.current.url);
-    },
-    [],
+  const restartPreview = useRef(() => {});
+  const browserExport = useBrowserExport(iframe, notify, () =>
+    restartPreview.current(),
   );
-  const browserBusy = ["queued", "running", "cancelling"].includes(
-    browserJob?.state,
-  );
+  const { job: browserJob, busy: browserBusy } = browserExport;
+  const latest = previewQuery.data?.latest;
+  const {
+    preview,
+    stage: previewStage,
+    setStage: setPreviewStage,
+    reference: previewReference,
+    error: previewError,
+    retry: retryPreview,
+    restart,
+    playerGeneration,
+  } = usePreviewSession({ workId: id, latest, blocked: browserBusy, notify });
+  restartPreview.current = restart;
   const compact = useMediaQuery("(max-width: 900px)");
   const toolbarRef = useRef(null);
   const returnFocus = useRef(null);
@@ -217,25 +223,7 @@ export function Creation({ id, notify }) {
     window.addEventListener("focus", check);
     return () => window.removeEventListener("focus", check);
   }, [id]);
-  const latest = previewQuery.data?.latest,
-    lastPreview = useRef(""),
-    buildRequested = useRef(false);
-  useEffect(() => {
-    if (!latest || latest.id === lastPreview.current || browserBusy) return;
-    let cancelled = false;
-    request(`/api/tasks/${latest.id}/preview`, { method: "POST" })
-      .then((link) => {
-        if (!cancelled) {
-          setPreview({ ...link, id: latest.id });
-          setPreviewStage("正在下载播放器…");
-          lastPreview.current = latest.id;
-        }
-      })
-      .catch((e) => notify(e.message, "error"));
-    return () => {
-      cancelled = true;
-    };
-  }, [latest?.id, browserBusy]);
+  const buildRequested = useRef(false);
   useEffect(() => {
     if (
       !taskQuery.data ||
@@ -259,101 +247,38 @@ export function Creation({ id, notify }) {
   useEffect(() => {
     const receive = (e) => {
       if (e.source !== iframe.current?.contentWindow) return;
-      if (
-        e.data?.type === "frame-export-state" &&
-        e.data.id === browserRequest.current
-      ) {
-        const { type, blob, ...state } = e.data;
-        if (blob instanceof Blob && state.state === "succeeded") {
-          if (browserFile.current) URL.revokeObjectURL(browserFile.current.url);
-          browserFile.current = {
-            url: URL.createObjectURL(blob),
-            name: state.filename,
-          };
-        }
-        setBrowserJob(state);
-        if (state.state === "failed")
-          notify(state.error || "本机导出失败", "error");
-      }
-      if (e.data?.type === "frame-download-error")
-        notify(e.data.message, "error");
-      if (e.data?.type === "frame-player-ready") {
+      const decoded = decodePlayerMessage(e.data);
+      if (!decoded) return;
+      if (decoded.type === "frame-download-error")
+        notify(decoded.message, "error");
+      if (decoded.type === "frame-player-ready") {
         sendPlayer("configure-view", {
           preferences: playerPreferences.current,
         });
         sendPlayer("configure-work", { context: workContext.current });
       }
-      if (e.data?.type === "frame-player-preferences") {
-        playerPreferences.current = e.data.preferences;
-        writePreference("frame.player-view", e.data.preferences);
+      if (decoded.type === "frame-player-preferences") {
+        playerPreferences.current = decoded.preferences;
+        writePreference("frame.player-view", decoded.preferences);
       }
-      const message = previewMessageSchema.safeParse(e.data);
-      if (
-        message.success &&
-        message.data.type === "frame-preview-update-request"
-      )
+      if (decoded.type === "frame-preview-update-request")
         void updatePreviewRef.current();
-      if (message.success && message.data.type === "frame-preview-loading")
-        setPreviewStage(message.data.message);
-      if (message.success && message.data.type === "frame-player-state")
-        setPosition(message.data);
+      if (decoded.type === "frame-preview-loading")
+        setPreviewStage(decoded.message);
+      if (decoded.type === "frame-player-state") setPosition(decoded);
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
   }, []);
   useEffect(
     () => (preview ? previewCacheBridge(iframe, preview.url) : undefined),
-    [preview?.url],
+    [preview?.url, playerGeneration],
   );
   useEffect(() => {
     writePreference("frame.chat-open", chatOpen);
     writePreference("frame.work-tool", tool);
     writePreference("frame.workspace-split", ratio);
   }, [tool, ratio]);
-  useEffect(() => {
-    if (!latest || browserBusy) return;
-    let cancelled = false;
-    const timer = setInterval(
-      () =>
-        request("/api/tasks/" + latest.id + "/preview", { method: "POST" })
-          .then((link) => {
-            if (!cancelled) setPreview({ ...link, id: latest.id });
-          })
-          .catch(() => {}),
-      20 * 60000,
-    );
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [latest?.id, browserBusy]);
-  useEffect(() => {
-    if (!browserBusy) return;
-    const protect = (event) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", protect);
-    return () => window.removeEventListener("beforeunload", protect);
-  }, [browserBusy]);
-  useEffect(() => {
-    if (browserJob?.state !== "queued") return;
-    const id = browserJob.id;
-    const timer = setTimeout(
-      () =>
-        setBrowserJob((previous) =>
-          previous?.id === id && previous.state === "queued"
-            ? {
-                ...previous,
-                state: "failed",
-                error: "播放器没有确认导出请求，请更新预览后重试",
-              }
-            : previous,
-        ),
-      15000,
-    );
-    return () => clearTimeout(timer);
-  }, [browserJob?.id, browserJob?.state]);
   if (query.loading && !query.data) return <Loading />;
   if (query.error) return <ErrorNote error={query.error} />;
   const work = query.data;
@@ -393,6 +318,14 @@ export function Creation({ id, notify }) {
           className="preview-pane"
           inert={compact && dockOpen ? true : undefined}
         >
+          {previewError && (
+            <div className="preview-version-note" role="status">
+              <ErrorNote error={previewError} />
+              <Button disabled={browserBusy} onClick={retryPreview}>
+                重试加载预览
+              </Button>
+            </div>
+          )}
           {preview && Number(latest?.result?.previewVersion || 0) < 9 && (
             <div className="preview-version-note" role="status">
               当前预览使用旧版播放器。
@@ -415,6 +348,7 @@ export function Creation({ id, notify }) {
                 </div>
               )}
               <iframe
+                key={preview.id + ":" + playerGeneration}
                 ref={iframe}
                 title="作品播放器"
                 src={preview.url}
@@ -493,7 +427,8 @@ export function Creation({ id, notify }) {
               tasks={tasks}
               reload={taskQuery.refresh}
               notify={notify}
-              position={position}
+              position={previewStage ? { time: 0 } : position}
+              previewReference={previewReference}
               selectedAssets={assets}
               onAddAssets={() => openTool("materials")}
               onPausePreview={() => sendPlayer("pause")}
@@ -502,6 +437,14 @@ export function Creation({ id, notify }) {
               onClose={closeChat}
               compact={compact}
               onRecall={(context) => {
+                if (
+                  context.sourceCommit &&
+                  context.sourceCommit !== preview?.sourceCommit
+                ) {
+                  sendPlayer("pause");
+                  setReferenceReview(context);
+                  return;
+                }
                 sendPlayer("seek", {
                   time: context.start ?? context.time ?? 0,
                   ...(context.end > context.start
@@ -566,7 +509,7 @@ export function Creation({ id, notify }) {
                       "请将配音资源“" +
                       asset.name +
                       "”编排到作品中，保持声画与字幕同步。",
-                    review,
+                    review: { ...review, ...previewReference },
                   });
                   openTool("ai");
                 }}
@@ -697,6 +640,25 @@ export function Creation({ id, notify }) {
           )}
         </WorkDock>
       </div>
+      {referenceReview && (
+        <Modal
+          title="引用版本审片"
+          wide
+          onClose={() => setReferenceReview(null)}
+        >
+          <p>
+            此处显示引用时的源码版本 {referenceReview.sourceCommit?.slice(0, 7)}
+            ，不恢复或覆盖当前作品。
+          </p>
+          <RevisionPreview
+            work={work}
+            version={referenceReview.sourceCommit}
+            previewTask={referenceReview.previewTask}
+            context={referenceReview}
+            label="引用版本播放器"
+          />
+        </Modal>
+      )}
       {panel && (
         <Modal
           title={title}
@@ -727,27 +689,10 @@ export function Creation({ id, notify }) {
               onBrowserExport={(options) => {
                 if (browserBusy || !preview || previewStage)
                   throw new Error("请等待播放器就绪或当前导出完成");
-                const id = crypto.randomUUID();
-                browserRequest.current = id;
-                setBrowserJob({ id, state: "queued" });
-                sendPlayer("export-start", { id, options });
+                browserExport.start(options);
               }}
-              onBrowserCancel={() => {
-                sendPlayer("export-cancel");
-                setBrowserJob((previous) => ({
-                  ...previous,
-                  state: "cancelling",
-                }));
-              }}
-              onBrowserDownload={() => {
-                if (browserFile.current) {
-                  const a = document.createElement("a");
-                  a.href = browserFile.current.url;
-                  a.download = browserFile.current.name;
-                  a.click();
-                } else
-                  notify("本机导出文件已不在当前标签页中，请重新导出", "error");
-              }}
+              onBrowserCancel={browserExport.cancel}
+              onBrowserDownload={browserExport.download}
               onSnapshot={() => sendPlayer("snapshot")}
               onSubtitles={() => sendPlayer("subtitles")}
             />

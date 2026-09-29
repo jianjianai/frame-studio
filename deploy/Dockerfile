@@ -6,7 +6,9 @@ WORKDIR /opt/frame
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN pnpm install --frozen-lockfile
 COPY . .
-RUN pnpm exec vite build --config studio/vite.config.mjs
+# Worktrees copied from private AgentDock volumes may have 0700/0600 modes.
+# The shipped runtime is non-secret, root-owned and must be readable by UID 1000.
+RUN chmod -R a+rX /opt/frame && pnpm exec vite build --config studio/vite.config.mjs
 ENV NODE_ENV=production FRAME_BROWSER=/usr/bin/chromium FRAME_ROLE=api HOME=/tmp/frame-home
 ARG REVISION=development
 ENV FRAME_REVISION=$REVISION
