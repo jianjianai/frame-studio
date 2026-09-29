@@ -9,9 +9,9 @@ import {
   token,
   hash,
 } from "./security.mjs";
-import { applyProject } from "./apply-project.mjs";
+import { TaskPublication } from "./task-publication.mjs";
+import { TaskMonitor } from "./task-monitor.mjs";
 import { copyTree, treeHash } from "./project-files.mjs";
-import { PREVIEW_VERSION } from "./preview-version.mjs";
 import { seedPreviewAudio } from "./preview-audio-seed.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { taskKindSchema } from "../src/contracts/platform.mjs";
@@ -24,9 +24,13 @@ export class Tasks {
     this.data = data;
     this.repos = repos;
     this.secrets = secrets;
-    this.logs = new Map();
-    this.monitorWarnings = new Map();
-    this.missingContainers = new Map();
+    this.publication = new TaskPublication({
+      db, data, repos, get: id => this.get(id), finishCancellation: id => this.finishCancellation(id),
+    });
+    this.monitor = new TaskMonitor({
+      db, data, command: (...args) => this.command(...args), get: id => this.get(id),
+      complete: (task, exit) => this.complete(task, exit), failTask: (task, message) => this.failTask(task, message),
+    });
     this.ticking = false;
     this.closed = false;
     fs.mkdirSync(path.join(data, "runs"), { recursive: true });
@@ -273,165 +277,13 @@ export class Tasks {
     // scheduler stops the container instead of overwriting it with 'running'.
     await this.db.event(t.id, "state", { state: (await this.get(t.id)).state });
   }
-  async retryPublication(id) {
-    const task = await this.db.one(
-      "UPDATE tasks SET state='publishing',error=NULL,monitor=NULL,publication_attempts=0,publication_retry_at=NULL WHERE id=$1 AND state='publish_failed' RETURNING *",
-      [id],
-    );
-    if (!task) throw problem(409, "此任务没有等待恢复的发布结果");
-    return task;
-  }
-  async publicationError(t, error) {
-    await this.db.pool.query(
-      "UPDATE tasks SET state=CASE WHEN publication_attempts+1>=3 THEN 'publish_failed' ELSE 'publishing' END,publication_attempts=publication_attempts+1,publication_retry_at=now()+interval '15 seconds',error=$2,expires=NULL,progress=$3 WHERE id=$1 AND state='publishing'",
-      [t.id, "执行结果已保留，保存或发布尚未完成：" + String(error.message).slice(0, 2000), { stage: "等待恢复结果发布（不会重新执行 AI）" }],
-    );
-    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
-  }
-  async complete(t, exit) {
-    t = await this.get(t.id);
-    if (["cancelled", "succeeded", "failed", "publish_failed"].includes(t.state)) return;
-    if (t.state === "cancelling") { await this.finishCancellation(t.id); return; }
-    if (t.state !== "publishing") {
-      let result;
-      try {
-        result = JSON.parse(fs.readFileSync(path.join(this.data, "runs", t.id, "result.json"), "utf8"));
-        if (exit !== 0 || !result || typeof result !== "object" || Array.isArray(result) || result.error || result.status === "failed")
-          throw Error(result?.error || "Task failed; inspect task events");
-      } catch (error) { throw Object.assign(error, { executionFailed: true }); }
-      if (t.kind === "agent") result.previewTask = randomUUID();
-      const claimed = await this.db.one(
-        "UPDATE tasks SET state='publishing',result=$2,expires=NULL,error=NULL,monitor=NULL,progress=$3 WHERE id=$1 AND state='running' RETURNING *",
-        [t.id, result, { stage: "正在保存版本并发布预览" }],
-      );
-      if (!claimed) {
-        const latest = await this.get(t.id);
-        if (latest.state === "cancelling") await this.finishCancellation(t.id);
-        return;
-      }
-      t = claimed;
-    }
-    // Publication is durable and re-entrant, independent of container lifetime.
-    // A crash after replacing files or committing Git resumes the SAME result.
-    try { await this.publish(t); }
-    catch (error) { await this.publicationError(t, error); }
-  }
-  async publish(t) {
-    const run = path.join(this.data, "runs", t.id);
-    let result = { ...t.result };
-    if (t.repo && ["agent", "new"].includes(t.kind))
-      await this.db.lock(`${t.repo}:${t.project}`, async () => {
-        const { dir } = await this.repos.project(t.repo, t.project, {
-          exists: false,
-        });
-        const source = confined(run, "projects/" + t.project);
-        // After a process restart, an already applied identical result is safe to finish publishing.
-        await this.repos.revisions?.invalidate(t.repo, t.project);
-        if (await treeHash(dir) !== await treeHash(source))
-          await applyProject({
-            source,
-            destination: dir,
-            run,
-            id: t.id,
-            fingerprint: t.fingerprint,
-          });
-        result.commit = await this.repos.checkpoint(
-          t.repo,
-          t.project,
-          "AI · " + (t.input.prompt || "创建作品").slice(0, 120),
-        );
-      });
-    if (t.chat && result.upstream)
-      await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
-        t.chat,
-        result.upstream,
-      ]);
-    const artifacts = [];
-    const base = path.join(run, "projects", t.project || "", "exports");
-    const walk = (dir) => {
-      if (!fs.existsSync(dir)) return;
-      for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (item.isSymbolicLink()) continue;
-        const file = path.join(dir, item.name);
-        if (item.isDirectory()) walk(file);
-        else if (/\.(png|mp4|webm|wav|html|srt|json)$/.test(item.name))
-          artifacts.push({
-            name: path.relative(base, file).replaceAll("\\", "/"),
-            path: path.relative(run, file).replaceAll("\\", "/"),
-            bytes: fs.statSync(file).size,
-          });
-      }
-    };
-    walk(base);
-    result = { ...result, artifacts };
-    if (t.repo && t.kind === "agent") {
-      await this.db.pool.query(
-        "UPDATE works SET updated=now() WHERE repo=$1 AND project=$2",
-        [t.repo, t.project],
-      );
-      // A completed creation turn publishes a fresh player preview without a second user action.
-      // Publish the build already validated in this isolated turn, before queued follow-up work.
-      if (result.previewArtifacts) {
-          const preview = result.previewTask,
-            previewRun = path.join(this.data, "runs", preview);
-          fs.mkdirSync(previewRun, { recursive: true });
-          const directories = new Set(
-            result.previewArtifacts.map((a) => path.posix.dirname(a.path)),
-          );
-          for (const relative of directories) {
-            if (!relative.startsWith(`projects/${t.project}/exports/`))
-              throw new Error("Invalid preview output");
-            await fs.promises.cp(confined(run, relative), confined(previewRun, relative), {
-              recursive: true,
-              filter: (file) => !fs.lstatSync(file).isSymbolicLink(),
-            });
-          }
-          const { dir } = await this.repos.project(t.repo, t.project);
-          await this.db.pool.query(
-            "INSERT INTO tasks(id,repo,project,kind,state,input,result,fingerprint,source_commit,created,started,finished,expires) VALUES($1,$2,$3,'build','succeeded','{}',$4,$5,$6,now(),now(),now(),now()+interval '7 days') ON CONFLICT(id) DO NOTHING",
-            [
-              preview,
-              t.repo,
-              t.project,
-              {
-                previewVersion: PREVIEW_VERSION,
-                artifacts: result.previewArtifacts,
-              },
-              await treeHash(dir),
-              result.commit || t.source_commit,
-            ],
-          );
-      } else {
-        await this.db.pool.query(
-          "INSERT INTO tasks(id,repo,project,kind,input) VALUES($1,$2,$3,'build','{}') ON CONFLICT(id) DO NOTHING",
-          [result.previewTask, t.repo, t.project],
-        );
-      }
-      await this.repos.onChange?.(t.repo, t.project);
-    }
-    if (t.repo && (["new", "build"].includes(t.kind) || (t.kind === "agent" && !this.repos.onChange)))
-      await this.repos.revisions?.refresh(t.repo, t.project);
-    await this.db.pool.query(
-      "INSERT INTO events(task,kind,data,source_offset) VALUES($1,'result',$2,-1) ON CONFLICT DO NOTHING",
-      [t.id, result],
-    );
-    await this.db.pool.query(
-      "UPDATE tasks SET state='succeeded',result=$2,error=NULL,monitor=NULL,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days',publication_retry_at=NULL WHERE id=$1 AND state='publishing'",
-      [t.id, result, result.commit || null],
-    );
-    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
-  }
-  async monitorWarning(t, phase, error) {
-    const message = String(error?.message || error).slice(0, 1500);
-    const previous = this.monitorWarnings.get(t.id);
-    if (previous?.message === message && Date.now() - previous.checked < 30000) return;
-    const monitor = { phase, message, checked: Date.now(), since: previous?.since || Date.now() };
-    this.monitorWarnings.set(t.id, monitor);
-    try {
-      await this.db.pool.query("UPDATE tasks SET monitor=$2 WHERE id=$1 AND state IN ('running','cancelling')", [t.id, monitor]);
-      await this.db.event(t.id, "monitor-warning", monitor);
-    } catch (e) { console.error("Task monitoring unavailable:", e.message); }
-  }
+  retryPublication(id) { return this.publication.retryPublication(id); }
+  publicationError(task, error) { return this.publication.publicationError(task, error); }
+  complete(task, exit) { return this.publication.complete(task, exit); }
+  publish(task) { return this.publication.publish(task); }
+  monitorWarning(task, phase, error) { return this.monitor.monitorWarning(task, phase, error); }
+  observeTask(task) { return this.monitor.observeTask(task); }
+  collectEvents(task) { return this.monitor.collectEvents(task); }
   async failTask(t, message) {
     const failed = await this.db.one(
       "UPDATE tasks SET state='failed',error=$2,monitor=NULL,finished=now(),expires=now()+interval '14 days' WHERE id=$1 AND state IN ('queued','running') RETURNING id",
@@ -442,87 +294,6 @@ export class Tasks {
       await this.db.event(t.id, "error", { message });
     } else if ((await this.get(t.id)).state === "cancelling") {
       await this.finishCancellation(t.id);
-    }
-  }
-  async observeTask(t) {
-    // Optional diagnostic files must never determine whether the execution lives.
-    let diagnosticError = false;
-    try {
-      const progressFile = confined(path.join(this.data, "runs", t.id), "progress.json");
-      if (fs.existsSync(progressFile) && fs.statSync(progressFile).size < 4096) {
-        const value = JSON.parse(fs.readFileSync(progressFile, "utf8"));
-        const progress = { stage: String(value.stage || "正在处理").slice(0, 100) };
-        if (Number.isFinite(value.total) && value.total > 0 && Number.isFinite(value.completed))
-          Object.assign(progress, { total: value.total, completed: Math.max(0, Math.min(value.completed, value.total)) });
-        if (JSON.stringify(progress) !== JSON.stringify(t.progress))
-          await this.db.pool.query("UPDATE tasks SET progress=$2 WHERE id=$1", [t.id, progress]);
-      }
-    } catch (e) {
-      diagnosticError = true;
-      await this.monitorWarning(t, "progress", e);
-    }
-    let state;
-    try {
-      state = JSON.parse(await this.command("docker", ["inspect", "--format", "{{json .State}}", t.container], { timeout: 10000, max: 65536 }));
-      if (typeof state?.Running !== "boolean" || (!state.Running && !Number.isInteger(state.ExitCode)))
-        throw Error("Docker returned an incomplete task state");
-      this.missingContainers.delete(t.id);
-    } catch (e) {
-      const missing = /No such (?:object|container)/i.test(e.message);
-      const count = missing ? (this.missingContainers.get(t.id) || 0) + 1 : 0;
-      this.missingContainers.set(t.id, count);
-      await this.monitorWarning(t, "docker", e);
-      // Confirm repeated absence against a healthy daemon, not a broken connection.
-      if (count >= 3 && Date.now() - new Date(t.started).getTime() > 120000) {
-        await this.command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 10000 });
-        await this.failTask(t, "执行容器连续多次确认不存在；工作副本已保留，请检查后重试。");
-      }
-      return;
-    }
-    t = await this.get(t.id);
-    const timedOut = t.state === "running" && Date.now() - new Date(t.started).getTime() >
-      Math.max(600, Math.min(604800, Number(process.env.FRAME_TASK_TIMEOUT_SECONDS) || 21600)) * 1000;
-    if (state.Running && (t.state === "cancelling" || timedOut)) {
-      // Successful stop is followed by a fresh inspect on the next tick. A failed
-      // stop is a monitoring problem, not permission to force-remove the container.
-      await this.command("docker", ["stop", "-t", "5", t.container], { timeout: 20000 });
-      return;
-    }
-    if (timedOut && !state.Running) {
-      await this.failTask(t, "创作超过服务器配置的运行时限，隔离工作区产物已保留，可重新继续。");
-    } else {
-      try {
-        if (t.kind === "agent") {
-          do { if (!(await this.collectEvents(t))) break; } while (!state.Running);
-        } else {
-          const log = await this.command("docker", ["logs", "--tail", "1500", t.container], { timeout: 10000, max: 1024 * 1024, combined: true });
-          if (log !== this.logs.get(t.id)) {
-            const old = this.logs.get(t.id) || "";
-            const delta = log.startsWith(old) ? log.slice(old.length) : log;
-            if (delta) await this.db.event(t.id, "log", { text: delta.slice(-64000) });
-            this.logs.set(t.id, log);
-          }
-        }
-      } catch (e) {
-        diagnosticError = true;
-        await this.monitorWarning(t, "events", e);
-      }
-      if (!state.Running) {
-        try { await this.complete(t, state.ExitCode); }
-        catch (e) {
-          if (e.executionFailed) await this.failTask(t, e.message);
-          else { await this.monitorWarning(t, "publication", e); return; }
-        }
-      }
-    }
-    if (!diagnosticError && (t.monitor || this.monitorWarnings.has(t.id))) {
-      await this.db.pool.query("UPDATE tasks SET monitor=NULL WHERE id=$1", [t.id]);
-      this.monitorWarnings.delete(t.id);
-    }
-    if (!state.Running && ["succeeded", "failed", "cancelled"].includes((await this.get(t.id)).state)) {
-      await this.command("docker", ["rm", t.container], { timeout: 10000 }).catch(() => {});
-      this.logs.delete(t.id);
-      this.missingContainers.delete(t.id);
     }
   }
   async tick() {
@@ -568,46 +339,6 @@ export class Tasks {
         }
       }
     } finally { this.ticking = false; }
-  }
-  async collectEvents(task) {
-    const file = path.join(this.data, "runs", task.id, "events.ndjson");
-    if (!fs.existsSync(file)) return;
-    const start = Number(task.log_cursor || 0),
-      size = fs.statSync(file).size;
-    if (size <= start) return;
-    const fd = fs.openSync(file, "r"),
-      bytes = Buffer.alloc(Math.min(size - start, 1024 * 1024));
-    try {
-      fs.readSync(fd, bytes, 0, bytes.length, start);
-    } finally {
-      fs.closeSync(fd);
-    }
-    const end = bytes.lastIndexOf(10);
-    if (end < 0) return;
-    let offset = start;
-    for (const line of bytes.subarray(0, end).toString("utf8").split("\n")) {
-      offset += Buffer.byteLength(line) + 1;
-      try {
-        const event = JSON.parse(line);
-        await this.db.pool.query(
-          "INSERT INTO events(task,kind,data,source_offset) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
-          [task.id, event.type, event, offset],
-        );
-        if (event.type === "session" && task.chat)
-          await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
-            task.chat,
-            event.id,
-          ]);
-      } catch (e) {
-        if (!(e instanceof SyntaxError)) throw e;
-      }
-    }
-    await this.db.pool.query("UPDATE tasks SET log_cursor=$2 WHERE id=$1", [
-      task.id,
-      String(start + end + 1),
-    ]);
-    task.log_cursor = String(start + end + 1);
-    return start + end + 1 < size;
   }
   startLoop() {
     this.timer = setInterval(
