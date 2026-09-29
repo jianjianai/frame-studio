@@ -16,6 +16,9 @@ import {
   verifyDelivery,
 } from "./production-media.mjs";
 import { createRenderSession } from "./render-session.mjs";
+import { runtimeIdentity } from "./runtime-identity.mjs";
+import { browserOptions } from "./browser.mjs";
+import { fitComposition } from "../src/engine/dimensions.mjs";
 
 /** Durable segment files are reusable only with the same complete input and parameters. */
 export async function exportProduction(root, id, options = {}) {
@@ -62,9 +65,12 @@ export async function exportProduction(root, id, options = {}) {
 async function runExport(root, id, options, renderId) {
   const { meta } = readProject(projectPath(root, id, "project.ts"));
   const input = inputManifest(root, id);
+  const runtime = { ...(await runtimeIdentity(root)), browserExecutableSha256: sha(browserOptions().executablePath), image: process.env.FRAME_RUNTIME_IMAGE || null,
+    ffmpeg: (await checkedProcess(process.env.FFMPEG_PATH || "ffmpeg", ["-version"])).split("\n")[0] };
   const plan = createExportPlan({
     duration: meta.duration,
-    width: options.width ?? 1920,
+    composition: meta.composition,
+    width: options.width ?? fitComposition(meta, 1920).width,
     fps: options.fps ?? meta.fps,
     start: options.start ?? 0,
     end: options.end ?? meta.duration,
@@ -88,6 +94,7 @@ async function runExport(root, id, options, renderId) {
     manifest = JSON.parse(fs.readFileSync(manifestFile, "utf8"));
     if (
       manifest.input.fingerprint !== input.fingerprint ||
+      JSON.stringify(manifest.runtime) !== JSON.stringify(runtime) ||
       JSON.stringify(manifest.config) !== JSON.stringify(config)
     )
       throw new Error(
@@ -100,6 +107,7 @@ async function runExport(root, id, options, renderId) {
       renderId,
       project: id,
       input,
+      runtime,
       config,
       segments: [],
       status: "preparing",

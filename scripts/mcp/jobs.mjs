@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { createExportPlan } from "../../src/engine/export-plan.mjs";
+import { fitComposition } from "../../src/engine/dimensions.mjs";
 import { readProject } from "../project-metadata.mjs";
 import { fail, MAX_FILE } from "./workspace.mjs";
 
@@ -50,9 +51,10 @@ export class Jobs {
         validation,
       });
     const { meta } = readProject(this.workspace.file(id, "project.ts"));
-    const width = options.width ?? (kind === "render" ? 1280 : 640);
+    const width = options.width ?? fitComposition(meta, kind === "render" ? 1280 : 640).width;
     const plan = createExportPlan({
       duration: meta.duration,
+    composition: meta.composition,
       fps: options.fps ?? meta.fps,
       width,
       start: options.start ?? 0,

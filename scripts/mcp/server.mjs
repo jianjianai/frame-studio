@@ -27,7 +27,7 @@ import {
 const project = z.string().refine(validProjectId, "Invalid project id");
 const filePath = z.string().min(1).max(512);
 const jobId = z.string().uuid();
-const width = z.number().int().min(320).max(3840).multipleOf(32);
+const width = z.number().int().min(320).max(3840).multipleOf(2);
 const seconds = z.number().finite().nonnegative();
 const imageOptions = {
   presentation: z.enum(["native", "image-only", "metadata"]).default("native"),

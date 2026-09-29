@@ -37,6 +37,7 @@ export async function mockApi(context, playerUrl, uiUrl) {
     id: randomUUID(),
     connection: connection.id,
     title: "精确审片",
+    provider: "codex",
   };
   const build = {
     id: randomUUID(),

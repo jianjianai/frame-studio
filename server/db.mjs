@@ -4,7 +4,7 @@ import { passwordHash, passwordMatches } from "./security.mjs";
 export async function database(url, password) {
   if (typeof password !== "string" || password.length < 14)
     throw new Error("FRAME_ADMIN_PASSWORD (at least 14 characters) is required on every startup");
-  const pool = new pg.Pool({ connectionString: url, max: 12 });
+  const pool = new pg.Pool({ connectionString: url, max: 12, connectionTimeoutMillis: 10000 });
   try {
     await migrate(pool);
     const admin = await pool.query(
@@ -53,6 +53,7 @@ export async function database(url, password) {
     },
     async lock(id, fn) {
       const client = await pool.connect();
+      let locked = false, broken = false;
       try {
         const row = await client.query(
           "SELECT pg_try_advisory_lock(hashtext($1)) AS ok",
@@ -63,10 +64,11 @@ export async function database(url, password) {
           e.statusCode = 409;
           throw e;
         }
+        locked = true;
         return await fn();
       } finally {
-        await client.query("SELECT pg_advisory_unlock(hashtext($1))", [id]);
-        client.release();
+        if (locked) await client.query("SELECT pg_advisory_unlock(hashtext($1))", [id]).catch(() => { broken = true; });
+        client.release(broken);
       }
     },
   };

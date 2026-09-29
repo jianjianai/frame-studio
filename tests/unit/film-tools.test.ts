@@ -24,7 +24,7 @@ describe("fixed frame grid", () => {
   it("rejects invalid dimensions, frame rate and ranges", () => {
     for (const change of [
       { width: 641 },
-      { width: 336 },
+      { width: 0 },
       { fps: 0 },
       { fps: 29.97 },
       { start: -1 },

@@ -1,3 +1,4 @@
+import { previewMessageSchema } from "../src/contracts/platform.mjs";
 import { WorkChat } from "./work-chat";
 import { useEffect, useRef, useState } from "react";
 import { previewCacheBridge } from "./preview-cache";
@@ -228,13 +229,9 @@ export function Creation({ id, notify }) {
         playerPreferences.current = e.data.preferences;
         writePreference("frame.player-view", e.data.preferences);
       }
-      if (e.data?.type === "frame-preview-loading")
-        setPreviewStage(e.data.message || "");
-      if (
-        e.data?.type === "frame-player-state" &&
-        typeof e.data.time === "number"
-      )
-        setPosition(e.data);
+      const message = previewMessageSchema.safeParse(e.data);
+      if (message.success && message.data.type === "frame-preview-loading") setPreviewStage(message.data.message);
+      if (message.success && message.data.type === "frame-player-state") setPosition(message.data);
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);

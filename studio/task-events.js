@@ -1,6 +1,7 @@
+import { hasLiveTaskEvents } from "../src/contracts/platform.mjs";
 // Historical turns use bounded reads, not one permanent WebSocket subscription per turn.
 /** @typedef {{id: number | string, data?: unknown, kind?: string}} TaskEvent */
-/** @typedef {{id: string, state: string}} TaskSummary */
+/** @typedef {import("../src/contracts/platform").TaskSummary} TaskSummary */
 /** @typedef {{after: number, rows: TaskEvent[], loadedState: string | null}} EventCache */
 /** @typedef {{result?: {events?: TaskEvent[]}, error?: string}} EventUpdate */
 /**
@@ -31,7 +32,7 @@ export function loadTaskEvents({ tasks, cache, call, subscribe, onChange, onErro
   const history = [];
   for (const task of tasks) {
     const entry = (cache[task.id] ||= { after: 0, rows: [], loadedState: null });
-    if (["running", "cancelling", "publishing"].includes(task.state)) {
+    if (hasLiveTaskEvents(task)) {
       entry.loadedState = null;
       stops.push(subscribe("task_get", { id: task.id, after: entry.after }, ({ result, error }) => {
         if (cancelled) return;

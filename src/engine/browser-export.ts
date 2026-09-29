@@ -41,6 +41,7 @@ export async function exportWebm(
 ): Promise<Blob | null> {
   const plan = createExportPlan({
     duration: project.duration,
+    composition: project.composition,
     width: options.width,
     fps: options.fps,
     start: options.start,

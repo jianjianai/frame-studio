@@ -2,12 +2,12 @@ import { FrameRenderer } from "./renderer";
 import { OfflineAudioRenderer } from "./audio-graph";
 import { projectAudioTracks, type AnimationProject } from "./types";
 import { waitForStudio, type StudioApi } from "./debug";
+import { frameDimensions, fitComposition } from "./dimensions.mjs";
 
 /** Production entry without a studio registry, UI, HMR, or playback clock. */
 export async function installOffline(project: AnimationProject) {
-  const width = Number(
-    new URLSearchParams(location.search).get("width") ?? 1280,
-  );
+  const requested = new URLSearchParams(location.search).get("width");
+  const { width, height } = frameDimensions(project, requested ? Number(requested) : fitComposition(project, 1280).width);
   const canvas = document.createElement("canvas");
   document.body.append(canvas);
   const renderer = new FrameRenderer(canvas, project);
@@ -35,7 +35,7 @@ export async function installOffline(project: AnimationProject) {
       loop: false,
       audioState: "offline",
       width,
-      height: (width * 9) / 16,
+      height,
     }),
     dataURL: () => canvas.toDataURL("image/png"),
     async waitUntilReady(options = {}) {
@@ -101,7 +101,7 @@ export async function installOffline(project: AnimationProject) {
     { once: true },
   );
   try {
-    await renderer.init(width, (width * 9) / 16, "high");
+    await renderer.init(width, height, "high");
     await document.fonts.ready;
     api.ready = true;
   } catch (error) {

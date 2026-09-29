@@ -4,29 +4,40 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { command } from "./process.mjs";
 import {
-  copyTree,
-  treeHash,
   confined,
   problem,
   token,
   hash,
 } from "./security.mjs";
-import { applyProject } from "./apply-project.mjs";
-import { PREVIEW_VERSION } from "./preview-version.mjs";
-import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { snapshotVersion, versionTree } from "./version-review.mjs";
+import { TaskPublication } from "./task-publication.mjs";
+import { TaskMonitor } from "./task-monitor.mjs";
+import { copyTree, treeHash } from "./project-files.mjs";
+import { seedPreviewAudio } from "./preview-audio-seed.mjs";
+import { executionRuntime } from "./execution-runtime.mjs";
+import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
+import { executableTaskKindSchema } from "../src/contracts/platform.mjs";
+import { ControllerLease } from "./controller-lease.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets, { runCommand = command } = {}) {
-    this.command = runCommand;
+    this.command = async (...args) => {
+      if (args[0] === "docker" && ["run", "stop", "rm"].includes(args[1]?.[0])) await this.assertLeadership();
+      return runCommand(...args);
+    };
+    this.controllerId = randomUUID();
     this.limits = runtimeLimits();
     this.queueBlocked = null;
     this.db = db;
     this.data = data;
     this.repos = repos;
     this.secrets = secrets;
-    this.logs = new Map();
-    this.monitorWarnings = new Map();
-    this.missingContainers = new Map();
+    this.publication = new TaskPublication({
+      db, data, repos, get: id => this.get(id), finishCancellation: id => this.finishCancellation(id),
+    });
+    this.monitor = new TaskMonitor({
+      db, data, command: (...args) => this.command(...args), get: id => this.get(id),
+      complete: (task, exit) => this.complete(task, exit), failTask: (task, message) => this.failTask(task, message),
+    });
     this.ticking = false;
     this.closed = false;
     fs.mkdirSync(path.join(data, "runs"), { recursive: true });
@@ -41,18 +52,7 @@ export class Tasks {
     requestKey = null,
   }) {
     input = JSON.parse(JSON.stringify(input));
-    if (
-      ![
-        "new",
-        "validate",
-        "frame",
-        "storyboard",
-        "render",
-        "build",
-        "agent",
-        "tools-update",
-      ].includes(kind)
-    )
+    if (!executableTaskKindSchema.safeParse(kind).success)
       throw problem(400, "Unknown task kind");
     if (kind === "tools-update") {
       if (
@@ -83,8 +83,7 @@ export class Tasks {
           return existing;
         }
       }
-      if (repo && kind !== "agent" && !input.version)
-        await this.repos.writable(repo, project);
+      if (repo && kind !== "agent" && !input.version) await this.repos.writable(repo, project);
       if (
         kind === "tools-update" &&
         (await this.db.one(
@@ -113,12 +112,9 @@ export class Tasks {
     );
     if (changed?.state === "cancelled")
       await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [id]);
-    const current = changed || (await this.get(id));
+    const current = changed || await this.get(id);
     if (["publishing", "publish_failed"].includes(current.state))
-      throw problem(
-        409,
-        "执行已经结束，结果正在保存或等待恢复，请使用重试发布而不是取消",
-      );
+      throw problem(409, "执行已经结束，结果正在保存或等待恢复，请使用重试发布而不是取消");
     return current;
   }
   async finishCancellation(id) {
@@ -131,8 +127,34 @@ export class Tasks {
   host(relative) {
     return path.posix.join(process.env.FRAME_HOST_DATA || this.data, relative);
   }
+  async assertLeadership() {
+    if (this.closed) throw Object.assign(new Error("Controller is stopping"), { leadershipLost: true });
+    if (this.lease) await this.lease.assert();
+  }
   async start(t) {
-    if ((await this.get(t.id)).state !== "queued") return;
+    await this.assertLeadership();
+    const lock = this.db.lock ? fn => this.db.lock(t.repo ? `${t.repo}:${t.project}` : "tools-update", fn) : fn => fn();
+    return lock(async () => {
+      const container = "frame-task-" + t.id;
+      const claimed = await this.db.one(
+        "UPDATE tasks SET state='running',started=now(),container=$2,controller_id=$3,progress=$4 WHERE id=$1 AND state='queued' RETURNING id",
+        [t.id, container, this.controllerId, { stage: "准备隔离工作副本" }],
+      );
+      if (!claimed) return;
+      try { return await this.prepareAndLaunch(t, container); }
+      catch (error) {
+        const current = await this.get(t.id);
+        if (!error.leadershipLost && !current.launch_attempted_at) {
+          await this.assertLeadership();
+          await this.failTask(current, error.message);
+        }
+        throw error;
+      }
+    });
+  }
+  async prepareAndLaunch(t, container) {
+    if ((await this.get(t.id)).state === "cancelling") { await this.finishCancellation(t.id); return; }
+    await this.assertLeadership();
     const run = path.join(this.data, "runs", t.id);
     fs.mkdirSync(run, { recursive: true });
     let fingerprint = null;
@@ -140,7 +162,7 @@ export class Tasks {
     if (t.repo && t.kind === "build" && t.input.version) {
       const destination = path.join(run, "projects", t.project);
       await snapshotVersion(this.repos, t, t.input.version, destination);
-      fingerprint = treeHash(destination);
+      fingerprint = await treeHash(destination);
       sourceCommit = t.input.version;
     } else if (t.repo) {
       const { dir } = await this.repos.project(t.repo, t.project, {
@@ -148,9 +170,13 @@ export class Tasks {
       });
       if (t.kind === "new" && fs.existsSync(dir))
         throw problem(409, "Project already exists");
-      fingerprint = treeHash(dir);
-      if (fs.existsSync(dir))
-        copyTree(dir, path.join(run, "projects", t.project));
+      fingerprint = await treeHash(dir);
+      if (fs.existsSync(dir)) {
+        const snapshot = path.join(run, "projects", t.project);
+        await copyTree(dir, snapshot);
+        if (await treeHash(snapshot) !== fingerprint || await treeHash(dir) !== fingerprint)
+          throw problem(409, "Source changed while preparing the isolated task");
+      }
       if (t.kind !== "new")
         sourceCommit = await this.repos.checkpoint(
           t.repo,
@@ -158,6 +184,7 @@ export class Tasks {
           t.kind === "agent" ? "AI 修改前自动保存" : "生成预览或导出前保存",
         );
     }
+    await seedPreviewAudio({ db: this.db, data: this.data, task: t, run });
     let config = {};
     if (t.kind === "agent") {
       if (t.input.connection)
@@ -177,7 +204,10 @@ export class Tasks {
     const chat = t.chat
       ? await this.db.one("SELECT * FROM chats WHERE id=$1", [t.chat])
       : null;
+    const runtime = await executionRuntime({ data: this.data, task: t, command: this.command });
     const payload = {
+      runtime,
+      sourceCommit,
       id: t.id,
       project: t.project,
       kind: t.kind,
@@ -193,8 +223,8 @@ export class Tasks {
       sessionDir = path.join(this.data, "sessions", session);
     fs.mkdirSync(path.join(sessionDir, ".codex"), { recursive: true });
     await this.command("chown", ["-R", "1000:1000", sessionDir]);
-    const env = {};
-    const flags = [];
+    const env = { FRAME_RUNTIME_IMAGE: runtime.image };
+    const flags = ["-e", "FRAME_RUNTIME_IMAGE"];
     if (t.kind === "agent" && config.mode === "official") {
       const auth = path.join(this.data, "auth", config.id);
       if (!fs.existsSync(auth))
@@ -233,16 +263,15 @@ export class Tasks {
         flags.push("-e", key);
       }
     }
-    const image = process.env.FRAME_EXECUTOR_IMAGE || "frame-studio:local",
-      container = "frame-task-" + t.id;
-    const claimed = await this.db.one(
-      "UPDATE tasks SET state='running',started=now(),container=$2,fingerprint=$3,source_commit=$4 WHERE id=$1 AND state='queued' RETURNING id",
-      [t.id, container, fingerprint, sourceCommit],
+    const image = runtime.image;
+    await this.assertLeadership();
+    const prepared = await this.db.one(
+      "UPDATE tasks SET fingerprint=$2,source_commit=$3,runtime=$4 WHERE id=$1 AND state='running' AND controller_id=$5 RETURNING id",
+      [t.id, fingerprint, sourceCommit, runtime, this.controllerId],
     );
-    if (!claimed) {
-      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [
-        t.id,
-      ]);
+    if (!prepared) {
+      if ((await this.get(t.id)).state === "cancelling") await this.finishCancellation(t.id);
+      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
       return;
     }
     const args = [
@@ -283,10 +312,19 @@ export class Tasks {
     ];
     if (t.kind === "tools-update") {
       fs.mkdirSync(path.join(this.data, "tools"), { recursive: true });
-      await this.command("chmod", ["a+rwx", path.join(this.data, "tools")]);
+      await this.command("chmod", ["u+rwx", path.join(this.data, "tools")]);
     }
     if ((await this.get(t.id)).state !== "running") {
       await this.finishCancellation(t.id);
+      return;
+    }
+    await this.assertLeadership();
+    const launch = await this.db.one(
+      "UPDATE tasks SET launch_attempted_at=now() WHERE id=$1 AND state='running' AND controller_id=$2 AND launch_attempted_at IS NULL RETURNING id",
+      [t.id, this.controllerId],
+    );
+    if (!launch) {
+      if ((await this.get(t.id)).state === "cancelling") await this.finishCancellation(t.id);
       return;
     }
     await this.command("docker", args, { env, timeout: 120000 });
@@ -294,400 +332,47 @@ export class Tasks {
     // scheduler stops the container instead of overwriting it with 'running'.
     await this.db.event(t.id, "state", { state: (await this.get(t.id)).state });
   }
-  async retryPublication(id) {
-    const task = await this.db.one(
-      "UPDATE tasks SET state='publishing',error=NULL,monitor=NULL,publication_attempts=0,publication_retry_at=NULL WHERE id=$1 AND state='publish_failed' RETURNING *",
-      [id],
-    );
-    if (!task) throw problem(409, "此任务没有等待恢复的发布结果");
-    return task;
-  }
-  async publicationError(t, error) {
-    await this.db.pool.query(
-      "UPDATE tasks SET state=CASE WHEN publication_attempts+1>=3 THEN 'publish_failed' ELSE 'publishing' END,publication_attempts=publication_attempts+1,publication_retry_at=now()+interval '15 seconds',error=$2,expires=NULL,progress=$3 WHERE id=$1 AND state='publishing'",
-      [
-        t.id,
-        "执行结果已保留，保存或发布尚未完成：" +
-          String(error.message).slice(0, 2000),
-        { stage: "等待恢复结果发布（不会重新执行 AI）" },
-      ],
-    );
-    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
-  }
-  async complete(t, exit) {
-    t = await this.get(t.id);
-    if (
-      ["cancelled", "succeeded", "failed", "publish_failed"].includes(t.state)
-    )
-      return;
-    if (t.state === "cancelling") {
-      await this.finishCancellation(t.id);
-      return;
-    }
-    if (t.state !== "publishing") {
-      let result;
-      try {
-        result = JSON.parse(
-          fs.readFileSync(
-            path.join(this.data, "runs", t.id, "result.json"),
-            "utf8",
-          ),
-        );
-        if (
-          exit !== 0 ||
-          !result ||
-          typeof result !== "object" ||
-          Array.isArray(result) ||
-          result.error ||
-          result.status === "failed"
-        )
-          throw Error(result?.error || "Task failed; inspect task events");
-      } catch (error) {
-        throw Object.assign(error, { executionFailed: true });
-      }
-      if (t.kind === "agent") result.previewTask = randomUUID();
-      const claimed = await this.db.one(
-        "UPDATE tasks SET state='publishing',result=$2,expires=NULL,error=NULL,monitor=NULL,progress=$3 WHERE id=$1 AND state='running' RETURNING *",
-        [t.id, result, { stage: "正在保存版本并发布预览" }],
-      );
-      if (!claimed) {
-        const latest = await this.get(t.id);
-        if (latest.state === "cancelling") await this.finishCancellation(t.id);
-        return;
-      }
-      t = claimed;
-    }
-    // Publication is durable and re-entrant, independent of container lifetime.
-    // A crash after replacing files or committing Git resumes the SAME result.
-    try {
-      await this.publish(t);
-    } catch (error) {
-      await this.publicationError(t, error);
-    }
-  }
-  async publish(t) {
-    const run = path.join(this.data, "runs", t.id);
-    let result = { ...t.result };
-    if (t.repo && ["agent", "new"].includes(t.kind))
-      await this.db.lock(`${t.repo}:${t.project}`, async () => {
-        const { dir } = await this.repos.project(t.repo, t.project, {
-          exists: false,
-        });
-        const source = confined(run, "projects/" + t.project);
-        // After a process restart, an already applied identical result is safe to finish publishing.
-        if (treeHash(dir) !== treeHash(source))
-          applyProject({
-            source,
-            destination: dir,
-            run,
-            id: t.id,
-            fingerprint: t.fingerprint,
-          });
-        result.commit = await this.repos.checkpoint(
-          t.repo,
-          t.project,
-          "AI · " + (t.input.prompt || "创建作品").slice(0, 120),
-        );
-      });
-    if (t.chat && result.upstream)
-      await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
-        t.chat,
-        result.upstream,
-      ]);
-    const artifacts = [];
-    const base = path.join(run, "projects", t.project || "", "exports");
-    const walk = (dir) => {
-      if (!fs.existsSync(dir)) return;
-      for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (item.isSymbolicLink()) continue;
-        const file = path.join(dir, item.name);
-        if (item.isDirectory()) walk(file);
-        else if (/\.(png|mp4|webm|wav|html|srt|json)$/.test(item.name))
-          artifacts.push({
-            name: path.relative(base, file).replaceAll("\\", "/"),
-            path: path.relative(run, file).replaceAll("\\", "/"),
-            bytes: fs.statSync(file).size,
-          });
-      }
-    };
-    walk(base);
-    result = {
-      ...result,
-      artifacts,
-      ...(t.kind === "build" && t.input.version
-        ? { readonlyVersion: t.input.version }
-        : {}),
-    };
-    if (t.repo && t.kind === "agent") {
-      await this.db.pool.query(
-        "UPDATE works SET updated=now() WHERE repo=$1 AND project=$2",
-        [t.repo, t.project],
-      );
-      // A completed creation turn publishes a fresh player preview without a second user action.
-      // Publish the build already validated in this isolated turn, before queued follow-up work.
-      if (result.previewArtifacts) {
-        const preview = result.previewTask,
-          previewRun = path.join(this.data, "runs", preview);
-        fs.mkdirSync(previewRun, { recursive: true });
-        const directories = new Set(
-          result.previewArtifacts.map((a) => path.posix.dirname(a.path)),
-        );
-        for (const relative of directories) {
-          if (!relative.startsWith(`projects/${t.project}/exports/`))
-            throw new Error("Invalid preview output");
-          fs.cpSync(confined(run, relative), confined(previewRun, relative), {
-            recursive: true,
-            filter: (file) => !fs.lstatSync(file).isSymbolicLink(),
-          });
-        }
-        const { dir } = await this.repos.project(t.repo, t.project);
-        await this.db.pool.query(
-          "INSERT INTO tasks(id,repo,project,kind,state,input,result,fingerprint,source_commit,created,started,finished,expires) VALUES($1,$2,$3,'build','succeeded','{}',$4,$5,$6,now(),now(),now(),now()+interval '7 days') ON CONFLICT(id) DO NOTHING",
-          [
-            preview,
-            t.repo,
-            t.project,
-            {
-              previewVersion: PREVIEW_VERSION,
-              artifacts: result.previewArtifacts,
-            },
-            treeHash(dir),
-            result.commit || t.source_commit,
-          ],
-        );
-      } else {
-        await this.db.pool.query(
-          "INSERT INTO tasks(id,repo,project,kind,input) VALUES($1,$2,$3,'build','{}') ON CONFLICT(id) DO NOTHING",
-          [result.previewTask, t.repo, t.project],
-        );
-      }
-      await this.repos.onChange?.(t.repo, t.project);
-    }
-    await this.db.pool.query(
-      "INSERT INTO events(task,kind,data,source_offset) VALUES($1,'result',$2,-1) ON CONFLICT DO NOTHING",
-      [t.id, result],
-    );
-    await this.db.pool.query(
-      "UPDATE tasks SET state='succeeded',result=$2,error=NULL,monitor=NULL,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days',publication_retry_at=NULL WHERE id=$1 AND state='publishing'",
-      [t.id, result, result.commit || null],
-    );
-    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
-  }
-  async monitorWarning(t, phase, error) {
-    const message = String(error?.message || error).slice(0, 1500);
-    const previous = this.monitorWarnings.get(t.id);
-    if (previous?.message === message && Date.now() - previous.checked < 30000)
-      return;
-    const monitor = {
-      phase,
-      message,
-      checked: Date.now(),
-      since: previous?.since || Date.now(),
-    };
-    this.monitorWarnings.set(t.id, monitor);
-    try {
-      await this.db.pool.query(
-        "UPDATE tasks SET monitor=$2 WHERE id=$1 AND state IN ('running','cancelling')",
-        [t.id, monitor],
-      );
-      await this.db.event(t.id, "monitor-warning", monitor);
-    } catch (e) {
-      console.error("Task monitoring unavailable:", e.message);
-    }
-  }
+  retryPublication(id) { return this.publication.retryPublication(id); }
+  publicationError(task, error) { return this.publication.publicationError(task, error); }
+  async complete(task, exit) { await this.assertLeadership(); return this.publication.complete(task, exit); }
+  async publish(task) { await this.assertLeadership(); return this.publication.publish(task); }
+  monitorWarning(task, phase, error) { return this.monitor.monitorWarning(task, phase, error); }
+  observeTask(task) { return this.monitor.observeTask(task); }
+  collectEvents(task) { return this.monitor.collectEvents(task); }
   async failTask(t, message) {
     const failed = await this.db.one(
       "UPDATE tasks SET state='failed',error=$2,monitor=NULL,finished=now(),expires=now()+interval '14 days' WHERE id=$1 AND state IN ('queued','running') RETURNING id",
       [t.id, message],
     );
     if (failed) {
-      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [
-        t.id,
-      ]);
+      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
       await this.db.event(t.id, "error", { message });
     } else if ((await this.get(t.id)).state === "cancelling") {
       await this.finishCancellation(t.id);
-    }
-  }
-  async observeTask(t) {
-    // Optional diagnostic files must never determine whether the execution lives.
-    let diagnosticError = false;
-    try {
-      const progressFile = confined(
-        path.join(this.data, "runs", t.id),
-        "progress.json",
-      );
-      if (
-        fs.existsSync(progressFile) &&
-        fs.statSync(progressFile).size < 4096
-      ) {
-        const value = JSON.parse(fs.readFileSync(progressFile, "utf8"));
-        const progress = {
-          stage: String(value.stage || "正在处理").slice(0, 100),
-        };
-        if (
-          Number.isFinite(value.total) &&
-          value.total > 0 &&
-          Number.isFinite(value.completed)
-        )
-          Object.assign(progress, {
-            total: value.total,
-            completed: Math.max(0, Math.min(value.completed, value.total)),
-          });
-        if (JSON.stringify(progress) !== JSON.stringify(t.progress))
-          await this.db.pool.query("UPDATE tasks SET progress=$2 WHERE id=$1", [
-            t.id,
-            progress,
-          ]);
-      }
-    } catch (e) {
-      diagnosticError = true;
-      await this.monitorWarning(t, "progress", e);
-    }
-    let state;
-    try {
-      state = JSON.parse(
-        await this.command(
-          "docker",
-          ["inspect", "--format", "{{json .State}}", t.container],
-          { timeout: 10000, max: 65536 },
-        ),
-      );
-      if (
-        typeof state?.Running !== "boolean" ||
-        (!state.Running && !Number.isInteger(state.ExitCode))
-      )
-        throw Error("Docker returned an incomplete task state");
-      this.missingContainers.delete(t.id);
-    } catch (e) {
-      const missing = /No such (?:object|container)/i.test(e.message);
-      const count = missing ? (this.missingContainers.get(t.id) || 0) + 1 : 0;
-      this.missingContainers.set(t.id, count);
-      await this.monitorWarning(t, "docker", e);
-      // Confirm repeated absence against a healthy daemon, not a broken connection.
-      if (count >= 3 && Date.now() - new Date(t.started).getTime() > 120000) {
-        await this.command(
-          "docker",
-          ["info", "--format", "{{.ServerVersion}}"],
-          { timeout: 10000 },
-        );
-        await this.failTask(
-          t,
-          "执行容器连续多次确认不存在；工作副本已保留，请检查后重试。",
-        );
-      }
-      return;
-    }
-    t = await this.get(t.id);
-    const timedOut =
-      t.state === "running" &&
-      Date.now() - new Date(t.started).getTime() >
-        Math.max(
-          600,
-          Math.min(
-            604800,
-            Number(process.env.FRAME_TASK_TIMEOUT_SECONDS) || 21600,
-          ),
-        ) *
-          1000;
-    if (state.Running && (t.state === "cancelling" || timedOut)) {
-      // Successful stop is followed by a fresh inspect on the next tick. A failed
-      // stop is a monitoring problem, not permission to force-remove the container.
-      await this.command("docker", ["stop", "-t", "5", t.container], {
-        timeout: 20000,
-      });
-      return;
-    }
-    if (timedOut && !state.Running) {
-      await this.failTask(
-        t,
-        "创作超过服务器配置的运行时限，隔离工作区产物已保留，可重新继续。",
-      );
-    } else {
-      try {
-        if (t.kind === "agent") {
-          do {
-            if (!(await this.collectEvents(t))) break;
-          } while (!state.Running);
-        } else {
-          const log = await this.command(
-            "docker",
-            ["logs", "--tail", "1500", t.container],
-            { timeout: 10000, max: 1024 * 1024, combined: true },
-          );
-          if (log !== this.logs.get(t.id)) {
-            const old = this.logs.get(t.id) || "";
-            const delta = log.startsWith(old) ? log.slice(old.length) : log;
-            if (delta)
-              await this.db.event(t.id, "log", { text: delta.slice(-64000) });
-            this.logs.set(t.id, log);
-          }
-        }
-      } catch (e) {
-        diagnosticError = true;
-        await this.monitorWarning(t, "events", e);
-      }
-      if (!state.Running) {
-        try {
-          await this.complete(t, state.ExitCode);
-        } catch (e) {
-          if (e.executionFailed) await this.failTask(t, e.message);
-          else {
-            await this.monitorWarning(t, "publication", e);
-            return;
-          }
-        }
-      }
-    }
-    if (!diagnosticError && (t.monitor || this.monitorWarnings.has(t.id))) {
-      await this.db.pool.query("UPDATE tasks SET monitor=NULL WHERE id=$1", [
-        t.id,
-      ]);
-      this.monitorWarnings.delete(t.id);
-    }
-    if (
-      !state.Running &&
-      ["succeeded", "failed", "cancelled"].includes(
-        (await this.get(t.id)).state,
-      )
-    ) {
-      await this.command("docker", ["rm", t.container], {
-        timeout: 10000,
-      }).catch(() => {});
-      this.logs.delete(t.id);
-      this.missingContainers.delete(t.id);
     }
   }
   async tick() {
     if (this.ticking || this.closed) return;
     this.ticking = true;
     try {
-      const running = await this.db.all(
-        "SELECT * FROM tasks WHERE state IN ('running','cancelling','publishing') AND (publication_retry_at IS NULL OR publication_retry_at<=now()) ORDER BY created",
-      );
+      await this.assertLeadership();
+      const running = await this.db.all("SELECT * FROM tasks WHERE state IN ('running','cancelling','publishing') AND (publication_retry_at IS NULL OR publication_retry_at<=now()) ORDER BY created");
       for (const t of running) {
+        await this.assertLeadership();
         try {
           if (t.state === "publishing") {
             await this.complete(t, 0);
             if ((await this.get(t.id)).state === "succeeded" && t.container)
-              await this.command("docker", ["rm", t.container], {
-                timeout: 10000,
-              }).catch(() => {});
+              await this.command("docker", ["rm", t.container], { timeout: 10000 }).catch(() => {});
           } else await this.observeTask(t);
-        } catch (e) {
-          await this.monitorWarning(t, "controller", e);
         }
+        catch (e) { await this.monitorWarning(t, "controller", e); }
       }
-      const count = await this.db.one(
-        "SELECT count(*)::int AS n FROM tasks WHERE state IN ('running','cancelling')",
-      );
+      const count = await this.db.one("SELECT count(*)::int AS n FROM tasks WHERE state IN ('running','cancelling')");
       if (count.n < this.limits.concurrency) {
         try {
           const disk = await diskCapacity(this.data);
-          this.queueBlocked =
-            disk.freeBytes < this.limits.minFreeBytes
-              ? "可用空间低于安全阈值，新任务保留排队；正在执行的任务不会因此被终止。"
-              : null;
+          this.queueBlocked = disk.freeBytes < this.limits.minFreeBytes ? "可用空间低于安全阈值，新任务保留排队；正在执行的任务不会因此被终止。" : null;
         } catch {
           this.queueBlocked = "暂时无法读取磁盘容量，新任务保留排队。";
         }
@@ -697,80 +382,52 @@ export class Tasks {
           ORDER BY t.created LIMIT 1`,
         );
         if (t) {
-          try {
-            await this.start(t);
-          } catch (e) {
+          await this.assertLeadership();
+          try { await this.start(t); }
+          catch (e) {
             const current = await this.get(t.id);
             // docker run may have succeeded before its response was lost. Inspect
             // the assigned container on later ticks; never kill it on uncertainty.
-            if (
-              ["running", "cancelling"].includes(current.state) &&
-              current.container
-            )
+            if (["running", "cancelling"].includes(current.state) && current.container)
               await this.monitorWarning(current, "startup", e);
-            else if (current.state === "queued")
-              await this.failTask(current, e.message);
+            else if (current.state === "queued") await this.failTask(current, e.message);
             else if (current.state === "cancelled")
-              await this.db.pool.query(
-                "DELETE FROM agent_tokens WHERE task=$1",
-                [t.id],
-              );
+              await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
           }
         }
       }
-    } finally {
-      this.ticking = false;
-    }
+    } finally { this.ticking = false; }
   }
-  async collectEvents(task) {
-    const file = path.join(this.data, "runs", task.id, "events.ndjson");
-    if (!fs.existsSync(file)) return;
-    const start = Number(task.log_cursor || 0),
-      size = fs.statSync(file).size;
-    if (size <= start) return;
-    const fd = fs.openSync(file, "r"),
-      bytes = Buffer.alloc(Math.min(size - start, 1024 * 1024));
-    try {
-      fs.readSync(fd, bytes, 0, bytes.length, start);
-    } finally {
-      fs.closeSync(fd);
-    }
-    const end = bytes.lastIndexOf(10);
-    if (end < 0) return;
-    let offset = start;
-    for (const line of bytes.subarray(0, end).toString("utf8").split("\n")) {
-      offset += Buffer.byteLength(line) + 1;
-      try {
-        const event = JSON.parse(line);
-        await this.db.pool.query(
-          "INSERT INTO events(task,kind,data,source_offset) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
-          [task.id, event.type, event, offset],
-        );
-        if (event.type === "session" && task.chat)
-          await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
-            task.chat,
-            event.id,
-          ]);
-      } catch (e) {
-        if (!(e instanceof SyntaxError)) throw e;
-      }
-    }
-    await this.db.pool.query("UPDATE tasks SET log_cursor=$2 WHERE id=$1", [
-      task.id,
-      String(start + end + 1),
-    ]);
-    task.log_cursor = String(start + end + 1);
-    return start + end + 1 < size;
+  startLoop({ onLeadership = () => {}, onCycle = () => {} } = {}) {
+    if (this.loopStarted) return;
+    this.loopStarted = true;
+    this.lease = new ControllerLease(this.db.pool);
+    this.controllerId = this.lease.id;
+    const cycle = async () => {
+      if (this.closed || this.loopPromise) return;
+      this.loopPromise = (async () => {
+        let leader = false;
+        try {
+          leader = await this.lease.acquire();
+          await onLeadership(leader);
+          if (leader) await this.tick();
+        } catch (error) { console.error("Scheduler:", error.message); }
+        finally {
+          if (!this.lease.held || this.closed) await onLeadership(false);
+          await Promise.resolve().then(() => onCycle({ leader: this.lease.held && !this.closed, controllerId: this.controllerId })).catch(error => console.error("Controller status:", error.message));
+        }
+      })();
+      try { await this.loopPromise; }
+      catch (error) { console.error("Controller cycle:", error.message); }
+      finally { this.loopPromise = null; }
+    };
+    this.timer = setInterval(() => void cycle(), 1500);
+    void cycle();
   }
-  startLoop() {
-    this.timer = setInterval(
-      () => this.tick().catch((e) => console.error("Scheduler:", e.message)),
-      1500,
-    );
-    this.tick().catch(console.error);
-  }
-  close() {
+  async close() {
     this.closed = true;
     clearInterval(this.timer);
+    await this.loopPromise?.catch(() => {});
+    this.lease?.close();
   }
 }

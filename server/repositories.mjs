@@ -2,13 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { command } from "./process.mjs";
-import { allowedGitUrl, confined, problem, copyTree } from "./security.mjs";
+import { allowedGitUrl, confined, problem } from "./security.mjs";
+import { copyTree } from "./project-files.mjs";
+import { ProjectRevisions } from "./project-revisions.mjs";
 import { validProjectId, readProject } from "../scripts/project-metadata.mjs";
 export class Repositories {
   constructor(db, data, secrets) {
     this.db = db;
     this.data = data;
     this.secrets = secrets;
+    this.revisions = new ProjectRevisions(db, this);
     fs.mkdirSync(path.join(data, "repos"), { recursive: true });
   }
   async get(id) {
@@ -118,7 +121,7 @@ export class Repositories {
     const source = confined(repo.root, "projects/" + work.project),
       destination = confined(target, "projects/" + work.project);
     if (!work.branch && fs.existsSync(source) && !fs.existsSync(destination))
-      copyTree(source, destination);
+      await copyTree(source, destination);
     if (!fs.existsSync(path.join(target, "README.md")))
       fs.writeFileSync(
         path.join(target, "README.md"),
@@ -139,7 +142,7 @@ export class Repositories {
       );
     const old = path.join(repo.root, "materials"),
       dest = path.join(target, "materials");
-    if (fs.existsSync(old) && !fs.existsSync(dest)) copyTree(old, dest);
+    if (fs.existsSync(old) && !fs.existsSync(dest)) await copyTree(old, dest);
     if (!fs.existsSync(path.join(target, "README.md")))
       fs.writeFileSync(
         path.join(target, "README.md"),
@@ -543,6 +546,7 @@ export class Repositories {
               409,
               "当前分支有本地修改，请先保存并推送，再拉取远端修改",
             );
+          if (w) await this.revisions.invalidate(id, w.project);
           await this.git(
             r.root,
             ["pull", "--ff-only", "origin", r.branch],

@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { randomUUID } from "node:crypto";
 import { problem } from "./security.mjs";
 import { toolBinary } from "./connections.mjs";
 import { command } from "./process.mjs";
@@ -75,10 +74,15 @@ export function workbenchOperations({
     "Open a work and remember its access time",
     { id: uuid },
     async (a) => {
-      const w = await works.get(a.id, { active: true });
+      let w = await works.get(a.id, { active: true });
+      let revisionError = null;
+      try { await repos.revisions?.refresh(w.repo, w.project); }
+      catch (error) { revisionError = error.message; }
+      w = await works.get(a.id, { active: true });
       await db.pool.query("UPDATE works SET opened=now() WHERE id=$1", [a.id]);
       return {
         ...w,
+        revisionError,
         repository: await repos.get(w.repo).then(({ root, ...r }) => r),
       };
     },
@@ -247,77 +251,6 @@ export function workbenchOperations({
       });
     return rows;
   });
-  add(
-    "works_chat_create",
-    "Create a conversation bound to a named model connection",
-    {
-      id: uuid,
-      connection: uuid,
-      title: z.string().max(120).default("创作对话"),
-    },
-    async (a) => {
-      const w = await works.get(a.id, { active: true }),
-        c = await connections.resolve(a.connection);
-      return db.one(
-        "INSERT INTO chats(id,repo,project,provider,title,connection) VALUES($1,$2,$3,$4,$5,$6) RETURNING *",
-        [randomUUID(), w.repo, w.project, c.tool, a.title, a.connection],
-      );
-    },
-  );
-  add(
-    "works_chat_send",
-    "Persist an idempotent creation turn with review context; runs after disconnect",
-    {
-      id: uuid,
-      chat: uuid,
-      prompt: z.string().trim().min(1).max(40000),
-      requestKey: uuid.optional(),
-      context: z
-        .strictObject({
-          time: z.number().min(0).max(3600).optional(),
-          start: z.number().min(0).max(3600).optional(),
-          end: z.number().min(0).max(3600).optional(),
-          assets: z.array(uuid).max(20).optional(),
-        })
-        .optional(),
-    },
-    async (a) => {
-      const w = await works.get(a.id, { active: true }),
-        chat = await db.one(
-          "SELECT * FROM chats WHERE id=$1 AND repo=$2 AND project=$3",
-          [a.chat, w.repo, w.project],
-        );
-      if (!chat) throw problem(404, "Conversation not found");
-      if (chat.connection) await connections.resolve(chat.connection);
-      if (a.context?.assets)
-        for (const asset of a.context.assets)
-          if (
-            !(await db.one(
-              "SELECT asset FROM asset_repos WHERE asset=$1 AND repo=$2",
-              [asset, w.repo],
-            ))
-          )
-            throw problem(400, "素材不属于当前仓库");
-      const assetNames = {};
-      for (const id of a.context?.assets || []) {
-        const asset = await db.one("SELECT name FROM assets WHERE id=$1", [id]);
-        if (asset) assetNames[id] = asset.name;
-      }
-      return tasks.create({
-        repo: w.repo,
-        project: w.project,
-        kind: "agent",
-        chat: chat.id,
-        requestKey: a.requestKey || null,
-        input: {
-          provider: chat.provider,
-          connection: chat.connection,
-          prompt: a.prompt,
-          context: a.context ? { ...a.context, assetNames } : undefined,
-        },
-      });
-    },
-  );
   add(
     "works_chat_turns",
     "Paginate one conversation independently of other work activity",

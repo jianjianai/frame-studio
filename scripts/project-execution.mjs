@@ -206,7 +206,7 @@ export async function executeProject(root, id, action, options = {}) {
         process.env.FRAME_WORK_PREVIEW === "1" &&
         process.env.FRAME_PREVIEW_AUDIO !== "0"
       )
-        await buildPreviewAudio(output, options);
+        await buildPreviewAudio(output, { ...options, root, project: id });
       previewProgress("预览准备完成", 1, 1);
       return { status: "passed", output, input: inputManifest(root, id) };
     }

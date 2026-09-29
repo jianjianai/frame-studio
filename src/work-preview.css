@@ -236,7 +236,7 @@
   }
   .work-preview .stage-viewport {
     flex: none;
-    aspect-ratio: 16 / 9;
+    aspect-ratio: var(--frame-aspect, 16 / 9);
     min-height: 0 !important;
   }
   .work-preview .timeline-panel {

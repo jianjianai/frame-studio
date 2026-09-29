@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { writeProjectPoster } from "./poster-output.mjs";
 import { createRenderSession } from "./render-session.mjs";
 import { createExportPlan } from "../src/engine/export-plan.mjs";
+import { frameDimensions, fitComposition } from "../src/engine/dimensions.mjs";
 import { projectPath } from "./project-paths.mjs";
 import {
   validProjectId,
@@ -91,13 +92,13 @@ if (!posters && val("--out"))
       id,
       path.relative(projectPath(root, id), path.resolve(destination)),
     );
-let width = Number(val("--width", posters ? "1280" : "1920"));
+const width = Number(val("--width", posters ? "1280" : String(fitComposition(selected, 1920).width)));
 const fps = Number(val("--fps", String(selected?.fps ?? 30)));
-if (!Number.isInteger(width) || width < 320 || width > 3840 || width % 32 !== 0)
-  throw new Error("--width must be a multiple of 32, between 320 and 3840");
+if (!Number.isInteger(width) || width < 2 || width > 3840 || width % 2 !== 0)
+  throw new Error("--width must be an even integer between 2 and 3840");
 if (!Number.isInteger(fps) || fps < 12 || fps > 60)
   throw new Error("--fps must be 12..60");
-const height = (width * 9) / 16;
+const height = selected ? frameDimensions(selected, width).height : undefined;
 let session, encoder, temporary, audioTemporary;
 let stderr = "";
 try {
@@ -214,6 +215,7 @@ try {
         throw new Error("Invalid --start / --end range");
       const { frames, duration } = createExportPlan({
         duration: meta.duration,
+    composition: meta.composition,
         fps,
         width,
         start,

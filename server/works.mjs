@@ -3,7 +3,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { command } from "./process.mjs";
-import { confined, copyTree, treeHash, problem, hash } from "./security.mjs";
+import { confined, problem, hash } from "./security.mjs";
+import { copyTree, treeHash } from "./project-files.mjs";
 import {
   readProject,
   sourceFile,
@@ -62,6 +63,7 @@ export class Works {
           );
         if (inserted.rowCount || migrated || repository)
           await this.assets.importProject(repo.id, project.id);
+        await this.repos.revisions?.refreshIfIdle(repo.id, project.id);
       }
     }
     if (!repository) this.discovered = true;
@@ -102,6 +104,7 @@ export class Works {
           duration: meta.duration,
           fps: meta.fps,
           renderer: meta.renderer,
+          composition: meta.composition || { width: 1920, height: 1080 },
         });
         row.cover = this.coverPath(dir)
           ? `/api/works/${row.id}/cover?v=${new Date(row.modified).getTime()}`
@@ -140,6 +143,7 @@ export class Works {
     repo,
     renderer = "canvas",
     duration = 12,
+    composition,
     category = "",
   }) {
     if (!repo) throw problem(400, "请选择作品所属仓库");
@@ -164,12 +168,14 @@ export class Works {
             renderer,
             "--duration",
             String(duration),
+            ...(composition ? ["--width", String(composition.width), "--height", String(composition.height)] : []),
           ],
           { cwd: r.root },
         );
         const work = await this.get(id);
         await this.saveInfo(work);
         await this.repos.checkpoint(repo, project, "创建作品 · " + title);
+        await this.repos.revisions?.refresh(repo, project);
         return work;
       } catch (error) {
         await this.removeFailedCreation(id, repo);
@@ -253,6 +259,7 @@ export class Works {
       fs.mkdirSync(path.dirname(journal), { recursive: true });
       fs.writeFileSync(journal, JSON.stringify({ id }), { flag: "wx" });
       try {
+        await this.repos.revisions?.invalidate(w.repo, w.project);
         await this.saveInfo(next);
         await this.db.pool.query(
           "UPDATE works SET title=$2,category=$3,status=$4,description=$5,deleted=$6,updated=now() WHERE id=$1",
@@ -309,7 +316,7 @@ export class Works {
       try {
         const repo = await this.repos.isolate(await this.get(newId));
         dest = confined(repo.root, "projects/" + project);
-        copyTree(dir, dest);
+        await copyTree(dir, dest);
         walk(dest);
         const file = path.join(dest, "project.ts"),
           replacements = [];
@@ -425,19 +432,20 @@ export class Works {
       await this.repos.writable(w.repo, w.project);
       const { dir } = await this.repos.project(w.repo, w.project),
         backup = randomUUID();
-      copyTree(dir, path.join(this.data, "versions", backup));
+      await copyTree(dir, path.join(this.data, "versions", backup));
       await this.db.pool.query(
         "INSERT INTO work_versions(id,work,name) VALUES($1,$2,$3)",
         [backup, id, "恢复前自动备份"],
       );
       const run = path.join(this.data, "restores", randomUUID());
       fs.mkdirSync(run, { recursive: true });
-      applyProject({
+      await this.repos.revisions?.invalidate(w.repo, w.project);
+      await applyProject({
         source: path.join(this.data, "versions", version),
         destination: dir,
         run,
         id: randomUUID(),
-        fingerprint: treeHash(dir),
+        fingerprint: await treeHash(dir),
       });
       await this.saveInfo(w);
       await this.db.pool.query("UPDATE works SET updated=now() WHERE id=$1", [
@@ -469,6 +477,7 @@ export class Works {
         w.project,
         "恢复前自动保存",
       );
+      await this.repos.revisions?.invalidate(w.repo, w.project);
       try {
         await this.repos.git(
           repo.root,
@@ -504,10 +513,10 @@ export class Works {
         throw error;
       }
     });
-    await this.discover(w.repo, w.project);
     await this.db.pool.query("UPDATE works SET updated=now() WHERE id=$1", [
       w.id,
     ]);
+    await this.discover(w.repo, w.project);
     return this.get(w.id);
   }
 }

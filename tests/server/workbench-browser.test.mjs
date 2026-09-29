@@ -1,3 +1,4 @@
+import { runtimeIdentity } from "../../scripts/runtime-identity.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -63,7 +64,7 @@ test(
           id,
           repo.id,
           {
-            previewVersion: PREVIEW_VERSION,
+            runtimeFingerprint: (await runtimeIdentity()).fingerprint, previewVersion: PREVIEW_VERSION,
             artifacts: [{ name: "index.html", path: relative + "/index.html" }],
           },
           treeHash(path.join(data, "works", work.id, "projects/test-film")),
@@ -73,7 +74,7 @@ test(
       const historicalId = randomUUID();
       await db.pool.query(
         "INSERT INTO tasks(id,repo,project,kind,state,input,result,created) VALUES($1,$2,'test-film','build','succeeded',$3,$4,now()+interval '1 second')",
-        [historicalId, repo.id, { version: "a".repeat(40) }, { previewVersion: PREVIEW_VERSION }],
+        [historicalId, repo.id, { version: "a".repeat(40) }, { previewVersion: PREVIEW_VERSION, runtimeFingerprint: (await runtimeIdentity()).fingerprint }],
       );
       assert.equal((await call("works_preview_status", { id: work.id })).latest.id, id);
       await db.pool.query("DELETE FROM tasks WHERE id=$1", [historicalId]);

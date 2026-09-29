@@ -1,5 +1,7 @@
+import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
 import { Works } from "./works.mjs";
+import { compositionSchema } from "../src/engine/dimensions.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { readWorkPreview } from "./preview-state.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
@@ -44,6 +46,7 @@ export function workOperations({
       repo: uuid,
       renderer: z.enum(["canvas", "pixi", "three"]).default("canvas"),
       duration: z.number().positive().max(3600).default(12),
+      composition: compositionSchema.optional(),
       category: z.string().max(80).default(""),
     },
     (a) => works.create(a),
@@ -216,17 +219,6 @@ export function workOperations({
     },
   );
   add(
-    "works_chat_create",
-    "Start a persistent AI conversation for a work",
-    {
-      id: uuid,
-      provider: z.enum(["codex", "claude"]),
-      title: z.string().min(1).max(120),
-    },
-    async ({ id, ...a }) =>
-      invoke("chats_create", { ...(await resolve(id)), ...a }),
-  );
-  add(
     "works_versions",
     "List independent Git history and legacy local snapshots of this work",
     {
@@ -235,24 +227,6 @@ export function workOperations({
       offset: z.number().int().min(0).default(0),
     },
     (a) => works.history(a.id, a.limit, a.offset),
-  );
-  add(
-    "works_chat_send",
-    "Send a persistent AI creation turn for this work; continues after disconnect",
-    {
-      id: uuid,
-      chat: uuid,
-      prompt: z.string().min(1).max(40000),
-    },
-    async ({ id, chat, prompt }) => {
-      const w = await works.get(id, { active: true });
-      const c = await db.one(
-        "SELECT id FROM chats WHERE id=$1 AND repo=$2 AND project=$3",
-        [chat, w.repo, w.project],
-      );
-      if (!c) throw new Error("Conversation does not belong to this work");
-      return invoke("chats_send", { id: chat, prompt });
-    },
   );
   add(
     "works_checkpoint",
@@ -273,12 +247,13 @@ export function workOperations({
     async (a) => {
       const work = await works.get(a.id, { active: true });
       await versionTree(repos, work, a.version);
+      const runtime = await runtimeIdentity();
       return db.lock(
         "version-preview:" + work.id + ":" + a.version,
         async () => {
           const existing = await db.one(
-            "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running','publishing','publish_failed') OR (state='succeeded' AND result->>'previewVersion'=$4)) ORDER BY created DESC LIMIT 1",
-            [work.repo, work.project, a.version, String(PREVIEW_VERSION)],
+            "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running','publishing','publish_failed') OR (state='succeeded' AND result->>'previewVersion'=$4 AND result->>'runtimeFingerprint'=$5)) ORDER BY created DESC LIMIT 1",
+            [work.repo, work.project, a.version, String(PREVIEW_VERSION), runtime.fingerprint],
           );
           return (
             existing ||
@@ -309,15 +284,14 @@ export function workOperations({
       return { ok: true };
     },
   );
-  add(
-    "works_preview_status",
-    "Compare the current work source with its latest valid preview",
-    { id: uuid },
-    async (a) => {
-      const work = await works.get(a.id, { active: true });
-      return readWorkPreview({ db, repos, work });
-    },
-  );
+  add("works_preview_status", "Read indexed source and preview revisions; refresh explicitly scans external changes", { id: uuid, refresh: z.boolean().default(false) }, async (a) => {
+    let work = await works.get(a.id, { active: true });
+    if (a.refresh) {
+      await repos.revisions?.refresh(work.repo, work.project);
+      work = await works.get(a.id, { active: true });
+    }
+    return readWorkPreview({ db, work });
+  });
   add(
     "works_browser",
     "Get a private AI browser URL with FRAME_AI console controls. Rendering, segment playback, screenshots and WebM exports execute in the client browser. If compilation is needed, returns a durable task; poll and call again.",

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { fitComposition } from "../engine/dimensions.mjs";
 import { FrameRenderer } from "../engine/renderer";
 import type { AnimationProject } from "../engine/types";
 
@@ -19,6 +20,7 @@ export function ShotThumbnail({
   const canvas = useRef<HTMLCanvasElement>(null);
   const [state, setState] = useState("正在准备缩略图…");
   useEffect(() => {
+    const size = fitComposition(project, 320);
     let renderer: FrameRenderer | undefined,
       cancelled = false;
     const timer = setTimeout(() => {
@@ -26,7 +28,7 @@ export function ShotThumbnail({
       try {
         renderer = new FrameRenderer(canvas.current, project);
         void renderer
-          .init(320, 180, "draft")
+          .init(size.width, size.height, "draft")
           .then(() => {
             if (cancelled) return;
             renderer?.render(time, false);

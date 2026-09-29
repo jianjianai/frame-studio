@@ -4,6 +4,7 @@ import { FrameRenderer } from "./renderer";
 import { exportWebm, type ExportProgress } from "./browser-export";
 import { downloadBlob } from "./download";
 import { toSrt } from "./subtitles";
+import { frameDimensions, compositionSize, fitComposition } from "./dimensions.mjs";
 
 export function installAiBrowser(project: AnimationProject) {
   let segmentTimer: number | undefined;
@@ -42,6 +43,7 @@ export function installAiBrowser(project: AnimationProject) {
     duration: project.duration,
     fps: project.fps,
     renderer: project.renderer,
+    composition: compositionSize(project),
     tracks: projectAudioTracks(project),
     beats: project.beats,
     subtitles: project.subtitles,
@@ -131,10 +133,10 @@ export function installAiBrowser(project: AnimationProject) {
           !Number.isInteger(width) ||
           width < 64 ||
           width > 3840 ||
-          width % 16
+          width % 2
         )
-          throw Error("Width must be a multiple of 16 from 64 to 3840");
-        height = (width * 9) / 16;
+          throw Error("Width must be an even integer from 64 to 3840");
+        height = frameDimensions(project, width).height;
         const canvas = document.createElement("canvas"),
           renderer = new FrameRenderer(canvas, project);
         try {
@@ -267,7 +269,7 @@ export function installAiBrowser(project: AnimationProject) {
         };
       jobs.set(id, job);
       void exportWebm(project, {
-        width: options.width ?? 1280,
+        width: options.width ?? fitComposition(project, 1280).width,
         fps: options.fps ?? project.fps,
         start: options.start,
         end: options.end,

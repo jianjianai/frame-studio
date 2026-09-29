@@ -3,16 +3,16 @@ import { FrameRenderer } from "../engine/renderer";
 import type { AnimationProject } from "../engine/types";
 import type { StudioApi } from "../engine/debug";
 import { OfflineAudioRenderer } from "../engine/audio-graph";
+import { frameDimensions, fitComposition } from "../engine/dimensions.mjs";
 export function RenderPage({ project }: { project: AnimationProject }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [error, setError] = useState("");
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const w = Number(params.get("width") || 1280);
-    const width = Number.isFinite(w)
-      ? Math.min(3840, Math.max(320, Math.round(w / 2) * 2))
-      : 1280;
-    const height = Math.round((width * 9) / 16 / 2) * 2;
+    let width: number, height: number;
+    try {
+      ({ width, height } = frameDimensions(project, params.has("width") ? Number(params.get("width")) : fitComposition(project, 1280).width));
+    } catch (error) { setError(String(error)); return; }
     const renderer = new FrameRenderer(canvas.current!, project);
     const audio = new OfflineAudioRenderer(project);
     let canceled = false;

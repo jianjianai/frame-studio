@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { confined, problem, hash } from "./security.mjs";
+import { confined, problem } from "./security.mjs";
+import { fileSha256 } from "./project-files.mjs";
 import { command } from "./process.mjs";
 export function agentTools({ app, db, data, assets, actions }) {
   app.post("/api/agent/action", async (req) => {
@@ -26,7 +27,7 @@ export function agentTools({ app, db, data, assets, actions }) {
       const relative = `projects/${task.project}/.cache/speech/${preview.task}.${preview.mime === "audio/wav" ? "wav" : "mp3"}`;
       const target = confined(path.join(data, "runs", task.id), relative);
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.copyFileSync(
+      await fs.promises.copyFile(
         confined(path.join(data, "runs", preview.task), preview.path),
         target,
       );
@@ -69,9 +70,9 @@ export function agentTools({ app, db, data, assets, actions }) {
         dest = confined(root, relative);
       return db.lock("agent-material:" + task.id, async () => {
         fs.mkdirSync(path.dirname(dest), { recursive: true });
-        if (fs.existsSync(dest) && hash(fs.readFileSync(dest)) !== asset.sha)
+        if (fs.existsSync(dest) && await fileSha256(dest) !== asset.sha)
           throw problem(409, "Material file was modified");
-        fs.copyFileSync(path.join(data, "blobs", asset.sha), dest);
+        await fs.promises.copyFile(path.join(data, "blobs", asset.sha), dest);
         const manifest = confined(root, "production/materials.json");
         fs.mkdirSync(path.dirname(manifest), { recursive: true });
         const refs = fs.existsSync(manifest)

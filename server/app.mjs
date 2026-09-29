@@ -10,78 +10,33 @@ import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import staticPlugin from "@fastify/static";
 import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
-import { database } from "./db.mjs";
 import {
   hash,
   token,
-  vault,
   passwordMatches,
   confined,
   problem,
 } from "./security.mjs";
-import { Repositories } from "./repositories.mjs";
-import { Assets } from "./assets.mjs";
-import { Tasks } from "./tasks.mjs";
-import { operations } from "./operations.mjs";
 import { agentTools } from "./agent-tools.mjs";
 import { browserPreview } from "./browser-preview.mjs";
-import { Connections } from "./connections.mjs";
-import { GitHub } from "./github.mjs";
-import { Retention } from "./retention.mjs";
 import { sendMedia } from "./media.mjs";
+import { createServices } from "./services.mjs";
 import { rasterCover } from "./covers.mjs";
 import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
-import { seedSpeech } from "./speech.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
   data = process.env.FRAME_DATA || "/data",
   masterKey = process.env.FRAME_MASTER_KEY,
   origin = process.env.FRAME_PUBLIC_URL || "http://localhost:3000",
-  scheduler = true,
+  scheduler = process.env.FRAME_ROLE !== "api",
 } = {}) {
-  fs.mkdirSync(data, { recursive: true });
-  fs.mkdirSync(path.join(data, "uploads"), { recursive: true });
-  fs.mkdirSync(path.join(data, "tools"), { recursive: true });
-  db ||= await database(
-    process.env.DATABASE_URL,
-    process.env.FRAME_ADMIN_PASSWORD,
-  );
-  const secrets = vault(masterKey),
-    repos = new Repositories(db, data, secrets),
-    assets = new Assets(db, data, repos),
-    tasks = new Tasks(db, data, repos, secrets);
-  const connections = new Connections(db, data, secrets),
-    github = new GitHub(db, secrets, repos, data),
-    retention = new Retention(db, data);
-  connections.github = github;
-  tasks.connections = connections;
-  const actions = operations({
-    db,
-    data,
-    repos,
-    assets,
-    tasks,
-    secrets,
-    connections,
-    github,
-    retention,
-  });
-  repos.onChange = async (id, project = null) => {
-    if (!project) await assets.indexRepository(id);
-    await actions.works.discover(id, project);
-    assets.scans?.delete(id);
-    assets.scans?.delete("all");
-  };
-  await connections.migrate();
-  await github.migrate();
-  await assets.migrate();
-  await actions.works.discover();
-  await db.pool.query(
-    "UPDATE tasks SET expires=finished+interval '7 days' WHERE finished IS NOT NULL AND expires IS NULL",
-  );
-  await seedSpeech(db, secrets);
+  if (process.env.FRAME_ROLE === "controller") throw new Error("The controller role must not expose the HTTP application");
+  if (process.env.FRAME_ROLE === "api" && scheduler) throw new Error("The public API role cannot start a controller");
+  const services = await createServices({ db, data, masterKey });
+  ({ db } = services);
+  const { repos, assets, tasks, retention, actions } = services;
   const app = Fastify({
     logger: {
       level: "info",
@@ -332,10 +287,13 @@ export async function createApp({
     res
       .type(types[path.extname(file)] || "application/octet-stream")
       .header("Content-Disposition", "attachment");
-    const release = retention.lease(task.id);
-    res.raw.once("close", release);
-    res.raw.once("finish", release);
-    return sendMedia(req, res, file, { cache: 0 });
+    const release = await retention.lease(task.id, { onLost: error => res.raw.destroy(error) });
+    const done = () => void release().catch(error => req.log.error({ message: error.message }, "Artifact lease release failed"));
+    res.raw.once("close", done);
+    res.raw.once("finish", done);
+    if (res.raw.destroyed) { done(); return res; }
+    try { return sendMedia(req, res, file, { cache: 0 }); }
+    catch (error) { done(); throw error; }
   });
   app.post("/api/tasks/:id/preview", async (req) => {
     const t = await tasks.get(req.params.id);
@@ -387,7 +345,7 @@ export async function createApp({
           },
           async (args) => {
             try {
-              const value = await op.fn(args);
+              const value = await actions.call(name, args);
               if (name === "speech_test" && value.bytes <= 8 * 1024 * 1024) {
                 const audio = confined(
                   path.join(data, "runs", value.task),
@@ -460,15 +418,11 @@ export async function createApp({
     app.setNotFoundHandler((req, res) => res.sendFile("index.html"));
   }
   if (scheduler) {
-    tasks.startLoop();
-    retention.start();
+    tasks.startLoop({ onLeadership: leader => leader ? retention.start() : retention.stop() });
   }
   app.addHook("onClose", async () => {
-    tasks.close();
-    retention.close();
-    connections.close();
     await mcp.close();
-    await db.pool.end();
+    await services.close();
   });
   return { app, db, repos, assets, tasks, actions };
 }

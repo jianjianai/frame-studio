@@ -116,7 +116,9 @@ test(
           "INSERT INTO tasks(id,repo,project,kind,state,input,result,finished,expires) VALUES($1,$2,$3,'build','succeeded','{}','{}',now(),now()-interval '2 days')",
           [randomUUID(), repo.id, "retained-" + i],
         );
-      const releaseLease = retention.lease(exportId);
+      const releaseLease = await retention.lease(exportId);
+      const otherCleaner = new Retention(db, data);
+      assert.equal(await otherCleaner.cleanTask(exportId, { manual: true }), false);
       await retention.tick();
       assert(fs.existsSync(run));
 
@@ -233,7 +235,7 @@ test(
         "release targets exported source even when newer edits exist",
       );
       assert(uploaded > 0);
-      releaseLease();
+      await releaseLease();
       await retention.tick();
       assert(!fs.existsSync(run));
       assert(

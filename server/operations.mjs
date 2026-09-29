@@ -5,6 +5,9 @@ import { z } from "zod";
 import { speechOperations } from "./speech.mjs";
 import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
+import { chatOperations } from "./chat-operations.mjs";
+import { createOperationRegistry } from "./operation-registry.mjs";
+import { taskGetRequestSchema } from "../src/contracts/platform.mjs";
 import { hash, token, confined, problem } from "./security.mjs";
 const uuid = z.string().uuid(),
   text = z.string().max(20000),
@@ -23,9 +26,7 @@ export function operations({
   github,
   retention,
 }) {
-  const registry = {};
-  const add = (name, description, shape, fn) =>
-    (registry[name] = { description, schema: z.strictObject(shape), fn });
+  const { registry, add, call } = createOperationRegistry();
   add(
     "repositories_list",
     "List repositories and statically discovered animation projects",
@@ -168,10 +169,12 @@ export function operations({
         const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
         if ((previous ? hash(previous) : null) !== a.expectedSha256)
           throw problem(409, "File changed; read the current version first");
+        await repos.revisions?.invalidate(a.repo, a.project);
         fs.mkdirSync(path.dirname(file), { recursive: true });
         const temp = file + ".frame-" + randomUUID();
         fs.writeFileSync(temp, a.content);
         fs.renameSync(temp, file);
+        await repos.revisions?.invalidate(a.repo, a.project);
         return { sha256: hash(a.content) };
       }),
   );
@@ -195,7 +198,7 @@ export function operations({
           renderer: z.enum(["canvas", "pixi", "three"]).optional(),
           duration: z.number().positive().max(3600).optional(),
           time: z.number().nonnegative().max(3600).optional(),
-          width: z.number().int().min(320).max(3840).multipleOf(32).optional(),
+          width: z.number().int().min(2).max(3840).multipleOf(2).optional(),
           fps: z.number().int().min(1).max(120).optional(),
           subtitles: z.boolean().optional(),
           start: z.number().nonnegative().max(3600).optional(),
@@ -211,7 +214,7 @@ export function operations({
   add(
     "task_get",
     "Read durable task state, artifacts and incremental events",
-    { id: uuid, after: z.number().int().nonnegative().default(0) },
+    taskGetRequestSchema,
     async (a) => ({
       task: await tasks.get(a.id),
       events: await db.all(
@@ -367,10 +370,10 @@ export function operations({
         const dir = path.join(data, "uploads", a.id),
           meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
         if (meta.result) return meta.result;
-        const { fileSha256 } = await import("../scripts/production-input.mjs");
+        const { fileSha256 } = await import("./project-files.mjs");
         if (
           fs.statSync(dir + "/bytes").size !== meta.bytes ||
-          fileSha256(dir + "/bytes") !== meta.sha256
+          await fileSha256(dir + "/bytes") !== meta.sha256
         )
           throw problem(409, "Upload size or checksum mismatch");
         const result = await assets.register(dir + "/bytes", meta);
@@ -384,39 +387,6 @@ export function operations({
   );
   add("chats_list", "List persistent AI conversations", {}, () =>
     db.all("SELECT * FROM chats ORDER BY created DESC LIMIT 100"),
-  );
-  add(
-    "chats_create",
-    "Create an AI conversation tied to one project",
-    {
-      repo: uuid,
-      project,
-      provider: z.enum(["codex", "claude"]),
-      title: z.string().min(1).max(120),
-    },
-    async (a) => {
-      await repos.project(a.repo, a.project);
-      return db.one(
-        "INSERT INTO chats(id,repo,project,provider,title) VALUES($1,$2,$3,$4,$5) RETURNING *",
-        [randomUUID(), a.repo, a.project, a.provider, a.title],
-      );
-    },
-  );
-  add(
-    "chats_send",
-    "Send a turn to an AI conversation; runs after browser disconnect",
-    { id: uuid, prompt: z.string().min(1).max(40000) },
-    async (a) => {
-      const c = await db.one("SELECT * FROM chats WHERE id=$1", [a.id]);
-      if (!c) throw problem(404, "Chat not found");
-      return tasks.create({
-        repo: c.repo,
-        project: c.project,
-        kind: "agent",
-        chat: c.id,
-        input: { provider: c.provider, prompt: a.prompt },
-      });
-    },
   );
   add(
     "settings_get",
@@ -513,6 +483,7 @@ export function operations({
     assets,
     tasks,
   });
+  chatOperations({ add, db, works, repos, tasks, connections });
   if (connections)
     workbenchOperations({
       add,
@@ -529,10 +500,6 @@ export function operations({
   return {
     works,
     registry,
-    async call(name, args) {
-      const op = registry[name];
-      if (!op) throw problem(404, "Unknown operation");
-      return op.fn(op.schema.parse(args || {}));
-    },
+    call,
   };
 }

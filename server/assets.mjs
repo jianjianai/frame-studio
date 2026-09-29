@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import { hash, problem, confined } from "./security.mjs";
+import { problem, confined } from "./security.mjs";
+import { fileSha256, confinedAsync, exists } from "./project-files.mjs";
 export class Assets {
   constructor(db, data, repos) {
     this.db = db;
@@ -50,12 +51,18 @@ export class Assets {
     if (!license.trim()) throw problem(400, "Source/license is required");
     if (repo) await this.repos.get(repo);
     const bytes = fs.statSync(file).size;
-    const { fileSha256 } = await import("../scripts/production-input.mjs");
-    const sha = fileSha256(file),
+    const sha = await fileSha256(file),
       dest = path.join(this.data, "blobs", sha);
     const registered = await this.db.lock("blob:" + sha, async () => {
-      if (!fs.existsSync(dest))
-        fs.copyFileSync(file, dest, fs.constants.COPYFILE_EXCL);
+      if (!(await exists(dest))) {
+        const temporary = dest + ".tmp-" + randomUUID();
+        try {
+          await fs.promises.copyFile(file, temporary, fs.constants.COPYFILE_EXCL);
+          if (await fileSha256(temporary) !== sha || (await fs.promises.stat(temporary)).size !== bytes)
+            throw problem(409, "Asset changed during import");
+          await fs.promises.rename(temporary, dest);
+        } finally { await fs.promises.rm(temporary, { force: true }); }
+      }
       const id = randomUUID();
       return this.db.one(
         "INSERT INTO assets(id,name,sha,bytes,mime,license,tags) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
@@ -117,24 +124,23 @@ export class Assets {
         a.id,
       ]);
     const seen = new Map();
-    const { fileSha256 } = await import("../scripts/production-input.mjs");
     for (const r of await this.repos.list(repository))
       for (const p of r.projects) {
         const { dir } = await this.repos.project(r.id, p.id);
-        const walk = (folder) => {
-          if (!fs.existsSync(folder)) return;
-          for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+        const walk = async (folder) => {
+          if (!(await exists(folder))) return;
+          for (const entry of await fs.promises.readdir(folder, { withFileTypes: true })) {
             const relative = path
               .relative(dir, path.join(folder, entry.name))
               .replaceAll("\\", "/");
-            const file = confined(dir, relative),
-              st = fs.statSync(file);
-            if (st.isDirectory()) walk(file);
+            const file = await confinedAsync(dir, relative),
+              st = await fs.promises.stat(file);
+            if (st.isDirectory()) await walk(file);
             else if (sizes.has(st.size)) {
               const signature = `${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
               let cache = this.digests.get(file);
               if (cache?.signature !== signature) {
-                cache = { signature, sha: fileSha256(file) };
+                cache = { signature, sha: await fileSha256(file) };
                 this.digests.set(file, cache);
               }
               for (const asset of byHash.get(r.id + ":" + cache.sha) || [])
@@ -147,7 +153,7 @@ export class Assets {
             }
           }
         };
-        walk(confined(dir, "public"));
+        await walk(confined(dir, "public"));
       }
     for (const ref of await this.db.all(
       "SELECT * FROM asset_refs WHERE ($1::uuid IS NULL OR repo=$1)",
@@ -212,7 +218,7 @@ export class Assets {
       const dest = confined(r.root, relative);
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       if (!fs.existsSync(dest))
-        fs.copyFileSync(path.join(this.data, "blobs", a.sha), dest);
+        await fs.promises.copyFile(path.join(this.data, "blobs", a.sha), dest);
       await this.db.pool.query(
         "INSERT INTO asset_repos(asset,repo,catalog_id) VALUES($1,$2,$1) ON CONFLICT DO NOTHING",
         [id, repo],
@@ -257,8 +263,7 @@ export class Assets {
         const source = confined(r.root, `materials/${row.sha}/${row.name}`);
         if (!fs.existsSync(source))
           throw problem(409, "Material catalog file missing");
-        const { fileSha256 } = await import("../scripts/production-input.mjs");
-        if (fileSha256(source) !== row.sha)
+        if (await fileSha256(source) !== row.sha)
           throw problem(409, "Material checksum mismatch");
         if (existing && existing.sha !== row.sha)
           throw problem(
@@ -318,7 +323,6 @@ export class Assets {
         )
       ).map((a) => a.sha),
     );
-    const { fileSha256 } = await import("../scripts/production-input.mjs");
     const types = {
       ".svg": "image/svg+xml",
       ".png": "image/png",
@@ -335,8 +339,8 @@ export class Assets {
       ".bin": "application/octet-stream",
     };
     const walk = async (folder) => {
-      if (!fs.existsSync(folder)) return;
-      for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
+      if (!(await exists(folder))) return;
+      for (const entry of await fs.promises.readdir(folder, { withFileTypes: true })) {
         const file = confined(
           dir,
           path
@@ -349,7 +353,7 @@ export class Assets {
             signature = `${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
           let cache = this.digests.get(file);
           if (cache?.signature !== signature) {
-            cache = { signature, sha: fileSha256(file) };
+            cache = { signature, sha: await fileSha256(file) };
             this.digests.set(file, cache);
           }
           if (known.has(cache.sha)) continue;
@@ -383,10 +387,11 @@ export class Assets {
             .slice(0, 12),
           relative = `public/imports/${a.sha.slice(0, 20)}${ext}`,
           dest = confined(dir, relative);
+        await this.repos.revisions?.invalidate(repo, project);
         fs.mkdirSync(path.dirname(dest), { recursive: true });
-        if (fs.existsSync(dest) && hash(fs.readFileSync(dest)) !== a.sha)
+        if (fs.existsSync(dest) && await fileSha256(dest) !== a.sha)
           throw problem(409, "Project asset path has different contents");
-        fs.copyFileSync(path.join(this.data, "blobs", a.sha), dest);
+        await fs.promises.copyFile(path.join(this.data, "blobs", a.sha), dest);
         const manifest = confined(dir, "production/materials.json");
         fs.mkdirSync(path.dirname(manifest), { recursive: true });
         const refs = fs.existsSync(manifest)
@@ -415,6 +420,7 @@ export class Assets {
           "INSERT INTO asset_refs VALUES($1,$2,$3,$4) ON CONFLICT(asset,repo,project) DO UPDATE SET path=$4",
           [id, repo, project, relative],
         );
+        await this.repos.revisions?.invalidate(repo, project);
         return { path: relative, url: `films/${project}/${relative.slice(7)}` };
       }),
     );
@@ -456,6 +462,7 @@ export class Assets {
     return this.db.lock(`${repo}:${project}`, async () => {
       await this.repos.writable(repo, project);
       const { dir } = await this.repos.project(repo, project);
+      await this.repos.revisions?.invalidate(repo, project);
       const manifest = confined(dir, "production/materials.json");
       if (fs.existsSync(manifest)) {
         const refs = JSON.parse(fs.readFileSync(manifest, "utf8"));

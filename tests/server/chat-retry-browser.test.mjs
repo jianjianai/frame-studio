@@ -36,8 +36,8 @@ test(
           return React.createElement(React.Fragment, null,
             React.createElement('button', { onClick: () => setPosition({ time: 10, duration: 20, selection: { start: 9, end: 11 } }) }, 'Move player'),
             React.createElement('output', { id: 'error' }, error),
-            React.createElement(WorkChat, { work: { id: 'work' }, tasks: [], reload() {}, notify: setError,
-              position, selectedAssets: [{ id: 'asset', name: 'Fixture asset' }], onClearAssets() {} }));
+            React.createElement(WorkChat, { work: { id: '12345678-1234-4123-8123-000000000001' }, tasks: [], reload() {}, notify: setError,
+              position, selectedAssets: [{ id: '12345678-1234-4123-8123-000000000004', name: 'Fixture asset' }], onClearAssets() {} }));
         }
         createRoot(document.getElementById('root')).render(React.createElement(Fixture));
       `
@@ -73,7 +73,7 @@ test(
               requests = [],
               turns = new Map();
             let chat = existing
-              ? { id: "chat", connection: "connection", title: "Fixture chat" }
+              ? { id: "12345678-1234-4123-8123-000000000002", provider: "codex", connection: "12345678-1234-4123-8123-000000000003", title: "Fixture chat" }
               : null;
             let creates = 0;
             page.on("pageerror", (error) => errors.push(error.message));
@@ -93,7 +93,7 @@ test(
                   case "connections_list":
                     return reply([
                       {
-                        id: "connection",
+                        id: "12345678-1234-4123-8123-000000000003",
                         name: "Fixture connection",
                         configured: true,
                       },
@@ -105,8 +105,8 @@ test(
                   case "works_chat_create":
                     creates++;
                     chat = {
-                      id: "created-chat",
-                      connection: "connection",
+                      id: "12345678-1234-4123-8123-000000000005",
+                      provider: "codex", connection: "12345678-1234-4123-8123-000000000003",
                       title: "New fixture chat",
                     };
                     return reply(chat);
@@ -132,7 +132,7 @@ test(
                           error: "Message request key already used",
                         }),
                       );
-                    return reply({ id: "task", state: "queued" });
+                    return reply({ id: "12345678-1234-4123-8123-000000000006", kind: "agent", state: "queued" });
                   }
                   default:
                     throw Error("Unexpected fixture request: " + message.name);
@@ -146,7 +146,7 @@ test(
               await page.waitForFunction(
                 () =>
                   document.querySelector('[aria-label="模型连接"]')?.value ===
-                  "connection",
+                  "12345678-1234-4123-8123-000000000003",
               );
               await page
                 .getByLabel("创作要求", { exact: true })
@@ -184,7 +184,7 @@ test(
                 time: 4,
                 start: 4,
                 end: 6,
-                assets: ["asset"],
+                assets: ["12345678-1234-4123-8123-000000000004"],
               });
               assert.equal(turns.size, 1);
               assert.equal(creates, existing ? 0 : 1);

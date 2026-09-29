@@ -1,3 +1,4 @@
+import { fitComposition } from "../src/engine/dimensions.mjs";
 import { useState } from "react";
 import {
   Download,
@@ -77,12 +78,14 @@ export function Exports({
   onSnapshot,
   onSubtitles,
 }) {
+  const composition = { composition: position.composition || work.composition };
+  const sizes = [640, 1280, 1920, 3840].map(edge => fitComposition(composition, edge));
   const query = useQuery("works_exports", { id: work.id }, 1),
     [run, busy] = useAction(notify);
   const [release, setRelease] = useState(null),
     [remove, setRemove] = useState(null);
   const [format, setFormat] = useState("mp4"),
-    [width, setWidth] = useState(1920),
+    [width, setWidth] = useState(() => fitComposition(composition, 1920).width),
     [fps, setFps] = useState(position.fps || 30);
   const [range, setRange] = useState("whole"),
     [start, setStart] = useState(position.selection?.start || 0),
@@ -148,9 +151,9 @@ export function Exports({
               value={width}
               onChange={(e) => setWidth(Number(e.target.value))}
             >
-              {[640, 1280, 1920, 3840].map((n) => (
+              {sizes.map(({ width: n, height }) => (
                 <option key={n} value={n}>
-                  {n} × {(n * 9) / 16}
+                  {n} × {height}
                 </option>
               ))}
             </select>

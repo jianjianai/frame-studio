@@ -1,7 +1,10 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022", "DOM"],
+    "lib": [
+      "ES2022",
+      "DOM"
+    ],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowJs": true,
@@ -11,5 +14,12 @@
     "skipLibCheck": true,
     "types": []
   },
-  "include": ["studio/chat-draft.js", "studio/task-events.js"]
+  "include": [
+    "studio/chat-draft.js",
+    "studio/task-events.js",
+    "src/contracts/*.mjs",
+    "src/contracts/*.ts",
+    "studio/realtime.ts",
+    "server/operation-registry.mjs"
+  ]
 }

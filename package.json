@@ -44,7 +44,8 @@
     "verify:release": "pnpm verify:core && pnpm test:server:release",
     "backup": "node scripts/backup.mjs",
     "restore:check": "node scripts/restore-check.mjs",
-    "test:workspace": "node tests/ui/workspace-review.mjs"
+    "test:workspace": "node tests/ui/workspace-review.mjs",
+    "controller": "node server/controller.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

@@ -103,3 +103,9 @@ pnpm render my-film --frame 150
 `pnpm film storyboard my-film --times "0,2,5"` 生成带时间标记的 PNG 拼图和 JSON 清单，默认取 beats 与首尾帧。`posterTime` 可在元数据中指定封面秒数，省略时用片长中点。
 
 开发页或 `?debug=1` 播放器提供 `window.__FRAME_STUDIO__`。`/?render=my-film&width=1280&time=5&subtitles=1` 为离线入口；等待 ready 后使用 frame(seconds, subtitles)、dataURL() 和 audioChunk(start, duration)。片段音频返回 48 kHz 双声道 16 位 PCM 的 Base64，每段不超过 10 秒。
+
+## 画幅与输出尺寸
+
+`project.ts` 可声明 `composition: { width: 1080, height: 1920 }` 来使用竖屏，正方形使用相同宽高；省略时沿用 1920×1080。元数据宽高为 2–8192 的整数，播放器、缩略图、单帧与视频输出共用此比例。新建项目可传 `--width` 和 `--height`。
+
+工作台的分辨率选项按长边适配，实际输出宽高会显示在选项中。命令行 `--width` 表示实际像素宽度，需为 2–3840 的偶数；高度按画幅取最近偶数，任一边超过 3840 时需降低宽度。

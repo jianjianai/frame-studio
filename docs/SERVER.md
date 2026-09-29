@@ -4,13 +4,13 @@
 
 `deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio:<版本>` 与 `ghcr.io/jianjianai/frame-speech:<版本>`。服务器需要 Linux x86_64、Docker、HTTPS 反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
 
-在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像，4.2 起默认 4.2.0，升级时同步切换才能使用新增内置引擎。主密钥必须与数据库、文件一起备份，丢失后无法恢复加密凭据。
+在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`，以及宿主机 `stat -c %g /var/run/docker.sock` 得到的 `FRAME_DOCKER_GID`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像，4.2 起默认 4.2.0，升级时同步切换才能使用新增内置引擎。主密钥必须与数据库、文件一起备份，丢失后无法恢复加密凭据。
 
 模板使用已有 `caddy_caddy` 网络和域名 `frame.nerviloom.com`，部署到其他主机时修改域名、外部网络和 `FRAME_HOST_DATA`。后者必须是 Docker 宿主机上 `./data` 的绝对路径。数据库与语音服务不发布公网端口。
 
 更新流程：等待当前任务完成，备份数据库、`.env` 和 `data/models` 目录，修改 `.env` 中的明确版本，执行 `docker compose pull && docker compose up -d`，检查 `docker compose ps`、`/healthz` 和一次作品预览。保留旧镜像标签供回退；数据库发生不兼容迁移时连同备份回退。数据库在线备份使用 `pg_dump`；直接复制 `postgres` 目录必须先停止数据库。不得使用 `down -v` 更新。
 
-平台容器需要 Docker socket 来启动独立执行器，因此它属于可信控制层。执行器不会挂载 socket、数据库或主密钥，只能读写自己的工作副本和会话目录。为选择的 AI 提供的 API Key 仍属于该 AI 的运行凭据；仅在可信的个人作品中执行代码。
+HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `controller` 通过数据库领导者锁接管调度、监控和发布，仅此服务挂载 socket 并加入其宿主机组；它属于可信控制层，不接入公开代理网络。一次性 `data-init` 为共享数据目录准备权限，两项长期服务均使用只读根文件系统和临时 `/tmp`。升级后须确认 controller 健康且 `/readyz` 就绪，只有 HTTP 存活不代表可以执行任务。执行器不会挂载 socket、数据库或主密钥，只能读写自己的工作副本和会话目录。为选择的 AI 提供的 API Key 仍属于该 AI 的运行凭据；仅在可信的个人作品中执行代码。
 
 ## 平台代码与作品仓库
 
@@ -99,7 +99,7 @@ Dockge 的持久目录均在项目内：`./data` 为作品与运行目录，`./p
 
 新增的部署参数示例在 deploy/.env.example；升级只补充缺少的项，不能覆盖现有 FRAME_MASTER_KEY。FRAME_DOMAIN、FRAME_PUBLIC_URL、FRAME_HOST_DATA 和 FRAME_PROXY_NETWORK 可配置，默认保留原部署。FRAME_HOST_DATA 必须与宿主机 data 挂载真实路径一致。
 
-FRAME_TASK_CONCURRENCY 默认 2，允许 1–8；每个执行器仍受 4 GiB/2 CPU 限制，应根据主机容量配置。当前部署按单个控制器运行，不把多个 studio 副本当作水平扩容方式。FRAME_MIN_FREE_BYTES 默认 1 GiB，低于阈值时暂停新任务出队；不会清理作品、终止已有任务或将排队任务记为失败。设为 0 可关闭剩余空间阈值，但读取容量失败仍保守暂停。
+FRAME_TASK_CONCURRENCY 默认 2，允许 1–8；每个执行器仍受 4 GiB/2 CPU 限制，应根据主机容量配置。当前模板运行一个独立 controller；数据库领导者锁避免多个控制器同时调度。增加 studio 副本不等于增加执行容量。FRAME_MIN_FREE_BYTES 默认 1 GiB，低于阈值时暂停新任务出队；不会清理作品、终止已有任务或将排队任务记为失败。设为 0 可关闭剩余空间阈值，但读取容量失败仍保守暂停。
 
 设置 → 运行状态显示 Docker、语音服务、排队与最长等待、待恢复发布、磁盘容量和迁移版本；统计缓存 30 秒。目录统计有时间/条目上限，未完成会显示“至少”，不把逻辑文件大小冒充实际磁盘占用。/healthz 保持轻量存活检查；/readyz 分别检查执行依赖及空间，只返回 ready/degraded，不公开内部详情。
 
