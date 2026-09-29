@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { exportPlayerVideo } from "./player-export";
 import { playerCommandSchema } from "../contracts/platform.mjs";
 import {
   Play,
@@ -28,22 +29,13 @@ import {
   type AnimationProject,
   type Quality,
 } from "../engine/types";
-import { FrameRenderer } from "../engine/renderer";
-import { AudioTransport } from "../engine/audio";
+import type { FrameRenderer } from "../engine/renderer";
+import type { AudioTransport } from "../engine/audio";
 import type { ExportProgress } from "../engine/browser-export";
 import { activeSubtitle, toSrt } from "../engine/subtitles";
 import { downloadBlob, downloadCanvas } from "../engine/download";
 import { clamp, formatTime } from "../engine/math";
-import { waitForStudio, type StudioApi } from "../engine/debug";
-interface Playback {
-  time: number;
-  playing: boolean;
-  buffering: boolean;
-  rate: number;
-  loop: boolean;
-  volume: number;
-  muted: boolean;
-}
+import { createPlayerSession, readPlayback, type PlaybackSnapshot as Playback } from "../engine/player-session";
 export function Player({
   project,
   embedded = false,
@@ -136,32 +128,16 @@ export function Player({
       element.scrollLeft = Math.max(0, x - element.clientWidth / 4);
   }, [view.time, view.playing, zoom, project.duration]);
   const exportAbort = useRef<AbortController | null>(null);
+  const acceptSnapshot = (value: Playback) => {
+    saved.current = value;
+    setView(value);
+    if (embedded && parent !== window) parent.postMessage({
+      type: "frame-player-state", ...value, duration: project.duration, fps: project.fps,
+      selection: selectionRef.current,
+    }, "*");
+  };
   const publish = () => {
-    const a = transport.current;
-    if (a) {
-      const value = {
-        time: a.clock.time(),
-        playing: a.clock.playing,
-        buffering: a.buffering,
-        rate: a.clock.rate,
-        loop: a.clock.loop,
-        volume: a.volume,
-        muted: a.muted,
-      };
-      saved.current = value;
-      setView(value);
-      if (embedded && parent !== window)
-        parent.postMessage(
-          {
-            type: "frame-player-state",
-            ...value,
-            duration: project.duration,
-            fps: project.fps,
-            selection: selectionRef.current,
-          },
-          "*",
-        );
-    }
+    if (transport.current) acceptSnapshot(readPlayback(transport.current));
   };
   useEffect(() => {
     if (!embedded || parent === window) return;
@@ -218,244 +194,22 @@ export function Player({
         .catch((e) => setError("全屏未能开启：" + String(e)));
   };
   useEffect(() => {
-    let canceled = false,
-      raf = 0,
-      lastRender = -1,
-      lastSub = false,
-      uiAt = 0,
-      frames = 0,
-      fpsAt = performance.now();
-    const output = new FrameRenderer(canvas.current!, project);
-    const diagnosticErrors: string[] = [];
-    const sound = new AudioTransport(project, (error) => {
-      diagnosticErrors.push(error.message);
-      if (!canceled) {
-        setError("播放已暂停：" + error.message);
-        publish();
-      }
+    const session = createPlayerSession({
+      canvas: canvas.current!, project, quality, embedded, initial: saved.current,
+      controls: trackControlsRef.current, subtitles: () => subtitleRef.current,
+      segmentEnd: () => segmentEnd.current, onSegmentEnd: () => { segmentEnd.current = null; },
+      onSnapshot: acceptSnapshot, onLoading: setLoading, onError: setError, onFps: setFps,
+      onTrackControl: (id, control) => setTrackControls(previous => ({ ...previous, [id]: control })),
     });
-    for (const [id, control] of Object.entries(trackControlsRef.current))
-      if (sound.controls.has(id)) sound.setTrack(id, control);
-    renderer.current = output;
-    transport.current = sound;
-    sound.seek(saved.current.time);
-    sound.setRate(saved.current.rate);
-    sound.setLoop(saved.current.loop);
-    sound.setVolume(saved.current.volume);
-    sound.setMuted(saved.current.muted);
-    setLoading(true);
-    document.getElementById("frame-boot")?.remove();
-    if (embedded && parent !== window)
-      parent.postMessage(
-        { type: "frame-preview-loading", message: "正在准备画面与素材…" },
-        "*",
-      );
-    setError("");
-    const w = quality === "high" ? 1920 : quality === "draft" ? 640 : 1280;
-    const api: StudioApi = {
-      ready: false,
-      projectId: project.id,
-      duration: project.duration,
-      frame(t, subtitles = true) {
-        sound.pause();
-        sound.seek(t);
-        output.render(sound.clock.time(), subtitles);
-        publish();
-      },
-      seek(t) {
-        sound.seek(t);
-        output.render(sound.clock.time(), subtitleRef.current);
-        publish();
-      },
-      async play() {
-        await sound.play();
-        publish();
-      },
-      pause() {
-        sound.pause();
-        publish();
-      },
-      getState: () => ({
-        time: sound.clock.time(),
-        playing: sound.clock.playing,
-        rate: sound.clock.rate,
-        loop: sound.clock.loop,
-        audioState: sound.context?.state ?? "locked",
-        width: w,
-        height: Math.round((w * 9) / 16),
-      }),
-      dataURL: () => canvas.current!.toDataURL("image/png"),
-      async waitUntilReady(options = {}) {
-        await waitForStudio(api, options);
-        if (options.audio)
-          await sound.preparePosition(
-            AbortSignal.timeout(options.timeoutMs ?? 60000),
-          );
-      },
-      async captureAt(t, options = {}) {
-        await waitForStudio(api, options);
-        api.frame(t, options.subtitles ?? subtitleRef.current);
-        await api.waitUntilReady!(options);
-        return {
-          time: sound.clock.time(),
-          dataURL: api.dataURL(),
-          diagnostics: api.getDiagnostics!(),
-        };
-      },
-      setRate(rate) {
-        sound.setRate(rate);
-        publish();
-      },
-      setLoop(loop) {
-        sound.clock.loop = loop;
-        publish();
-      },
-      setVolume(volume) {
-        sound.setVolume(volume);
-        publish();
-      },
-      setTrack(id, control) {
-        sound.setTrack(id, control);
-        setTrackControls((previous) => ({
-          ...previous,
-          [id]: sound.controls.get(id)!,
-        }));
-        publish();
-      },
-      getDiagnostics: () => ({
-        ...output.diagnostics(),
-        audio: {
-          state: sound.context?.state ?? "locked",
-          buffering: sound.buffering,
-          prepareMs: sound.prepareMs,
-          tracks: Object.fromEntries(sound.controls),
-          bufferedRanges: sound.bufferedRanges(),
-        },
-        errors: [...diagnosticErrors],
-      }),
-      getParameters: () => output.parameters(),
-      setParameters(values) {
-        sound.pause();
-        output.setParameters(values);
-        output.render(sound.clock.time(), subtitleRef.current);
-        publish();
-      },
-      setOverlay(enabled) {
-        output.setOverlay(enabled);
-        output.render(sound.clock.time(), subtitleRef.current);
-      },
-    };
-    if (
-      embedded ||
-      import.meta.env.DEV ||
-      new URLSearchParams(location.search).has("debug")
-    )
-      window.__FRAME_STUDIO__ = api;
-    output
-      .init(w, Math.round((w * 9) / 16), quality)
-      .then(() => {
-        if (canceled) return;
-        output.render(sound.clock.time(), subtitleRef.current);
-        setLoading(false);
-        api.ready = true;
-        if (embedded && parent !== window)
-          parent.postMessage(
-            { type: "frame-preview-loading", message: "" },
-            "*",
-          );
-        publish();
-        sound.preload();
-        const tick = (now: number) => {
-          if (canceled) return;
-          try {
-            const t = sound.clock.time();
-            if (segmentEnd.current !== null && t >= segmentEnd.current) {
-              sound.pause();
-              sound.seek(segmentEnd.current);
-              segmentEnd.current = null;
-            }
-            if (
-              sound.clock.playing ||
-              lastRender !== t ||
-              lastSub !== subtitleRef.current
-            ) {
-              output.render(t, subtitleRef.current);
-              frames++;
-              lastRender = t;
-              lastSub = subtitleRef.current;
-            }
-            if (
-              t >= project.duration &&
-              sound.clock.playing &&
-              !sound.clock.loop
-            ) {
-              sound.pause();
-            }
-            if (now - uiAt > 65) {
-              publish();
-              uiAt = now;
-            }
-            if (now - fpsAt > 1000) {
-              setFps(
-                sound.clock.playing
-                  ? Math.round((frames * 1000) / (now - fpsAt))
-                  : 0,
-              );
-              frames = 0;
-              fpsAt = now;
-            }
-            raf = requestAnimationFrame(tick);
-          } catch (e) {
-            diagnosticErrors.push(String(e));
-            sound.pause();
-            setError("渲染错误：" + String(e));
-          }
-        };
-        raf = requestAnimationFrame(tick);
-      })
-      .catch((e) => {
-        if (embedded && parent !== window)
-          parent.postMessage(
-            {
-              type: "frame-preview-loading",
-              message: "加载失败，请点击刷新预览重试",
-            },
-            "*",
-          );
-        diagnosticErrors.push(String(e));
-        if (!canceled) {
-          setError(
-            "场景载入失败：" +
-              String(e) +
-              (embedded
-                ? "。可尝试刷新预览，或把错误告诉 AI 修复作品。"
-                : "。请检查浏览器硬件加速或运行 pnpm env:check。"),
-          );
-          setLoading(false);
-        }
-      });
-    const visibility = () => {
-      if (document.hidden) {
-        sound.pause();
-        publish();
-      }
-    };
-    document.addEventListener("visibilitychange", visibility);
+    transport.current = session.audio;
+    renderer.current = session.renderer;
     return () => {
-      canceled = true;
-      cancelAnimationFrame(raf);
       exportAbort.current?.abort();
-      document.removeEventListener("visibilitychange", visibility);
-      sound.pause();
-      saved.current = {
-        ...saved.current,
-        time: sound.clock.time(),
-        playing: false,
-        buffering: false,
-      };
-      void sound.dispose();
-      output.dispose();
-      if (window.__FRAME_STUDIO__ === api) delete window.__FRAME_STUDIO__;
+      const snapshot = session.snapshot();
+      saved.current = { ...snapshot, playing: false, buffering: false };
+      session.dispose();
+      if (transport.current === session.audio) transport.current = null;
+      if (renderer.current === session.renderer) renderer.current = null;
     };
   }, [project, quality, retry]);
   useEffect(() => {
@@ -496,77 +250,10 @@ export function Player({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   });
-  async function renderWebm() {
-    const sound = transport.current;
-    if (!sound || exportAbort.current) return;
-    const abort = new AbortController();
-    exportAbort.current = abort;
-    sound.pause();
-    publish();
-    setError("");
-    setExporting(true);
-    setExportOpen(false);
-    setExportProgress({ phase: "preparing", completed: 0, total: 0 });
-    try {
-      type FileWriter = {
-        write(chunk: unknown): Promise<void>;
-        close(): Promise<void>;
-        abort(): Promise<void>;
-      };
-      const picker = (
-        window as unknown as {
-          showSaveFilePicker?: (
-            options: unknown,
-          ) => Promise<{ createWritable(): Promise<FileWriter> }>;
-        }
-      ).showSaveFilePicker;
-      const writer =
-        exportToDisk && picker
-          ? await (
-              await picker.call(window, {
-                suggestedName: project.id + ".webm",
-                types: [
-                  {
-                    description: "WebM 视频",
-                    accept: { "video/webm": [".webm"] },
-                  },
-                ],
-              })
-            ).createWritable()
-          : undefined;
-      let blob: Blob | null;
-      try {
-        const { exportWebm } = await import("../engine/browser-export");
-        blob = await exportWebm(project, {
-          width: exportWidth,
-          fps: exportFps,
-          subtitles: subtitleRef.current,
-          controls: new Map(sound.controls),
-          volume: sound.muted ? 0 : sound.volume,
-          signal: abort.signal,
-          onProgress: setExportProgress,
-          writable: writer
-            ? new WritableStream({ write: (chunk) => writer.write(chunk) })
-            : undefined,
-        });
-        if (abort.signal.aborted) throw abort.signal.reason;
-        await writer?.close();
-      } catch (error) {
-        await writer?.abort().catch(() => {});
-        throw error;
-      }
-      if (blob && !abort.signal.aborted)
-        downloadBlob(blob, project.id + ".webm");
-    } catch (error) {
-      if (!abort.signal.aborted) setError("逐帧导出失败：" + String(error));
-    } finally {
-      if (exportAbort.current === abort) {
-        exportAbort.current = null;
-        setExporting(false);
-        setExportProgress(null);
-      }
-    }
-  }
+  const renderWebm = () => exportPlayerVideo({
+    project, transport, exportAbort, publish, setError, setExporting, setExportOpen, setExportProgress,
+    exportToDisk, exportWidth, exportFps, subtitleRef,
+  });
   const command =
     "pnpm film export " +
     project.id +
