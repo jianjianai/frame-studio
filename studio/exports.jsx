@@ -24,7 +24,7 @@ export function Exports({ work, notify, onBrowserExport }) {
               await api("works_task", {
                 id: work.id,
                 kind: "render",
-                input: { width: 1920 },
+                input: {}, // The export runtime derives width from this work’s composition.
               });
               query.refresh();
               notify("后台导出已开始");

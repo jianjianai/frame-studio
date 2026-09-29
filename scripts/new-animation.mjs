@@ -4,12 +4,13 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { validProjectId } from "./project-metadata.mjs";
 import { ENGINE_PROTOCOL_VERSION } from "../src/engine/protocol.mjs";
+import { compositionSchema } from "../src/engine/dimensions.mjs";
 
 const [id, title, ...rest] = process.argv.slice(2);
 const options = new Map();
 for (let i = 0; i < rest.length; i += 2) {
   if (
-    !["--renderer", "--duration", "--fps", "--audio"].includes(rest[i]) ||
+    !["--renderer", "--duration", "--fps", "--audio", "--width", "--height"].includes(rest[i]) ||
     !rest[i + 1] ||
     options.has(rest[i])
   )
@@ -20,6 +21,8 @@ const renderer = options.get("--renderer") ?? "pixi";
 const duration = Number(options.get("--duration") ?? 24);
 const fps = Number(options.get("--fps") ?? 30);
 const audio = options.get("--audio") ?? "silent";
+const composition = options.has("--width") || options.has("--height")
+  ? compositionSchema.parse({ width: Number(options.get("--width")), height: Number(options.get("--height")) }) : undefined;
 if (
   !validProjectId(id) ||
   typeof title !== "string" ||
@@ -34,7 +37,7 @@ if (
   !["silent", "generated"].includes(audio)
 ) {
   console.error(
-    'Usage: pnpm film new my-film "我的动画" [--renderer pixi|three|canvas] [--duration 24] [--fps 30] [--audio silent|generated]',
+    'Usage: pnpm film new my-film "我的动画" [--renderer pixi|three|canvas] [--duration 24] [--fps 30] [--audio silent|generated] [--width 1080 --height 1920]',
   );
   process.exit(1);
 }
@@ -99,6 +102,7 @@ try {
     description: `新建工程；文件和脚本说明见 projects/${id}/README.md。`,
     renderer,
     engineProtocol: ENGINE_PROTOCOL_VERSION,
+    ...(composition ? { composition } : {}),
     duration,
     fps,
     ...(audio === "generated"

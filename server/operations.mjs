@@ -198,7 +198,7 @@ export function operations({
           renderer: z.enum(["canvas", "pixi", "three"]).optional(),
           duration: z.number().positive().max(3600).optional(),
           time: z.number().nonnegative().max(3600).optional(),
-          width: z.number().int().min(320).max(3840).multipleOf(32).optional(),
+          width: z.number().int().min(320).max(3840).multipleOf(2).optional(),
           start: z.number().nonnegative().max(3600).optional(),
           end: z.number().positive().max(3600).optional(),
         })

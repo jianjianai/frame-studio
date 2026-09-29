@@ -793,7 +793,7 @@ img {
 .stage-viewport {
   position: relative;
   width: 100%;
-  aspect-ratio: 16/9;
+  aspect-ratio: var(--frame-aspect, 16/9);
   background: #14261e;
   overflow: hidden;
 }

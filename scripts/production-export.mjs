@@ -18,6 +18,7 @@ import {
 import { createRenderSession } from "./render-session.mjs";
 import { runtimeIdentity } from "./runtime-identity.mjs";
 import { browserOptions } from "./browser.mjs";
+import { fitComposition } from "../src/engine/dimensions.mjs";
 
 /** Durable segment files are reusable only with the same complete input and parameters. */
 export async function exportProduction(root, id, options = {}) {
@@ -68,7 +69,8 @@ async function runExport(root, id, options, renderId) {
     ffmpeg: (await checkedProcess(process.env.FFMPEG_PATH || "ffmpeg", ["-version"])).split("\n")[0] };
   const plan = createExportPlan({
     duration: meta.duration,
-    width: options.width ?? 1920,
+    composition: meta.composition,
+    width: options.width ?? fitComposition(meta, 1920).width,
     fps: options.fps ?? meta.fps,
     start: options.start ?? 0,
     end: options.end ?? meta.duration,

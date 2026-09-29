@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { Works } from "./works.mjs";
+import { compositionSchema } from "../src/engine/dimensions.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { readWorkPreview } from "./preview-state.mjs";
 export function workOperations({
@@ -42,6 +43,7 @@ export function workOperations({
       repo: uuid,
       renderer: z.enum(["canvas", "pixi", "three"]).default("canvas"),
       duration: z.number().positive().max(3600).default(12),
+      composition: compositionSchema.optional(),
       category: z.string().max(80).default(""),
     },
     (a) => works.create(a),

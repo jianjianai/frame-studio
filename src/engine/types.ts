@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { ENGINE_PROTOCOL_VERSION } from "./protocol.mjs";
+import { compositionSchema } from "./dimensions.mjs";
 export const subtitleSchema = z
   .object({
     start: z.number().nonnegative(),
@@ -29,6 +30,7 @@ export const projectSchema = z
     description: z.string(),
     renderer: z.enum(["pixi", "three", "canvas"]),
     engineProtocol: z.literal(ENGINE_PROTOCOL_VERSION).optional(),
+    composition: compositionSchema.optional(),
     duration: z.number().positive().max(3600),
     fps: z.number().int().min(12).max(60),
     accent: z.string(),

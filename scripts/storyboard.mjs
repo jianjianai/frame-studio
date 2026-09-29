@@ -39,6 +39,7 @@ try {
     frames: frameCount,
   } = createExportPlan({
     duration: meta.duration,
+    composition: meta.composition,
     width: Number(values.get("--width") ?? 480),
     fps: meta.fps,
   });

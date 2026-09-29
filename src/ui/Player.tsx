@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState, type CSSProperties } from "react";
+import { compositionSize, fitComposition } from "../engine/dimensions.mjs";
 import { exportPlayerVideo } from "./player-export";
 import { playerCommandSchema } from "../contracts/platform.mjs";
 import {
@@ -44,6 +45,8 @@ export function Player({
   embedded?: boolean;
 }) {
   const audioTracks = projectAudioTracks(project);
+  const composition = compositionSize(project);
+  const exportSizes = [640, 1280, 1920, 3840].map(edge => fitComposition(project, edge));
   const [trackControls, setTrackControls] = useState<
     Record<string, { gain: number; muted: boolean }>
   >({});
@@ -86,7 +89,7 @@ export function Player({
   const [exportOpen, setExportOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [exportWidth, setExportWidth] = useState(1920);
+  const [exportWidth, setExportWidth] = useState(() => fitComposition(project, 1920).width);
   const [exportFps, setExportFps] = useState(project.fps);
   const [exportToDisk, setExportToDisk] = useState(false);
   const [exportProgress, setExportProgress] = useState<ExportProgress | null>(
@@ -265,7 +268,8 @@ export function Player({
     [...project.beats].reverse().find((b) => view.time >= b.at) ??
     project.beats[0];
   return (
-    <div className={"player-page" + (embedded ? " work-player" : "")}>
+    <div className={"player-page" + (embedded ? " work-player" : "")}
+      style={{ "--frame-aspect": `${composition.width} / ${composition.height}` } as CSSProperties}>
       {!embedded && (
         <header className="player-heading">
           <div>
@@ -301,11 +305,7 @@ export function Player({
                 <i className="status-dot" /> 实时画面
               </span>
               <span>
-                {quality === "high"
-                  ? "1920 × 1080"
-                  : quality === "draft"
-                    ? "640 × 360"
-                    : "1280 × 720"}{" "}
+                {(() => { const size = fitComposition(project, quality === "high" ? 1920 : quality === "draft" ? 640 : 1280); return `${size.width} × ${size.height}`; })()}{" "}
                 <b>·</b>{" "}
                 {view.buffering
                   ? "正在准备声音"
@@ -965,10 +965,7 @@ export function Player({
                   value={exportWidth}
                   onChange={(e) => setExportWidth(Number(e.target.value))}
                 >
-                  <option value={640}>640 × 360</option>
-                  <option value={1280}>1280 × 720</option>
-                  <option value={1920}>1920 × 1080</option>
-                  <option value={3840}>3840 × 2160</option>
+                  {exportSizes.map(size => <option key={size.width} value={size.width}>{size.width} × {size.height}</option>)}
                 </select>
               </label>
               <label>

@@ -2,6 +2,7 @@ import { FrameRenderer } from "./renderer";
 import { AudioTransport } from "./audio";
 import { waitForStudio, type StudioApi } from "./debug";
 import type { AnimationProject, Quality } from "./types";
+import { fitComposition } from "./dimensions.mjs";
 
 export interface PlaybackSnapshot {
   time: number; playing: boolean; buffering: boolean; rate: number;
@@ -55,7 +56,7 @@ export function createPlayerSession({ canvas, project, quality, embedded, initia
         "*",
       );
     onError("");
-    const w = quality === "high" ? 1920 : quality === "draft" ? 640 : 1280;
+    const size = fitComposition(project, quality === "high" ? 1920 : quality === "draft" ? 640 : 1280);
     const api: StudioApi = {
       ready: false,
       projectId: project.id,
@@ -85,8 +86,8 @@ export function createPlayerSession({ canvas, project, quality, embedded, initia
         rate: sound.clock.rate,
         loop: sound.clock.loop,
         audioState: sound.context?.state ?? "locked",
-        width: w,
-        height: Math.round((w * 9) / 16),
+        width: size.width,
+        height: size.height,
       }),
       dataURL: () => canvas.toDataURL("image/png"),
       async waitUntilReady(options = {}) {
@@ -153,7 +154,7 @@ export function createPlayerSession({ canvas, project, quality, embedded, initia
     )
       window.__FRAME_STUDIO__ = api;
     output
-      .init(w, Math.round((w * 9) / 16), quality)
+      .init(size.width, size.height, quality)
       .then(() => {
         if (canceled) return;
         output.render(sound.clock.time(), subtitles());

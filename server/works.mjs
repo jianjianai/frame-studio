@@ -104,6 +104,7 @@ export class Works {
           duration: meta.duration,
           fps: meta.fps,
           renderer: meta.renderer,
+          composition: meta.composition || { width: 1920, height: 1080 },
         });
         row.cover = this.coverPath(dir)
           ? `/api/works/${row.id}/cover?v=${new Date(row.modified).getTime()}`
@@ -142,6 +143,7 @@ export class Works {
     repo,
     renderer = "canvas",
     duration = 12,
+    composition,
     category = "",
   }) {
     if (!repo) throw problem(400, "请选择作品所属仓库");
@@ -166,6 +168,7 @@ export class Works {
             renderer,
             "--duration",
             String(duration),
+            ...(composition ? ["--width", String(composition.width), "--height", String(composition.height)] : []),
           ],
           { cwd: r.root },
         );

@@ -4,6 +4,8 @@ import { build, preview } from "vite";
 import { launchBrowser } from "./browser.mjs";
 import { captureInput } from "./production-input.mjs";
 import { projectAssets } from "./project-assets.mjs";
+import { readProject } from "./project-metadata.mjs";
+import { frameDimensions } from "../src/engine/dimensions.mjs";
 
 /** Each project page has frozen input bytes and a static production build. */
 export async function createRenderSession({
@@ -53,7 +55,7 @@ export async function createRenderSession({
       entry.server = await preview(config);
       browser ??= await launchBrowser();
       const page = await browser.newPage({
-        viewport: { width, height: (width * 9) / 16 },
+        viewport: frameDimensions(readProject(path.join(snapshot.root, "projects", id, "project.ts")).meta, width),
         deviceScaleFactor: 1,
       });
       const errors = [];

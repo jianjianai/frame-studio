@@ -10,7 +10,7 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film inspect <id> [--json]             元数据、素材、音轨和时间标记
   pnpm film context <id> [--json]             AI 接手上下文与修改边界（只读）
   pnpm film new <id> "标题" --renderer canvas|pixi|three
-    [--duration 24] [--fps 30] [--audio silent|generated]
+    [--duration 24] [--fps 30] [--audio silent|generated] [--width 1080 --height 1920]
   pnpm film check <id> [--strict] [--json]     结构与接口检查（只读）
   pnpm film scope <id> [--base <commit>] [--json]  分类报告 Git 修改范围（只读）
   pnpm film operation <id> [--recover <lock-id>] [--json]  查询操作或恢复已退出实例的遗留锁
