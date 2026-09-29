@@ -80,9 +80,10 @@ export class TaskPublication {
         );
       });
     if (t.chat && result.upstream)
-      await this.db.pool.query("UPDATE chats SET upstream=$2 WHERE id=$1", [
+      await this.db.pool.query("UPDATE chats SET upstream=$2,upstream_execution=$3 WHERE id=$1", [
         t.chat,
         result.upstream,
+        t.execution?.sessionKey || null,
       ]);
     const artifacts = [];
     const base = path.join(run, "projects", t.project || "", "exports");

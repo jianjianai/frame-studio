@@ -483,7 +483,7 @@ export function operations({
     assets,
     tasks,
   });
-  chatOperations({ add, db, works, repos, tasks, connections });
+  chatOperations({ add, db, works, repos, tasks, connections, secrets });
   if (connections)
     workbenchOperations({
       add,

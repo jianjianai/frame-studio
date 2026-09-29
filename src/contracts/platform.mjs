@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { commitSchema, shotIdSchema, workResultRequestSchema, workResultResponseSchema, workUndoRequestSchema, workUndoResponseSchema } from "./workflow.mjs";
 
 export const taskStateSchema = z.enum([
   "queued",
@@ -54,6 +55,9 @@ export const reviewContextSchema = z
     start: z.number().min(0).max(3600).optional(),
     end: z.number().min(0).max(3600).optional(),
     assets: z.array(uuid).max(20).optional(),
+    previewTask: uuid.optional(),
+    sourceCommit: commitSchema.optional(),
+    shotId: shotIdSchema.optional(),
   })
   .refine(
     (a) =>
@@ -101,6 +105,8 @@ export const taskGetResponseSchema = z.looseObject({
   events: z.array(taskEventSchema),
 });
 export const operationContracts = Object.freeze({
+  works_result: { request: workResultRequestSchema, response: workResultResponseSchema },
+  works_undo: { request: workUndoRequestSchema, response: workUndoResponseSchema },
   works_chat_create: {
     request: workChatCreateSchema,
     response: z.looseObject({

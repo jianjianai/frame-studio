@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { ENGINE_PROTOCOL_VERSION } from "./protocol.mjs";
 import { compositionSchema } from "./dimensions.mjs";
+import { shotIdSchema } from "../contracts/workflow.mjs";
 export const subtitleSchema = z
   .object({
     start: z.number().nonnegative(),
@@ -43,6 +44,7 @@ export const projectSchema = z
     beats: z.array(
       z.object({
         at: z.number().nonnegative(),
+        id: shotIdSchema.optional(),
         title: z.string(),
         detail: z.string(),
       }),
@@ -73,9 +75,13 @@ export const projectSchema = z
     for (const s of p.subtitles)
       if (s.end > p.duration)
         ctx.addIssue({ code: "custom", message: "字幕不能超过片长" });
-    for (const b of p.beats)
+    const shotIds = new Set<string>();
+    for (const b of p.beats) {
+      if (b.id && shotIds.has(b.id)) ctx.addIssue({ code: "custom", message: "镜头 id 不能重复" });
+      if (b.id) shotIds.add(b.id);
       if (b.at >= p.duration)
         ctx.addIssue({ code: "custom", message: "镜头标记不能超过片长" });
+    }
   });
 export type ProjectMeta = z.infer<typeof projectSchema>;
 export type Quality = "draft" | "standard" | "high";

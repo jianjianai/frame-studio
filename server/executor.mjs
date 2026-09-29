@@ -123,6 +123,7 @@ try {
       "docs",
       "public",
       "projects",
+      "review",
       "package.json",
       "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
@@ -191,8 +192,11 @@ try {
       const context = task.input.context
         ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}`
         : "";
+      const reference = task.reviewReference
+        ? `\n\nVersion-bound review reference: ${JSON.stringify(task.reviewReference)}. Timecodes and shot ids belong to this reference, not automatically to the current work. If disposition is compare-to-latest, inspect the read-only reference source at the supplied path and compare it with projects/${task.project} before mapping the user's request. Never overwrite the current work with the old reference. Do not modify review/; continue editing the latest work directly with the available tools. If a mapping is ambiguous, explain that limitation rather than claiming an exact unaffected range.`
+        : "";
       const output = await run(bin, args, {
-        input: prompt + context,
+        input: prompt + context + reference + (task.previousTurns?.length ? `\n\nPersisted context from earlier turns (new execution session; current instruction above takes precedence):\n${JSON.stringify(task.previousTurns)}` : ""),
         agent: true,
       });
       for (const line of output.split("\n")) {

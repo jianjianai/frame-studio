@@ -212,6 +212,10 @@ export class Connections {
     );
   }
   async begin(kind, target) {
+    const begin = () => this.beginLocked(kind, target);
+    return kind === "github" ? begin() : this.db.lock(`connection:${target}`, begin);
+  }
+  async beginLocked(kind, target) {
     if (kind !== "github") {
       const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
         target,
@@ -279,6 +283,9 @@ export class Connections {
       await this.db.pool.query(
         "INSERT INTO auth_flows(id,target,kind,expires) VALUES($1,$2,$3,now()+interval '15 minutes')",
         [id, target || null, kind],
+      );
+      if (kind !== "github") await this.db.pool.query(
+        "UPDATE connections SET auth_generation=auth_generation+1,state='authorizing',error=NULL WHERE id=$1", [target],
       );
       const child = spawn(
         kind === "github" ? "gh" : toolBinary(this.data, kind),

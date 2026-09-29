@@ -2,10 +2,12 @@ import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { problem } from "./security.mjs";
 import { chatSubmissionShape as submission, workChatCreateSchema, workChatSendSchema } from "../src/contracts/platform.mjs";
+import { freezeExecution } from "./execution-selection.mjs";
+import { freezeReviewReference } from "./review-reference.mjs";
 
 const uuid = z.string().uuid();
 /** Legacy project identifiers are adapters, not a second conversation implementation. */
-export function chatOperations({ add, db, works, repos, tasks, connections }) {
+export function chatOperations({ add, db, works, repos, tasks, connections, secrets }) {
   const create = async ({ repo, project, connection, provider, title }) => {
     await repos.project(repo, project);
     if (Boolean(connection) === Boolean(provider))
@@ -21,22 +23,21 @@ export function chatOperations({ add, db, works, repos, tasks, connections }) {
     const chat = await db.one("SELECT * FROM chats WHERE id=$1", [id]);
     if (!chat || (repo && (chat.repo !== repo || chat.project !== project)))
       throw problem(404, "Conversation not found");
-    if (chat.connection) {
-      if (!connections) throw problem(503, "Model connections are unavailable");
-      await connections.resolve(chat.connection);
-    }
-    for (const asset of context?.assets || [])
-      if (!(await db.one("SELECT asset FROM asset_repos WHERE asset=$1 AND repo=$2", [asset, chat.repo])))
-        throw problem(400, "素材不属于当前仓库");
-    const assetNames = {};
-    for (const asset of context?.assets || []) {
-      const row = await db.one("SELECT name FROM assets WHERE id=$1", [asset]);
-      if (row) assetNames[asset] = row.name;
-    }
     return tasks.create({
       repo: chat.repo, project: chat.project, kind: "agent", chat: chat.id,
       requestKey: requestKey || null,
-      input: { provider: chat.provider, connection: chat.connection || undefined, prompt, context: context ? { ...context, assetNames } : undefined },
+      input: { provider: chat.provider, connection: chat.connection || undefined, prompt, context },
+      prepareInput: async (input) => {
+        const execution = await freezeExecution({ db, connections, secrets, input });
+        const reviewReference = await freezeReviewReference({ db, repos, repo: chat.repo, project: chat.project, context });
+        const assetNames = {};
+        for (const asset of context?.assets || []) {
+          const row = await db.one("SELECT a.name FROM assets a JOIN asset_repos r ON r.asset=a.id WHERE a.id=$1 AND r.repo=$2 AND NOT a.deleted", [asset, chat.repo]);
+          if (!row) throw problem(400, "素材不属于当前仓库或已被删除");
+          assetNames[asset] = row.name;
+        }
+        return { execution, reviewReference, input: { ...input, ...(context ? { context: { ...context, assetNames } } : {}) } };
+      },
     });
   };
   add("chats_create", "Legacy project-addressed conversation creation", {
