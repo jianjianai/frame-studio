@@ -26,6 +26,11 @@ import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
 import { operationError } from "../src/contracts/errors.mjs";
 import { PLATFORM_VERSION } from "../src/contracts/version.mjs";
+import {
+  isMcpOperation,
+  operationDescription,
+  toolAnnotations,
+} from "./tool-catalog.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
@@ -34,8 +39,10 @@ export async function createApp({
   origin = process.env.FRAME_PUBLIC_URL || "http://localhost:3000",
   scheduler = process.env.FRAME_ROLE !== "api",
 } = {}) {
-  if (process.env.FRAME_ROLE === "controller") throw new Error("The controller role must not expose the HTTP application");
-  if (process.env.FRAME_ROLE === "api" && scheduler) throw new Error("The public API role cannot start a controller");
+  if (process.env.FRAME_ROLE === "controller")
+    throw new Error("The controller role must not expose the HTTP application");
+  if (process.env.FRAME_ROLE === "api" && scheduler)
+    throw new Error("The public API role cannot start a controller");
   const services = await createServices({ db, data, masterKey });
   ({ db } = services);
   const { repos, assets, tasks, retention, actions } = services;
@@ -60,7 +67,8 @@ export async function createApp({
   await installRealtime(app, db, actions, origin);
   const oauth = await installOAuth(app, db, actions, origin);
   app.setErrorHandler((err, req, res) => {
-    const failure = operationError(err, req.id), status = failure.status;
+    const failure = operationError(err, req.id),
+      status = failure.status;
     res.code(status).send({
       ...failure,
       details:
@@ -131,7 +139,9 @@ export async function createApp({
   });
   app.get("/readyz", async (_req, res) => {
     const state = await actions.call("system_status", {});
-    return res.code(state.ready ? 200 : 503).send({ status: state.ready ? "ready" : "degraded" });
+    return res
+      .code(state.ready ? 200 : 503)
+      .send({ status: state.ready ? "ready" : "degraded" });
   });
   agentTools({ app, db, data, assets, actions });
   app.post(
@@ -170,22 +180,43 @@ export async function createApp({
     const file = actions.works.coverPath(dir);
     if (!file) throw problem(404, "Cover unavailable");
     const cover = await rasterCover(file);
-    res.type("image/webp")
+    res
+      .type("image/webp")
       .header("Content-Security-Policy", "sandbox; default-src 'none'")
       .header("Cross-Origin-Resource-Policy", "same-origin")
       .header("Cache-Control", "private, max-age=300, must-revalidate")
       .header("ETag", cover.etag);
-    if (req.headers["if-none-match"] === cover.etag) return res.code(304).send();
+    if (req.headers["if-none-match"] === cover.etag)
+      return res.code(304).send();
     return res.send(cover.buffer);
   });
-  app.get("/api/actions", async () =>
-    Object.fromEntries(
-      Object.entries(actions.registry).map(([name, op]) => [
-        name,
-        { description: op.description },
+  app.get("/api/actions", async (req) => {
+    const { name = "", search = "", schema = "0" } = req.query;
+    if (
+      typeof name !== "string" ||
+      name.length > 100 ||
+      typeof search !== "string" ||
+      search.length > 200 ||
+      !["0", "1"].includes(schema)
+    )
+      throw problem(400, "Use name/search and schema=0|1");
+    const entries = Object.entries(actions.registry).filter(
+      ([key, op]) =>
+        (!name || key === name.replace(/^frame_/, "")) &&
+        (!search ||
+          `${key} ${op.description}`
+            .toLowerCase()
+            .includes(search.toLowerCase())),
+    );
+    if (name && !entries.length)
+      throw problem(404, "Unknown operation; list /api/actions first");
+    return Object.fromEntries(
+      entries.map(([key, op]) => [
+        key,
+        operationDescription(key, op, { schema: schema === "1" }),
       ]),
-    ),
-  );
+    );
+  });
   app.post("/api/upload", async (req) => {
     const file = path.join(data, "uploads", randomUUID());
     let metadata = {},
@@ -289,13 +320,28 @@ export async function createApp({
     res
       .type(types[path.extname(file)] || "application/octet-stream")
       .header("Content-Disposition", "attachment");
-    const release = await retention.lease(task.id, { onLost: error => res.raw.destroy(error) });
-    const done = () => void release().catch(error => req.log.error({ message: error.message }, "Artifact lease release failed"));
+    const release = await retention.lease(task.id, {
+      onLost: (error) => res.raw.destroy(error),
+    });
+    const done = () =>
+      void release().catch((error) =>
+        req.log.error(
+          { message: error.message },
+          "Artifact lease release failed",
+        ),
+      );
     res.raw.once("close", done);
     res.raw.once("finish", done);
-    if (res.raw.destroyed) { done(); return res; }
-    try { return sendMedia(req, res, file, { cache: 0 }); }
-    catch (error) { done(); throw error; }
+    if (res.raw.destroyed) {
+      done();
+      return res;
+    }
+    try {
+      return sendMedia(req, res, file, { cache: 0 });
+    } catch (error) {
+      done();
+      throw error;
+    }
   });
   app.post("/api/tasks/:id/preview", async (req) => {
     const t = await tasks.get(req.params.id);
@@ -326,19 +372,21 @@ export async function createApp({
   });
   const mcp = createMcpHandler(
     () => {
-      const server = new McpServer({ name: "frame-studio", version: PLATFORM_VERSION });
+      const server = new McpServer(
+        { name: "frame-studio", version: PLATFORM_VERSION },
+        {
+          instructions:
+            "Start with frame_help. Work tools take a work UUID, not a project slug. Request compact context with sections, use hashed line reads and atomic patch/edit batches, then validate, inspect frames and export. Poll durable tasks instead of resubmitting after disconnect. A ready browser URL is temporary and private. Never claim image or audio review from metadata alone.",
+        },
+      );
       for (const [name, op] of Object.entries(actions.registry)) {
-        if (
-          !/^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$)/.test(
-            name,
-          )
-        )
-          continue;
+        if (!isMcpOperation(name)) continue;
         server.registerTool(
           "frame_" + name,
           {
             description: op.description,
             inputSchema: op.schema,
+            annotations: toolAnnotations(name),
             _meta: {
               securitySchemes: [
                 { type: "oauth2", scopes: ["frame:workbench"] },
@@ -376,11 +424,19 @@ export async function createApp({
                 };
               return {
                 content: [{ type: "text", text: JSON.stringify(value) }],
+                structuredContent: Array.isArray(value)
+                  ? { items: value }
+                  : value !== null && typeof value === "object"
+                    ? value
+                    : { value },
               };
             } catch (e) {
               return {
                 isError: true,
-                content: [{ type: "text", text: JSON.stringify(operationError(e)) }],
+                content: [
+                  { type: "text", text: JSON.stringify(operationError(e)) },
+                ],
+                structuredContent: operationError(e),
               };
             }
           },
@@ -420,7 +476,9 @@ export async function createApp({
     app.setNotFoundHandler((req, res) => res.sendFile("index.html"));
   }
   if (scheduler) {
-    tasks.startLoop({ onLeadership: leader => leader ? retention.start() : retention.stop() });
+    tasks.startLoop({
+      onLeadership: (leader) => (leader ? retention.start() : retention.stop()),
+    });
   }
   app.addHook("onClose", async () => {
     await mcp.close();

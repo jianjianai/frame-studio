@@ -7,6 +7,7 @@ import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
 import { chatOperations } from "./chat-operations.mjs";
 import { createOperationRegistry } from "./operation-registry.mjs";
+import { registerToolHelp } from "./tool-catalog.mjs";
 import { workResultOperations } from "./work-results.mjs";
 import { taskGetRequestSchema } from "../src/contracts/platform.mjs";
 import { workIdRequestSchema } from "../src/contracts/platform.mjs";
@@ -29,6 +30,7 @@ export function operations({
   retention,
 }) {
   const { registry, add, call } = createOperationRegistry();
+  registerToolHelp(add, registry);
   add(
     "repositories_list",
     "List repositories and statically discovered animation projects",
@@ -93,19 +95,40 @@ export function operations({
   add(
     "project_context",
     "Read project metadata, authoring rules and project README",
-    { repo: uuid, project },
+    {
+      repo: uuid,
+      project,
+      sections: z
+        .array(z.enum(["metadata", "readme", "authoring"]))
+        .max(3)
+        .default(["metadata", "readme", "authoring"]),
+    },
     async (a) => {
       const { dir } = await repos.project(a.repo, a.project);
+      const read = (relative) => {
+        const file = confined(dir, relative);
+        if (!fs.existsSync(file)) return "";
+        if (!fs.statSync(file).isFile() || fs.statSync(file).size > 1024 * 1024)
+          throw problem(
+            413,
+            "Context source exceeds 1 MiB; split large source files or use the asset workflow",
+          );
+        return fs.readFileSync(file, "utf8");
+      };
       return {
         project: a.project,
-        metadata: fs.readFileSync(confined(dir, "project.ts"), "utf8"),
-        readme: fs.existsSync(confined(dir, "README.md"))
-          ? fs.readFileSync(confined(dir, "README.md"), "utf8")
-          : "",
-        authoring: fs.readFileSync(
-          new URL("../docs/AUTHORING.md", import.meta.url),
-          "utf8",
-        ),
+        ...(a.sections.includes("metadata")
+          ? { metadata: read("project.ts") }
+          : {}),
+        ...(a.sections.includes("readme") ? { readme: read("README.md") } : {}),
+        ...(a.sections.includes("authoring")
+          ? {
+              authoring: fs.readFileSync(
+                new URL("../docs/AUTHORING.md", import.meta.url),
+                "utf8",
+              ),
+            }
+          : {}),
         instructions:
           "Use project_files and project_read. Edits need expectedSha256. Create preview tasks; poll task_get. Tasks persist after MCP disconnect.",
       };
@@ -145,10 +168,36 @@ export function operations({
     async (a) => {
       const { dir } = await repos.project(a.repo, a.project),
         file = confined(dir, a.path);
-      if (fs.statSync(file).size > 1024 * 1024)
-        throw problem(413, "Text file exceeds 1 MiB");
-      const content = fs.readFileSync(file, "utf8");
-      return { path: a.path, content, sha256: hash(content) };
+      if (!fs.existsSync(file))
+        throw problem(404, "Source file not found; list the work files first");
+      const stat = fs.statSync(file);
+      if (!stat.isFile()) throw problem(400, "Expected a regular text file");
+      if (stat.size > 1024 * 1024)
+        throw problem(
+          413,
+          "Text file exceeds 1 MiB; split large source files or use the asset workflow",
+        );
+      const bytes = fs.readFileSync(file);
+      let content;
+      try {
+        content = new TextDecoder("utf-8", {
+          fatal: true,
+          ignoreBOM: true,
+        }).decode(bytes);
+      } catch {
+        throw problem(
+          400,
+          "File is not valid UTF-8; use the asset download endpoint for binary files",
+        );
+      }
+      if (content.includes("\0"))
+        throw problem(400, "Binary file is not editable text");
+      return {
+        path: a.path,
+        content,
+        bytes: bytes.length,
+        sha256: hash(bytes),
+      };
     },
   );
   add(
@@ -166,16 +215,38 @@ export function operations({
         await repos.writable(a.repo, a.project);
         const { dir } = await repos.project(a.repo, a.project),
           file = confined(dir, a.path);
-        if (!/\.(ts|tsx|js|mjs|json|md|txt|svg|css|glsl|wgsl)$/.test(file))
+        if (Buffer.byteLength(a.content, "utf8") > 1024 * 1024)
+          throw problem(413, "Text file exceeds 1 MiB in UTF-8 bytes");
+        if (a.content.includes("\0"))
+          throw problem(400, "NUL characters are not allowed in text files");
+        if (
+          !/\.(ts|tsx|js|jsx|mjs|json|md|txt|svg|css|glsl|wgsl|vert|frag|csv|srt|vtt)$/.test(
+            file,
+          )
+        )
           throw problem(400, "Unsupported text file");
+        if (fs.existsSync(file)) {
+          const stat = fs.statSync(file);
+          if (!stat.isFile())
+            throw problem(400, "Expected a regular text file");
+          if (stat.size > 1024 * 1024)
+            throw problem(
+              413,
+              "Existing text file exceeds 1 MiB; use an asset workflow for large files",
+            );
+        }
         const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
         if ((previous ? hash(previous) : null) !== a.expectedSha256)
           throw problem(409, "File changed; read the current version first");
         await repos.revisions?.invalidate(a.repo, a.project);
         fs.mkdirSync(path.dirname(file), { recursive: true });
         const temp = file + ".frame-" + randomUUID();
-        fs.writeFileSync(temp, a.content);
-        fs.renameSync(temp, file);
+        try {
+          fs.writeFileSync(temp, a.content, { flag: "wx" });
+          fs.renameSync(temp, file);
+        } finally {
+          if (fs.existsSync(temp)) fs.unlinkSync(temp);
+        }
         await repos.revisions?.invalidate(a.repo, a.project);
         return { sha256: hash(a.content) };
       }),
@@ -225,10 +296,18 @@ export function operations({
       ),
     }),
   );
-  add("task_cancel", "Cancel a queued or running task", workIdRequestSchema, (a) =>
-    tasks.cancel(a.id),
+  add(
+    "task_cancel",
+    "Cancel a queued or running task",
+    workIdRequestSchema,
+    (a) => tasks.cancel(a.id),
   );
-  add("task_retry_publish", "Retry saving an already completed result without re-running AI", workIdRequestSchema, (a) => tasks.retryPublication(a.id));
+  add(
+    "task_retry_publish",
+    "Retry saving an already completed result without re-running AI",
+    workIdRequestSchema,
+    (a) => tasks.retryPublication(a.id),
+  );
   add(
     "artifact_read",
     "Read a completed task PNG for visual inspection; JSON and subtitles return as text",
@@ -331,6 +410,48 @@ export function operations({
     },
   );
   add(
+    "upload_status",
+    "Inspect resumable upload progress and expected checksum; finished uploads keep their asset result.",
+    { id: uuid },
+    async ({ id }) =>
+      db.lock("upload:" + id, async () => {
+        const dir = path.join(data, "uploads", id);
+        if (!fs.existsSync(dir + "/meta.json"))
+          throw problem(404, "Upload not found or expired");
+        const meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
+        return {
+          id,
+          repo: meta.repo,
+          name: meta.name,
+          bytes: meta.bytes,
+          sha256: meta.sha256,
+          offset: meta.result ? meta.bytes : fs.statSync(dir + "/bytes").size,
+          state: meta.result ? "finished" : "uploading",
+          chunkBytes: 768 * 1024,
+          ...(meta.result ? { result: meta.result } : {}),
+        };
+      }),
+  );
+  add(
+    "upload_abort",
+    "Remove only this unfinished upload's temporary bytes. Does not delete registered materials. Safe to repeat for a missing upload.",
+    { id: uuid },
+    async ({ id }) =>
+      db.lock("upload:" + id, async () => {
+        const dir = path.join(data, "uploads", id);
+        if (!fs.existsSync(dir + "/meta.json"))
+          return { id, aborted: false, state: "absent" };
+        const meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
+        if (meta.result)
+          throw problem(
+            409,
+            "Upload already registered an asset; use asset lifecycle operations instead",
+          );
+        fs.rmSync(dir, { recursive: true });
+        return { id, aborted: true };
+      }),
+  );
+  add(
     "upload_chunk",
     "Append a base64 chunk at exact byte offset; repeated identical chunks are accepted",
     {
@@ -340,14 +461,33 @@ export function operations({
     },
     async (a) =>
       db.lock("upload:" + a.id, async () => {
-        const dir = path.join(data, "uploads", a.id),
-          meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8")),
-          file = dir + "/bytes",
+        const dir = path.join(data, "uploads", a.id);
+        if (!fs.existsSync(dir + "/meta.json"))
+          throw problem(404, "Upload not found or expired");
+        const meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
+        if (meta.result)
+          throw problem(409, "Upload already finished; inspect upload_status");
+        if (
+          !a.base64 ||
+          a.base64.length % 4 ||
+          !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+            a.base64,
+          )
+        )
+          throw problem(400, "Chunk must be canonical nonempty base64");
+        const file = dir + "/bytes",
           bytes = Buffer.from(a.base64, "base64"),
           size = fs.statSync(file).size;
         if (a.offset + bytes.length > meta.bytes)
           throw problem(400, "Upload exceeds declared size");
+        if (bytes.toString("base64") !== a.base64)
+          throw problem(400, "Chunk must be canonical base64");
         if (a.offset < size) {
+          if (a.offset + bytes.length > size)
+            throw problem(
+              409,
+              "Repeated chunk partially overlaps existing bytes",
+            );
           const fd = fs.openSync(file, "r"),
             old = Buffer.alloc(bytes.length);
           try {
@@ -369,13 +509,15 @@ export function operations({
     { id: uuid },
     async (a) =>
       db.lock("upload:" + a.id, async () => {
-        const dir = path.join(data, "uploads", a.id),
-          meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
+        const dir = path.join(data, "uploads", a.id);
+        if (!fs.existsSync(dir + "/meta.json"))
+          throw problem(404, "Upload not found or expired");
+        const meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
         if (meta.result) return meta.result;
         const { fileSha256 } = await import("./project-files.mjs");
         if (
           fs.statSync(dir + "/bytes").size !== meta.bytes ||
-          await fileSha256(dir + "/bytes") !== meta.sha256
+          (await fileSha256(dir + "/bytes")) !== meta.sha256
         )
           throw problem(409, "Upload size or checksum mismatch");
         const result = await assets.register(dir + "/bytes", meta);

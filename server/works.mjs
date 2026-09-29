@@ -143,6 +143,8 @@ export class Works {
     repo,
     renderer = "canvas",
     duration = 12,
+    fps = 30,
+    audio = "silent",
     composition,
     category = "",
   }) {
@@ -168,7 +170,18 @@ export class Works {
             renderer,
             "--duration",
             String(duration),
-            ...(composition ? ["--width", String(composition.width), "--height", String(composition.height)] : []),
+            "--fps",
+            String(fps),
+            "--audio",
+            audio,
+            ...(composition
+              ? [
+                  "--width",
+                  String(composition.width),
+                  "--height",
+                  String(composition.height),
+                ]
+              : []),
           ],
           { cwd: r.root },
         );

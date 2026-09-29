@@ -1,7 +1,15 @@
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
-import { workIdRequestSchema, workTaskRequestSchema, workPreviewRequestSchema, workVersionsRequestSchema, workVersionRequestSchema, workRestoreRequestSchema } from "../src/contracts/platform.mjs";
+import {
+  workIdRequestSchema,
+  workTaskRequestSchema,
+  workPreviewRequestSchema,
+  workVersionsRequestSchema,
+  workVersionRequestSchema,
+  workRestoreRequestSchema,
+} from "../src/contracts/platform.mjs";
 import { Works } from "./works.mjs";
+import { workSourceTools } from "./work-source-tools.mjs";
 import { compositionSchema } from "../src/engine/dimensions.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { readWorkPreview } from "./preview-state.mjs";
@@ -48,6 +56,8 @@ export function workOperations({
       renderer: z.enum(["canvas", "pixi", "three"]).default("canvas"),
       duration: z.number().positive().max(3600).default(12),
       composition: compositionSchema.optional(),
+      fps: z.number().int().min(12).max(60).default(30),
+      audio: z.enum(["silent", "generated"]).default("silent"),
       category: z.string().max(80).default(""),
     },
     (a) => works.create(a),
@@ -92,22 +102,43 @@ export function workOperations({
   add(
     "works_context",
     "Read one work, authoring instructions, material references and recent tasks",
-    { id: uuid },
+    {
+      id: uuid,
+      sections: z
+        .array(z.enum(["metadata", "readme", "authoring", "assets", "tasks"]))
+        .max(5)
+        .default(["metadata", "readme", "authoring", "assets", "tasks"]),
+    },
     async (a) => {
       const work = await works.get(a.id),
         args = { repo: work.repo, project: work.project };
       return {
         work,
-        ...(await invoke("project_context", args)),
-        assets: await assets.list({
-          repo: work.repo,
-          project: work.project,
-          limit: 200,
-        }),
-        tasks: await db.all(
-          "SELECT * FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC LIMIT 60",
-          [work.repo, work.project],
-        ),
+        ...(await invoke("project_context", {
+          ...args,
+          sections: a.sections.filter((s) =>
+            ["metadata", "readme", "authoring"].includes(s),
+          ),
+        })),
+        instructions:
+          "Use frame_works_files_page/search/read_lines with this work UUID. SHA-256 covers the full file. Batch related edits with frame_works_patch/edit; dryRun writes nothing. Use frame_works_task, poll frame_task_get, then inspect frame_artifact_read. frame_works_browser may return a build task; poll and call it again. For compact context request sections: [metadata, readme].",
+        ...(a.sections.includes("assets")
+          ? {
+              assets: await assets.list({
+                repo: work.repo,
+                project: work.project,
+                limit: 200,
+              }),
+            }
+          : {}),
+        ...(a.sections.includes("tasks")
+          ? {
+              tasks: await db.all(
+                "SELECT * FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC LIMIT 60",
+                [work.repo, work.project],
+              ),
+            }
+          : {}),
       };
     },
   );
@@ -246,7 +277,13 @@ export function workOperations({
         async () => {
           const existing = await db.one(
             "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running','publishing','publish_failed') OR (state='succeeded' AND result->>'previewVersion'=$4 AND result->>'runtimeFingerprint'=$5)) ORDER BY created DESC LIMIT 1",
-            [work.repo, work.project, a.version, String(PREVIEW_VERSION), runtime.fingerprint],
+            [
+              work.repo,
+              work.project,
+              a.version,
+              String(PREVIEW_VERSION),
+              runtime.fingerprint,
+            ],
           );
           return (
             existing ||
@@ -277,14 +314,19 @@ export function workOperations({
       return { ok: true };
     },
   );
-  add("works_preview_status", "Read indexed source and preview revisions; refresh explicitly scans external changes", workPreviewRequestSchema, async (a) => {
-    let work = await works.get(a.id, { active: true });
-    if (a.refresh) {
-      await repos.revisions?.refresh(work.repo, work.project);
-      work = await works.get(a.id, { active: true });
-    }
-    return readWorkPreview({ db, work });
-  });
+  add(
+    "works_preview_status",
+    "Read indexed source and preview revisions; refresh explicitly scans external changes",
+    workPreviewRequestSchema,
+    async (a) => {
+      let work = await works.get(a.id, { active: true });
+      if (a.refresh) {
+        await repos.revisions?.refresh(work.repo, work.project);
+        work = await works.get(a.id, { active: true });
+      }
+      return readWorkPreview({ db, work });
+    },
+  );
   add(
     "works_browser",
     "Get a private AI browser URL with FRAME_AI console controls. Rendering, segment playback, screenshots and WebM exports execute in the client browser. If compilation is needed, returns a durable task; poll and call again.",
@@ -333,5 +375,6 @@ export function workOperations({
       };
     },
   );
+  workSourceTools({ add, works, repos, db });
   return works;
 }
