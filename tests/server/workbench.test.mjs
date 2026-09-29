@@ -74,7 +74,7 @@ test(
       const queued = await call("works_task", { id: a.id, kind: "build" });
       await assert.rejects(
         call("works_update", { id: a.id, title: "busy" }),
-        /作品正在运行/,
+        { statusCode: 409 },
       );
       await call("works_update", {
         id: b.id,

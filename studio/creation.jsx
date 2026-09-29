@@ -259,17 +259,18 @@ export function WorkChat({
     requestKey.current = submission;
     try {
       await run(async () => {
+        const frozen = submission.intent;
         if (!submission.chat) {
           const created = await api("works_chat_create", {
-            id: intent.id, connection: intent.connection, title: intent.prompt.slice(0, 60),
+            id: frozen.id, connection: frozen.connection, title: frozen.prompt.slice(0, 60),
           });
           submission.chat = created.id;
           if (chatRevision.current === sent.conversation) setChat(created.id);
           chats.refresh();
         }
         await api("works_chat_send", {
-          id: intent.id, chat: submission.chat, prompt: intent.prompt,
-          requestKey: submission.key, context: intent.context,
+          id: frozen.id, chat: submission.chat, prompt: frozen.prompt,
+          requestKey: submission.key, context: frozen.context,
         });
         if (requestKey.current === submission) requestKey.current = null;
         if (canClearDraft(sent, { text: promptRef.current, version: draftRevision.current, conversation: chatRevision.current }))

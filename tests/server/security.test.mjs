@@ -47,7 +47,11 @@ test("project paths reject traversal, credential paths, symlinks and hardlinks",
     fs.linkSync(root + "/ok.txt", root + "/hard.txt");
     assert.throws(() => confined(root, "hard.txt"));
     fs.unlinkSync(root + "/hard.txt");
-    fs.symlinkSync(root + "/ok.txt", root + "/link.txt");
+    if (process.platform === "win32") {
+      // Junctions exercise the link boundary without requiring Windows symlink privileges.
+      fs.mkdirSync(root + "/target");
+      fs.symlinkSync(root + "/target", root + "/link.txt", "junction");
+    } else fs.symlinkSync(root + "/ok.txt", root + "/link.txt");
     assert.throws(() => confined(root, "link.txt"));
     assert.throws(() => copyTree(root, root + "-copy"));
   } finally {

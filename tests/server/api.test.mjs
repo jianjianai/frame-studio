@@ -158,7 +158,7 @@ test(
           expectedSha256: hash("export const value = 2;"),
           content: "busy",
         }),
-        /作品正在运行/,
+        { statusCode: 409 },
       );
       await call("task_cancel", { id: task.id });
       assert.equal((await tasks.get(task.id)).state, "cancelled");
@@ -255,7 +255,7 @@ test(
           deleted: true,
           confirm: "改名的作品",
         }),
-        /作品正在运行/,
+        { statusCode: 409 },
       );
       await call("task_cancel", { id: workTask.id });
       await call("works_trash", {
