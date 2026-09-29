@@ -27,10 +27,9 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
       fs.mkdirSync(data, { recursive: true });
       let platform, task, work;
       const api = http.createServer(async (req, res) => {
-        if (
-          req.method !== "POST" ||
-          (!req.url.includes("/responses") && !req.url.includes("/messages"))
-        ) {
+        const requestPath = new URL(req.url, "http://fixture.local").pathname;
+        const allowedPaths = provider === "codex" ? ["/v1/responses"] : ["/v1/messages", "/v1/messages/count_tokens"];
+        if (req.method !== "POST" || !allowedPaths.includes(requestPath)) {
           res.writeHead(404);
           res.end();
           return;
@@ -224,10 +223,11 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           name: "Model fixture",
           tool: provider,
           mode: "api",
-          baseUrl: `http://172.17.0.1:${modelPort}${provider === "codex" ? "/v1" : ""}`,
+          baseUrl: `http://172.17.0.1:${modelPort}/v1/${provider === "codex" ? "responses" : "messages"}`,
           apiKey: "fixture-provider-key",
           model: provider === "codex" ? "gpt-5.4" : "claude-sonnet-4-6",
         });
+        assert.equal(connection.baseUrl, `http://172.17.0.1:${modelPort}${provider === "codex" ? "/v1" : ""}`);
         const chat = await platform.actions.call("works_chat_create", {
           id: work.id,
           connection: connection.id,

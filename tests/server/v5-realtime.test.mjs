@@ -87,6 +87,11 @@ test("shared errors preserve recovery semantics and hide internal failures; unce
       operationError(Error("password=private; SQL internal failure")),
     ).includes("password"),
   );
+  const catalogFailure = operationError(Object.assign(Error("无法获取模型（HTTP 404），可手动添加"), { statusCode: 502, expose: true }), "catalog-1");
+  assert.equal(catalogFailure.status, 502);
+  assert.match(catalogFailure.error, /HTTP 404/);
+  assert.equal(catalogFailure.requestId, "catalog-1");
+  assert(!operationError(Object.assign(Error("private upstream body"), { statusCode: 502 })).error.includes("private"));
   assert.equal(uncertainOperation("Response lost").code, "OPERATION_UNCERTAIN");
   assert.equal(uncertainOperation("Response lost").retryable, false);
   assert(Object.keys(operationContracts).length >= 20);

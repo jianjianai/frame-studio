@@ -4,15 +4,11 @@ import {
   Search,
   Settings2,
   RefreshCw,
-  Check,
   ChevronRight,
   Link,
-  Eye,
-  EyeOff,
   Trash2,
   Power,
   Cpu,
-  X,
   Download,
 } from "lucide-react";
 import {
@@ -32,244 +28,29 @@ import {
   providerModels,
   providerAvailable,
 } from "../src/contracts/ai-models.mjs";
-import { useAiPreferences } from "./ai-preferences";
+import { useAiPreferences, forgetProviderPreferences } from "./ai-preferences";
 import { ModelPicker } from "./model-picker";
 
-const payload = (provider, patch = {}) => ({
-  id: provider.id,
-  ...(provider.revision ? { expectedRevision: provider.revision } : {}),
-  name: provider.name,
-  tool: provider.tool,
-  mode: provider.mode || "api",
-  baseUrl: provider.baseUrl || "",
-  model: provider.model || "",
-  models:
-    provider.models || providerModels(provider).filter((model) => model.id),
-  enabled: provider.enabled !== false,
-  ...patch,
-});
+import { ConnectionForm } from "./provider-connection";
+export { ConnectionForm } from "./provider-connection";
+import {
+  providerPayload as payload,
+  DiscoverDialog,
+  ModelEditor,
+  DeleteProviderDialog,
+  ModelSummary,
+} from "./provider-dialogs";
+import "./provider-settings.css";
+
 const providerLabel = (provider) =>
   provider.enabled === false
     ? "已停用"
     : providerAvailable(provider)
-      ? "已配置"
+      ? provider.mode !== "official" &&
+        !provider.models?.some((m) => m.enabled !== false)
+        ? "待添加模型"
+        : "已配置"
       : "待连接";
-
-export function ConnectionForm({ initial, onClose, onSave }) {
-  const [tool, setTool] = useState(initial.tool || "codex"),
-    [mode, setMode] = useState(initial.mode || "api"),
-    [showKey, setShowKey] = useState(false);
-  return (
-    <Modal title={initial.id ? "编辑提供商" : "添加提供商"} onClose={onClose}>
-      <Form
-        submit="保存提供商"
-        onSubmit={async (values) => {
-          const { name, baseUrl = "", apiKey, model } = values;
-          const saved = await api("connections_save", {
-            ...(initial.id ? payload(initial) : {}),
-            name,
-            tool,
-            mode,
-            baseUrl: mode === "api" ? baseUrl.trim() : "",
-            ...(apiKey ? { apiKey } : {}),
-            ...(!initial.id
-              ? {
-                  model: model?.trim() || "",
-                  models: model?.trim()
-                    ? [
-                        {
-                          id: model.trim(),
-                          name: model.trim().slice(0, 100),
-                          enabled: true,
-                        },
-                      ]
-                    : [],
-                }
-              : {}),
-          });
-          onSave(saved);
-        }}
-      >
-        <p className="settings-help">
-          一个提供商共用一组连接凭据，可以添加多个模型。聊天栏将按这里的名称分组。
-        </p>
-        <Field label="提供商名称">
-          <input
-            name="name"
-            defaultValue={initial.name || ""}
-            placeholder="例如：OpenAI、团队 API、备用服务"
-            required
-            maxLength={100}
-            autoFocus
-          />
-        </Field>
-        <div className="settings-form-grid">
-          <Field label="创作工具 / API 协议">
-            <select
-              value={tool}
-              disabled={!!initial.id}
-              onChange={(event) => setTool(event.target.value)}
-            >
-              <option value="codex">Codex · Responses API</option>
-              <option value="claude">Claude Code · Messages API</option>
-            </select>
-          </Field>
-          <Field label="认证方式">
-            <select
-              value={mode}
-              disabled={!!initial.id}
-              onChange={(event) => setMode(event.target.value)}
-            >
-              <option value="api">API 密钥</option>
-              <option value="official">官方账号登录</option>
-            </select>
-          </Field>
-        </div>
-        {initial.id && (
-          <p className="settings-help">
-            更换创作工具或认证方式时，请新建提供商，以免旧会话混用凭据。
-          </p>
-        )}
-        {mode === "api" ? (
-          <>
-            <Field label="API 地址">
-              <input
-                name="baseUrl"
-                type="url"
-                defaultValue={initial.baseUrl || ""}
-                placeholder={
-                  tool === "codex"
-                    ? "https://api.openai.com/v1"
-                    : "https://api.anthropic.com"
-                }
-              />
-            </Field>
-            <p className="settings-help">
-              留空使用官方地址。填写接口根地址，不包含 /responses 或
-              /messages；仅支持与所选工具兼容的接口。
-            </p>
-            <Field label="API 密钥">
-              <div className="secret-input">
-                <input
-                  aria-label="API 密钥"
-                  name="apiKey"
-                  type={showKey ? "text" : "password"}
-                  autoComplete="new-password"
-                  placeholder={
-                    initial.configured ? "留空保留已保存密钥" : "输入 API 密钥"
-                  }
-                  required={!initial.configured}
-                  maxLength={10000}
-                />
-                <button
-                  type="button"
-                  aria-label={showKey ? "隐藏密钥" : "显示输入的密钥"}
-                  onClick={() => setShowKey(!showKey)}
-                >
-                  {showKey ? <EyeOff size={16} /> : <Eye size={16} />}
-                </button>
-              </div>
-            </Field>
-            <p className="settings-help">
-              已保存密钥不会回传浏览器；此按钮只显示本次输入。
-            </p>
-          </>
-        ) : (
-          <p className="settings-callout">
-            保存后，通过提供商详情中的“登录官方账号”完成授权，无需输入 API
-            密钥。
-          </p>
-        )}
-        {!initial.id && (
-          <Field label="初始模型 ID（可稍后添加）">
-            <input
-              name="model"
-              maxLength={200}
-              placeholder="填写提供商给出的真实模型 ID"
-            />
-          </Field>
-        )}
-      </Form>
-    </Modal>
-  );
-}
-
-function DiscoverDialog({ provider, result, onClose, onSave }) {
-  const [search, setSearch] = useState(""),
-    [selected, setSelected] = useState([]);
-  const existing = new Set((provider.models || []).map((model) => model.id));
-  const filtered = result.models.filter((model) =>
-    `${model.name} ${model.id}`
-      .toLowerCase()
-      .includes(search.trim().toLowerCase()),
-  );
-  return (
-    <Modal title="从提供商添加模型" onClose={onClose}>
-      <Form
-        submit={`添加所选模型（${selected.length}）`}
-        disabled={!selected.length}
-        onSubmit={async () => {
-          const additions = result.models.filter(
-            (model) => selected.includes(model.id) && !existing.has(model.id),
-          );
-          const models = [...(provider.models || []), ...additions];
-          if (models.length > 200)
-            throw new Error("每个提供商最多保存 200 个模型，请减少选择");
-          await api(
-            "connections_save",
-            payload(provider, {
-              models,
-              model:
-                provider.model ||
-                (provider.mode === "official" ? "" : additions[0]?.id || ""),
-            }),
-          );
-          onSave();
-        }}
-      >
-        <p className="settings-help">{result.message}</p>
-        {result.truncated && (
-          <p className="settings-callout">
-            目录已截取，未列出的模型可通过 ID 手动添加。
-          </p>
-        )}
-        <label className="settings-search">
-          <Search size={15} />
-          <input
-            aria-label="搜索发现的模型"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="搜索模型…"
-          />
-        </label>
-        <div className="discover-models">
-          {filtered.map((model) => (
-            <label key={model.id} className="discover-model">
-              <input
-                type="checkbox"
-                checked={existing.has(model.id) || selected.includes(model.id)}
-                disabled={existing.has(model.id)}
-                onChange={(event) =>
-                  setSelected((old) =>
-                    event.target.checked
-                      ? [...old, model.id]
-                      : old.filter((id) => id !== model.id),
-                  )
-                }
-              />
-              <span>
-                <strong>{model.name}</strong>
-                <small>{model.id}</small>
-              </span>
-              {existing.has(model.id) && <small>已添加</small>}
-            </label>
-          ))}
-          {!filtered.length && <Empty>没有匹配的模型，可手动添加。</Empty>}
-        </div>
-      </Form>
-    </Modal>
-  );
-}
 
 export function ProviderSettings({ notify, LoginDialog }) {
   const connections = useQuery("connections_list", {}, 1),
@@ -278,7 +59,8 @@ export function ProviderSettings({ notify, LoginDialog }) {
     [modelSearch, setModelSearch] = useState("");
   const [edit, setEdit] = useState(null),
     [login, setLogin] = useState(null),
-    [adding, setAdding] = useState(false),
+    [modelEdit, setModelEdit] = useState(null),
+    [deleting, setDeleting] = useState(null),
     [discovery, setDiscovery] = useState(null);
   const [run, busy] = useAction(notify),
     [pendingModel, setPendingModel] = useState(null);
@@ -322,7 +104,7 @@ export function ProviderSettings({ notify, LoginDialog }) {
       <div className="settings-section-heading">
         <div>
           <h2>提供商与模型</h2>
-          <p>管理创作连接，在聊天中随时选择模型。</p>
+          <p>连接 API，自动发现模型与规格。手动配置仅作兜底。</p>
         </div>
         <Button
           className="primary"
@@ -427,7 +209,11 @@ export function ProviderSettings({ notify, LoginDialog }) {
                 </Button>
                 <Button
                   icon={RefreshCw}
-                  disabled={busy || !selected.configured}
+                  disabled={
+                    busy ||
+                    !selected.configured ||
+                    (selected.mode !== "official" && !selected.model)
+                  }
                   title="API 测试会向所选模型发送少量请求，可能产生费用"
                   onClick={() => testModel(selected)}
                 >
@@ -482,7 +268,10 @@ export function ProviderSettings({ notify, LoginDialog }) {
               <div className="provider-model-heading">
                 <div>
                   <h3>模型目录</h3>
-                  <p>显示名用于选择，模型 ID 原样发送给提供商。</p>
+                  <p>
+                    API 自动填参 · 可查看来源和覆盖值 ·{" "}
+                    {selected.models?.length || 0} / 200 个模型
+                  </p>
                 </div>
                 <div className="row">
                   <Button
@@ -497,23 +286,18 @@ export function ProviderSettings({ notify, LoginDialog }) {
                         ? "官方登录请手动添加模型 ID"
                         : "从已保存的 API 地址读取 /models"
                     }
-                    onClick={() =>
-                      run(async () =>
-                        setDiscovery({
-                          provider: selected,
-                          result: await api("connections_discover", {
-                            id: selected.id,
-                          }),
-                        }),
-                      )
-                    }
+                    className="primary"
+                    onClick={() => setDiscovery({ provider: selected })}
                   >
                     发现模型
                   </Button>
                   <Button
                     icon={Plus}
                     disabled={busy}
-                    onClick={() => setAdding(true)}
+                    title="API 不支持目录或使用自定义模型 ID 时手动添加"
+                    onClick={() =>
+                      setModelEdit({ provider: selected, initial: {} })
+                    }
                   >
                     添加模型
                   </Button>
@@ -528,7 +312,9 @@ export function ProviderSettings({ notify, LoginDialog }) {
                   }
                 >
                   <option value="" disabled={selected.mode !== "official"}>
-                    工具默认模型
+                    {selected.mode === "official"
+                      ? "工具默认模型"
+                      : "请先获取并导入模型"}
                   </option>
                   {(selected.models || [])
                     .filter((model) => model.enabled !== false)
@@ -580,7 +366,17 @@ export function ProviderSettings({ notify, LoginDialog }) {
                           )}
                         </strong>
                         <code>{model.id}</code>
+                        <ModelSummary model={model} />
                       </span>
+                      <Button
+                        icon={Settings2}
+                        disabled={busy}
+                        aria-label={`编辑模型参数 ${model.name}`}
+                        title="查看自动规格或手动覆盖"
+                        onClick={() =>
+                          setModelEdit({ provider: selected, initial: model })
+                        }
+                      />
                       <Button
                         disabled={
                           busy ||
@@ -609,16 +405,36 @@ export function ProviderSettings({ notify, LoginDialog }) {
                     </div>
                   ))}
               </div>
+              {!!selected.models?.length &&
+                !selected.models.some((m) =>
+                  `${m.name} ${m.id}`
+                    .toLowerCase()
+                    .includes(modelSearch.toLowerCase()),
+                ) && <Empty>没有匹配的模型，试试其他名称或 ID。</Empty>}
               {!selected.models?.length && (
                 <p className="settings-callout">
                   {selected.mode === "official"
                     ? "当前使用工具默认模型；可以手动添加账号支持的模型。"
-                    : "尚未添加模型。请发现或手动添加，再设置默认模型。"}
+                    : "连接已保存。点击“发现模型”，勾选后即可导入；首次导入自动选择默认模型。"}
                 </p>
               )}
               <p className="settings-help">
-                停用或移除模型不会删除历史消息。已排队任务若引用停用模型，会明确失败，不会改用其他模型。
+                发现模型也可更新已有规格，不覆盖手动值。停用或移除模型不会删除历史消息；任务不会暗中改用其他模型。
               </p>
+              <div className="provider-danger-zone">
+                <div>
+                  <strong>删除此提供商</strong>
+                  <p>清除连接凭据与模型目录，保留作品及历史对话。</p>
+                </div>
+                <Button
+                  icon={Trash2}
+                  className="danger"
+                  disabled={busy}
+                  onClick={() => setDeleting(selected)}
+                >
+                  删除提供商
+                </Button>
+              </div>
             </div>
           )}
         </div>
@@ -628,10 +444,13 @@ export function ProviderSettings({ notify, LoginDialog }) {
           initial={edit}
           onClose={() => setEdit(null)}
           onSave={(saved) => {
+            const created = !edit.id;
             connections.refresh();
             setSelectedId(saved.id);
             setEdit(null);
             notify("提供商已保存");
+            if (created && saved.mode === "api")
+              setDiscovery({ provider: saved });
           }}
         />
       )}
@@ -647,58 +466,65 @@ export function ProviderSettings({ notify, LoginDialog }) {
           }}
         />
       )}
-      {adding && selected && (
-        <Modal title="添加模型" onClose={() => setAdding(false)}>
-          <Form
-            submit="添加模型"
-            onSubmit={async ({ id, name }) => {
-              id = id.trim();
-              if ((selected.models || []).some((model) => model.id === id))
-                throw new Error("此模型 ID 已存在");
-              const models = [
-                ...(selected.models || []),
-                { id, name: name.trim() || id.slice(0, 100), enabled: true },
-              ];
-              await api(
-                "connections_save",
-                payload(selected, {
-                  models,
-                  model:
-                    selected.model || (selected.mode === "official" ? "" : id),
-                }),
-              );
-              setAdding(false);
-              connections.refresh();
-            }}
-          >
-            <Field label="模型 ID">
-              <input
-                name="id"
-                required
-                autoFocus
-                maxLength={200}
-                placeholder="提供商提供的真实模型 ID"
-              />
-            </Field>
-            <Field label="显示名称">
-              <input
-                name="name"
-                maxLength={100}
-                placeholder="可选，例如：主力创作"
-              />
-            </Field>
-            <p className="settings-help">仅添加目录项，不会立即调用模型。</p>
-          </Form>
-        </Modal>
+      {modelEdit && (
+        <ModelEditor
+          initial={modelEdit.initial}
+          onClose={() => setModelEdit(null)}
+          onSave={async (model) => {
+            const provider = modelEdit.provider;
+            if (
+              !modelEdit.initial.id &&
+              provider.models?.some((entry) => entry.id === model.id)
+            )
+              throw Error("此模型 ID 已存在，请编辑已有模型");
+            const models = modelEdit.initial.id
+              ? provider.models.map((entry) =>
+                  entry.id === model.id ? model : entry,
+                )
+              : [...(provider.models || []), model];
+            await api(
+              "connections_save",
+              payload(provider, {
+                models,
+                model:
+                  provider.model ||
+                  (provider.mode === "official" ? "" : model.id),
+              }),
+            );
+            setModelEdit(null);
+            connections.refresh();
+            notify("模型已保存");
+          }}
+        />
       )}
       {discovery && (
         <DiscoverDialog
           {...discovery}
           onClose={() => setDiscovery(null)}
-          onSave={() => {
+          onManual={(provider) => {
+            setModelEdit({ provider, initial: {} });
+            setDiscovery(null);
+          }}
+          onSave={({ added, updated }) => {
             setDiscovery(null);
             connections.refresh();
-            notify("所选模型已添加");
+            notify(`已新增 ${added} 个模型，更新 ${updated} 个模型的规格`);
+          }}
+        />
+      )}
+      {deleting && (
+        <DeleteProviderDialog
+          provider={deleting}
+          onClose={() => setDeleting(null)}
+          onDeleted={(result) => {
+            forgetProviderPreferences(result.id);
+            setDeleting(null);
+            setSelectedId("");
+            connections.refresh();
+            notify(
+              result.warning ||
+                `提供商已删除，保留 ${result.preservedChats} 个历史对话`,
+            );
           }}
         />
       )}

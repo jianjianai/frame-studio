@@ -241,6 +241,22 @@ export function workbenchOperations({
     (a) => connections.setEnabled(a.id, a.enabled),
   );
   add(
+    "connections_usage",
+    "Inspect provider deletion impact without credentials",
+    { id: uuid },
+    (a) => connections.usage(a.id),
+  );
+  add(
+    "connections_delete",
+    "Delete provider credentials while preserving history; active use blocks deletion",
+    {
+      id: uuid,
+      expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
+      confirmName: z.string().min(1).max(100),
+    },
+    (a) => connections.delete(a),
+  );
+  add(
     "connections_save",
     "Save a named Codex or Claude model connection",
     {
@@ -252,6 +268,7 @@ export function workbenchOperations({
       model: modelIdSchema.default(""),
       models: providerModelsSchema.optional(),
       enabled: z.boolean().optional(),
+      publicCatalog: z.boolean().optional(),
       expectedRevision: z
         .string()
         .regex(/^[a-f0-9]{64}$/)

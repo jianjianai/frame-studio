@@ -100,6 +100,13 @@ export class Tasks {
           return existing;
         }
       }
+      // Recover an existing acknowledgement before validating mutable provider state.
+      // New admissions still run under the provider lock shared with deletion.
+      if (input.connection) {
+        const provider = await this.db.one("SELECT state FROM connections WHERE id=$1", [input.connection]);
+        if (!provider || provider.state === "deleted")
+          throw problem(409, "提供商已删除，请重新选择后发送");
+      }
       if (repo && kind !== "agent" && !input.version) await this.repos.writable(repo, project);
       if (
         kind === "tools-update" &&
@@ -115,7 +122,12 @@ export class Tasks {
         [id, repo || null, project || null, kind, input, chat, requestKey, requestedInput, prepared.execution || null, prepared.reviewReference || null],
       );
     };
-    return this.db.lock(repo ? `${repo}:${project}` : "tools-update", insert);
+    // Serialize final admission with deletion, not only the earlier chat/UI check.
+    const admit = input.connection
+      ? () =>
+          this.db.lock(`connection:${input.connection}`, insert)
+      : insert;
+    return this.db.lock(repo ? `${repo}:${project}` : "tools-update", admit);
   }
   async get(id) {
     const row = await this.db.one("SELECT * FROM tasks WHERE id=$1", [id]);

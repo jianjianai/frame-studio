@@ -5,6 +5,7 @@ import { decodeNotification, notificationMatches } from "../src/contracts/realti
 
 const watched = {
   connections_list: ["connections"],
+  connections_usage: ["connections", "tasks", "auth_flows", "chats"],
   engines_list: ["engines"],
   works_tasks: ["tasks"],
   works_queue_status: ["tasks", "settings", "work_undos"],
