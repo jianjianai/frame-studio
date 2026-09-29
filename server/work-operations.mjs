@@ -1,5 +1,6 @@
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
+import { workIdRequestSchema, workTaskRequestSchema, workPreviewRequestSchema, workVersionsRequestSchema, workVersionRequestSchema, workRestoreRequestSchema } from "../src/contracts/platform.mjs";
 import { Works } from "./works.mjs";
 import { compositionSchema } from "../src/engine/dimensions.mjs";
 import { browserPreview } from "./browser-preview.mjs";
@@ -137,17 +138,13 @@ export function workOperations({
   add(
     "works_task",
     "Preview, validate, render a frame/storyboard or export a work in a durable task",
-    {
-      id: uuid,
-      kind: z.enum(["validate", "frame", "storyboard", "render", "build"]),
-      input: registry.task_create.schema.shape.input,
-    },
+    workTaskRequestSchema,
     async ({ id, ...a }) => tasks.create({ ...(await resolve(id)), ...a }),
   );
   add(
     "works_tasks",
     "Read tasks belonging to one work",
-    { id: uuid },
+    workIdRequestSchema,
     async (a) => {
       const w = await works.get(a.id);
       return db.all(
@@ -221,11 +218,7 @@ export function workOperations({
   add(
     "works_versions",
     "List independent Git history and legacy local snapshots of this work",
-    {
-      id: uuid,
-      limit: z.number().int().min(1).max(100).default(50),
-      offset: z.number().int().min(0).default(0),
-    },
+    workVersionsRequestSchema,
     (a) => works.history(a.id, a.limit, a.offset),
   );
   add(
@@ -237,13 +230,13 @@ export function workOperations({
   add(
     "works_version_compare",
     "Compare a work version to the current work without modifying either",
-    { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) },
+    workVersionRequestSchema,
     async (a) => compareVersion(repos, await works.get(a.id), a.version),
   );
   add(
     "works_version_preview",
     "Build an immutable historical preview; does not restore or save the current work",
-    { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) },
+    workVersionRequestSchema,
     async (a) => {
       const work = await works.get(a.id, { active: true });
       await versionTree(repos, work, a.version);
@@ -271,7 +264,7 @@ export function workOperations({
   add(
     "works_restore",
     "Restore a work snapshot, saving the current version first",
-    { id: uuid, version: z.union([uuid, z.string().regex(/^[a-f0-9]{40}$/)]) },
+    workRestoreRequestSchema,
     (a) => works.restore(a.id, a.version),
   );
   add(
@@ -284,7 +277,7 @@ export function workOperations({
       return { ok: true };
     },
   );
-  add("works_preview_status", "Read indexed source and preview revisions; refresh explicitly scans external changes", { id: uuid, refresh: z.boolean().default(false) }, async (a) => {
+  add("works_preview_status", "Read indexed source and preview revisions; refresh explicitly scans external changes", workPreviewRequestSchema, async (a) => {
     let work = await works.get(a.id, { active: true });
     if (a.refresh) {
       await repos.revisions?.refresh(work.repo, work.project);

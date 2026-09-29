@@ -1,5 +1,6 @@
 import { operationContract, parseOperationResult, wireResponseSchema, taskGetResponseSchema } from "../src/contracts/platform.mjs";
 import type { OperationName, OperationInput, OperationResult } from "../src/contracts/platform";
+import { clientOperationError, uncertainOperation } from "../src/contracts/errors.mjs";
 
 type Args = Record<string, unknown>;
 export interface SubscriptionUpdate { result?: unknown; error?: string; status?: number }
@@ -42,7 +43,7 @@ function connect(): WebSocket {
     if (!call) return;
     calls.delete(value.id);
     clearTimeout(call.timer);
-    if (value.error) call.reject(Object.assign(new Error(value.error), { status: value.status }));
+    if (value.error) call.reject(clientOperationError(value));
     else {
       try { call.resolve(parseOperationResult(call.name, value.result)); }
       catch (error) { call.reject(new Error("操作响应无效，请先检查最新状态：" + messageOf(error))); }
@@ -54,7 +55,7 @@ function connect(): WebSocket {
     status("reconnecting");
     for (const call of calls.values()) {
       clearTimeout(call.timer);
-      call.reject(new Error("连接中断；操作可能已提交，请查看最新状态后重试。"));
+      call.reject(uncertainOperation("连接中断；操作可能已提交，请查看最新状态后重试。"));
     }
     calls.clear();
     if (code === 4401) { window.dispatchEvent(new Event("frame-auth-required")); return; }
@@ -78,7 +79,7 @@ export async function socketCall(name: string, args: Args = {}): Promise<unknown
   });
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID();
-    const timer = setTimeout(() => { calls.delete(id); reject(new Error("等待响应超时，请查看操作状态")); }, 300000);
+    const timer = setTimeout(() => { calls.delete(id); reject(uncertainOperation("等待响应超时，请查看操作状态")); }, 300000);
     calls.set(id, { name, resolve, reject, timer });
     try { ws.send(JSON.stringify({ type: "call", id, name, args: input })); }
     catch (error) { calls.delete(id); clearTimeout(timer); reject(error); }

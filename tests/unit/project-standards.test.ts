@@ -62,6 +62,26 @@ const codes = (root: string) =>
   checkProjects(root).issues.map((issue) => issue.code);
 
 describe("static project registry metadata", () => {
+  it("accepts legacy shot markers and rejects ambiguous versioned shot ids before building", () =>
+    withRoot((root) => {
+      fixture(root);
+      expect(codes(root)).not.toContain("SHOT_ID");
+      fixture(root, {
+        beats: [{ at: 0, id: "opening", title: "开场", detail: "动作" }],
+      });
+      expect(codes(root)).not.toContain("SHOT_ID");
+      fixture(root, {
+        beats: [
+          { at: 0, id: "opening", title: "开场", detail: "动作" },
+          { at: 5, id: "opening", title: "第二镜头", detail: "动作" },
+        ],
+      });
+      expect(codes(root)).toContain("SHOT_ID");
+      fixture(root, {
+        beats: [{ at: 0, id: "invalid/id", title: "开场", detail: "动作" }],
+      });
+      expect(codes(root)).toContain("SHOT_ID");
+    }));
   it("supports typed objects, local constant spreads and satisfies without executing code", () =>
     withRoot((root) => {
       fixture(root);

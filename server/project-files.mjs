@@ -47,7 +47,7 @@ export async function fileSha256(file) {
 }
 const ignored = new Set([".git", "node_modules", ".cache", ".history", "exports"]);
 /** Same canonical fingerprint as the legacy synchronous helper. */
-export async function treeHash(root) {
+export async function treeHash(root, { includeExecutableMode = false } = {}) {
   const files = [];
   const walk = async (dir, relative = "") => {
     if (!(await exists(dir))) return;
@@ -57,7 +57,12 @@ export async function treeHash(root) {
       const rel = relative ? relative + "/" + name : name;
       const file = await confinedAsync(root, rel), stat = regular(await fsp.lstat(file));
       if (stat.isDirectory()) await walk(file, rel);
-      else files.push([rel, await fileSha256(file)]);
+      else {
+        const entry = [rel, await fileSha256(file)];
+        // Preview/content fingerprints stay compatible; undo additionally tracks Git executable modes.
+        if (includeExecutableMode) entry.push(stat.mode & 0o100 ? "100755" : "100644");
+        files.push(entry);
+      }
     }
     const after = (await fsp.readdir(dir)).filter(name => !ignored.has(name)).sort();
     if (JSON.stringify(after) !== JSON.stringify(names)) throw problem(409, "Project changed while hashing");

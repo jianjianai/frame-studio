@@ -40,7 +40,7 @@ export async function agentEventTransaction(db, data, taskId, operation = async 
               [taskId, event.type, event, offset],
             );
             if (event.type === "session" && task.chat && typeof event.id === "string")
-              await client.query("UPDATE chats SET upstream=$2 WHERE id=$1", [task.chat, event.id]);
+              await client.query("UPDATE chats SET upstream=$2,upstream_execution=$3 WHERE id=$1", [task.chat, event.id, task.execution?.sessionKey || null]);
           }
           cursor += newline + 1;
         }

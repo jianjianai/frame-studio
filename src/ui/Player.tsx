@@ -238,6 +238,7 @@ export function Player({
             quality: qualityRef.current,
             subtitles: subtitleRef.current,
             selection: selectionRef.current,
+            shotId: project.beats.reduce<(typeof project.beats)[number] | undefined>((found, shot) => shot.at <= value.time && (!found || shot.at > found.at) ? shot : found, undefined)?.id,
           },
           "*",
         );
@@ -272,6 +273,10 @@ export function Player({
       transport.current?.pause();
       publish();
     }
+    if (data.command === "play" && transport.current && !loading && !exporting) {
+      segmentEnd.current = Number.isFinite(data.end) ? Math.min(project.duration, data.end) : null;
+      void transport.current.play().then(publish).catch(error => setError(String(error.message || error)));
+    }
     if (data.command === "seek" && Number.isFinite(data.time)) {
       transport.current?.pause();
       if (
@@ -279,11 +284,12 @@ export function Player({
         Number.isFinite(data.selection.start) &&
         Number.isFinite(data.selection.end) &&
         data.selection.end > data.selection.start
-      )
-        setSelection({
-          start: Math.max(0, data.selection.start),
-          end: Math.min(project.duration, data.selection.end),
-        });
+      ) {
+        const start = Math.max(0, Math.min(project.duration, data.selection.start));
+        const end = Math.min(project.duration, data.selection.end);
+        updateSelection(end > start ? { start, end } : {});
+      }
+      else updateSelection({});
       seek(data.time);
     }
     if (data.command === "configure-work") setWorkContext(data.context);

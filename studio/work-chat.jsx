@@ -18,6 +18,9 @@ import {
   LoaderCircle,
 } from "lucide-react";
 import { ModelPicker } from "./model-picker";
+import { WorkResult } from "./work-result";
+import { TaskDiagnostics } from "./task-diagnostics";
+import { positionReference } from "./preview-session";
 import { ChatHistory } from "./chat-history";
 import { useAiPreferences } from "./ai-preferences";
 import {
@@ -90,6 +93,7 @@ function Turn({
   onRetryPublication,
   onResult,
   onEdit,
+  queue,
 }) {
   const messages = new Map(),
     activities = new Map();
@@ -124,8 +128,8 @@ function Turn({
         <div className="assistant-label">
           <Sparkles size={14} />
           <strong>{states[task.state] || "状态更新中"}</strong>
-          <span title={task.input.model || "工具默认模型"}>
-            {task.input.model || "默认模型"} · {date(task.created)}
+          <span title={task.execution?.model || task.input.model || "工具默认模型"}>
+            {task.execution?.model || task.input.model || "默认模型"} · {date(task.created)}
           </span>
         </div>
         {[...messages].map(([id, text]) => (
@@ -167,14 +171,15 @@ function Turn({
           </p>
         )}
         <ErrorNote error={task.error} />
-        {task.state === "succeeded" && task.result?.previewTask && (
+        <TaskDiagnostics task={task} queue={queue} />
+        {task.state === "succeeded" && (
           <div className="turn-result">
             <strong>本轮创作已完成</strong>
             <Button icon={Play} onClick={() => onResult(task)}>
-              查看本轮预览
+              查看本轮预览与修改
             </Button>
             <small>
-              {task.result.commit
+              {typeof task.result?.commit === "string"
                 ? `版本 ${task.result.commit.slice(0, 7)}`
                 : "独立结果，不跳转到其他轮次"}
             </small>
@@ -247,6 +252,7 @@ export function WorkChat({
   notify,
   position,
   selectedAssets,
+  previewReference = {},
   onClearAssets,
   onRemoveAsset,
   onRecall,
@@ -260,6 +266,7 @@ export function WorkChat({
 }) {
   const chats = useQuery("works_chats", { id: work.id }),
     connections = useQuery("connections_list", {}, 1);
+  const queueQuery = useQuery(visible && tasks.some(task => task.state === "queued") ? "works_queue_status" : null, { id: work.id }, 1);
   const [preferences] = useAiPreferences();
   const [modelChoice, setModelChoice] = useState(null),
     [expandedComposer, setExpandedComposer] = useState(false),
@@ -410,23 +417,7 @@ export function WorkChat({
     if (!expandedComposer)
       el.style.height = Math.min(220, Math.max(66, el.scrollHeight)) + "px";
   }, [prompt, expandedComposer]);
-  const showResult = async (task) => {
-    onPausePreview?.();
-    setResultPreview({ task, loading: true });
-    try {
-      const link = await request(
-        `/api/tasks/${task.result.previewTask}/preview`,
-        { method: "POST" },
-      );
-      setResultPreview((current) =>
-        current?.task.id === task.id ? { task, url: link.url } : current,
-      );
-    } catch (error) {
-      setResultPreview((current) =>
-        current?.task.id === task.id ? { task, error: error.message } : current,
-      );
-    }
-  };
+  const showResult = (task) => { onPausePreview?.(); setResultPreview({ task }); };
   useEffect(() => {
     const el = messages.current;
     if (!el) return;
@@ -706,6 +697,7 @@ export function WorkChat({
           <Turn
             key={t.id}
             task={t}
+            queue={queueQuery.data?.items.find(item => item.id === t.id)}
             events={stream.events[t.id]}
             onRetry={send}
             onStop={(id) =>
@@ -840,7 +832,7 @@ export function WorkChat({
             aria-label="引用当前时间"
             title={"引用 " + reviewTime(position.time)}
             disabled={busy || !position.duration}
-            onClick={() => setReview({ time: Number(position.time || 0) })}
+            onClick={() => setReview(positionReference(position, previewReference))}
           >
             当前时间
           </Button>
@@ -857,11 +849,7 @@ export function WorkChat({
             }
             disabled={busy || !validRange}
             onClick={() =>
-              setReview({
-                time: position.selection.start,
-                start: position.selection.start,
-                end: position.selection.end,
-              })
+              setReview({ time: position.selection.start, ...positionReference(position, previewReference, true) })
             }
           >
             选段
@@ -933,28 +921,11 @@ export function WorkChat({
         </small>
       </form>
       {resultPreview && (
-        <Modal title="本轮修改预览" wide onClose={() => setResultPreview(null)}>
-          <p className="settings-help">
-            {resultPreview.task.input.prompt} ·{" "}
-            {resultPreview.task.result.commit?.slice(0, 7) || "本轮结果"}
-          </p>
-          {resultPreview.loading && <Loading />}
-          <ErrorNote error={resultPreview.error} />
-          {resultPreview.error && (
-            <Button onClick={() => showResult(resultPreview.task)}>
-              重试打开本轮预览
-            </Button>
-          )}
-          {resultPreview.url && (
-            <iframe
-              title="本轮结果播放器"
-              className="ai-result-player"
-              src={resultPreview.url}
-              sandbox="allow-scripts allow-downloads"
-              allow="autoplay; fullscreen"
-              allowFullScreen
-            />
-          )}
+        <Modal title="本轮修改与审片" wide onClose={() => setResultPreview(null)}>
+          <WorkResult work={work} task={resultPreview.task} notify={notify} onChanged={reload} onContinue={({text, review}) => {
+            setPrompt(previous => previous.trim() ? previous + "\n\n" + text : text);
+            setReview(review); setResultPreview(null); composer.current?.focus();
+          }} />
         </Modal>
       )}
     </section>

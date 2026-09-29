@@ -109,6 +109,8 @@ async function encode(pcm, output, signal) {
 }
 
 export async function buildPreviewAudio(output, { signal, onLog, root, project } = {}) {
+  const started = performance.now();
+  const metrics = { generatedChunks: 0, reusedChunks: 0, encodedChunks: 0 };
   const server = await servePreview(output);
   let browser;
   const directory = path.join(output, "preview-audio");
@@ -139,6 +141,7 @@ export async function buildPreviewAudio(output, { signal, onLog, root, project }
         if (cached) {
           manifest.tracks.push(cached);
           manifest.reusedTracks++;
+          metrics.reusedChunks += cached.chunks.length;
           complete += cached.chunks.length;
           previewProgress("复用已验证音轨", complete, total);
           onLog?.(`Preview audio reused track ${id} (${complete}/${total})\n`);
@@ -148,6 +151,7 @@ export async function buildPreviewAudio(output, { signal, onLog, root, project }
         for (let start = 0; start < meta.duration; start += 2) {
           signal?.throwIfAborted();
           const duration = Math.min(2, meta.duration - start);
+          metrics.generatedChunks++;
           const pcm = Buffer.from(
             await page.evaluate(
               ({ id, start, duration }) =>
@@ -159,6 +163,7 @@ export async function buildPreviewAudio(output, { signal, onLog, root, project }
           const pcmSha256 = createHash("sha256").update(pcm).digest("hex");
           let encodedChunk = encoded.get(pcmSha256);
           if (!encodedChunk) {
+            metrics.encodedChunks++;
             const temporary = path.join(directory, "encoding.mp3");
             await encode(pcm, temporary, signal);
             const bytes = fs.readFileSync(temporary);
@@ -186,7 +191,7 @@ export async function buildPreviewAudio(output, { signal, onLog, root, project }
         if (JSON.stringify(current) !== JSON.stringify(keys)) throw Error("Audio inputs changed while preparing preview; rebuild this work");
         await saveAudioCache(output, cache, manifest);
       }
-      return manifest;
+      return { ...manifest, metrics: { ...metrics, totalChunks: total, totalMs: Math.round(performance.now() - started) } };
     } finally {
       signal?.removeEventListener("abort", stop);
     }

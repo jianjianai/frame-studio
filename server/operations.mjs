@@ -8,7 +8,9 @@ import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
 import { chatOperations } from "./chat-operations.mjs";
 import { createOperationRegistry } from "./operation-registry.mjs";
+import { workResultOperations } from "./work-results.mjs";
 import { taskGetRequestSchema } from "../src/contracts/platform.mjs";
+import { workIdRequestSchema } from "../src/contracts/platform.mjs";
 import { hash, token, confined, problem } from "./security.mjs";
 const uuid = z.string().uuid(),
   text = z.string().max(20000),
@@ -224,10 +226,10 @@ export function operations({
       ),
     }),
   );
-  add("task_cancel", "Cancel a queued or running task", { id: uuid }, (a) =>
+  add("task_cancel", "Cancel a queued or running task", workIdRequestSchema, (a) =>
     tasks.cancel(a.id),
   );
-  add("task_retry_publish", "Retry saving an already completed result without re-running AI", { id: uuid }, (a) => tasks.retryPublication(a.id));
+  add("task_retry_publish", "Retry saving an already completed result without re-running AI", workIdRequestSchema, (a) => tasks.retryPublication(a.id));
   add(
     "artifact_read",
     "Read a completed task PNG for visual inspection; JSON and subtitles return as text",
@@ -433,6 +435,10 @@ export function operations({
         v = old?.encrypted ? secrets.decrypt(old.encrypted) : {};
       v.baseUrl = a.baseUrl;
       v.model = a.model;
+      // Legacy connections also pin credential identity for queued V5 turns.
+      // A random generation avoids reusing an identity after concurrent key rotations.
+      if (a.provider !== "github" && a.secret && a.secret !== v.apiKey)
+        v.auth_generation = randomUUID();
       if (a.secret) v[a.provider === "github" ? "token" : "apiKey"] = a.secret;
       await db.setting(a.provider, { encrypted: secrets.encrypt(v) });
       return { ok: true };
@@ -485,7 +491,8 @@ export function operations({
     tasks,
   });
   const interactions = agentInteractionOperations({ add, db, data });
-  chatOperations({ add, db, works, repos, tasks, connections });
+  chatOperations({ add, db, works, repos, tasks, connections, secrets });
+  workResultOperations({ add, db, data, works, repos, tasks });
   if (connections)
     workbenchOperations({
       add,

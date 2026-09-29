@@ -233,12 +233,16 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           connection: connection.id,
           title: "Durable turn",
         });
+        const beforeRevision = await platform.repos.git((await platform.repos.project(work.repo, work.project)).repo.root, ["rev-parse", "HEAD"]);
         task = await platform.actions.call("works_chat_send", {
           id: work.id,
           chat: chat.id,
           prompt: "Append the fixture comment to the scene, then finish.",
           requestKey: randomUUID(),
+          context: { sourceCommit: beforeRevision, time: 0.5 },
         });
+        assert.equal(task.execution.model, provider === "codex" ? "gpt-5.4" : "claude-sonnet-4-6");
+        assert.equal(task.review_reference.sourceCommit, beforeRevision);
         await platform.tasks.start(task);
         await platform.app.close();
         platform = null;
@@ -288,6 +292,12 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           path: "scene.ts",
         });
         assert(scene.content.includes("// Durable fixture edit"));
+        assert.equal(task.base_commit, beforeRevision);
+        assert.deepEqual(task.result.validation.map(check => [check.check, check.status]), [
+          ["scope", "passed"], ["structure", "passed"], ["project-tests", "passed"], ["preview-build", "passed"],
+        ]);
+        assert(task.result.executorMetrics.agentMs >= 0);
+        assert(task.result.buildMetrics.compileMs >= 0);
         const events = await db.all(
           "SELECT * FROM events WHERE task=$1 ORDER BY id",
           [task.id],

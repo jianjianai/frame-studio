@@ -29,8 +29,24 @@ const emitAgentEvent = (event) => {
   if (Buffer.byteLength(line) > 768 * 1024) throw Error("Agent event exceeds the bounded event store");
   fs.appendFileSync(work + "/events.ndjson", line + "\n");
 };
+const executorStarted = performance.now(), validation = [], executorMetrics = {};
+const measured = async (name, fn, { check = false } = {}) => {
+  const started = performance.now();
+  try {
+    const output = await fn();
+    const durationMs = Math.round(performance.now() - started);
+    executorMetrics[name] = durationMs;
+    if (check) validation.push({ check: name, status: "passed", durationMs });
+    return output;
+  } catch (error) {
+    const durationMs = Math.round(performance.now() - started);
+    executorMetrics[name] = durationMs;
+    if (check) validation.push({ check: name, status: "failed", durationMs });
+    throw error;
+  }
+};
 const result = (value) =>
-  fs.writeFileSync(work + "/result.json", JSON.stringify({ ...value, runtime: actualRuntime, runtimeFingerprint: actualRuntime?.fingerprint || null }));
+  fs.writeFileSync(work + "/result.json", JSON.stringify({ ...value, validation, executorMetrics: { ...executorMetrics, totalMs: Math.round(performance.now() - executorStarted) }, runtime: actualRuntime, runtimeFingerprint: actualRuntime?.fingerprint || null }));
 const run = (bin, args, options = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
@@ -143,6 +159,7 @@ try {
       "docs",
       "public",
       "projects",
+      "review",
       "package.json",
       "pnpm-lock.yaml",
       "pnpm-workspace.yaml",
@@ -173,16 +190,19 @@ try {
       const prompt = `You are creating one work in FRAME: ${task.project}. Only edit projects/${task.project}/. The surrounding engine and tools are the platform runtime, not another project to create or install. Read AGENTS.md, docs/AUTHORING.md and the work README. Use pnpm --silent film context ${task.project} --json, frame/storyboard/render for visual inspection. Use node scripts/work-tool.mjs help for asset and speech tools. engines lists ready built-in engines and voices; engine_add adds a custom compatible speech API when needed. engine_test creates temporary audition audio only; speech generates final narration into the current work. use copies a selected asset into this work. Wire returned material URLs into scenes/audioTracks as needed. Pass credentials through @file or stdin and never print them. Validate before finishing; a preview is built automatically after successful completion.\n\n${task.input.prompt}`;
       const context = task.input.context
         ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}` : "";
+      const reference = task.reviewReference
+        ? `\n\nVersion-bound review reference: ${JSON.stringify(task.reviewReference)}. Timecodes and shot ids belong to this reference, not automatically to the current work. If disposition is compare-to-latest, inspect the read-only reference source at the supplied path and compare it with projects/${task.project} before mapping the user's request. Never overwrite the current work with the old reference. Do not modify review/; continue editing the latest work directly with the available tools. If a mapping is ambiguous, explain that limitation rather than claiming an exact unaffected range.`
+        : "";
       const inspectFiles = createAgentFileInspector({ cwd: work, project: task.project, baseline: baselineCommit, emit: emitAgentEvent });
-      const outcome = await runAgentTurn({
+      const outcome = await measured("agentMs", () => runAgentTurn({
         provider: p, bin, task, cwd: work,
-        prompt: prompt + context + "\n\nWhen a creative decision genuinely requires human input, ask through " +
+        prompt: prompt + context + reference + (task.previousTurns?.length ? `\n\nPersisted context from earlier turns (new execution session; current instruction above takes precedence):\n${JSON.stringify(task.previousTurns)}` : "") + "\n\nWhen a creative decision genuinely requires human input, ask through " +
           (p === "codex" ? "frame_ask_user" : "AskUserQuestion") +
           ". The question is presented directly in the FRAME chat and its answer continues this same task. Do not end the turn with an unanswered question. For a tool-independent fallback use node scripts/work-tool.mjs ask with JSON questions. Never request credentials through chat. Share concise progress and a plan for complex work; do not invent progress or validation results.",
         env: { ...process.env, FRAME_PROJECT: task.project, FRAME_TASK_PROGRESS_FILE: work + "/progress.json" },
         emit: emitAgentEvent, signal: abortController.signal, onToolComplete: inspectFiles,
         onStderr: (value) => process.stderr.write(redact(value)),
-      });
+      }));
       value.upstream = outcome.upstream;
       await inspectFiles();
       reportCommands = true;
@@ -196,24 +216,25 @@ try {
           text: "正在验证作品并准备预览",
         }) + "\n",
       );
-      await run("node", [
+      await measured("scope", () => run("node", [
         core + "/scripts/project-scope.mjs",
         task.project,
         "--base",
         baselineCommit,
-      ]);
-      await run("node", [
+      ]), { check: true });
+      await measured("structure", () => run("node", [
         core + "/scripts/check-projects.mjs",
         task.project,
         "--strict",
-      ]);
-      await run("node", [
+      ]), { check: true });
+      await measured("project-tests", () => run("node", [
         core + "/scripts/film.mjs",
         "test",
         task.project,
         "--json",
-      ]);
-      const built = await run(
+      ]), { check: true });
+      const { base, file } = await measured("preview-build", async () => {
+        const built = await run(
         "node",
         [work + "/scripts/film.mjs", "build", task.project, "--json"],
         {
@@ -232,6 +253,7 @@ try {
       }
       if (buildResult.status === "failed" || buildResult.passed === false)
         throw new Error("Preview build failed");
+      value.buildMetrics = buildResult.buildMetrics || null;
       const base = path.join(work, "projects", task.project, "exports");
       const file = path.resolve(buildResult.output || "", "index.html");
       if (
@@ -240,6 +262,8 @@ try {
         fs.lstatSync(file).isSymbolicLink()
       )
         throw new Error("Preview entry missing or outside work output");
+        return { base, file };
+      }, { check: true });
       value.previewVersion = PREVIEW_VERSION;
       value.previewArtifacts = [
         {

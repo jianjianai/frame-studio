@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { operationContracts, workIdRequestSchema, workSyncStatusRequestSchema, workChatTurnsRequestSchema } from "../src/contracts/platform.mjs";
 import {
   modelIdSchema,
   providerModelsSchema,
@@ -7,6 +8,7 @@ import { problem } from "./security.mjs";
 import { toolBinary } from "./connections.mjs";
 import { command } from "./process.mjs";
 import { RuntimeStatus } from "./runtime-status.mjs";
+import { workQueueStatus } from "./task-diagnostics.mjs";
 
 export function workbenchOperations({
   add,
@@ -26,6 +28,8 @@ export function workbenchOperations({
     tasks,
     speechUrl: process.env.FRAME_SPEECH_URL || "http://speech:8000",
   });
+  add("works_queue_status", "Explain queued work from current blockers, controller heartbeat and capacity without re-running a task", workIdRequestSchema,
+    ({ id }) => workQueueStatus({ db, works, tasks, id }));
   add(
     "system_status",
     "Read execution readiness, task backlog, disk capacity and migration versions",
@@ -86,7 +90,7 @@ export function workbenchOperations({
   add(
     "works_open",
     "Open a work and remember its access time",
-    { id: uuid },
+    workIdRequestSchema,
     async (a) => {
       let w = await works.get(a.id, { active: true });
       let revisionError = null;
@@ -132,7 +136,7 @@ export function workbenchOperations({
   add(
     "works_sync_status",
     "Read this work branch ahead/behind and local changes",
-    { id: uuid, fetch: z.boolean().default(false) },
+    workSyncStatusRequestSchema,
     async (a) => {
       const w = await works.get(a.id);
       return repos.status(w.repo, { work: w.id, fetch: a.fetch });
@@ -221,7 +225,7 @@ export function workbenchOperations({
       return repo;
     },
   );
-  add("connections_list", "List model providers without credentials", {}, () =>
+  add("connections_list", "List model providers without credentials", operationContracts.connections_list.request, () =>
     connections.list(),
   );
   add(
@@ -289,7 +293,7 @@ export function workbenchOperations({
   add(
     "works_chat_turns",
     "Paginate one conversation independently of other work activity",
-    { id: uuid, chat: uuid, before: uuid.optional(), limit },
+    workChatTurnsRequestSchema,
     async (a) => {
       const w = await works.get(a.id);
       const chat = await db.one(
@@ -306,7 +310,7 @@ export function workbenchOperations({
   add(
     "works_exports",
     "List temporary video exports and expiration dates",
-    { id: uuid },
+    workIdRequestSchema,
     async (a) => {
       const w = await works.get(a.id);
       return db.all(

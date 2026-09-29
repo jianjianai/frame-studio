@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { assertEngineProtocol } from "../src/engine/protocol.mjs";
+import { shotIdSchema } from "../src/contracts/workflow.mjs";
 import { compositionSize } from "../src/engine/dimensions.mjs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -309,10 +310,16 @@ export function checkProjects(root = process.cwd(), options = {}) {
       }
     }
     const beats = Array.isArray(meta.beats) ? meta.beats : [];
+    const shotIds = new Set();
     if (!Array.isArray(meta.beats))
       report("error", "BEATS", file, "beats must be an array");
     for (let i = 0; i < beats.length; i++) {
       const beat = beats[i];
+      if (beat?.id !== undefined) {
+        if (!shotIdSchema.safeParse(beat.id).success || shotIds.has(beat.id))
+          report("error", "SHOT_ID", file, `Shot marker ${i} has an invalid or duplicate id`);
+        shotIds.add(beat.id);
+      }
       if (
         !beat ||
         !Number.isFinite(beat.at) ||

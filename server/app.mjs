@@ -24,6 +24,8 @@ import { createServices } from "./services.mjs";
 import { rasterCover } from "./covers.mjs";
 import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
+import { operationError } from "../src/contracts/errors.mjs";
+import { PLATFORM_VERSION } from "../src/contracts/version.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
@@ -58,9 +60,9 @@ export async function createApp({
   await installRealtime(app, db, actions, origin);
   const oauth = await installOAuth(app, db, actions, origin);
   app.setErrorHandler((err, req, res) => {
-    const status = err.name === "ZodError" ? 400 : err.statusCode || 500;
+    const failure = operationError(err, req.id), status = failure.status;
     res.code(status).send({
-      error: status === 500 ? "Operation failed" : err.message,
+      ...failure,
       details:
         status === 400 && err.name === "ZodError" ? err.issues : undefined,
     });
@@ -123,7 +125,7 @@ export async function createApp({
     await db.one("SELECT 1");
     return {
       status: "ok",
-      version: "4.2.0",
+      version: PLATFORM_VERSION,
       revision: process.env.FRAME_REVISION || "development",
     };
   });
@@ -324,7 +326,7 @@ export async function createApp({
   });
   const mcp = createMcpHandler(
     () => {
-      const server = new McpServer({ name: "frame-studio", version: "4.2.0" });
+      const server = new McpServer({ name: "frame-studio", version: PLATFORM_VERSION });
       for (const [name, op] of Object.entries(actions.registry)) {
         if (
           !/^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$)/.test(
@@ -378,7 +380,7 @@ export async function createApp({
             } catch (e) {
               return {
                 isError: true,
-                content: [{ type: "text", text: e.message }],
+                content: [{ type: "text", text: JSON.stringify(operationError(e)) }],
               };
             }
           },

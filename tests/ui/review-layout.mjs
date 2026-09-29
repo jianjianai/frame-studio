@@ -18,6 +18,7 @@ export async function layoutChecks(h) {
       state.work.title,
     );
     assert.equal(await page.locator(".navigation").count(), 0);
+    await expect(page.getByText("独立结果，不跳转到其他轮次", { exact: true })).toBeVisible();
     assert(!library.url().includes("#/work/"));
     await player().getByTestId("play-toggle").waitFor();
     await frame().waitForFunction(() => window.__FRAME_STUDIO__?.ready);

@@ -1,5 +1,7 @@
 import { WebSocketServer } from "ws";
 import { hash } from "./security.mjs";
+import { operationError } from "../src/contracts/errors.mjs";
+import { decodeNotification, notificationMatches } from "../src/contracts/realtime-scope.mjs";
 
 const watched = {
   agent_questions: ["agent_questions", "tasks"],
@@ -7,6 +9,7 @@ const watched = {
   connections_list: ["connections"],
   engines_list: ["engines"],
   works_tasks: ["tasks"],
+  works_queue_status: ["tasks", "settings", "work_undos"],
   works_preview_status: ["works", "previews"],
   works_chat_turns: ["tasks"],
   works_background: ["tasks"],
@@ -25,8 +28,9 @@ export async function installRealtime(app, db, actions, origin) {
   let listener,
     reconnect,
     closed = false;
-  const changed = (table) => {
-    for (const ws of wss.clients) ws.refresh?.(table);
+  const changed = (payload) => {
+    const change = decodeNotification(payload);
+    for (const ws of wss.clients) ws.refresh?.(change);
   };
   const listen = async () => {
     if (closed) return;
@@ -91,6 +95,7 @@ export async function installRealtime(app, db, actions, origin) {
       ws.send(JSON.stringify(value));
     };
     const refresh = async (sub) => {
+      if (sub.resolving) return;
       if (sub.busy) {
         sub.dirty = true;
         return;
@@ -122,30 +127,29 @@ export async function installRealtime(app, db, actions, origin) {
         send({
           type: "update",
           id: sub.id,
-          error: e.statusCode === 500 ? "读取状态失败" : e.message,
-          status: e.statusCode || 500,
+          ...operationError(e, sub.id),
         });
       } finally {
         sub.busy = false;
       }
     };
-    const dirtyTables = new Set();
-    ws.refresh = (table) => {
-      dirtyTables.add(table);
+    const changes = new Map();
+    ws.refresh = (change) => {
+      if (changes.size >= 1024) { changes.clear(); changes.set("all", null); }
+      else if (!changes.has("all")) changes.set(change ? JSON.stringify(change) : "all", change);
       if (timer) return;
       timer = setTimeout(() => {
         timer = undefined;
         for (const sub of subscriptions.values())
           if (
-            dirtyTables.has(null) ||
-            watched[sub.name].some((t) => dirtyTables.has(t))
+            [...changes.values()].some(change => notificationMatches(change, watched[sub.name], sub.scope))
           )
             void refresh(sub);
-        dirtyTables.clear();
+        changes.clear();
       }, 80);
     };
     ws.on("message", async (data) => {
-      let message, counted = false;
+      let message, pendingSubscription, counted = false;
       try {
         message = JSON.parse(data.toString());
         if (typeof message.id !== "string" || message.id.length > 80)
@@ -160,22 +164,30 @@ export async function installRealtime(app, db, actions, origin) {
         else if (message.type === "subscribe") {
           if (!watched[message.name] || subscriptions.size >= 80)
             throw Error("Invalid subscription");
-          const sub = { ...message, args: message.args || {} };
+          const args = actions.registry[message.name].schema.parse(message.args || {});
+          const sub = { ...message, args, scope: {}, resolving: true };
+          pendingSubscription = sub;
           subscriptions.set(message.id, sub);
+          let scope = {};
+          if (message.name === "task_get") scope = { task: args.id };
+          else if (message.name.startsWith("works_") && args.id) {
+            const work = await actions.works.get(args.id);
+            scope = { work: work.id, repo: work.repo, project: work.project, ...(args.chat ? { chat: args.chat } : {}) };
+          }
+          if (subscriptions.get(message.id) !== sub || ws.readyState !== 1) return;
+          Object.assign(sub, { scope, resolving: false });
           void refresh(sub);
         } else if (message.type === "call") {
           const result = await actions.call(message.name, message.args);
           send({ type: "result", id: message.id, result });
         } else throw Error("Unknown message");
       } catch (e) {
+        if (pendingSubscription?.resolving && subscriptions.get(pendingSubscription.id) === pendingSubscription)
+          subscriptions.delete(pendingSubscription.id);
         send({
           type: message?.type === "subscribe" ? "update" : "result",
           id: message?.id,
-          error:
-            e.statusCode && e.statusCode < 500
-              ? e.message
-              : "操作未完成，请检查状态后重试",
-          status: e.name === "ZodError" ? 400 : e.statusCode || 500,
+          ...operationError(e, message?.id),
         });
       } finally {
         if (counted) inFlight = Math.max(0, inFlight - 1);

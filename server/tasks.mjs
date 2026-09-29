@@ -18,6 +18,20 @@ import { executionRuntime } from "./execution-runtime.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { executableTaskKindSchema } from "../src/contracts/platform.mjs";
 import { ControllerLease } from "./controller-lease.mjs";
+import { resolveExecution, continuationContext } from "./execution-selection.mjs";
+import { prepareReviewReference } from "./review-reference.mjs";
+// Pre-V5 chat tasks stored server-enriched input. Recover their original acknowledgement
+// before consulting mutable connection/catalog state; explicit changed input still conflicts.
+function sameTaskRequest(existing, requested) {
+  if (existing.request_input != null)
+    return isDeepStrictEqual(existing.request_input, requested);
+  if (existing.kind !== "agent" || !existing.chat)
+    return isDeepStrictEqual(existing.input, requested);
+  const { assetNames: _names, ...context } = existing.input.context || {};
+  const saved = { ...existing.input, context };
+  if (requested.model === undefined) delete saved.model;
+  return isDeepStrictEqual(saved, { ...requested, context: requested.context || {} });
+}
 export class Tasks {
   constructor(db, data, repos, secrets, { runCommand = command } = {}) {
     this.command = async (...args) => {
@@ -50,8 +64,10 @@ export class Tasks {
     input = {},
     chat = null,
     requestKey = null,
+    prepareInput = null,
   }) {
     input = JSON.parse(JSON.stringify(input));
+    const requestedInput = JSON.parse(JSON.stringify(input));
     if (!executableTaskKindSchema.safeParse(kind).success)
       throw problem(400, "Unknown task kind");
     if (kind === "tools-update") {
@@ -77,7 +93,8 @@ export class Tasks {
             existing.repo !== repo ||
             existing.project !== project ||
             existing.chat !== chat ||
-            !isDeepStrictEqual(existing.input, input)
+            existing.kind !== kind ||
+            !sameTaskRequest(existing, requestedInput)
           )
             throw problem(409, "Message request key already used");
           return existing;
@@ -91,9 +108,11 @@ export class Tasks {
         ))
       )
         throw problem(409, "Another tool upgrade is running");
+      const prepared = prepareInput ? await prepareInput(JSON.parse(JSON.stringify(input))) : {};
+      input = JSON.parse(JSON.stringify(prepared.input ?? input));
       return this.db.one(
-        "INSERT INTO tasks(id,repo,project,kind,input,chat,request_key) VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *",
-        [id, repo || null, project || null, kind, input, chat, requestKey],
+        "INSERT INTO tasks(id,repo,project,kind,input,chat,request_key,request_input,execution,review_reference) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
+        [id, repo || null, project || null, kind, input, chat, requestKey, requestedInput, prepared.execution || null, prepared.reviewReference || null],
       );
     };
     return this.db.lock(repo ? `${repo}:${project}` : "tools-update", insert);
@@ -137,11 +156,14 @@ export class Tasks {
     return lock(async () => {
       const container = "frame-task-" + t.id;
       const claimed = await this.db.one(
-        "UPDATE tasks SET state='running',started=now(),container=$2,controller_id=$3,progress=$4 WHERE id=$1 AND state='queued' RETURNING id",
+        "UPDATE tasks SET state='running',started=now(),container=$2,controller_id=$3,progress=$4,metrics=metrics||jsonb_build_object('queueMs',GREATEST(0,EXTRACT(EPOCH FROM (now()-created))*1000)) WHERE id=$1 AND state='queued' RETURNING id",
         [t.id, container, this.controllerId, { stage: "准备隔离工作副本" }],
       );
       if (!claimed) return;
-      try { return await this.prepareAndLaunch(t, container); }
+      try {
+        const launch = () => this.prepareAndLaunch(t, container);
+        return t.input.connection && this.db.lock ? await this.db.lock(`connection:${t.input.connection}`, launch) : await launch();
+      }
       catch (error) {
         const current = await this.get(t.id);
         if (!error.leadershipLost && !current.launch_attempted_at) {
@@ -153,6 +175,7 @@ export class Tasks {
     });
   }
   async prepareAndLaunch(t, container) {
+    const preparationStarted = performance.now();
     if ((await this.get(t.id)).state === "cancelling") { await this.finishCancellation(t.id); return; }
     await this.assertLeadership();
     const run = path.join(this.data, "runs", t.id);
@@ -184,11 +207,12 @@ export class Tasks {
           t.kind === "agent" ? "AI 修改前自动保存" : "生成预览或导出前保存",
         );
     }
+    const reviewReference = await prepareReviewReference({ repos: this.repos, task: t, run, sourceCommit, fingerprint });
     await seedPreviewAudio({ db: this.db, data: this.data, task: t, run });
     let config = {};
     if (t.kind === "agent") {
       if (t.input.connection)
-        config = await this.connections.selection(t.input.connection, t.input.model);
+        config = t.execution ? await this.connections.resolve(t.input.connection) : await this.connections.selection(t.input.connection, t.input.model);
       else {
         const stored = await this.db.setting(t.input.provider);
         config = stored?.encrypted
@@ -200,11 +224,14 @@ export class Tasks {
           400,
           "Configure this AI provider API key in Settings first",
         );
+      config = resolveExecution(t.execution, config, t.input.provider);
     }
     const chat = t.chat
       ? await this.db.one("SELECT * FROM chats WHERE id=$1", [t.chat])
       : null;
     const runtime = await executionRuntime({ data: this.data, task: t, command: this.command });
+    const continuation = t.kind === "agent" ? await continuationContext(this.db, t, chat, t.execution) : null;
+    if (continuation) runtime.continuation = { strategy: continuation.strategy, turns: continuation.turns.length };
     const payload = {
       runtime,
       sourceCommit,
@@ -212,7 +239,10 @@ export class Tasks {
       project: t.project,
       kind: t.kind,
       input: t.input,
-      upstream: chat?.upstream || null,
+      execution: t.execution || null,
+      reviewReference,
+      upstream: continuation?.upstream || null,
+      previousTurns: continuation?.turns || [],
       model: config.model || null,
       baseUrl: config.baseUrl || null,
       authMode: config.mode || "api",
@@ -266,8 +296,8 @@ export class Tasks {
     const image = runtime.image;
     await this.assertLeadership();
     const prepared = await this.db.one(
-      "UPDATE tasks SET fingerprint=$2,source_commit=$3,runtime=$4 WHERE id=$1 AND state='running' AND controller_id=$5 RETURNING id",
-      [t.id, fingerprint, sourceCommit, runtime, this.controllerId],
+      "UPDATE tasks SET fingerprint=$2,source_commit=$3,base_commit=$3,runtime=$4,review_reference=$6,metrics=metrics||$7::jsonb WHERE id=$1 AND state='running' AND controller_id=$5 RETURNING id",
+      [t.id, fingerprint, sourceCommit, runtime, this.controllerId, reviewReference, { prepareMs: Math.round(performance.now() - preparationStarted) }],
     );
     if (!prepared) {
       if ((await this.get(t.id)).state === "cancelling") await this.finishCancellation(t.id);
@@ -379,6 +409,7 @@ export class Tasks {
         if (this.queueBlocked) return;
         const t = await this.db.one(
           `SELECT t.* FROM tasks t WHERE t.state='queued' AND NOT EXISTS(SELECT 1 FROM tasks r WHERE (r.repo=t.repo AND r.project=t.project AND r.state IN ('running','cancelling','publishing','publish_failed')) OR (r.state IN ('running','cancelling') AND t.input->>'connection' IS NOT NULL AND r.input->>'connection'=t.input->>'connection'))
+          AND NOT EXISTS(SELECT 1 FROM work_undos u JOIN works w ON w.id=u.work WHERE w.repo=t.repo AND w.project=t.project AND u.state IN ('applying','failed'))
           ORDER BY t.created LIMIT 1`,
         );
         if (t) {
