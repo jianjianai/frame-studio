@@ -178,7 +178,7 @@ export class Repositories {
   async writable(id, project = null) {
     if (
       await this.db.one(
-        "SELECT id FROM tasks WHERE repo=$1 AND ($2::text IS NULL OR project=$2) AND state IN ('queued','running','cancelling') LIMIT 1",
+        "SELECT id FROM tasks WHERE repo=$1 AND ($2::text IS NULL OR project=$2) AND state IN ('queued','running','cancelling','publishing','publish_failed') LIMIT 1",
         [id, project],
       )
     )

@@ -20,7 +20,7 @@ export class Retention {
     return this.db.lock(`artifact:${id}`, async () => {
       if (this.downloads.has(id)) return false;
       const task = await this.db.one(
-        "SELECT * FROM tasks WHERE id=$1 AND state NOT IN ('queued','running','cancelling') AND cleaned IS NULL",
+        "SELECT * FROM tasks WHERE id=$1 AND state NOT IN ('queued','running','cancelling','publishing','publish_failed') AND cleaned IS NULL",
         [id],
       );
       if (!task) return false;

@@ -34,6 +34,7 @@ import {
   ErrorNote,
   Loading,
   active,
+  cancellable,
   states,
   kinds,
   date,
@@ -99,7 +100,7 @@ function useEvents(tasks, chat) {
   }, [chat, signature]);
   return { events, error };
 }
-function Turn({ task, events, onRetry, onStop }) {
+function Turn({ task, events, onRetry, onStop, onRetryPublication }) {
   const messages = new Map(),
     activities = new Map();
   let delta = "";
@@ -176,7 +177,10 @@ function Turn({ task, events, onRetry, onStop }) {
               保留上下文重试
             </Button>
           )}
-          {active(task) && (
+          {task.state === "publish_failed" && (
+            <Button onClick={() => onRetryPublication(task.id)}>重试保存结果（不重跑 AI）</Button>
+          )}
+          {cancellable(task) && (
             <Button icon={Square} onClick={() => onStop(task.id)}>
               停止本次创作
             </Button>
@@ -402,6 +406,7 @@ export function WorkChat({
             events={stream.events[t.id]}
             onRetry={send}
             onStop={stop}
+            onRetryPublication={(id) => run(async () => { await api("task_retry_publish", { id }); reload(); })}
           />
         ))}
       </div>
@@ -820,7 +825,11 @@ export function Creation({ id, notify, onToggleNav }) {
                     </small>
                   )}
                   {task.error && <ErrorNote error={task.error} />}
-                  {active(task) && (
+                  {task.monitor && <ErrorNote error={"监控暂时不可用：" + task.monitor.message} />}
+                  {task.state === "publish_failed" && (
+                    <Button disabled={busy} onClick={() => run(async () => { await api("task_retry_publish", { id: task.id }); taskQuery.refresh(); })}>重试保存结果</Button>
+                  )}
+                  {cancellable(task) && (
                     <Button
                       disabled={busy}
                       icon={Square}

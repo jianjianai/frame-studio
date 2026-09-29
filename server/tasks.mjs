@@ -104,7 +104,10 @@ export class Tasks {
     );
     if (changed?.state === "cancelled")
       await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [id]);
-    return changed || this.get(id);
+    const current = changed || await this.get(id);
+    if (["publishing", "publish_failed"].includes(current.state))
+      throw problem(409, "执行已经结束，结果正在保存或等待恢复，请使用重试发布而不是取消");
+    return current;
   }
   async finishCancellation(id) {
     await this.db.pool.query(
@@ -272,20 +275,52 @@ export class Tasks {
     // scheduler stops the container instead of overwriting it with 'running'.
     await this.db.event(t.id, "state", { state: (await this.get(t.id)).state });
   }
+  async retryPublication(id) {
+    const task = await this.db.one(
+      "UPDATE tasks SET state='publishing',error=NULL,monitor=NULL,publication_attempts=0,publication_retry_at=NULL WHERE id=$1 AND state='publish_failed' RETURNING *",
+      [id],
+    );
+    if (!task) throw problem(409, "此任务没有等待恢复的发布结果");
+    return task;
+  }
+  async publicationError(t, error) {
+    await this.db.pool.query(
+      "UPDATE tasks SET state=CASE WHEN publication_attempts+1>=3 THEN 'publish_failed' ELSE 'publishing' END,publication_attempts=publication_attempts+1,publication_retry_at=now()+interval '15 seconds',error=$2,expires=NULL,progress=$3 WHERE id=$1 AND state='publishing'",
+      [t.id, "执行结果已保留，保存或发布尚未完成：" + String(error.message).slice(0, 2000), { stage: "等待恢复结果发布（不会重新执行 AI）" }],
+    );
+    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
+  }
   async complete(t, exit) {
     t = await this.get(t.id);
-    if (["cancelled", "succeeded"].includes(t.state)) return;
-    if (t.state === "cancelling") {
-      await this.finishCancellation(t.id);
-      return;
+    if (["cancelled", "succeeded", "failed", "publish_failed"].includes(t.state)) return;
+    if (t.state === "cancelling") { await this.finishCancellation(t.id); return; }
+    if (t.state !== "publishing") {
+      let result;
+      try {
+        result = JSON.parse(fs.readFileSync(path.join(this.data, "runs", t.id, "result.json"), "utf8"));
+        if (exit !== 0 || !result || typeof result !== "object" || Array.isArray(result) || result.error || result.status === "failed")
+          throw Error(result?.error || "Task failed; inspect task events");
+      } catch (error) { throw Object.assign(error, { executionFailed: true }); }
+      if (t.kind === "agent") result.previewTask = randomUUID();
+      const claimed = await this.db.one(
+        "UPDATE tasks SET state='publishing',result=$2,expires=NULL,error=NULL,monitor=NULL,progress=$3 WHERE id=$1 AND state='running' RETURNING *",
+        [t.id, result, { stage: "正在保存版本并发布预览" }],
+      );
+      if (!claimed) {
+        const latest = await this.get(t.id);
+        if (latest.state === "cancelling") await this.finishCancellation(t.id);
+        return;
+      }
+      t = claimed;
     }
-    const run = path.join(this.data, "runs", t.id),
-      resultFile = path.join(run, "result.json");
-    let result = fs.existsSync(resultFile)
-      ? JSON.parse(fs.readFileSync(resultFile, "utf8"))
-      : {};
-    if (exit !== 0 || result.error || result.status === "failed")
-      throw Object.assign(new Error(result.error || "Task failed; inspect task events"), { executionFailed: true });
+    // Publication is durable and re-entrant, independent of container lifetime.
+    // A crash after replacing files or committing Git resumes the SAME result.
+    try { await this.publish(t); }
+    catch (error) { await this.publicationError(t, error); }
+  }
+  async publish(t) {
+    const run = path.join(this.data, "runs", t.id);
+    let result = { ...t.result };
     if (t.repo && ["agent", "new"].includes(t.kind))
       await this.db.lock(`${t.repo}:${t.project}`, async () => {
         const { dir } = await this.repos.project(t.repo, t.project, {
@@ -330,12 +365,6 @@ export class Tasks {
     };
     walk(base);
     result = { ...result, artifacts };
-    await this.db.pool.query(
-      "UPDATE tasks SET state='succeeded',result=$2,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days' WHERE id=$1",
-      [t.id, result, result.commit || null],
-    );
-    await this.db.event(t.id, "result", result);
-    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
     if (t.repo && t.kind === "agent") {
       await this.db.pool.query(
         "UPDATE works SET updated=now() WHERE repo=$1 AND project=$2",
@@ -343,9 +372,8 @@ export class Tasks {
       );
       // A completed creation turn publishes a fresh player preview without a second user action.
       // Publish the build already validated in this isolated turn, before queued follow-up work.
-      try {
-        if (result.previewArtifacts) {
-          const preview = randomUUID(),
+      if (result.previewArtifacts) {
+          const preview = result.previewTask,
             previewRun = path.join(this.data, "runs", preview);
           fs.mkdirSync(previewRun, { recursive: true });
           const directories = new Set(
@@ -361,7 +389,7 @@ export class Tasks {
           }
           const { dir } = await this.repos.project(t.repo, t.project);
           await this.db.pool.query(
-            "INSERT INTO tasks(id,repo,project,kind,state,input,result,fingerprint,source_commit,created,started,finished,expires) VALUES($1,$2,$3,'build','succeeded','{}',$4,$5,$6,now(),now(),now(),now()+interval '7 days')",
+            "INSERT INTO tasks(id,repo,project,kind,state,input,result,fingerprint,source_commit,created,started,finished,expires) VALUES($1,$2,$3,'build','succeeded','{}',$4,$5,$6,now(),now(),now(),now()+interval '7 days') ON CONFLICT(id) DO NOTHING",
             [
               preview,
               t.repo,
@@ -374,25 +402,23 @@ export class Tasks {
               result.commit || t.source_commit,
             ],
           );
-        } else
-          await this.create({
-            repo: t.repo,
-            project: t.project,
-            kind: "build",
-          }).catch((e) =>
-            this.db.event(t.id, "preview-error", { message: e.message }),
-          );
-      } catch (e) {
-        await this.db.event(t.id, "preview-error", {
-          message: "作品已保存，预览发布失败，可重新生成：" + e.message,
-        });
+      } else {
+        await this.db.pool.query(
+          "INSERT INTO tasks(id,repo,project,kind,input) VALUES($1,$2,$3,'build','{}') ON CONFLICT(id) DO NOTHING",
+          [result.previewTask, t.repo, t.project],
+        );
       }
-      await this.repos.onChange?.(t.repo, t.project).catch((e) =>
-        this.db.event(t.id, "index-error", {
-          message: "作品已保存，素材索引待刷新：" + e.message,
-        }),
-      );
+      await this.repos.onChange?.(t.repo, t.project);
     }
+    await this.db.pool.query(
+      "INSERT INTO events(task,kind,data,source_offset) VALUES($1,'result',$2,-1) ON CONFLICT DO NOTHING",
+      [t.id, result],
+    );
+    await this.db.pool.query(
+      "UPDATE tasks SET state='succeeded',result=$2,error=NULL,monitor=NULL,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days',publication_retry_at=NULL WHERE id=$1 AND state='publishing'",
+      [t.id, result, result.commit || null],
+    );
+    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
   }
   async monitorWarning(t, phase, error) {
     const message = String(error?.message || error).slice(0, 1500);
@@ -502,15 +528,21 @@ export class Tasks {
     if (this.ticking || this.closed) return;
     this.ticking = true;
     try {
-      const running = await this.db.all("SELECT * FROM tasks WHERE state IN ('running','cancelling') ORDER BY created");
+      const running = await this.db.all("SELECT * FROM tasks WHERE state IN ('running','cancelling','publishing') AND (publication_retry_at IS NULL OR publication_retry_at<=now()) ORDER BY created");
       for (const t of running) {
-        try { await this.observeTask(t); }
+        try {
+          if (t.state === "publishing") {
+            await this.complete(t, 0);
+            if ((await this.get(t.id)).state === "succeeded" && t.container)
+              await this.command("docker", ["rm", t.container], { timeout: 10000 }).catch(() => {});
+          } else await this.observeTask(t);
+        }
         catch (e) { await this.monitorWarning(t, "controller", e); }
       }
       const count = await this.db.one("SELECT count(*)::int AS n FROM tasks WHERE state IN ('running','cancelling')");
       if (count.n < 2) {
         const t = await this.db.one(
-          `SELECT t.* FROM tasks t WHERE t.state='queued' AND NOT EXISTS(SELECT 1 FROM tasks r WHERE r.state IN ('running','cancelling') AND ((r.repo=t.repo AND r.project=t.project) OR (t.input->>'connection' IS NOT NULL AND r.input->>'connection'=t.input->>'connection')))
+          `SELECT t.* FROM tasks t WHERE t.state='queued' AND NOT EXISTS(SELECT 1 FROM tasks r WHERE (r.repo=t.repo AND r.project=t.project AND r.state IN ('running','cancelling','publishing','publish_failed')) OR (r.state IN ('running','cancelling') AND t.input->>'connection' IS NOT NULL AND r.input->>'connection'=t.input->>'connection'))
           ORDER BY t.created LIMIT 1`,
         );
         if (t) {

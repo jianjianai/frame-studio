@@ -221,6 +221,7 @@ export function operations({
   add("task_cancel", "Cancel a queued or running task", { id: uuid }, (a) =>
     tasks.cancel(a.id),
   );
+  add("task_retry_publish", "Retry saving an already completed result without re-running AI", { id: uuid }, (a) => tasks.retryPublication(a.id));
   add(
     "artifact_read",
     "Read a completed task PNG for visual inspection; JSON and subtitles return as text",

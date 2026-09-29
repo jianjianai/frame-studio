@@ -81,7 +81,7 @@ export function workbenchOperations({
   );
   add("works_background", "Active projects, grouped by work", {}, () =>
     db.all(
-      `SELECT w.*,r.name AS storage_name,jsonb_agg(jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'created',t.created,'started',t.started) ORDER BY t.created) AS tasks FROM tasks t JOIN works w ON w.repo=t.repo AND w.project=t.project JOIN repos r ON r.id=w.repo WHERE t.state IN ('queued','running','cancelling') GROUP BY w.id,r.name ORDER BY min(t.created)`,
+      `SELECT w.*,r.name AS storage_name,jsonb_agg(jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'created',t.created,'started',t.started) ORDER BY t.created) AS tasks FROM tasks t JOIN works w ON w.repo=t.repo AND w.project=t.project JOIN repos r ON r.id=w.repo WHERE t.state IN ('queued','running','cancelling','publishing','publish_failed') GROUP BY w.id,r.name ORDER BY min(t.created)`,
     ),
   );
   add(

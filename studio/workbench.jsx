@@ -63,7 +63,7 @@ function Background({ notify }) {
             <Button onClick={() => go("work/" + w.id)}>打开作品</Button>
             <Button
               icon={Square}
-              disabled={busy}
+              disabled={busy || !w.tasks.some((t) => ["queued", "running", "cancelling"].includes(t.state))}
               onClick={() =>
                 run(async () => {
                   await api("works_stop", { id: w.id });

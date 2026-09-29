@@ -289,15 +289,15 @@ export function workOperations({
         };
       }
       const pending = await db.one(
-        "SELECT id,kind,state FROM tasks WHERE repo=$1 AND project=$2 AND state IN ('queued','running','cancelling') ORDER BY created LIMIT 1",
+        "SELECT id,kind,state FROM tasks WHERE repo=$1 AND project=$2 AND state IN ('queued','running','cancelling','publishing','publish_failed') ORDER BY created LIMIT 1",
         [w.repo, w.project],
       );
       if (pending)
         return {
-          state: "building",
+          state: pending.state === "publish_failed" ? "attention" : "building",
           task: pending.id,
           kind: pending.kind,
-          next: "Poll task_get, then call works_browser again.",
+          next: pending.state === "publish_failed" ? "Inspect task_get and retry with task_retry_publish after resolving the publication error." : "Poll task_get, then call works_browser again.",
         };
       const task = await tasks.create({
         repo: w.repo,

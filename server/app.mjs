@@ -366,7 +366,7 @@ export async function createApp({
       const server = new McpServer({ name: "frame-studio", version: "4.2.0" });
       for (const [name, op] of Object.entries(actions.registry)) {
         if (
-          !/^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|cancel)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$)/.test(
+          !/^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$)/.test(
             name,
           )
         )
