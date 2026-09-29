@@ -29,6 +29,7 @@ import { Connections } from "./connections.mjs";
 import { GitHub } from "./github.mjs";
 import { Retention } from "./retention.mjs";
 import { sendMedia } from "./media.mjs";
+import { rasterCover } from "./covers.mjs";
 import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
 import { seedSpeech } from "./speech.mjs";
@@ -207,16 +208,14 @@ export async function createApp({
     const { dir } = await repos.project(w.repo, w.project);
     const file = actions.works.coverPath(dir);
     if (!file) throw problem(404, "Cover unavailable");
-    res.type(
-      path.extname(file) === ".svg"
-        ? "image/svg+xml"
-        : path.extname(file) === ".png"
-          ? "image/png"
-          : path.extname(file) === ".jpg"
-            ? "image/jpeg"
-            : "image/webp",
-    );
-    return sendMedia(req, res, file, { cache: 300 });
+    const cover = await rasterCover(file);
+    res.type("image/webp")
+      .header("Content-Security-Policy", "sandbox; default-src 'none'")
+      .header("Cross-Origin-Resource-Policy", "same-origin")
+      .header("Cache-Control", "private, max-age=300, must-revalidate")
+      .header("ETag", cover.etag);
+    if (req.headers["if-none-match"] === cover.etag) return res.code(304).send();
+    return res.send(cover.buffer);
   });
   app.get("/api/actions", async () =>
     Object.fromEntries(
