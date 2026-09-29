@@ -54,7 +54,7 @@ export async function agentModelServer({ provider, command = "printf 'fixture co
     } else if (step === commandStep) {
       const tool = tools.find((t) => ["exec_command", "shell_command", "shell"].includes(t.name));
       if (!tool) { res.writeHead(500); res.end("Missing shell tool"); return; }
-      const args = tool.name === "exec_command" ? { cmd: command, yield_time_ms: 1000 } : tool.name === "shell_command" ? { command } : { command: ["bash", "-lc", command] };
+      const args = tool.name === "exec_command" ? { cmd: command, yield_time_ms: 10000 } : tool.name === "shell_command" ? { command } : { command: ["bash", "-lc", command] };
       output.push({ type: "function_call", id: "command-fixture", call_id: "command-fixture", name: tool.name, arguments: JSON.stringify(args), status: "completed" });
     } else output.push(message("final", "已按你的回答完成修改。\n\n**修改结果**：保留音乐与字幕，开场更紧凑。", "final_answer"));
     res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache" });

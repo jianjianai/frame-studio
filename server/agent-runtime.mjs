@@ -116,7 +116,7 @@ export async function runAgentTurn({ provider, bin, task, prompt, cwd, env = pro
     } catch (error) {
       if (provider === "codex") write({ id: packet.id, error: { code: -32000, message: publicAgentText(error.message) } });
       else write({ type: "control_response", response: { subtype: "success", request_id: packet.request_id, response: { behavior: "deny", message: publicAgentText(error.message) } } });
-      if (activeSignal.aborted || error.status === 401 || /过期|已结束|中断|默认选项/.test(error.message)) fail(error);
+      if (activeSignal.aborted || [401, 403, 404, 409].includes(error.status) || /过期|已结束|中断|默认选项/.test(error.message)) fail(error);
     }
   };
   const receive = (packet) => {

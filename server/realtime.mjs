@@ -170,6 +170,8 @@ export async function installRealtime(app, db, actions, origin) {
           subscriptions.set(message.id, sub);
           let scope = {};
           if (message.name === "task_get") scope = { task: args.id };
+          else if (message.name === "agent_questions") scope = { task: args.task, work: args.work };
+          else if (message.name === "agent_notifications" && args.work) scope = { work: args.work };
           else if (message.name.startsWith("works_") && args.id) {
             const work = await actions.works.get(args.id);
             scope = { work: work.id, repo: work.repo, project: work.project, ...(args.chat ? { chat: args.chat } : {}) };

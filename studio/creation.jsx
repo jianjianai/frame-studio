@@ -1,4 +1,5 @@
 import { usePreviewSession, decodePlayerMessage } from "./preview-session";
+import { readAgentTarget } from "./agent/agent-navigation";
 import { useBrowserExport } from "./browser-export-session";
 import { RevisionPreview } from "./revision-preview";
 import { WorkChat } from "./work-chat";
@@ -142,6 +143,15 @@ export function Creation({ id, notify }) {
         previous[tool] ? previous : { ...previous, [tool]: true },
       );
   }, [tool]);
+  useEffect(() => {
+    const openTarget = (event) => {
+      const target = event?.detail || readAgentTarget();
+      if (target?.work === id) openTool("ai");
+    };
+    openTarget();
+    window.addEventListener("frame-agent-navigate", openTarget);
+    return () => window.removeEventListener("frame-agent-navigate", openTarget);
+  }, [id]);
   const closeTool = () => {
     setTool("");
     requestAnimationFrame(() => {

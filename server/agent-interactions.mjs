@@ -77,6 +77,7 @@ export class AgentInteractions {
 export function agentInteractionOperations({ add, db, data }) {
   const service = new AgentInteractions({ db, data });
   const uuid = z.string().uuid();
+  add("agent_turn_read", "Locate one archived turn within its own work", { work: uuid, task: uuid }, (a) => service.forWork(a.work, a.task));
   add("agent_questions", "Read durable questions for an explicitly scoped work and task", { work: uuid, task: uuid }, (a) => service.list(a.work, a.task));
   add("agent_question_answer", "Submit human answers once and continue the original running task", agentQuestionAnswerRequestSchema, (a) => service.answer(a));
   add("agent_notifications", "Read persisted Agent completion, failure and input notifications", {

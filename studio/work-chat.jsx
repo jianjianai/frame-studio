@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ArrowUp,
+  Search,
+  CircleHelp,
   Square,
   Plus,
   MessageSquare,
@@ -17,6 +19,10 @@ import {
   Pencil,
   LoaderCircle,
 } from "lucide-react";
+import { AgentTurn as Turn } from "./agent/AgentTurn";
+import { AgentChatSearch, useAgentSearch } from "./agent/AgentSearch";
+import { useAgentTarget, navigateToAgent } from "./agent/agent-navigation";
+import "./agent/agent-thread.css";
 import { ModelPicker } from "./model-picker";
 import { WorkResult } from "./work-result";
 import { TaskDiagnostics } from "./task-diagnostics";
@@ -83,156 +89,6 @@ function useEvents(tasks, chat) {
   }, [chat, signature, reconnected]);
   return { events, error: connectionError || error };
 }
-function Turn({
-  task,
-  events,
-  onRetry,
-  onStop,
-  onRecall,
-  notify,
-  onRetryPublication,
-  onResult,
-  onEdit,
-  queue,
-}) {
-  const messages = new Map(),
-    activities = new Map();
-  let delta = "";
-  for (const row of events || []) {
-    const e = row.data;
-    if (row.kind === "message") {
-      messages.set(e.id || row.id, e.text);
-      delta = "";
-    } else if (row.kind === "summary" && e.text) {
-      if (![...messages.values()].includes(e.text))
-        messages.set("summary", e.text);
-      delta = "";
-    } else if (row.kind === "delta") delta += e.text;
-    else if (row.kind === "activity") {
-      const previous = activities.get(e.id);
-      activities.set(e.id || row.id, {
-        ...previous,
-        ...e,
-        text: e.tool === "result" && previous ? previous.text : e.text,
-      });
-    }
-  }
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <article className="chat-turn">
-      <div className="human-message">
-        {task.input.prompt}
-        <ReviewContext context={task.input.context} onRecall={onRecall} />
-      </div>
-      <div className="assistant-message">
-        <div className="assistant-label">
-          <Sparkles size={14} />
-          <strong>{states[task.state] || "状态更新中"}</strong>
-          <span title={task.execution?.model || task.input.model || "工具默认模型"}>
-            {task.execution?.model || task.input.model || "默认模型"} · {date(task.created)}
-          </span>
-        </div>
-        {[...messages].map(([id, text]) => (
-          <div className="message-text" key={id}>
-            <ReviewText text={text} onRecall={onRecall} />
-          </div>
-        ))}
-        {delta && (
-          <div className="message-text streaming">
-            <ReviewText text={delta} onRecall={onRecall} />
-          </div>
-        )}
-        {activities.size > 0 && (
-          <details className="activity-list">
-            <summary>
-              {active(task) ? "查看正在进行的工作" : "查看制作过程"} ·{" "}
-              {activities.size} 项
-            </summary>
-            {[...activities].slice(expanded ? 0 : -30).map(([id, activity]) => (
-              <div key={id}>
-                <span>
-                  {activity.phase === "done" ? "✓" : "·"} {activity.text}
-                </span>
-                {activity.output && <pre>{activity.output}</pre>}
-              </div>
-            ))}
-            {activities.size > 30 && (
-              <button type="button" onClick={() => setExpanded(!expanded)}>
-                {expanded ? "只显示最近 30 项" : "展开更早的过程"}
-              </button>
-            )}
-          </details>
-        )}
-        {!messages.size && !delta && active(task) && (
-          <p className="quiet">
-            {task.state === "queued"
-              ? "已排队，前一项工作结束后自动开始。"
-              : "AI 正在制作作品…"}
-          </p>
-        )}
-        <ErrorNote error={task.error} />
-        <TaskDiagnostics task={task} queue={queue} />
-        {task.state === "succeeded" && (
-          <div className="turn-result">
-            <strong>本轮创作已完成</strong>
-            <Button icon={Play} onClick={() => onResult(task)}>
-              查看本轮预览与修改
-            </Button>
-            <small>
-              {typeof task.result?.commit === "string"
-                ? `版本 ${task.result.commit.slice(0, 7)}`
-                : "独立结果，不跳转到其他轮次"}
-            </small>
-          </div>
-        )}
-        <div className="row turn-actions">
-          <Button icon={Pencil} onClick={() => onEdit(task)}>
-            重新编辑要求
-          </Button>
-          {!!messages.size && (
-            <Button
-              icon={Copy}
-              aria-label="复制 AI 回复"
-              onClick={() =>
-                navigator.clipboard
-                  .writeText([...messages.values()].join("\n\n"))
-                  .then(
-                    () => notify("回复已复制"),
-                    () => notify("复制失败，请选择文字复制", "error"),
-                  )
-              }
-            >
-              复制回复
-            </Button>
-          )}
-          {task.state === "failed" && (
-            <Button
-              onClick={() =>
-                onRetry(
-                  task.input.prompt,
-                  task.input.context || {},
-                  task.input.model,
-                )
-              }
-            >
-              保留原引用重试
-            </Button>
-          )}
-          {task.state === "publish_failed" && (
-            <Button onClick={() => onRetryPublication(task.id)}>
-              重试保存结果（不重跑 AI）
-            </Button>
-          )}
-          {cancellable(task) && (
-            <Button icon={Square} onClick={() => onStop(task.id)}>
-              停止本次创作
-            </Button>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
 const draftRead = (key) => {
   try {
     return JSON.parse(sessionStorage.getItem(key) || "{}");
@@ -295,6 +151,7 @@ export function WorkChat({
   const draftRevision = useRef(0),
     conversationRevision = useRef(0),
     sending = useRef(false);
+  const search = useAgentSearch(messages, follow, setFollowing);
   const currentDraft = useRef({ prompt, review });
   currentDraft.current = { prompt, review };
   const setPrompt = (value) => {
@@ -401,6 +258,7 @@ export function WorkChat({
     providerModels(chosenConnection).some(
       (entry) => entry.id === model && entry.enabled !== false,
     );
+  useAgentTarget({ work, chat, chats: chats.data, visible, turns: conversationTasks, switchChat, setOlder, follow, setFollowing, messages, notify });
   const changesProvider =
     !!chat && !!selected?.connection && chosen !== selected.connection;
   const activeTasks = tasks.filter(
@@ -539,13 +397,14 @@ export function WorkChat({
     <section
       ref={section}
       id="work-chat"
-      className={`creation-chat ai-chat ${expandedComposer ? "composer-expanded" : ""}`}
+      className={`creation-chat ai-chat agent-chat ${expandedComposer ? "composer-expanded" : ""}`}
       style={{ "--ai-font-size": preferences.fontSize + "px" }}
       hidden={!visible}
       aria-label="AI 创作对话"
       role={compact && !embedded ? "dialog" : undefined}
       aria-modal={compact && visible && !embedded ? true : undefined}
       onKeyDown={(event) => {
+        if (search.onKeyDown(event)) return;
         if (event.defaultPrevented || event.target.closest("dialog[open]"))
           return;
         if (event.key === "Escape" && expandedComposer) {
@@ -586,6 +445,7 @@ export function WorkChat({
           disabled={busy}
           onChange={switchChat}
         />
+        <Button type="button" icon={Search} aria-label="搜索对话内容" title="搜索已加载对话（Ctrl / ⌘ + F）" onClick={search.toggle} />
         <Button
           icon={Plus}
           aria-label="新对话"
@@ -613,6 +473,7 @@ export function WorkChat({
           onClick={onClose}
         />
       </header>
+      <AgentChatSearch controller={search} />
       <ErrorNote error={chats.error || connections.error} />
       {stream.error && (
         <p className="reconnecting" role="status">
@@ -697,6 +558,8 @@ export function WorkChat({
           <Turn
             key={t.id}
             task={t}
+            work={work}
+            search={search.query}
             queue={queueQuery.data?.items.find(item => item.id === t.id)}
             events={stream.events[t.id]}
             onRetry={send}
@@ -743,10 +606,11 @@ export function WorkChat({
         <div className="chat-run-status" role="status">
           <LoaderCircle size={13} className={runningTask ? "spin" : ""} />
           <span>
-            {runningTask?.progress?.stage ||
+            {(runningTask?.interaction ? "等待回答；新要求会进入队列" : runningTask?.progress?.stage) ||
               (runningTask ? states[runningTask.state] : "等待开始")}
             {queuedCount > 0 ? ` · ${queuedCount} 项排队` : ""}
           </span>
+          {runningTask?.interaction && <button type="button" onClick={() => navigateToAgent({ work: work.id, chat: runningTask.chat, task: runningTask.id, question: runningTask.interaction.id })}>回答</button>}
           {runningTask && cancellable(runningTask) && (
             <Button
               aria-label="停止当前任务"

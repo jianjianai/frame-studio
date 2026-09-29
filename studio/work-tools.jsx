@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { AgentNotificationBell, useAgentNotifications } from "./agent/AgentNotifications";
 import {
   Film,
   MessageSquare,
@@ -35,12 +36,13 @@ export function WorkTools({
   toolbarRef,
 }) {
   const [menu, setMenu] = useState("");
+  const agentNotifications = useAgentNotifications();
   const [focused, setFocused] = useState("work");
   const popup = useRef(null);
   const menuTrigger = useRef(null);
   const keys = compact
-    ? ["work", "tools", "ai", "exports"]
-    : ["work", "ai", "materials", "voice", "tasks", "sync", "exports"];
+    ? ["work", "tools", "ai", ...(agentNotifications ? ["notifications"] : []), "exports"]
+    : ["work", "ai", "materials", "voice", "tasks", "sync", ...(agentNotifications ? ["notifications"] : []), "exports"];
   const focusKey = keys.includes(focused) ? focused : "work";
   const syncLabel =
     syncError || sync?.error
@@ -226,6 +228,7 @@ export function WorkTools({
             })}
           </div>
         )}
+        <AgentNotificationBell className="work-tool" label={!compact} data-tool-key="notifications" tabIndex={focusKey === "notifications" ? 0 : -1} />
         {button("exports", Download, "导出", {
           className: "work-tool export-tool",
           "aria-controls": undefined,

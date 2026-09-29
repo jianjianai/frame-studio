@@ -112,12 +112,17 @@ export async function continuationContext(db, task, chat, execution) {
   for (const row of rows) {
     if (remaining <= 0) break;
     const events = await db.all(
-      "SELECT kind,data FROM events WHERE task=$1 AND kind IN ('message','summary') ORDER BY id DESC LIMIT 8",
+      "SELECT kind,data FROM events WHERE task=$1 AND (kind IN ('message','summary') OR (kind='agent-item' AND ((data->>'kind'='message' AND data ? 'text') OR (data->>'kind'='question' AND data->'question'->>'state'='answered')))) ORDER BY id DESC LIMIT 16",
       [row.id],
     );
     const messages = new Map();
     for (const event of events) {
       const id = event.data?.id || event.kind;
+      if (event.data?.kind === "question" && !messages.has(id)) {
+        const q = event.data.question;
+        messages.set(id, "用户已回答：" + JSON.stringify({ questions: q.payload?.questions, answers: q.answers }));
+        continue;
+      }
       if (!messages.has(id) && typeof event.data?.text === "string")
         messages.set(id, event.data.text);
     }

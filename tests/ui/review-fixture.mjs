@@ -180,6 +180,8 @@ export async function mockApi(context, playerUrl, uiUrl) {
         return [chat];
       case "connections_list":
         return [connection];
+      case "agent_notifications":
+        return { items: [], unread: 0, next: null };
       case "works_chat_turns":
         return state.tasks.filter((t) => t.chat === args.chat);
       case "works_sync_status":

@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { confined, problem } from "./security.mjs";
+import { agentItemEventSchema } from "../src/contracts/agent.mjs";
+import { publicAgentData } from "./agent-public-data.mjs";
 
 /** A question must follow all output already emitted by the worker. Both the
  * controller and API use this same transaction/cursor, not independent readers.
@@ -35,6 +37,11 @@ export async function agentEventTransaction(db, data, taskId, operation = async 
             let event;
             try { event = JSON.parse(line); } catch { continue; }
             if (!event || typeof event.type !== "string" || event.type.length > 80) continue;
+            if (event.type === "agent-item") {
+              // Human input state is created by the authenticated interaction API,
+              // never by model-controlled files. Malformed worker blocks cannot crash the UI.
+              if (event.kind === "question" || !agentItemEventSchema.safeParse(event).success) continue;
+            }
             await client.query(
               "INSERT INTO events(task,kind,data,source_offset) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING",
               [taskId, event.type, event, offset],

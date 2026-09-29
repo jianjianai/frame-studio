@@ -61,4 +61,12 @@ export const agentItemEventSchema = z.object({
   at: z.number().finite().nonnegative(),
   text: z.string().optional(),
   delta: z.string().optional(),
+  title: z.string().max(1000).optional(),
+  command: z.string().max(16000).optional(),
+  cwd: z.string().max(2000).optional(),
+  output: z.string().max(128000).optional(),
+  outputDelta: z.string().max(64000).optional(),
+  error: z.string().max(16000).optional(),
+  files: z.array(z.object({ path: z.string().max(2048), kind: z.string().max(30).optional(), diff: z.string().max(128000).optional(), added: z.number().nonnegative().optional(), removed: z.number().nonnegative().optional(), binary: z.boolean().optional(), truncated: z.boolean().optional(), note: z.string().max(4000).optional() }).passthrough()).max(100).optional(),
+  steps: z.array(z.object({ id: z.string().max(200), text: z.string().max(2000), status: z.string().max(30) }).passthrough()).max(50).optional(),
 }).passthrough();

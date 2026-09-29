@@ -1,5 +1,6 @@
 import { Component, lazy, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { AgentNotificationProvider, AgentNotificationBell } from "./agent/AgentNotifications";
 import {
   Film,
   Clock3,
@@ -222,6 +223,7 @@ function App() {
       ["settings", Settings2, "设置"],
     ];
   return (
+    <AgentNotificationProvider>
     <div
       className={
         "workbench " +
@@ -254,6 +256,7 @@ function App() {
             ))}
           </nav>
           <footer>
+            <AgentNotificationBell label />
             <Button
               icon={collapsed ? PanelLeftOpen : PanelLeftClose}
               aria-label={collapsed ? "展开导航" : "收起导航"}
@@ -298,6 +301,7 @@ function App() {
       </main>
       <Notification notice={notice} onClose={() => setNotice(null)} />
     </div>
+    </AgentNotificationProvider>
   );
 }
 createRoot(document.getElementById("root")).render(<App />);

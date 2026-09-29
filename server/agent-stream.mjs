@@ -2,6 +2,7 @@ import { publicAgentText as text, publicAgentData as data, publicToolOutput as o
 
 const phase = (status, fallback = "running") => ({ in_progress: "running", inProgress: "running", running: "running", completed: "completed", done: "completed", succeeded: "completed", failed: "failed", declined: "cancelled", interrupted: "cancelled", cancelled: "cancelled" }[status] || fallback);
 const toolCategory = (name = "") => /read|view_image|imageView/i.test(name) ? "read" : /search|grep|glob|fetch/i.test(name) ? "search" : /agent|task|collab/i.test(name) ? "agent" : "tool";
+const toolTitle = (name) => ({ Read: "读取文件", Grep: "搜索内容", Glob: "查找文件", WebSearch: "搜索资料", WebFetch: "读取网页", Task: "子代理", Agent: "子代理", AskUserQuestion: "向你确认", frame_ask_user: "向你确认" }[name] || name);
 /** Stateful protocol adapter. One input can produce MANY ordered public items.
  * Private/raw reasoning, signatures, provider envelopes and auth are deliberately absent.
  */
@@ -19,7 +20,7 @@ export function createAgentStream({ now = Date.now } = {}) {
   const toolItem = (tool, done = false, parentId) => {
     const name = tool.name || tool.tool || tool.type || "工具";
     const input = tool.input || tool.arguments || {};
-    const base = { phase: done ? "completed" : "running", title: text(name, { limit: 120 }), toolName: text(name, { limit: 200 }), input: data(input), ...(parentId ? { parentId } : {}) };
+    const base = { phase: done ? "completed" : "running", title: text(toolTitle(name), { limit: 120 }), toolName: text(name, { limit: 200 }), input: data(input), ...(parentId ? { parentId } : {}) };
     tools.set(tool.id, { ...base, name, input });
     if (["Bash", "PowerShell", "exec_command", "shell_command", "shell"].includes(name))
       return item(tool.id, "command", { ...base, title: text(input.description || "执行命令", { limit: 200 }), command: text(Array.isArray(input.command) ? input.command.join(" ") : input.command || input.cmd || "", { limit: 12000 }), cwd: text(input.cwd || input.workdir || "", { limit: 1000 }) });
@@ -54,7 +55,7 @@ export function createAgentStream({ now = Date.now } = {}) {
       ...common, title: "修改文件", files: (i.changes || []).slice(0, 100).map((f) => ({ path: text(f.path, { limit: 1000 }), kind: typeof f.kind === "string" ? f.kind : f.kind?.type || "modify", diff: text(f.diff || "", { limit: 64000 }), truncated: String(f.diff || "").length > 64000 })),
     });
     if (["mcpToolCall", "mcp_tool_call", "dynamicToolCall", "collabAgentToolCall", "collabToolCall"].includes(i.type)) {
-      return item(id, "tool", { ...common, category: /collab/i.test(i.type) ? "agent" : "tool", title: text([i.server, i.tool].filter(Boolean).join(" / ") || "工具调用", { limit: 200 }), toolName: text(i.tool || i.type, { limit: 200 }), input: data(i.arguments),
+      return item(id, "tool", { ...common, category: /collab/i.test(i.type) ? "agent" : "tool", title: text([i.server, toolTitle(i.tool)].filter(Boolean).join(" / ") || "工具调用", { limit: 200 }), toolName: text(i.tool || i.type, { limit: 200 }), input: data(i.arguments),
         ...(i.result != null || i.contentItems != null ? { output: output(i.result ?? i.contentItems) } : {}),
         ...(i.error || i.success === false ? { phase: "failed", error: text(i.error?.message || i.error || "工具执行失败", { limit: 8000 }) } : {}),
         ...(Number.isFinite(i.durationMs) ? { durationMs: i.durationMs } : {}),
@@ -68,6 +69,7 @@ export function createAgentStream({ now = Date.now } = {}) {
   const feed = (value) => {
     if (!value || typeof value !== "object") return [];
     const p = value.params || {};
+    if (["userMessage", "user_message"].includes((p.item || value.item)?.type)) return [];
     if (value.method) {
       if (["thread/started"].includes(value.method)) { session = p.thread?.id || session; return session ? [{ type: "session", id: session }] : []; }
       if (["item/started", "item/completed"].includes(value.method) && p.item)
