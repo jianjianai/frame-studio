@@ -73,7 +73,12 @@ test(
               requests = [],
               turns = new Map();
             let chat = existing
-              ? { id: "12345678-1234-4123-8123-000000000002", provider: "codex", connection: "12345678-1234-4123-8123-000000000003", title: "Fixture chat" }
+              ? {
+                  id: "12345678-1234-4123-8123-000000000002",
+                  provider: "codex",
+                  connection: "12345678-1234-4123-8123-000000000003",
+                  title: "Fixture chat",
+                }
               : null;
             let creates = 0;
             page.on("pageerror", (error) => errors.push(error.message));
@@ -106,7 +111,8 @@ test(
                     creates++;
                     chat = {
                       id: "12345678-1234-4123-8123-000000000005",
-                      provider: "codex", connection: "12345678-1234-4123-8123-000000000003",
+                      provider: "codex",
+                      connection: "12345678-1234-4123-8123-000000000003",
                       title: "New fixture chat",
                     };
                     return reply(chat);
@@ -132,7 +138,11 @@ test(
                           error: "Message request key already used",
                         }),
                       );
-                    return reply({ id: "12345678-1234-4123-8123-000000000006", kind: "agent", state: "queued" });
+                    return reply({
+                      id: "12345678-1234-4123-8123-000000000006",
+                      kind: "agent",
+                      state: "queued",
+                    });
                   }
                   default:
                     throw Error("Unexpected fixture request: " + message.name);
@@ -145,8 +155,8 @@ test(
               );
               await page.waitForFunction(
                 () =>
-                  document.querySelector('[aria-label="模型连接"]')?.value ===
-                  "12345678-1234-4123-8123-000000000003",
+                  document.querySelector('[aria-label="选择模型"]')?.dataset
+                    .connection === "12345678-1234-4123-8123-000000000003",
               );
               await page
                 .getByLabel("创作要求", { exact: true })

@@ -230,8 +230,10 @@ export function Creation({ id, notify }) {
         writePreference("frame.player-view", e.data.preferences);
       }
       const message = previewMessageSchema.safeParse(e.data);
-      if (message.success && message.data.type === "frame-preview-loading") setPreviewStage(message.data.message);
-      if (message.success && message.data.type === "frame-player-state") setPosition(message.data);
+      if (message.success && message.data.type === "frame-preview-loading")
+        setPreviewStage(message.data.message);
+      if (message.success && message.data.type === "frame-player-state")
+        setPosition(message.data);
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
@@ -497,6 +499,8 @@ export function Creation({ id, notify }) {
           notify={notify}
           position={position}
           selectedAssets={assets}
+          onAddAssets={() => setPanel("materials")}
+          onPausePreview={() => sendPlayer("pause")}
           suggestion={suggestion}
           visible={chatOpen}
           onClose={closeChat}
