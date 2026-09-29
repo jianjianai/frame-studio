@@ -6,7 +6,7 @@ import { ENGINE_PROTOCOL_VERSION } from "../src/engine/protocol.mjs";
 
 const rootDirectory = fileURLToPath(new URL("../", import.meta.url));
 const pending = new Map();
-const sourceNames = ["src", "public", "scripts", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json", ".npmrc", "vite.config.ts", "index.html", "server/executor.mjs", "server/agent-events.mjs", "server/preview-version.mjs"];
+const sourceNames = ["src", "public", "scripts", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json", ".npmrc", "vite.config.ts", "index.html", "server/executor.mjs", "server/agent-events.mjs", "server/tool-installation.mjs", "server/preview-version.mjs"];
 async function identity(root) {
   const files = [];
   const walk = async relative => {

@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { agentEvent } from "./agent-events.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
+import { installToolVersion } from "./tool-installation.mjs";
 const work = "/workspace",
   core = "/opt/frame";
 const task = JSON.parse(fs.readFileSync(work + "/task.json", "utf8"));
@@ -80,22 +81,7 @@ try {
   if (task.runtime?.image && task.runtime.image !== actualRuntime.image)
     throw Error("Executor image does not match the frozen task runtime");
   if (task.kind === "tools-update") {
-    const provider = task.input.provider,
-      version = task.input.version,
-      dir = `/tools/${provider}/${version}`;
-    const pkg =
-      provider === "codex" ? "@openai/codex" : "@anthropic-ai/claude-code";
-    await run("npm", ["install", "--prefix", dir, pkg + "@" + version]);
-    await run(
-      dir + "/node_modules/.bin/" + (provider === "codex" ? "codex" : "claude"),
-      ["--version"],
-    );
-    fs.writeFileSync(`/tools/${provider}/current.tmp`, version);
-    fs.renameSync(
-      `/tools/${provider}/current.tmp`,
-      `/tools/${provider}/current`,
-    );
-    result({ status: "passed", provider, version });
+    result(await installToolVersion({ provider: task.input.provider, version: task.input.version, run }));
   } else {
     for (const name of [
       "src",
