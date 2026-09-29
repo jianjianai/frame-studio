@@ -144,7 +144,7 @@ export class Tasks {
     return lock(async () => {
       const container = "frame-task-" + t.id;
       const claimed = await this.db.one(
-        "UPDATE tasks SET state='running',started=now(),container=$2,controller_id=$3,progress=$4 WHERE id=$1 AND state='queued' RETURNING id",
+        "UPDATE tasks SET state='running',started=now(),container=$2,controller_id=$3,progress=$4,metrics=metrics||jsonb_build_object('queueMs',GREATEST(0,EXTRACT(EPOCH FROM (now()-created))*1000)) WHERE id=$1 AND state='queued' RETURNING id",
         [t.id, container, this.controllerId, { stage: "准备隔离工作副本" }],
       );
       if (!claimed) return;
@@ -163,6 +163,7 @@ export class Tasks {
     });
   }
   async prepareAndLaunch(t, container) {
+    const preparationStarted = performance.now();
     if ((await this.get(t.id)).state === "cancelling") { await this.finishCancellation(t.id); return; }
     await this.assertLeadership();
     const run = path.join(this.data, "runs", t.id);
@@ -199,7 +200,7 @@ export class Tasks {
     let config = {};
     if (t.kind === "agent") {
       if (t.input.connection)
-        config = await this.connections.selection(t.input.connection, t.execution?.model ?? t.input.model);
+        config = t.execution ? await this.connections.resolve(t.input.connection) : await this.connections.selection(t.input.connection, t.input.model);
       else {
         const stored = await this.db.setting(t.input.provider);
         config = stored?.encrypted
@@ -283,8 +284,8 @@ export class Tasks {
     const image = runtime.image;
     await this.assertLeadership();
     const prepared = await this.db.one(
-      "UPDATE tasks SET fingerprint=$2,source_commit=$3,base_commit=$3,runtime=$4,review_reference=$6 WHERE id=$1 AND state='running' AND controller_id=$5 RETURNING id",
-      [t.id, fingerprint, sourceCommit, runtime, this.controllerId, reviewReference],
+      "UPDATE tasks SET fingerprint=$2,source_commit=$3,base_commit=$3,runtime=$4,review_reference=$6,metrics=metrics||$7::jsonb WHERE id=$1 AND state='running' AND controller_id=$5 RETURNING id",
+      [t.id, fingerprint, sourceCommit, runtime, this.controllerId, reviewReference, { prepareMs: Math.round(performance.now() - preparationStarted) }],
     );
     if (!prepared) {
       if ((await this.get(t.id)).state === "cancelling") await this.finishCancellation(t.id);

@@ -1,5 +1,7 @@
 # 工程接入与接口说明
 
+V5 继续使用场景/音频协议 1，旧作品无需迁移。`beats` 中可选的唯一 `id` 用于更稳定的审片引用，例如 `{ id: 'opening', at: 0, title: '开场', detail: '...' }`；这不是要求作品采用可编辑剪辑数据模型。引用和结果操作见 [V5 升级说明](V5-UPGRADE.md)。
+
 修改边界见 [NEW-PROJECT-STANDARD.md](NEW-PROJECT-STANDARD.md)。每个视频的全部文件都属于 `projects/<id>/`，项目任务不能修改目录之外的文件。
 
 统一工具入口是 `pnpm film help`；AI 接手与分镜预览见 [AI-WORKFLOW.md](AI-WORKFLOW.md)。单项目运行、局部修改、检查点、带声音审片、后台任务、冻结导出与旁白见 [AI-PRODUCTION.md](AI-PRODUCTION.md)，不需要连接 MCP 即可使用。

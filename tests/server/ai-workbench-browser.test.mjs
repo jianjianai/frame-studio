@@ -358,13 +358,13 @@ test(
         .getByRole("button", { name: "动画节奏与声音优化", exact: true })
         .click();
       await page
-        .getByRole("button", { name: "查看本轮预览", exact: true })
+        .getByRole("button", { name: "查看本轮预览与修改", exact: true })
         .click();
       await expect(
-        page.getByRole("dialog", { name: "本轮修改预览" }).locator("iframe"),
+        page.getByRole("dialog", { name: "本轮修改与审片" }).locator("iframe"),
       ).toHaveAttribute("src", /\/preview\//);
       await page
-        .getByRole("dialog", { name: "本轮修改预览" })
+        .getByRole("dialog", { name: "本轮修改与审片" })
         .getByRole("button", { name: "关闭弹窗", exact: true })
         .click();
       for (const width of [1024, 768, 390, 320]) {

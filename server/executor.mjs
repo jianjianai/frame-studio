@@ -278,6 +278,7 @@ try {
       }
       if (buildResult.status === "failed" || buildResult.passed === false)
         throw new Error("Preview build failed");
+      value.buildMetrics = buildResult.buildMetrics || null;
       const base = path.join(work, "projects", task.project, "exports");
       const file = path.resolve(buildResult.output || "", "index.html");
       if (

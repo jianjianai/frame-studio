@@ -110,6 +110,7 @@ export class Connections {
       models !== undefined
     )
       delete config.lastTest;
+    const identityChanged = Boolean(apiKey && apiKey !== config.apiKey);
     Object.assign(config, { baseUrl, model });
     if (apiKey) config.apiKey = apiKey;
     const state =
@@ -120,8 +121,8 @@ export class Connections {
         : old?.state || "unconfigured";
     if (old) {
       const saved = await this.db.pool.query(
-        "UPDATE connections SET name=$2,config=$3,state=$4,error=NULL WHERE id=$1 AND config=$5 AND name=$6",
-        [id, name, this.secrets.encrypt(config), state, old.config, old.name],
+        "UPDATE connections SET name=$2,config=$3,state=$4,error=NULL,auth_generation=auth_generation+$7 WHERE id=$1 AND config=$5 AND name=$6",
+        [id, name, this.secrets.encrypt(config), state, old.config, old.name, identityChanged ? 1 : 0],
       );
       if (!saved.rowCount)
         throw problem(409, "提供商配置刚刚发生变化，请重新打开后保存");

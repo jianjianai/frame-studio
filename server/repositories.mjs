@@ -420,7 +420,7 @@ export class Repositories {
       ? (await this.project(id, w.project)).repo
       : await this.library(id);
     let checked = (w || r).sync_state?.checked || null,
-      error = null;
+      error = fetch ? null : (w || r).sync_state?.error || null;
     if (fetch && r.url) {
       try {
         await this.git(
@@ -522,8 +522,8 @@ export class Repositories {
     };
     await this.db.pool.query(
       w
-        ? "UPDATE works SET sync_state=$2 WHERE id=$1"
-        : "UPDATE repos SET sync_state=$2 WHERE id=$1",
+        ? "UPDATE works SET sync_state=$2 WHERE id=$1 AND sync_state IS DISTINCT FROM $2::jsonb"
+        : "UPDATE repos SET sync_state=$2 WHERE id=$1 AND sync_state IS DISTINCT FROM $2::jsonb",
       [w?.id || id, state],
     );
     return state;

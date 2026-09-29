@@ -9,6 +9,7 @@ import { chatOperations } from "./chat-operations.mjs";
 import { createOperationRegistry } from "./operation-registry.mjs";
 import { workResultOperations } from "./work-results.mjs";
 import { taskGetRequestSchema } from "../src/contracts/platform.mjs";
+import { workIdRequestSchema } from "../src/contracts/platform.mjs";
 import { hash, token, confined, problem } from "./security.mjs";
 const uuid = z.string().uuid(),
   text = z.string().max(20000),
@@ -224,10 +225,10 @@ export function operations({
       ),
     }),
   );
-  add("task_cancel", "Cancel a queued or running task", { id: uuid }, (a) =>
+  add("task_cancel", "Cancel a queued or running task", workIdRequestSchema, (a) =>
     tasks.cancel(a.id),
   );
-  add("task_retry_publish", "Retry saving an already completed result without re-running AI", { id: uuid }, (a) => tasks.retryPublication(a.id));
+  add("task_retry_publish", "Retry saving an already completed result without re-running AI", workIdRequestSchema, (a) => tasks.retryPublication(a.id));
   add(
     "artifact_read",
     "Read a completed task PNG for visual inspection; JSON and subtitles return as text",

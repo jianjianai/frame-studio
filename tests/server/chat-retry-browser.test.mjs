@@ -101,6 +101,8 @@ test(
                         id: "12345678-1234-4123-8123-000000000003",
                         name: "Fixture connection",
                         configured: true,
+                        tool: "codex", mode: "api", model: "fixture-model",
+                        models: [{ id: "fixture-model", name: "Fixture model", enabled: true }],
                       },
                     ]);
                   case "works_chats":

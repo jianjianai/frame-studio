@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Component, lazy, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Film,
@@ -27,13 +27,22 @@ import {
   kinds,
   Notification,
 } from "./ui";
-import { WorkLibrary, Repositories } from "./library";
-import { Creation } from "./creation";
-import { Materials } from "./work-panels";
-import { Settings } from "./accounts";
+const WorkLibrary = lazy(() => import("./library").then(module => ({ default: module.WorkLibrary })));
+const Repositories = lazy(() => import("./library").then(module => ({ default: module.Repositories })));
+const Creation = lazy(() => import("./creation").then(module => ({ default: module.Creation })));
+const Materials = lazy(() => import("./materials").then(module => ({ default: module.Materials })));
+const Settings = lazy(() => import("./accounts").then(module => ({ default: module.Settings })));
 import "./workbench.css";
 import "./workspace.css";
 import "./work-tools.css";
+
+class PageBoundary extends Component {
+  state = { error: null };
+  static getDerivedStateFromError(error) { return { error }; }
+  render() {
+    return this.state.error ? <section role="alert"><h2>页面暂时无法打开</h2><p>服务器更新或网络中断可能使页面资源暂时不可用。创作任务仍保存在服务器，刷新前请保留尚未提交的输入。</p><Button onClick={() => location.reload()}>重新加载页面</Button></section> : this.props.children;
+  }
+}
 
 function Background({ notify }) {
   const query = useQuery("works_background", {}, 2000),
@@ -266,6 +275,7 @@ function App() {
         </aside>
       )}
       <main className={isWork ? "workspace" : "page"}>
+        <PageBoundary key={section + ":" + (route[1] || "")}><Suspense fallback={<Loading />}>
         {section === "work" ? (
           <Creation key={route[1]} id={route[1]} notify={notify} />
         ) : section === "repository" ? (
@@ -284,6 +294,7 @@ function App() {
         ) : (
           <WorkLibrary recent notify={notify} />
         )}
+        </Suspense></PageBoundary>
       </main>
       <Notification notice={notice} onClose={() => setNotice(null)} />
     </div>
