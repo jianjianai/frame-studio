@@ -1,3 +1,4 @@
+import { runtimeIdentity } from "../../scripts/runtime-identity.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -63,7 +64,7 @@ test(
           id,
           repo.id,
           {
-            previewVersion: PREVIEW_VERSION,
+            runtimeFingerprint: (await runtimeIdentity()).fingerprint, previewVersion: PREVIEW_VERSION,
             artifacts: [{ name: "index.html", path: relative + "/index.html" }],
           },
           treeHash(path.join(data, "works", work.id, "projects/test-film")),

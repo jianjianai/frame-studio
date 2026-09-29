@@ -3,6 +3,7 @@ import { projectPath } from "./project-paths.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { validProjectId } from "./project-metadata.mjs";
+import { ENGINE_PROTOCOL_VERSION } from "../src/engine/protocol.mjs";
 
 const [id, title, ...rest] = process.argv.slice(2);
 const options = new Map();
@@ -97,6 +98,7 @@ try {
     subtitle: "新的故事，从这里开始。",
     description: `新建工程；文件和脚本说明见 projects/${id}/README.md。`,
     renderer,
+    engineProtocol: ENGINE_PROTOCOL_VERSION,
     duration,
     fps,
     ...(audio === "generated"

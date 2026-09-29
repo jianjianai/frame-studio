@@ -33,6 +33,7 @@ import { rasterCover } from "./covers.mjs";
 import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
 import { seedSpeech } from "./speech.mjs";
+import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
@@ -48,6 +49,7 @@ export async function createApp({
     process.env.DATABASE_URL,
     process.env.FRAME_ADMIN_PASSWORD,
   );
+  await runtimeIdentity(); // Warm once, never hash platform code for each preview subscription.
   const secrets = vault(masterKey),
     repos = new Repositories(db, data, secrets),
     assets = new Assets(db, data, repos),

@@ -1,10 +1,12 @@
 import path from "node:path";
 import { token, hash, problem } from "./security.mjs";
+import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 export async function browserPreview(db, task, { ai = false } = {}) {
   if (
     task.kind !== "build" ||
     task.state !== "succeeded" ||
-    task.result?.previewVersion !== PREVIEW_VERSION
+    task.result?.previewVersion !== PREVIEW_VERSION ||
+    task.result?.runtimeFingerprint !== (await runtimeIdentity()).fingerprint
   )
     throw problem(409, "Generate a current work preview first");
   const index = task.result.artifacts?.find((a) =>

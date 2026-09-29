@@ -44,13 +44,16 @@ export function inputFiles(root, id) {
     else throw new Error("Unsupported input: " + relative);
   }
   for (const name of [
-    "src/engine",
-    "src/contracts",
+    "src",
     "public",
     "scripts",
     "package.json",
     "pnpm-lock.yaml",
     "tsconfig.json",
+    "vite.config.ts",
+    "index.html",
+    "pnpm-workspace.yaml",
+    ".npmrc",
     "projects/" + id,
   ])
     walk(name);

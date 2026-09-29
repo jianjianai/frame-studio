@@ -13,6 +13,7 @@ import { TaskPublication } from "./task-publication.mjs";
 import { TaskMonitor } from "./task-monitor.mjs";
 import { copyTree, treeHash } from "./project-files.mjs";
 import { seedPreviewAudio } from "./preview-audio-seed.mjs";
+import { executionRuntime } from "./execution-runtime.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { taskKindSchema } from "../src/contracts/platform.mjs";
 export class Tasks {
@@ -162,7 +163,10 @@ export class Tasks {
     const chat = t.chat
       ? await this.db.one("SELECT * FROM chats WHERE id=$1", [t.chat])
       : null;
+    const runtime = await executionRuntime({ data: this.data, task: t, command: this.command });
     const payload = {
+      runtime,
+      sourceCommit,
       id: t.id,
       project: t.project,
       kind: t.kind,
@@ -178,8 +182,8 @@ export class Tasks {
       sessionDir = path.join(this.data, "sessions", session);
     fs.mkdirSync(path.join(sessionDir, ".codex"), { recursive: true });
     await this.command("chown", ["-R", "1000:1000", sessionDir]);
-    const env = {};
-    const flags = [];
+    const env = { FRAME_RUNTIME_IMAGE: runtime.image };
+    const flags = ["-e", "FRAME_RUNTIME_IMAGE"];
     if (t.kind === "agent" && config.mode === "official") {
       const auth = path.join(this.data, "auth", config.id);
       if (!fs.existsSync(auth))
@@ -218,11 +222,11 @@ export class Tasks {
         flags.push("-e", key);
       }
     }
-    const image = process.env.FRAME_EXECUTOR_IMAGE || "frame-studio:local",
+    const image = runtime.image,
       container = "frame-task-" + t.id;
     const claimed = await this.db.one(
-      "UPDATE tasks SET state='running',started=now(),container=$2,fingerprint=$3,source_commit=$4 WHERE id=$1 AND state='queued' RETURNING id",
-      [t.id, container, fingerprint, sourceCommit],
+      "UPDATE tasks SET state='running',started=now(),container=$2,fingerprint=$3,source_commit=$4,runtime=$5 WHERE id=$1 AND state='queued' RETURNING id",
+      [t.id, container, fingerprint, sourceCommit, runtime],
     );
     if (!claimed) {
       await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);

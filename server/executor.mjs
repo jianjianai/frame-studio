@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { agentEvent } from "./agent-events.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
+import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 const work = "/workspace",
   core = "/opt/frame";
 const task = JSON.parse(fs.readFileSync(work + "/task.json", "utf8"));
@@ -16,8 +17,9 @@ const redact = (value) => {
     "[redacted]",
   );
 };
+let actualRuntime = null;
 const result = (value) =>
-  fs.writeFileSync(work + "/result.json", JSON.stringify(value));
+  fs.writeFileSync(work + "/result.json", JSON.stringify({ ...value, runtime: actualRuntime, runtimeFingerprint: actualRuntime?.fingerprint || null }));
 const run = (bin, args, options = {}) =>
   new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
@@ -72,6 +74,11 @@ const run = (bin, args, options = {}) =>
     child.stdin.end(options.input);
   });
 try {
+  actualRuntime = { ...(await runtimeIdentity(core)), image: process.env.FRAME_RUNTIME_IMAGE || null, sourceCommit: task.sourceCommit || null };
+  if (task.runtime?.fingerprint && task.runtime.fingerprint !== actualRuntime.fingerprint)
+    throw Error("Executor runtime differs from the controller; deploy matching platform and executor images");
+  if (task.runtime?.image && task.runtime.image !== actualRuntime.image)
+    throw Error("Executor image does not match the frozen task runtime");
   if (task.kind === "tools-update") {
     const provider = task.input.provider,
       version = task.input.version,
@@ -144,13 +151,19 @@ try {
     await run("git", ["add", "--", ...baseline]);
     await run("git", ["commit", "-qm", "Initialize isolated task workspace"]);
     const baselineCommit = (await run("git", ["rev-parse", "HEAD"])).trim();
+    actualRuntime.ffmpeg = (await run(process.env.FFMPEG_PATH || "ffmpeg", ["-version"])).split("\n")[0];
+    actualRuntime.browser = (await run(process.env.FRAME_BROWSER || "/usr/bin/chromium", ["--version"])).trim();
     let value = { status: "passed" };
     if (task.kind === "agent") {
       const p = task.input.provider;
       let bin = p === "codex" ? "codex" : "claude";
-      const marker = `/tools/${p}/current`;
-      if (fs.existsSync(marker))
-        bin = `/tools/${p}/${fs.readFileSync(marker, "utf8").trim()}/node_modules/.bin/${bin}`;
+      const pinned = task.runtime?.tool;
+      if (pinned?.provider && pinned.provider !== p) throw Error("Pinned tool/provider mismatch");
+      if (pinned?.version) {
+        if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(pinned.version)) throw Error("Invalid pinned tool version");
+        bin = `/tools/${p}/${pinned.version}/node_modules/.bin/${bin}`;
+      }
+      actualRuntime.tool = { provider: p, pinnedVersion: pinned?.version || null, actualVersion: (await run(bin, ["--version"])).trim(), model: task.model, authMode: task.authMode };
       const prompt = `You are creating one work in FRAME: ${task.project}. Only edit projects/${task.project}/. The surrounding engine and tools are the platform runtime, not another project to create or install. Read AGENTS.md, docs/AUTHORING.md and the work README. Use pnpm --silent film context ${task.project} --json, frame/storyboard/render for visual inspection. Use node scripts/work-tool.mjs help for asset and speech tools. engines lists ready built-in engines and voices; engine_add adds a custom compatible speech API when needed. engine_test creates temporary audition audio only; speech generates final narration into the current work. use copies a selected asset into this work. Wire returned material URLs into scenes/audioTracks as needed. Pass credentials through @file or stdin and never print them. Validate before finishing; a preview is built automatically after successful completion.\n\n${task.input.prompt}`;
       let args;
       if (p === "codex") {
@@ -266,6 +279,7 @@ try {
         fs.lstatSync(file).isSymbolicLink()
       )
         throw new Error("Preview entry missing or outside work output");
+      value.previewVersion = PREVIEW_VERSION;
       value.previewArtifacts = [
         {
           name: path.relative(base, file).replaceAll("\\", "/"),

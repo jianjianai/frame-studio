@@ -36,6 +36,7 @@ export function fixture({ browser = false, renderer = "canvas" } = {}) {
       path.join(root, "src/engine/types.ts"),
     );
   }
+  fs.copyFileSync(path.join(repo, "src/engine/protocol.mjs"), path.join(root, "src/engine/protocol.mjs"));
   const result = spawnSync(
     process.execPath,
     [

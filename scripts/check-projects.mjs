@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { assertEngineProtocol } from "../src/engine/protocol.mjs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { assetPath } from "./project-paths.mjs";
@@ -147,6 +148,8 @@ export function checkProjects(root = process.cwd(), options = {}) {
       continue;
     }
     const { meta, loadPath } = record;
+    try { assertEngineProtocol(meta); }
+    catch (error) { report("error", "ENGINE_PROTOCOL", file, error.message); }
     if (
       meta.posterTime !== undefined &&
       (!Number.isFinite(meta.posterTime) ||

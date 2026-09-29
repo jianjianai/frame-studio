@@ -132,7 +132,9 @@ export class TaskPublication {
               t.repo,
               t.project,
               {
-                previewVersion: PREVIEW_VERSION,
+                previewVersion: result.previewVersion ?? PREVIEW_VERSION,
+                runtime: result.runtime || null,
+                runtimeFingerprint: result.runtimeFingerprint || null,
                 artifacts: result.previewArtifacts,
               },
               await treeHash(dir),

@@ -34,6 +34,7 @@ for (const moment of ["before-preparation", "during-preparation", "after-claim"]
     let tasks;
     tasks = new Tasks(db, data, {}, {}, { runCommand: async (bin, args) => {
       if (moment === "during-preparation" && bin === "chown") await tasks.cancel(task.id);
+      if (bin === "docker" && args[0] === "image") return JSON.stringify({ Id: "sha256:" + "a".repeat(64) });
       if (bin === "docker" && args[0] === "run") dockerRuns++;
       return "";
     } });
