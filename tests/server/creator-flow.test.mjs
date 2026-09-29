@@ -114,7 +114,11 @@ test("context identifies the active work and does not expose task credentials or
     assert.equal(result.project, "test-film");
     assert.equal(result.entrypoints.scene, "./scene");
     assert.equal(result.focus.time, 0.5);
-    assert.equal(result.focus.shot.at, 0);
+    assert.equal(result.focus.shot, null, "neutral scaffold has no preselected shot");
+    const metadata = fs.readFileSync(f.file("project.ts"), "utf8");
+    assert(metadata.includes('"beats": []'));
+    fs.writeFileSync(f.file("project.ts"), metadata.replace('"beats": []', '"beats": [{"at":0,"title":"Fixture opening"}]'));
+    assert.equal(readCreatorContext(f.root, {}, {}).focus.shot.at, 0);
     assert.deepEqual(result.request.assets, ["material-1"]);
     assert.equal(result.platformTools.available, false);
     for (const secret of [
