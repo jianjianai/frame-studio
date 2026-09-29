@@ -8,6 +8,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { database } from "../../server/db.mjs";
 import { createApp } from "../../server/app.mjs";
 import { command } from "../../server/process.mjs";
+import { createAgentTimeline } from "../../studio/agent/agent-timeline.js";
 const enabled = process.env.FRAME_TEST_EXECUTOR === "1",
   url = process.env.FRAME_TEST_DATABASE_URL;
 
@@ -302,9 +303,9 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           "SELECT * FROM events WHERE task=$1 ORDER BY id",
           [task.id],
         );
-        const items = events.filter((e) => e.kind === "agent-item").map((e) => e.data);
-        assert(items.some((item) => item.version === 1 && item.kind === "message" && item.text.includes("作品修改完成")), "persist a public native message");
-        assert(items.some((item) => item.version === 1 && item.kind === "command" && item.phase === "completed" && item.command.includes("Durable fixture edit")), "persist completed native command activity");
+        const items = createAgentTimeline().update(events).items;
+        assert(items.some((item) => item.version === 1 && item.kind === "message" && item.text?.includes("作品修改完成")), "persist a public native message");
+        assert(items.some((item) => item.version === 1 && item.kind === "command" && item.phase === "completed" && item.command?.includes("Durable fixture edit")), "persist completed native command activity");
         assert(!JSON.stringify(events).includes("fixture-provider-key"));
         assert(
           await db.one(
