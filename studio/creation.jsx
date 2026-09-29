@@ -1,6 +1,6 @@
 import { subscribe } from "./realtime";
 import { loadTaskEvents } from "./task-events";
-import { canClearDraft } from "./chat-draft";
+import { canClearDraft, canReuseSubmission } from "./chat-draft";
 import { useEffect, useRef, useState } from "react";
 import { previewCacheBridge } from "./preview-cache";
 import {
@@ -192,7 +192,7 @@ export function WorkChat({
     follow = useRef(true);
   promptRef.current = prompt;
   const editPrompt = (value) => { draftRevision.current++; promptRef.current = value; setPrompt(value); };
-  const chooseChat = (value) => { chatRevision.current++; setChat(value); };
+  const chooseChat = (value) => { initialized.current = true; chatRevision.current++; setChat(value); };
   const currentTurns = useQuery(
     chat ? "works_chat_turns" : null,
     { id: work.id, chat, limit: 30 },
@@ -238,6 +238,7 @@ export function WorkChat({
   const send = async (text = prompt) => {
     if (sending.current || !text.trim() || !chosen) return;
     sending.current = true;
+    initialized.current = true;
     const sent = { text, version: draftRevision.current, conversation: chatRevision.current };
     const assetIds = selectedAssets.map((asset) => asset.id);
     const intent = {
@@ -250,8 +251,11 @@ export function WorkChat({
       },
     };
     const previous = requestKey.current;
-    const submission = previous && JSON.stringify({ ...previous.intent, chat: previous.chat }) === JSON.stringify(intent)
-      ? previous : { key: crypto.randomUUID(), intent, chat };
+    const snapshot = { ...sent, work: work.id, chat, connection: chosen, usePosition, assetIds };
+    // A retry after a lost acknowledgement must retain the original review time
+    // and request key, even when the player has advanced in the meantime.
+    const submission = previous && canReuseSubmission({ ...previous.snapshot, chat: previous.chat }, snapshot)
+      ? previous : { key: crypto.randomUUID(), intent, chat, snapshot };
     requestKey.current = submission;
     try {
       await run(async () => {
