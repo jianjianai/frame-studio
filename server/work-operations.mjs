@@ -1,6 +1,14 @@
+import { compactTask, TASK_SUMMARY_COLUMNS } from "./agent-toolkit.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
-import { workIdRequestSchema, workTaskRequestSchema, workPreviewRequestSchema, workVersionsRequestSchema, workVersionRequestSchema, workRestoreRequestSchema } from "../src/contracts/platform.mjs";
+import {
+  workIdRequestSchema,
+  workTaskRequestSchema,
+  workPreviewRequestSchema,
+  workVersionsRequestSchema,
+  workVersionRequestSchema,
+  workRestoreRequestSchema,
+} from "../src/contracts/platform.mjs";
 import { Works } from "./works.mjs";
 import { sourceControlOperations } from "./source-control.mjs";
 import { compositionSchema } from "../src/engine/dimensions.mjs";
@@ -92,27 +100,52 @@ export function workOperations({
   );
   add(
     "works_context",
-    "Read one work, authoring instructions, material references and recent tasks",
-    { id: uuid },
+    "Read compact work context and recent task summaries. detail includes the full authoring reference, never repeated build manifests.",
+    {
+      id: uuid,
+      detail: z.boolean().default(false),
+      taskLimit: z.number().int().min(0).max(20).default(5),
+    },
     async (a) => {
       const work = await works.get(a.id),
         args = { repo: work.repo, project: work.project };
+      const context = await invoke("project_context", args);
+      const taskRows = a.taskLimit
+        ? await db.all(
+            `SELECT ${TASK_SUMMARY_COLUMNS} FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC,id DESC LIMIT $3`,
+            [work.repo, work.project, a.taskLimit],
+          )
+        : [];
       return {
         work,
-        ...(await invoke("project_context", args)),
-        assets: await assets.list({
-          repo: work.repo,
-          project: work.project,
-          limit: 200,
-        }),
-        tasks: await db.all(
-          "SELECT * FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC LIMIT 60",
-          [work.repo, work.project],
-        ),
+        ...context,
+        authoring: a.detail
+          ? context.authoring
+          : "createScene({width,height,quality}) returns {canvas,render(time),dispose()}; render uses absolute seconds, no independent clock. Keep all source/media under this work. Use detail:true for the complete scene/audio/export reference.",
+        instructions:
+          "Use frame_works_files_page, frame_works_search and frame_works_read. Paths are work-relative; id is the work UUID. A partial read is NOT a replacement file. Prefer frame_works_patch with the whole-file expectedSha256. Validate and render with frame_works_task; wait with frame_task_status, then inspect artifacts. Tasks survive MCP disconnection.",
+        assets: await assets.list({ ...args, limit: 20 }),
+        tasks: taskRows.map((task) => compactTask(task, { artifactLimit: 3 })),
+        nextActions: [
+          { tool: "frame_works_files_page", arguments: { id: a.id } },
+          {
+            tool: "frame_works_tasks_page",
+            arguments: { id: a.id, offset: a.taskLimit },
+          },
+          { tool: "frame_works_assets", arguments: { id: a.id, offset: 20 } },
+        ],
       };
     },
   );
-  for (const name of ["files", "read", "write"]) {
+  for (const name of [
+    "files",
+    "files_page",
+    "read",
+    "write",
+    "patch",
+    "search",
+    "delete_file",
+  ]) {
     const old = registry["project_" + name];
     add(
       "works_" + name,
@@ -128,7 +161,10 @@ export function workOperations({
       async ({ id, ...a }) => {
         const args = await resolve(id),
           result = await invoke("project_" + name, { ...args, ...a });
-        if (name === "write")
+        if (
+          name === "write" ||
+          (["patch", "delete_file"].includes(name) && !a.dryRun)
+        )
           await db.pool.query("UPDATE works SET updated=now() WHERE id=$1", [
             id,
           ]);
@@ -284,14 +320,19 @@ export function workOperations({
       return { ok: true };
     },
   );
-  add("works_preview_status", "Read indexed source and preview revisions; refresh explicitly scans external changes", workPreviewRequestSchema, async (a) => {
-    let work = await works.get(a.id, { active: true });
-    if (a.refresh) {
-      await repos.revisions?.refresh(work.repo, work.project);
-      work = await works.get(a.id, { active: true });
-    }
-    return readWorkPreview({ db, work });
-  });
+  add(
+    "works_preview_status",
+    "Read indexed source and preview revisions; refresh explicitly scans external changes",
+    workPreviewRequestSchema,
+    async (a) => {
+      let work = await works.get(a.id, { active: true });
+      if (a.refresh) {
+        await repos.revisions?.refresh(work.repo, work.project);
+        work = await works.get(a.id, { active: true });
+      }
+      return readWorkPreview({ db, work });
+    },
+  );
   add(
     "works_browser",
     "Get a private AI browser URL with FRAME_AI console controls. Rendering, segment playback, screenshots and WebM exports execute in the client browser. If compilation is needed, returns a durable task; poll and call again.",
@@ -325,8 +366,8 @@ export function workOperations({
           kind: pending.kind,
           next:
             pending.state === "publish_failed"
-              ? "Inspect task_get and retry with task_retry_publish after resolving the publication error."
-              : "Poll task_get, then call works_browser again.",
+              ? "Inspect frame_task_status and retry with frame_task_retry_publish after resolving the publication error."
+              : "Poll frame_task_status, then call frame_works_browser again.",
         };
       const task = await tasks.create({
         repo: w.repo,
@@ -336,7 +377,7 @@ export function workOperations({
       return {
         state: "building",
         task: task.id,
-        next: "Poll task_get, then call works_browser again. Only compilation runs on the server.",
+        next: "Poll frame_task_status, then call frame_works_browser again. Only compilation runs on the server.",
       };
     },
   );
