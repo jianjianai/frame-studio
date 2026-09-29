@@ -64,9 +64,12 @@ export function Creation({ id, notify }) {
     [ratio, setRatio] = useState(() => boundedPreference(readPreference("frame.workspace-split", 68), 68, 35, 80)),
     [dragging, setDragging] = useState(false),
     [position, setPosition] = useState({ time: 0 }),
-    [assets, setAssets] = useState([]),
+    [assets, setAssets] = useState(() => { try { const value = JSON.parse(sessionStorage.getItem("frame.assets:" + id) || "[]"); return Array.isArray(value) ? value.filter(a => a && typeof a.id === "string" && typeof a.name === "string").slice(0,20) : []; } catch { return []; } }),
+    [suggestion, setSuggestion] = useState(null),
     [browserJob, setBrowserJob] = useState(null),
     [run, busy] = useAction(notify);
+  useEffect(() => { try { sessionStorage.setItem("frame.assets:" + id, JSON.stringify(assets.map(({id,name}) => ({id,name})))); } catch {} }, [assets,id]);
+  const addAsset = asset => setAssets(old => old.some(item => item.id === asset.id) ? old : old.length < 20 ? [...old, {id:asset.id, name:asset.name}] : old);
   const browserRequest = useRef(null);
   const browserFile = useRef(null);
   useEffect(() => () => { if (browserFile.current) URL.revokeObjectURL(browserFile.current.url); }, []);
@@ -292,6 +295,7 @@ export function Creation({ id, notify }) {
           notify={notify}
           position={position}
           selectedAssets={assets}
+          suggestion={suggestion}
           visible={chatOpen}
           onClose={closeChat}
           compact={compact}
@@ -367,14 +371,15 @@ export function Creation({ id, notify }) {
             <Materials
               work={work}
               notify={notify}
-              onSelect={(a) =>
-                setAssets((old) =>
-                  old.some((x) => x.id === a.id) ? old : [...old, a],
-                )
-              }
+              selectedAssets={assets}
+              onSelect={addAsset}
+              onDone={() => { setPanel(""); setChatOpen(true); }}
             />
           ) : panel === "voice" ? (
-            <Voice work={work} notify={notify} />
+            <Voice work={work} notify={notify} position={position} onAdopt={(asset, review) => {
+              if (assets.length >= 20 && !assets.some(a => a.id === asset.id)) { notify("当前已引用 20 个素材，请先移除部分引用再添加配音", "error"); return; }
+              addAsset(asset); setSuggestion({ id: crypto.randomUUID(), text: "请将配音资源“" + asset.name + "”编排到作品中，保持声画与字幕同步。", review }); setPanel(""); setChatOpen(true);
+            }} />
           ) : panel === "versions" ? (
             <Versions
               work={work}

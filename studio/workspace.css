@@ -116,3 +116,16 @@ button.inline-time { display: inline; border: 0; border-radius: 3px; background:
 .local-export { border: 1px solid #c6d9b6; border-radius: 9px; padding: 16px; margin-top: 16px; background: #f0f6e9; }
 .export-item .section-head { margin: 0 0 8px; }
 @media(max-width:550px) { .export-settings-grid { grid-template-columns: 1fr; } }
+
+.voice-audition { margin: 20px 0; padding: 18px; background: #f1f6eb; border: 1px solid var(--line); border-radius: 10px; }
+.voice-audition h3, .voice-adopted > strong { display: flex; align-items: center; gap: 7px; }
+.voice-audition audio { display: block; width: 100%; margin-top: 12px; }
+.upload-progress { display: grid; gap: 10px; }
+.upload-progress progress { width: 100%; }
+.asset-works { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.material-actions { flex-wrap: wrap; gap: 6px; }
+.material-actions button { white-space: normal; font-size: 12px; }
+.material-card p { font-size: 12px; }
+.sync-counts { gap: 10px; }
+.sync-counts > div { min-width: 0; padding: 18px 8px; }
+.sync-counts span { text-align: center; }

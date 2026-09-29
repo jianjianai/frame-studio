@@ -61,7 +61,7 @@ function Turn({ task, events, onRetry, onStop, onRecall, notify }) {
 }
 const draftRead = key => { try { return JSON.parse(sessionStorage.getItem(key) || "{}"); } catch { return {}; } };
 const draftWrite = (key, value) => { try { sessionStorage.setItem(key, JSON.stringify(value)); } catch {} };
-export function WorkChat({ work, tasks, reload, notify, position, selectedAssets, onClearAssets, onRemoveAsset, onRecall, onClose, visible = true, compact = false }) {
+export function WorkChat({ work, tasks, reload, notify, position, selectedAssets, onClearAssets, onRemoveAsset, onRecall, onClose, suggestion, visible = true, compact = false }) {
   const chats = useQuery("works_chats", { id: work.id }), connections = useQuery("connections_list");
   const draftKey = chat => "frame.chat-draft:" + work.id + ":" + (chat || "new");
   const [chat, setChat] = useState(""), [connection, setConnection] = useState("");
@@ -69,6 +69,12 @@ export function WorkChat({ work, tasks, reload, notify, position, selectedAssets
   const [review, setReview] = useState(() => draftRead(draftKey("")).review || null);
   const [run, busy] = useAction(notify), [older, setOlder] = useState([]), [more, setMore] = useState(true), [following, setFollowing] = useState(true);
   const initialized = useRef(false), requestKey = useRef(null), messages = useRef(null), follow = useRef(true), section = useRef(null), composer = useRef(null), historyAnchor = useRef(null);
+  useEffect(() => {
+    if (!suggestion) return;
+    setPrompt(previous => previous.trim() ? previous + "\n\n" + suggestion.text : suggestion.text);
+    if (suggestion.review) setReview(suggestion.review);
+    composer.current?.focus();
+  }, [suggestion?.id]);
   const currentTurns = useQuery(chat ? "works_chat_turns" : null, { id: work.id, chat, limit: 30 }, 1500);
   const switchChat = next => {
     draftWrite(draftKey(chat), { prompt, review });

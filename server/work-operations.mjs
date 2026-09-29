@@ -153,6 +153,7 @@ export function workOperations({
     "List materials present in a work",
     {
       id: uuid,
+      search: z.string().max(200).default(""),
       limit: z.number().int().min(1).max(200).default(60),
       offset: z.number().int().min(0).default(0),
     },
@@ -162,6 +163,7 @@ export function workOperations({
       return assets.list({
         repo: w.repo,
         project: w.project,
+        search: a.search,
         limit: a.limit,
         offset: a.offset,
       });
@@ -176,6 +178,7 @@ export function workOperations({
       return assets.attach(a.asset, w.repo, w.project);
     },
   );
+  add("works_speech_adopt", "Adopt the exact temporary audition as a work resource", { id: uuid, task: uuid, name: z.string().trim().min(1).max(180) }, async ({ id, ...a }) => invoke("speech_adopt", { ...(await resolve(id)), ...a }));
   add(
     "works_speech",
     "Synthesize a narration and save it in this work and the global material library",
