@@ -596,7 +596,7 @@ export function Details({ work, notify, onSave }) {
       busy={busy}
       onSubmit={(a) =>
         run(async () => {
-          await api("works_update", { id: work.id, ...a });
+          await api("works_update", { id: work.id, expectedRevision: work.metadataRevision, ...a });
           onSave();
           notify("资料已保存");
         })

@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { command } from "./process.mjs";
-import { confined, copyTree, treeHash, problem } from "./security.mjs";
+import { confined, copyTree, treeHash, problem, hash } from "./security.mjs";
 import {
   readProject,
   sourceFile,
@@ -16,6 +16,7 @@ export class Works {
     Object.assign(this, { db, data, repos, assets, tasks });
   }
   async discover(repository = null, projectId = null) {
+    await this.recoverInfo();
     for (const repo of await this.repos.list(repository, projectId)) {
       for (const project of repo.projects) {
         const { dir } = await this.repos.project(repo.id, project.id);
@@ -129,7 +130,10 @@ export class Works {
     const row = await this.db.one("SELECT * FROM works WHERE id=$1", [id]);
     if (!row) throw problem(404, "Work not found");
     if (active && row.deleted) throw problem(409, "Restore this work first");
-    return row;
+    return {
+      ...row,
+      metadataRevision: hash(JSON.stringify(this.info(row))),
+    };
   }
   async create({
     title,
@@ -191,26 +195,59 @@ export class Works {
     else if (fs.existsSync(target))
       fs.rmSync(target, { recursive: true, force: true });
   }
+  info(work) {
+    return Object.fromEntries(
+      ["title", "category", "status", "description", "deleted"].map((key) => [key, work[key]]),
+    );
+  }
+  async recoverInfo(id = null) {
+    const root = path.join(this.data, "metadata-recovery");
+    if (!fs.existsSync(root)) return;
+    const ids = id ? [id] : fs.readdirSync(root).map((name) => name.replace(/\.json$/, ""));
+    for (const key of ids) {
+      if (!/^[0-9a-f-]{36}$/.test(key)) continue;
+      const file = path.join(root, key + ".json");
+      if (!fs.existsSync(file)) continue;
+      const recover = async () => {
+        if (!fs.existsSync(file)) return;
+        // The atomic SQL row is authoritative after an interrupted/ambiguous save.
+        await this.saveInfo(await this.get(key));
+        fs.rmSync(file);
+      };
+      if (id) await recover();
+      else {
+        const work = await this.get(key);
+        await this.db.lock(`${work.repo}:${work.project}`, recover);
+      }
+    }
+  }
   async saveInfo(work) {
     const { dir } = await this.repos.project(work.repo, work.project);
     const file = confined(dir, "production/work.json");
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    const info = Object.fromEntries(
-      ["title", "category", "status", "description", "deleted"].map((k) => [
-        k,
-        work[k],
-      ]),
-    );
-    fs.writeFileSync(file + ".tmp", JSON.stringify(info, null, 2) + "\n");
-    fs.renameSync(file + ".tmp", file);
+    const temp = file + ".tmp-" + randomUUID();
+    try {
+      fs.writeFileSync(temp, JSON.stringify(this.info(work), null, 2) + "\n", { flag: "wx" });
+      fs.renameSync(temp, file);
+    } finally {
+      fs.rmSync(temp, { force: true });
+    }
   }
-  async update(id, fields) {
+  async update(id, fields, { expectedRevision } = {}) {
     const w = await this.get(id);
     return this.db.lock(`${w.repo}:${w.project}`, async () => {
       await this.repos.writable(w.repo, w.project);
-      const next = { ...w, ...fields };
-      await this.saveInfo(next);
-      await this.db.pool.query(
+      await this.recoverInfo(id);
+      const current = await this.get(id);
+      if (expectedRevision && expectedRevision !== current.metadataRevision)
+        throw problem(409, "作品资料已更新，请重新打开资料后再保存");
+      const next = { ...current, ...fields };
+      const journal = path.join(this.data, "metadata-recovery", id + ".json");
+      fs.mkdirSync(path.dirname(journal), { recursive: true });
+      fs.writeFileSync(journal, JSON.stringify({ id }), { flag: "wx" });
+      try {
+        await this.saveInfo(next);
+        await this.db.pool.query(
         "UPDATE works SET title=$2,category=$3,status=$4,description=$5,deleted=$6,updated=now() WHERE id=$1",
         [
           id,
@@ -220,7 +257,14 @@ export class Works {
           next.description,
           next.deleted,
         ],
-      );
+        );
+      } catch (error) {
+        // Re-read SQL rather than blindly restoring an old snapshot: COMMIT may
+        // have succeeded even when its response was lost. Keep the journal if offline.
+        await this.recoverInfo(id).catch(() => {});
+        throw error;
+      }
+      fs.rmSync(journal, { force: true });
       return this.get(id);
     });
   }

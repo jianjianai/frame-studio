@@ -52,12 +52,13 @@ export function workOperations({
     "Update work title, category, description or production status",
     {
       id: uuid,
+      expectedRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
       title: z.string().trim().min(1).max(150).optional(),
       category: z.string().max(80).optional(),
       description: z.string().max(4000).optional(),
       status: z.enum(["draft", "review", "finished"]).optional(),
     },
-    ({ id, ...a }) => works.update(id, a),
+    ({ id, expectedRevision, ...a }) => works.update(id, a, { expectedRevision }),
   );
   add(
     "works_trash",
