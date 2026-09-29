@@ -4,7 +4,7 @@
 
 ## 修改范围
 
-工作区：`C:\Users\28018\Desktop\动画`。先读 `docs/NEW-PROJECT-STANDARD.md`、`docs/AUTHORING.md` 和目标 `projects/<id>/README.md`，检查 Git 状态、HEAD 和相关 diff。
+工作区为当前仓库根目录。主开发环境已迁至 ovh-docker：`/home/agentdock/AgentDock/frame-studio`，容器命令与持久化说明见 `docs/OVH-DEVELOPMENT.md`。先读 `docs/NEW-PROJECT-STANDARD.md`、`docs/AUTHORING.md` 和目标 `projects/<id>/README.md`，检查 Git 状态、HEAD 和相关 diff。
 
 **视频制作任务只允许修改 `projects/<id>/`。** 每个视频的源码、素材、音轨、代码音频、说明、制作源文件、专用脚本、测试和导出结果全部放在这个目录。不得修改其他视频，也不得改公共引擎、播放器、根配置、依赖或仓库规范；需要公共能力时提出工作台维护需求。只有用户明确要求的工作台公共功能维护任务可以修改公共目录，本次隔离、音频和导出改造属于此类维护。
 
