@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  modelIdSchema,
+  providerModelsSchema,
+} from "../src/contracts/ai-models.mjs";
 import { problem } from "./security.mjs";
 import { toolBinary } from "./connections.mjs";
 import { command } from "./process.mjs";
@@ -16,8 +20,18 @@ export function workbenchOperations({
   retention,
   data,
 }) {
-  const runtime = new RuntimeStatus({ db, data, tasks, speechUrl: process.env.FRAME_SPEECH_URL || "http://speech:8000" });
-  add("system_status", "Read execution readiness, task backlog, disk capacity and migration versions", {}, () => runtime.read());
+  const runtime = new RuntimeStatus({
+    db,
+    data,
+    tasks,
+    speechUrl: process.env.FRAME_SPEECH_URL || "http://speech:8000",
+  });
+  add(
+    "system_status",
+    "Read execution readiness, task backlog, disk capacity and migration versions",
+    {},
+    () => runtime.read(),
+  );
   const uuid = z.string().uuid(),
     limit = z.number().int().min(1).max(100).default(30),
     offset = z.number().int().min(0).default(0),
@@ -76,8 +90,11 @@ export function workbenchOperations({
     async (a) => {
       let w = await works.get(a.id, { active: true });
       let revisionError = null;
-      try { await repos.revisions?.refresh(w.repo, w.project); }
-      catch (error) { revisionError = error.message; }
+      try {
+        await repos.revisions?.refresh(w.repo, w.project);
+      } catch (error) {
+        revisionError = error.message;
+      }
       w = await works.get(a.id, { active: true });
       await db.pool.query("UPDATE works SET opened=now() WHERE id=$1", [a.id]);
       return {
@@ -169,8 +186,8 @@ export function workbenchOperations({
   add(
     "connections_test",
     "Test selected model API or official CLI login status",
-    { id: uuid },
-    (a) => connections.test(a.id),
+    { id: uuid, model: modelIdSchema.optional() },
+    (a) => connections.test(a.id, a.model),
   );
   add(
     "github_token",
@@ -208,6 +225,18 @@ export function workbenchOperations({
     connections.list(),
   );
   add(
+    "connections_discover",
+    "Discover provider models without modifying the saved catalog",
+    { id: uuid },
+    (a) => connections.discover(a.id),
+  );
+  add(
+    "connections_enabled",
+    "Enable or disable a provider while preserving conversation history",
+    { id: uuid, enabled: z.boolean() },
+    (a) => connections.setEnabled(a.id, a.enabled),
+  );
+  add(
     "connections_save",
     "Save a named Codex or Claude model connection",
     {
@@ -216,7 +245,13 @@ export function workbenchOperations({
       tool: z.enum(["codex", "claude"]),
       mode: z.enum(["api", "official"]),
       baseUrl: z.string().max(1000).default(""),
-      model: z.string().max(200).default(""),
+      model: modelIdSchema.default(""),
+      models: providerModelsSchema.optional(),
+      enabled: z.boolean().optional(),
+      expectedRevision: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional(),
       apiKey: z.string().max(10000).optional(),
     },
     (a) => connections.save(a),

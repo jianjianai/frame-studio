@@ -7,6 +7,13 @@ import {
   FolderGit2,
   Link,
   Settings2,
+  Search,
+  Cpu,
+  SlidersHorizontal,
+  Terminal,
+  Shield,
+  AudioLines,
+  Activity,
 } from "lucide-react";
 import {
   api,
@@ -20,6 +27,12 @@ import {
   Loading,
   Empty,
 } from "./ui";
+import {
+  ProviderSettings,
+  GeneralAiSettings,
+  ToolSettings,
+} from "./model-settings";
+import "./ai-workbench.css";
 import { SpeechSettings } from "./speech";
 import { SystemStatus } from "./system-status";
 
@@ -198,230 +211,8 @@ export function GitHubAccounts({ notify }) {
   );
 }
 
-export function ModelConnections({ notify }) {
-  const connections = useQuery("connections_list"),
-    tools = useQuery("tools_info", {}, 15000),
-    [edit, setEdit] = useState(null),
-    [login, setLogin] = useState(null),
-    [upgrade, setUpgrade] = useState(null),
-    [run, busy] = useAction(notify);
-  return (
-    <>
-      <div className="section-head">
-        <div>
-          <h2>AI 创作工具与模型</h2>
-          <p>一个工具可连接多个模型提供商。每次对话保留自己的连接和上下文。</p>
-        </div>
-        <Button
-          icon={Plus}
-          onClick={() => setEdit({ tool: "codex", mode: "api" })}
-        >
-          添加连接
-        </Button>
-      </div>
-      <ErrorNote error={connections.error} />
-      <div className="connection-grid">
-        {connections.data?.map((c) => (
-          <article className="panel" key={c.id}>
-            <div className="section-head">
-              <h3>{c.name}</h3>
-              <span className={"badge " + c.state}>
-                {c.configured ? "已配置" : "待连接"}
-              </span>
-            </div>
-            <p>
-              {c.tool === "codex" ? "Codex" : "Claude Code"} ·{" "}
-              {c.mode === "official" ? "官方账号" : c.baseUrl || "官方 API"}
-            </p>
-            <p>{c.model || "使用工具默认模型"}</p>
-            <div className="row">
-              <Button icon={Settings2} onClick={() => setEdit(c)}>
-                配置
-              </Button>
-              <Button
-                disabled={busy}
-                onClick={() =>
-                  run(async () => {
-                    const result = await api("connections_test", { id: c.id });
-                    notify(
-                      result.message +
-                        `（${(result.elapsedMs / 1000).toFixed(1)} 秒）`,
-                    );
-                    connections.refresh();
-                  })
-                }
-              >
-                {c.mode === "official" ? "检查登录" : "测试模型"}
-              </Button>
-              {c.mode === "official" && (
-                <Button icon={Link} onClick={() => setLogin(c)}>
-                  {c.configured ? "重新登录" : "登录官方账号"}
-                </Button>
-              )}
-            </div>
-          </article>
-        ))}
-      </div>
-      {connections.data?.length === 0 && (
-        <Empty>添加模型连接，让 AI 开始制作视频。</Empty>
-      )}
-      <div className="section-head">
-        <h2>工具版本</h2>
-      </div>
-      {tools.data?.map((t) => (
-        <div className="settings-row" key={t.tool}>
-          <div>
-            <strong>{t.tool === "codex" ? "Codex" : "Claude Code"}</strong>
-            <p>{t.version}</p>
-            {t.updates[0] && (
-              <p>
-                最近更新：{t.updates[0].state}
-                {t.updates[0].error ? " · " + t.updates[0].error : ""}
-              </p>
-            )}
-          </div>
-          <Button onClick={() => setUpgrade(t.tool)}>更新版本</Button>
-        </div>
-      ))}
-      {edit && (
-        <ConnectionForm
-          initial={edit}
-          notify={notify}
-          onClose={() => setEdit(null)}
-          onSave={() => {
-            connections.refresh();
-            setEdit(null);
-          }}
-        />
-      )}
-      {login && (
-        <LoginFlow
-          kind={login.tool}
-          target={login.id}
-          notify={notify}
-          onSuccess={connections.refresh}
-          onClose={() => {
-            connections.refresh();
-            setLogin(null);
-          }}
-        />
-      )}
-      {upgrade && (
-        <Modal title={`更新 ${upgrade}`} onClose={() => setUpgrade(null)}>
-          <p>工具独立安装，更新失败保留原版本；后续新任务使用新版本。</p>
-          <Form
-            busy={busy}
-            submit="安装版本"
-            onSubmit={(a) =>
-              run(async () => {
-                await api("tools_update", {
-                  provider: upgrade,
-                  version: a.version,
-                });
-                tools.refresh();
-                setUpgrade(null);
-                notify("工具更新已在后台开始");
-              })
-            }
-          >
-            <Field label="版本号">
-              <input
-                name="version"
-                placeholder="例如 0.158.0"
-                pattern="[0-9]+\.[0-9]+\.[0-9]+.*"
-                required
-              />
-            </Field>
-          </Form>
-        </Modal>
-      )}
-    </>
-  );
-}
-function ConnectionForm({ initial, onClose, onSave, notify }) {
-  const [mode, setMode] = useState(initial.mode),
-    [tool, setTool] = useState(initial.tool),
-    [run, busy] = useAction(notify);
-  return (
-    <Modal
-      title={initial.id ? "编辑模型连接" : "添加模型连接"}
-      onClose={onClose}
-    >
-      <Form
-        busy={busy}
-        onSubmit={(a) =>
-          run(async () => {
-            await api("connections_save", {
-              ...a,
-              tool,
-              mode,
-              ...(initial.id ? { id: initial.id } : {}),
-            });
-            onSave();
-            notify("模型连接已保存");
-          })
-        }
-      >
-        <Field label="连接名称">
-          <input
-            name="name"
-            defaultValue={initial.name}
-            placeholder="例如：主力创作模型"
-            required
-            maxLength="100"
-          />
-        </Field>
-        <Field label="创作工具">
-          <select
-            value={tool}
-            disabled={!!initial.id}
-            onChange={(e) => setTool(e.target.value)}
-          >
-            <option value="codex">Codex</option>
-            <option value="claude">Claude Code</option>
-          </select>
-        </Field>
-        <Field label="连接方式">
-          <select
-            value={mode}
-            disabled={!!initial.id}
-            onChange={(e) => setMode(e.target.value)}
-          >
-            <option value="api">API · 官方或兼容提供商</option>
-            <option value="official">登录官方账号</option>
-          </select>
-        </Field>
-        {mode === "api" && (
-          <>
-            <Field label="API 地址（留空使用官方）">
-              <input
-                name="baseUrl"
-                type="url"
-                defaultValue={initial.baseUrl}
-                placeholder={
-                  tool === "codex"
-                    ? "https://api.openai.com/v1"
-                    : "https://api.anthropic.com"
-                }
-              />
-            </Field>
-            <Field label="API 密钥">
-              <input
-                name="apiKey"
-                type="password"
-                autoComplete="off"
-                placeholder={initial.configured ? "留空保留已保存密钥" : ""}
-                required={!initial.configured}
-              />
-            </Field>
-          </>
-        )}
-        <Field label="模型（留空使用工具默认）">
-          <input name="model" defaultValue={initial.model} />
-        </Field>
-      </Form>
-    </Modal>
-  );
+export function ModelConnections(props) {
+  return <ProviderSettings {...props} LoginDialog={LoginFlow} />;
 }
 
 function AccessTokens({ notify }) {
@@ -515,45 +306,139 @@ function AccessTokens({ notify }) {
     </>
   );
 }
+const settingsSections = [
+  {
+    id: "ai",
+    label: "AI 模型",
+    detail: "提供商、模型目录与连接测试",
+    icon: Cpu,
+  },
+  {
+    id: "general",
+    label: "创作偏好",
+    detail: "默认模型、快捷键与字体",
+    icon: SlidersHorizontal,
+  },
+  {
+    id: "github",
+    label: "GitHub",
+    detail: "内容仓库与账号授权",
+    icon: FolderGit2,
+  },
+  {
+    id: "speech",
+    label: "语音引擎",
+    detail: "配音服务与声音模型",
+    icon: AudioLines,
+  },
+  {
+    id: "tools",
+    label: "创作工具",
+    detail: "Codex 与 Claude Code 版本",
+    icon: Terminal,
+  },
+  {
+    id: "access",
+    label: "访问设置",
+    detail: "MCP、CLI 与授权令牌",
+    icon: Shield,
+  },
+  {
+    id: "system",
+    label: "运行状态",
+    detail: "任务、容量与服务健康",
+    icon: Activity,
+  },
+];
+const currentSettingsTab = () => {
+  const tab = location.hash.split("/")[2];
+  return settingsSections.some((section) => section.id === tab) ? tab : "ai";
+};
 export function Settings({ notify }) {
-  const [tab, setTab] = useState("ai"),
-    [run] = useAction(notify);
+  const [tab, setTab] = useState(currentSettingsTab),
+    [search, setSearch] = useState("");
+  useEffect(() => {
+    const update = () => setTab(currentSettingsTab());
+    window.addEventListener("hashchange", update);
+    return () => window.removeEventListener("hashchange", update);
+  }, []);
+  const matches = settingsSections.filter((section) =>
+    `${section.label} ${section.detail}`
+      .toLowerCase()
+      .includes(search.toLowerCase().trim()),
+  );
+  const open = (id) => {
+    setTab(id);
+    location.hash = "/settings/" + id;
+    setSearch("");
+  };
   return (
-    <>
-      <div className="page-heading">
-        <h1>设置</h1>
-        <p>连接创作能力与内容仓库</p>
+    <div className="settings-page">
+      <header className="settings-page-heading">
+        <div>
+          <h1>设置</h1>
+          <p>你的创作环境，由你掌控。</p>
+        </div>
+        <label className="settings-search">
+          <Search size={16} />
+          <input
+            aria-label="搜索设置"
+            placeholder="搜索设置…"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+          />
+        </label>
+      </header>
+      <div className="settings-layout">
+        <nav className="settings-nav" aria-label="设置分类">
+          {settingsSections.map(({ id, label, icon: Icon }) => (
+            <button
+              type="button"
+              key={id}
+              aria-current={tab === id ? "page" : undefined}
+              className={tab === id ? "selected" : ""}
+              onClick={() => open(id)}
+            >
+              <Icon size={16} />
+              <span>{label}</span>
+            </button>
+          ))}
+        </nav>
+        <main className="settings-content">
+          {search.trim() ? (
+            <section className="settings-search-results">
+              <h2>设置搜索</h2>
+              {matches.map(({ id, label, detail, icon: Icon }) => (
+                <button type="button" key={id} onClick={() => open(id)}>
+                  <Icon size={18} />
+                  <span>
+                    <strong>{label}</strong>
+                    <small>{detail}</small>
+                  </span>
+                  <span>→</span>
+                </button>
+              ))}
+              {!matches.length && (
+                <Empty>没有匹配的设置，请尝试“模型”“快捷键”或“语音”。</Empty>
+              )}
+            </section>
+          ) : tab === "ai" ? (
+            <ModelConnections notify={notify} />
+          ) : tab === "general" ? (
+            <GeneralAiSettings />
+          ) : tab === "github" ? (
+            <GitHubAccounts notify={notify} />
+          ) : tab === "speech" ? (
+            <SpeechSettings notify={notify} />
+          ) : tab === "tools" ? (
+            <ToolSettings notify={notify} />
+          ) : tab === "system" ? (
+            <SystemStatus />
+          ) : (
+            <AccessTokens notify={notify} />
+          )}
+        </main>
       </div>
-      <div className="tabs">
-        {[
-          ["ai", "AI 模型"],
-          ["github", "GitHub"],
-          ["speech", "语音引擎"],
-          ["access", "访问设置"],
-          ["system", "运行状态"],
-        ].map(([id, label]) => (
-          <Button
-            key={id}
-            className={tab === id ? "selected" : ""}
-            onClick={() => setTab(id)}
-          >
-            {label}
-          </Button>
-        ))}
-      </div>
-      <div className="settings-body">
-        {tab === "ai" ? (
-          <ModelConnections notify={notify} />
-        ) : tab === "github" ? (
-          <GitHubAccounts notify={notify} />
-        ) : tab === "speech" ? (
-          <SpeechSettings notify={notify} />
-        ) : tab === "system" ? (
-          <SystemStatus />
-        ) : (
-          <AccessTokens notify={notify} />
-        )}
-      </div>
-    </>
+    </div>
   );
 }

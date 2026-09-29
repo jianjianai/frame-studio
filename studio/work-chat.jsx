@@ -7,11 +7,30 @@ import {
   PanelRightClose,
   Sparkles,
   Copy,
+  Settings2,
+  Paperclip,
+  Clock3,
+  Scissors,
+  Maximize2,
+  Minimize2,
+  Play,
+  Pencil,
+  LoaderCircle,
 } from "lucide-react";
+import { ModelPicker } from "./model-picker";
+import { ChatHistory } from "./chat-history";
+import { useAiPreferences } from "./ai-preferences";
+import {
+  providerModels,
+  providerAvailable,
+} from "../src/contracts/ai-models.mjs";
+import "./ai-workbench.css";
 import { loadTaskEvents } from "./task-events";
 import { subscribe } from "./realtime";
 import {
   api,
+  request,
+  Modal,
   useQuery,
   useAction,
   Button,
@@ -69,6 +88,8 @@ function Turn({
   onRecall,
   notify,
   onRetryPublication,
+  onResult,
+  onEdit,
 }) {
   const messages = new Map(),
     activities = new Map();
@@ -103,7 +124,9 @@ function Turn({
         <div className="assistant-label">
           <Sparkles size={14} />
           <strong>{states[task.state] || "状态更新中"}</strong>
-          <span>{date(task.created)}</span>
+          <span title={task.input.model || "工具默认模型"}>
+            {task.input.model || "默认模型"} · {date(task.created)}
+          </span>
         </div>
         {[...messages].map(([id, text]) => (
           <div className="message-text" key={id}>
@@ -144,7 +167,23 @@ function Turn({
           </p>
         )}
         <ErrorNote error={task.error} />
+        {task.state === "succeeded" && task.result?.previewTask && (
+          <div className="turn-result">
+            <strong>本轮创作已完成</strong>
+            <Button icon={Play} onClick={() => onResult(task)}>
+              查看本轮预览
+            </Button>
+            <small>
+              {task.result.commit
+                ? `版本 ${task.result.commit.slice(0, 7)}`
+                : "独立结果，不跳转到其他轮次"}
+            </small>
+          </div>
+        )}
         <div className="row turn-actions">
+          <Button icon={Pencil} onClick={() => onEdit(task)}>
+            重新编辑要求
+          </Button>
           {!!messages.size && (
             <Button
               icon={Copy}
@@ -164,7 +203,11 @@ function Turn({
           {task.state === "failed" && (
             <Button
               onClick={() =>
-                onRetry(task.input.prompt, task.input.context || {})
+                onRetry(
+                  task.input.prompt,
+                  task.input.context || {},
+                  task.input.model,
+                )
               }
             >
               保留原引用重试
@@ -208,13 +251,19 @@ export function WorkChat({
   onRemoveAsset,
   onRecall,
   onClose,
+  onAddAssets,
+  onPausePreview,
   suggestion,
   visible = true,
   compact = false,
   embedded = false,
 }) {
   const chats = useQuery("works_chats", { id: work.id }),
-    connections = useQuery("connections_list");
+    connections = useQuery("connections_list", {}, 1);
+  const [preferences] = useAiPreferences();
+  const [modelChoice, setModelChoice] = useState(null),
+    [expandedComposer, setExpandedComposer] = useState(false),
+    [resultPreview, setResultPreview] = useState(null);
   const draftKey = (chat) =>
     "frame.chat-draft:" + work.id + ":" + (chat || "new");
   const [chat, setChat] = useState(""),
@@ -265,9 +314,16 @@ export function WorkChat({
   const switchChat = (next) => {
     initialized.current = true;
     conversationRevision.current++;
-    draftWrite(draftKey(chat), { prompt, review });
+    draftWrite(draftKey(chat), { prompt, review, modelChoice });
     const draft = draftRead(draftKey(next));
+    if (!next)
+      setConnection(
+        preferences.defaultSelection?.connection ||
+          connections.data?.find(providerAvailable)?.id ||
+          "",
+      );
     setChat(next);
+    setModelChoice(draft.modelChoice || null);
     setPrompt(draft.prompt || "");
     setReview(draft.review || null);
     setOlder([]);
@@ -287,20 +343,25 @@ export function WorkChat({
   }, [chats.data]);
   useEffect(() => {
     if (!connection && connections.data?.length)
-      setConnection(connections.data.find((c) => c.configured)?.id || "");
-  }, [connection, connections.data]);
+      setConnection(
+        preferences.defaultSelection?.connection ||
+          connections.data.find(providerAvailable)?.id ||
+          "",
+      );
+  }, [connection, connections.data, preferences.defaultSelection]);
   useEffect(() => {
     const refresh = () => connections.refresh();
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, []);
   useEffect(() => {
-    draftWrite(draftKey(chat), { prompt, review });
+    draftWrite(draftKey(chat), { prompt, review, modelChoice });
   }, [
     prompt,
     review,
     chat,
     work.id,
+    modelChoice,
     selectedAssets.map((a) => a.id).join(","),
   ]);
   const conversationTasks = [
@@ -315,9 +376,57 @@ export function WorkChat({
   );
   const stream = useEvents(conversationTasks, chat),
     selected = chats.data?.find((c) => c.id === chat),
-    chosen = selected?.connection || connection;
-  const chosenConnection = connections.data?.find((c) => c.id === chosen),
-    canSend = !!chosenConnection?.configured;
+    chosen = modelChoice?.connection || selected?.connection || connection;
+  const chosenConnection = connections.data?.find((c) => c.id === chosen);
+  const model =
+    modelChoice?.model ??
+    (selected?.connection
+      ? conversationTasks.findLast(
+          (task) => typeof task.input?.model === "string",
+        )?.input.model
+      : preferences.defaultSelection?.connection === chosen
+        ? preferences.defaultSelection.model
+        : undefined) ??
+    chosenConnection?.model ??
+    "";
+  const canSend =
+    providerAvailable(chosenConnection) &&
+    providerModels(chosenConnection).some(
+      (entry) => entry.id === model && entry.enabled !== false,
+    );
+  const changesProvider =
+    !!chat && !!selected?.connection && chosen !== selected.connection;
+  const activeTasks = tasks.filter(
+    (task) => task.kind === "agent" && active(task),
+  );
+  const runningTask = activeTasks.find((task) => task.state !== "queued");
+  const queuedCount = activeTasks.filter(
+    (task) => task.state === "queued",
+  ).length;
+  useEffect(() => {
+    const el = composer.current;
+    if (!el) return;
+    el.style.height = expandedComposer ? "100%" : "auto";
+    if (!expandedComposer)
+      el.style.height = Math.min(220, Math.max(66, el.scrollHeight)) + "px";
+  }, [prompt, expandedComposer]);
+  const showResult = async (task) => {
+    onPausePreview?.();
+    setResultPreview({ task, loading: true });
+    try {
+      const link = await request(
+        `/api/tasks/${task.result.previewTask}/preview`,
+        { method: "POST" },
+      );
+      setResultPreview((current) =>
+        current?.task.id === task.id ? { task, url: link.url } : current,
+      );
+    } catch (error) {
+      setResultPreview((current) =>
+        current?.task.id === task.id ? { task, error: error.message } : current,
+      );
+    }
+  };
   useEffect(() => {
     const el = messages.current;
     if (!el) return;
@@ -332,8 +441,24 @@ export function WorkChat({
   useEffect(() => {
     if (visible && compact) composer.current?.focus();
   }, [visible, compact]);
-  const send = async (text = prompt, originalContext) => {
-    if (!text.trim() || sending.current || !canSend) return;
+  const send = async (text = prompt, originalContext, originalModel) => {
+    const sendConnection = originalContext
+      ? selected?.connection || chosen
+      : chosen;
+    const sendModel = originalContext
+      ? (originalModel ??
+        connections.data?.find((entry) => entry.id === sendConnection)?.model ??
+        "")
+      : model;
+    if (!text.trim() || sending.current) return;
+    if (
+      !providerAvailable(
+        connections.data?.find((entry) => entry.id === sendConnection),
+      )
+    ) {
+      notify("请先选择可用的模型提供商", "error");
+      return;
+    }
     sending.current = true;
     initialized.current = true;
     const revision = draftRevision.current,
@@ -348,7 +473,8 @@ export function WorkChat({
     const signature = JSON.stringify({
       text,
       context: requestContext,
-      chosen,
+      chosen: sendConnection,
+      model: sendModel,
       revision,
       conversation,
     });
@@ -359,10 +485,11 @@ export function WorkChat({
         : {
             signature,
             key: crypto.randomUUID(),
-            chat,
+            chat: !originalContext && changesProvider ? "" : chat,
             intent: {
               id: work.id,
-              connection: chosen,
+              connection: sendConnection,
+              model: sendModel,
               prompt: text,
               context: requestContext,
             },
@@ -389,6 +516,7 @@ export function WorkChat({
           id: frozen.id,
           chat: submission.chat,
           prompt: frozen.prompt,
+          model: frozen.model,
           requestKey: submission.key,
           context: frozen.context,
         });
@@ -420,12 +548,22 @@ export function WorkChat({
     <section
       ref={section}
       id="work-chat"
-      className="creation-chat"
+      className={`creation-chat ai-chat ${expandedComposer ? "composer-expanded" : ""}`}
+      style={{ "--ai-font-size": preferences.fontSize + "px" }}
       hidden={!visible}
       aria-label="AI 创作对话"
       role={compact && !embedded ? "dialog" : undefined}
       aria-modal={compact && visible && !embedded ? true : undefined}
       onKeyDown={(event) => {
+        if (event.defaultPrevented || event.target.closest("dialog[open]"))
+          return;
+        if (event.key === "Escape" && expandedComposer) {
+          event.preventDefault();
+          event.stopPropagation();
+          setExpandedComposer(false);
+          composer.current?.focus();
+          return;
+        }
         if (embedded) return;
         if (event.key === "Escape" && compact) {
           event.preventDefault();
@@ -451,21 +589,32 @@ export function WorkChat({
       }}
     >
       <header className="chat-header">
-        <div className="row">
-          <MessageSquare size={18} />
-          <h2>AI 创作</h2>
-        </div>
+        <ChatHistory
+          chats={chats.data || []}
+          selected={selected}
+          disabled={busy}
+          onChange={switchChat}
+        />
         <Button
           icon={Plus}
           aria-label="新对话"
+          title="新对话"
           disabled={busy}
           onClick={() => {
             switchChat("");
             composer.current?.focus();
           }}
+        />
+        <a
+          className="chat-settings"
+          href="#/settings/ai"
+          target="_blank"
+          rel="noopener"
+          aria-label="AI 设置"
+          title="提供商与模型设置"
         >
-          新对话
-        </Button>
+          <Settings2 size={16} />
+        </a>
         <Button
           icon={PanelRightClose}
           aria-label="关闭 AI 对话"
@@ -473,40 +622,6 @@ export function WorkChat({
           onClick={onClose}
         />
       </header>
-      <div className="chat-selectors">
-        <select
-          aria-label="创作对话"
-          value={chat}
-          disabled={busy}
-          onChange={(e) => switchChat(e.target.value)}
-        >
-          <option value="">新的创作对话</option>
-          {chats.data?.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.title}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="模型连接"
-          title={
-            chat
-              ? "此对话绑定当前模型连接；新对话可选择其他连接"
-              : "选择创作模型连接"
-          }
-          value={chosen}
-          disabled={!!chat || busy}
-          onChange={(e) => setConnection(e.target.value)}
-        >
-          <option value="">选择模型连接</option>
-          {connections.data?.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-              {c.configured ? "" : " · 未连接"}
-            </option>
-          ))}
-        </select>
-      </div>
       <ErrorNote error={chats.error || connections.error} />
       {stream.error && (
         <p className="reconnecting" role="status">
@@ -560,13 +675,25 @@ export function WorkChat({
           !currentTurns.error && (
             <div className="chat-intro">
               <Sparkles size={25} />
-              <h3>从一个想法开始</h3>
-              <p>描述想法，或引用一个时间、选段和素材，让 AI 精确修改。</p>
+              <h3>
+                {position.duration ? "继续打磨这个作品" : "从一个想法开始"}
+              </h3>
+              <p>
+                {position.duration
+                  ? "选择一个片段，或直接描述想调整的画面、节奏与声音。"
+                  : "描述主题和想要的效果，让 AI 开始制作。"}
+              </p>
               <div className="suggestions">
-                {[
-                  "先帮我设计这个作品的分镜与风格",
-                  "制作一段简洁、有节奏的开场动画",
-                ].map((text) => (
+                {(position.duration
+                  ? [
+                      "检查整片节奏，改善拖沓的衔接",
+                      "优化动画运动曲线与声音反馈",
+                    ]
+                  : [
+                      "先帮我设计这个作品的分镜与风格",
+                      "制作一段简洁、有节奏的开场动画",
+                    ]
+                ).map((text) => (
                   <button key={text} onClick={() => setPrompt(text)}>
                     {text}
                   </button>
@@ -594,6 +721,16 @@ export function WorkChat({
               })
             }
             onRecall={onRecall}
+            onResult={showResult}
+            onEdit={(task) => {
+              setPrompt((previous) =>
+                previous.trim()
+                  ? previous + "\n\n" + task.input.prompt
+                  : task.input.prompt,
+              );
+              setReview(task.input.context || null);
+              composer.current?.focus();
+            }}
             notify={notify}
           />
         ))}
@@ -609,6 +746,30 @@ export function WorkChat({
         >
           回到最新回复 ↓
         </button>
+      )}
+      {activeTasks.length > 0 && (
+        <div className="chat-run-status" role="status">
+          <LoaderCircle size={13} className={runningTask ? "spin" : ""} />
+          <span>
+            {runningTask?.progress?.stage ||
+              (runningTask ? states[runningTask.state] : "等待开始")}
+            {queuedCount > 0 ? ` · ${queuedCount} 项排队` : ""}
+          </span>
+          {runningTask && cancellable(runningTask) && (
+            <Button
+              aria-label="停止当前任务"
+              disabled={busy || runningTask.state === "cancelling"}
+              onClick={() =>
+                run(async () => {
+                  await api("task_cancel", { id: runningTask.id });
+                  reload();
+                })
+              }
+            >
+              停止
+            </Button>
+          )}
+        </div>
       )}
       <form
         className="chat-composer"
@@ -644,74 +805,158 @@ export function WorkChat({
           ref={composer}
           aria-label="创作要求"
           value={prompt}
-          disabled={busy}
           onChange={(e) => setPrompt(e.target.value)}
           placeholder="描述想法，或告诉 AI 这一段怎样调整…"
-          rows={4}
+          rows={2}
           required
           maxLength={40000}
           onKeyDown={(e) => {
             if (
-              (e.ctrlKey || e.metaKey) &&
               e.key === "Enter" &&
-              !e.nativeEvent.isComposing
+              !e.shiftKey &&
+              (e.ctrlKey ||
+                e.metaKey ||
+                preferences.sendShortcut === "enter") &&
+              !e.nativeEvent.isComposing &&
+              e.keyCode !== 229
             ) {
               e.preventDefault();
               void send();
             }
           }}
         />
+        <div className="composer-context-actions">
+          <Button
+            type="button"
+            icon={Paperclip}
+            aria-label="引用素材"
+            title="从素材库添加引用"
+            disabled={busy || !onAddAssets}
+            onClick={onAddAssets}
+          />
+          <Button
+            type="button"
+            icon={Clock3}
+            aria-label="引用当前时间"
+            title={"引用 " + reviewTime(position.time)}
+            disabled={busy || !position.duration}
+            onClick={() => setReview({ time: Number(position.time || 0) })}
+          >
+            当前时间
+          </Button>
+          <Button
+            type="button"
+            icon={Scissors}
+            aria-label="引用选段"
+            title={
+              validRange
+                ? reviewTime(position.selection.start) +
+                  "—" +
+                  reviewTime(position.selection.end)
+                : "先在时间轴选择片段"
+            }
+            disabled={busy || !validRange}
+            onClick={() =>
+              setReview({
+                time: position.selection.start,
+                start: position.selection.start,
+                end: position.selection.end,
+              })
+            }
+          >
+            选段
+          </Button>
+          <Button
+            type="button"
+            icon={expandedComposer ? Minimize2 : Maximize2}
+            aria-label={expandedComposer ? "收起输入框" : "展开输入框"}
+            title={expandedComposer ? "收起输入框" : "展开输入框"}
+            onClick={() => setExpandedComposer(!expandedComposer)}
+          />
+        </div>
         <div className="composer-options">
-          <div className="context-tools">
-            <Button
-              type="button"
-              disabled={busy || !position.duration}
-              title={"引用 " + reviewTime(position.time)}
-              onClick={() => setReview({ time: Number(position.time || 0) })}
-            >
-              引用当前时间
-            </Button>
-            <Button
-              type="button"
-              disabled={busy || !validRange}
-              title={
-                validRange
-                  ? reviewTime(position.selection.start) +
-                    "—" +
-                    reviewTime(position.selection.end)
-                  : "先在时间轴设置入点和出点"
-              }
-              onClick={() =>
-                setReview({
-                  time: position.selection.start,
-                  start: position.selection.start,
-                  end: position.selection.end,
-                })
-              }
-            >
-              引用选段
-            </Button>
-          </div>
+          <span
+            className="composer-mode"
+            title="在当前作品内直接修改；运行中的新要求将排队执行"
+          >
+            创作
+          </span>
+          <ModelPicker
+            connections={connections.data || []}
+            loading={connections.loading && !connections.data}
+            selection={{ connection: chosen, model }}
+            disabled={busy}
+            onChange={(value) => {
+              draftRevision.current++;
+              setModelChoice(value);
+            }}
+          />
           <Button
             type="submit"
-            className="primary"
+            className="primary composer-send"
             icon={ArrowUp}
+            aria-label={
+              busy ? "发送中" : activeTasks.length ? "排队发送" : "发送"
+            }
+            title={
+              busy
+                ? "发送中"
+                : activeTasks.length
+                  ? "当前任务完成后执行，不会即时补充到正在运行的任务"
+                  : "发送创作要求"
+            }
             disabled={busy || !prompt.trim() || !canSend}
           >
-            {busy ? "发送中" : "发送"}
+            {busy ? "发送中" : activeTasks.length ? "排队发送" : "发送"}
           </Button>
         </div>
+        {changesProvider && (
+          <p className="provider-switch-note">
+            发送后将使用「{chosenConnection?.name}
+            」新建对话。原对话保留，不转移其他提供商的会话。
+          </p>
+        )}
         {!canSend && !connections.loading && (
           <p className="connection-hint">
-            此对话没有可用的模型连接。
-            <a href="#/settings" target="_blank" rel="noopener">
+            所选模型暂不可用，请重新选择或配置提供商。
+            <a href="#/settings/ai" target="_blank" rel="noopener">
               连接模型 ↗
             </a>
             {chat && "，或新建对话选择其他连接。"}
           </p>
         )}
-        <small>草稿自动保留 · 关闭对话不停止创作 · Ctrl / ⌘ + Enter 发送</small>
+        <small className="composer-shortcut">
+          {preferences.sendShortcut === "enter"
+            ? "Enter 发送 · Shift + Enter 换行"
+            : "Ctrl / ⌘ + Enter 发送"}{" "}
+          · 草稿自动保留
+        </small>
       </form>
+      {resultPreview && (
+        <Modal title="本轮修改预览" wide onClose={() => setResultPreview(null)}>
+          <p className="settings-help">
+            {resultPreview.task.input.prompt} ·{" "}
+            {resultPreview.task.result.commit?.slice(0, 7) || "本轮结果"}
+          </p>
+          {resultPreview.loading && <Loading />}
+          <ErrorNote error={resultPreview.error} />
+          {resultPreview.error && (
+            <Button onClick={() => showResult(resultPreview.task)}>
+              重试打开本轮预览
+            </Button>
+          )}
+          {resultPreview.url && (
+            <iframe
+              title="本轮结果播放器"
+              className="ai-result-player"
+              src={resultPreview.url}
+              sandbox="allow-scripts allow-downloads"
+              allow="autoplay; fullscreen"
+              allowFullScreen
+            />
+          )}
+        </Modal>
+      )}
     </section>
   );
 }

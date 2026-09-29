@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { modelIdSchema } from "./ai-models.mjs";
 
 export const taskStateSchema = z.enum([
   "queued",
@@ -65,6 +66,7 @@ export const chatSubmissionShape = {
   prompt: z.string().trim().min(1).max(40000),
   requestKey: uuid.optional(),
   context: reviewContextSchema.optional(),
+  model: modelIdSchema.optional(),
 };
 export const workChatCreateSchema = z
   .strictObject({

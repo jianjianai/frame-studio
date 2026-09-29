@@ -93,6 +93,32 @@ export async function workToolsChecks(h) {
       await expect(input).toHaveValue("切换工具后仍保留的创作要求");
     },
   );
+  await check("AI 输入区与工具面板衔接：素材引用、局部展开和分层 Escape", async () => {
+    await ai();
+    const input = page.getByRole("textbox", { name: "创作要求" });
+    const draft = await input.inputValue();
+    await page.getByRole("button", { name: "引用素材", exact: true }).click();
+    await expect(dock).toHaveAttribute("aria-label", "素材");
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await dock.getByRole("button", { name: /返回对话/ }).click();
+    await expect(input).toHaveValue(draft);
+    const assertInsideDock = async (element) => {
+      const bounds = await dock.boundingBox();
+      const box = await element.boundingBox();
+      assert(box.x >= bounds.x - 1 && box.x + box.width <= bounds.x + bounds.width + 1);
+      assert(box.y >= bounds.y - 1 && box.y + box.height <= bounds.y + bounds.height + 1);
+    };
+    await page.getByRole("button", { name: "对话历史", exact: true }).click();
+    await assertInsideDock(page.getByRole("dialog", { name: "选择创作对话" }));
+    await page.getByRole("textbox", { name: "搜索对话" }).press("Escape");
+    await expect(dock).toBeVisible();
+    await page.getByRole("button", { name: "展开输入框", exact: true }).click();
+    await assertInsideDock(page.locator(".composer-expanded .chat-composer"));
+    await input.press("Escape");
+    await expect(page.locator(".composer-expanded")).toHaveCount(0);
+    await expect(dock).toBeVisible();
+    await expect(input).toHaveValue(draft);
+  });
   await check("任务/同步是可收起面板，点击画面不误关或中断任务", async () => {
     const cancellations = state.calls.filter(
       (c) => c.name === "task_cancel",
