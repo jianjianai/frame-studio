@@ -35,6 +35,7 @@ export async function database(url, password) {
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS log_cursor text;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS source_commit text;
     ALTER TABLE tasks ADD COLUMN IF NOT EXISTS progress jsonb;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS monitor jsonb;
     ALTER TABLE engines ADD COLUMN IF NOT EXISTS builtin text;
     ALTER TABLE events ADD COLUMN IF NOT EXISTS source_offset bigint;
     CREATE UNIQUE INDEX IF NOT EXISTS events_source ON events(task,source_offset) WHERE source_offset IS NOT NULL;
