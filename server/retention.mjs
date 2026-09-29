@@ -1,24 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
+import { ArtifactLeases } from "./artifact-leases.mjs";
 
 export class Retention {
   constructor(db, data) {
     Object.assign(this, { db, data });
-    this.downloads = new Map();
+    this.readers = new ArtifactLeases(db);
   }
-  lease(id) {
-    this.downloads.set(id, (this.downloads.get(id) || 0) + 1);
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const n = this.downloads.get(id) - 1;
-      n ? this.downloads.set(id, n) : this.downloads.delete(id);
-    };
-  }
+  lease(id, options) { return this.readers.acquire(id, options); }
   async cleanTask(id, { manual = false } = {}) {
     return this.db.lock(`artifact:${id}`, async () => {
-      if (this.downloads.has(id)) return false;
+      if (await this.db.one("SELECT id FROM artifact_leases WHERE task=$1 AND expires>now() LIMIT 1", [id])) return false;
       const task = await this.db.one(
         "SELECT * FROM tasks WHERE id=$1 AND state NOT IN ('queued','running','cancelling','publishing','publish_failed') AND cleaned IS NULL",
         [id],
@@ -50,7 +42,7 @@ export class Retention {
         target = path.resolve(root, id);
       if (!/^[0-9a-f-]{36}$/.test(id) || path.dirname(target) !== root)
         throw new Error("Invalid run directory");
-      fs.rmSync(target, { recursive: true, force: true });
+      await fs.promises.rm(target, { recursive: true, force: true });
       await this.db.pool.query("UPDATE tasks SET cleaned=now() WHERE id=$1", [
         id,
       ]);
@@ -58,9 +50,13 @@ export class Retention {
     });
   }
   async tick() {
-    if (this.running) return;
-    this.running = true;
+    if (this.running) return this.running;
+    this.running = this.collect();
+    try { return await this.running; } finally { this.running = null; }
+  }
+  async collect() {
     try {
+      await this.db.pool.query("DELETE FROM artifact_leases WHERE expires<now()");
       await this.db.pool.query("DELETE FROM sessions WHERE expires<now()");
       await this.db.pool.query(
         "DELETE FROM agent_tokens WHERE task IN (SELECT id FROM tasks WHERE state NOT IN ('queued','running','cancelling'))",
@@ -77,6 +73,7 @@ export class Retention {
         `SELECT t.id FROM tasks t WHERE t.expires<now() AND t.cleaned IS NULL AND t.state IN ('succeeded','failed','cancelled')
         AND NOT (t.kind='build' AND t.state='succeeded' AND NOT EXISTS(SELECT 1 FROM tasks newer WHERE newer.repo=t.repo AND newer.project=t.project AND newer.kind='build' AND newer.state='succeeded' AND newer.cleaned IS NULL AND newer.created>t.created))
         AND NOT EXISTS(SELECT 1 FROM settings s WHERE s.key LIKE 'preview:%' AND s.value->>'task'=t.id::text AND (s.value->>'expires')::bigint>$1)
+        AND NOT EXISTS(SELECT 1 FROM artifact_leases a WHERE a.task=t.id AND a.expires>now())
         ORDER BY t.expires LIMIT 30`,
         [Date.now()],
       )) {
@@ -91,15 +88,14 @@ export class Retention {
           if (Date.now() - fs.statSync(file).mtimeMs > 86400000)
             await this.db
               .lock("upload:" + entry.name, async () =>
-                fs.rmSync(file, { recursive: true, force: true }),
+                fs.promises.rm(file, { recursive: true, force: true }),
               )
               .catch(() => {});
         }
-    } finally {
-      this.running = false;
-    }
+    } finally { /* All scheduled file removals above are awaited. */ }
   }
   start() {
+    if (this.timer) return;
     this.timer = setInterval(
       () => void this.tick().catch(console.error),
       60000,
@@ -107,7 +103,10 @@ export class Retention {
     this.timer.unref();
     void this.tick().catch(console.error);
   }
-  close() {
-    clearInterval(this.timer);
+  stop() { clearInterval(this.timer); this.timer = null; }
+  async close() {
+    this.stop();
+    await this.running?.catch(() => {});
+    await this.readers.close();
   }
 }

@@ -334,10 +334,13 @@ export async function createApp({
     res
       .type(types[path.extname(file)] || "application/octet-stream")
       .header("Content-Disposition", "attachment");
-    const release = retention.lease(task.id);
-    res.raw.once("close", release);
-    res.raw.once("finish", release);
-    return sendMedia(req, res, file, { cache: 0 });
+    const release = await retention.lease(task.id, { onLost: error => res.raw.destroy(error) });
+    const done = () => void release().catch(error => req.log.error({ message: error.message }, "Artifact lease release failed"));
+    res.raw.once("close", done);
+    res.raw.once("finish", done);
+    if (res.raw.destroyed) { done(); return res; }
+    try { return sendMedia(req, res, file, { cache: 0 }); }
+    catch (error) { done(); throw error; }
   });
   app.post("/api/tasks/:id/preview", async (req) => {
     const t = await tasks.get(req.params.id);
@@ -467,7 +470,7 @@ export async function createApp({
   }
   app.addHook("onClose", async () => {
     await tasks.close();
-    retention.close();
+    await retention.close();
     connections.close();
     await mcp.close();
     await db.pool.end();
