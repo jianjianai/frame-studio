@@ -408,6 +408,7 @@ export class Tasks {
         }
       })();
       try { await this.loopPromise; }
+      catch (error) { console.error("Controller cycle:", error.message); }
       finally { this.loopPromise = null; }
     };
     this.timer = setInterval(() => void cycle(), 1500);

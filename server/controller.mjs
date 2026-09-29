@@ -30,7 +30,7 @@ export async function startController(options = {}) {
         await tasks.assertLeadership();
         await db.setting("controller-runtime", value);
       }
-      await fs.writeFile(healthFile + ".tmp", JSON.stringify({ checked: Date.now(), connected: true, leader }), { mode: 0o600 });
+      await fs.writeFile(healthFile + ".tmp", JSON.stringify({ checked: Date.now(), connected: true, leader, ready: !leader || docker.ok }), { mode: 0o600 });
       await fs.rename(healthFile + ".tmp", healthFile);
     } catch (error) { console.error("Controller heartbeat:", error.message); }
     finally { reporting = false; }

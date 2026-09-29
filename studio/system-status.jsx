@@ -16,7 +16,9 @@ export function SystemStatus() {
       {data && <>
         <p>{data.ready ? "执行基础设施就绪" : "执行基础设施需要检查"} · 检查时间 {date(data.checked)}（结果缓存 30 秒）</p>
         <div className="panel">
+          <p>控制器：{data.controller?.embedded ? "本地一体模式" : data.controller?.connected ? "已连接" : "未连接或版本不匹配"}{data.controller?.checked && <> · 最近心跳 {date(data.controller.checked)}</>}</p>
           <p>Docker：{data.docker.ok ? data.docker.version || "正常" : "不可用"} · 语音服务：{data.speech.ok ? "正常" : "不可用"}</p>
+          <ErrorNote error={data.docker.error} />
           <p>排队 {data.queue.queued} · 执行中 {data.queue.running} / {data.limits.concurrency} · 正在保存 {data.queue.publishing} · 待恢复 {data.queue.needs_recovery}</p>
           <p>最早任务等待 {Math.floor(data.queue.oldest_wait_seconds / 60)} 分钟</p>
           <ErrorNote error={data.queueBlocked} />
