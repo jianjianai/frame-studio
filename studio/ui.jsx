@@ -1,4 +1,13 @@
-import { useEffect, useRef, useState } from "react";
+import {
+  Children,
+  cloneElement,
+  isValidElement,
+  useId,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { createPortal } from "react-dom";
 import { X, LoaderCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { socketCall, subscribe } from "./realtime";
 export async function request(url, options = {}) {
@@ -63,86 +72,120 @@ export const kinds = {
 };
 export function useQuery(name, args = {}, interval = 0) {
   const key = JSON.stringify(args),
-    [data, setData] = useState(null),
-    [error, setError] = useState(""),
-    [loading, setLoading] = useState(true),
+    identity = name + ":" + key;
+  const [state, setState] = useState({
+      identity,
+      data: null,
+      error: "",
+      loading: !!name,
+    }),
     [revision, refresh] = useState(0);
   useEffect(() => {
-    let cancelled = false,
-      timer;
+    let cancelled = false;
     if (!name) {
-      setData(null);
-      setLoading(false);
-      setError("");
+      setState({ identity, data: null, error: "", loading: false });
       return;
     }
-    if (interval) {
-      setLoading(true);
-      return subscribe(name, JSON.parse(key), ({ result, error }) => {
-        if (error) setError(error);
-        else {
-          setData(result);
-          setError("");
-        }
-        setLoading(false);
-      });
-    }
-    const load = async () => {
-      try {
-        const value = await api(name, JSON.parse(key));
-        if (!cancelled) {
-          setData(value);
-          setError("");
-        }
-      } catch (e) {
-        if (!cancelled) setError(e.message);
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
+    setState((previous) => ({
+      identity,
+      data: previous.identity === identity ? previous.data : null,
+      error: "",
+      loading: true,
+    }));
+    const receive = ({ result, error }) => {
+      if (cancelled) return;
+      setState((previous) => ({
+        identity,
+        data: error
+          ? previous.identity === identity
+            ? previous.data
+            : null
+          : result,
+        error: error || "",
+        loading: false,
+      }));
     };
-    setLoading(true);
-    void load();
+    if (interval) {
+      const stop = subscribe(name, JSON.parse(key), receive);
+      return () => {
+        cancelled = true;
+        stop();
+      };
+    }
+    void api(name, JSON.parse(key)).then(
+      (result) => receive({ result }),
+      (error) => receive({ error: error.message }),
+    );
     return () => {
       cancelled = true;
-      clearTimeout(timer);
     };
   }, [name, key, interval, revision]);
-  return { data, error, loading, refresh: () => refresh((n) => n + 1) };
+  const current =
+    state.identity === identity
+      ? state
+      : { data: null, error: "", loading: !!name };
+  return {
+    data: current.data,
+    error: current.error,
+    loading: current.loading,
+    refresh: () => refresh((n) => n + 1),
+  };
 }
+const ACTION_FAILURE = Symbol("action-failure");
 export function useAction(notify = () => {}) {
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState(false),
+    pending = useRef(false);
   const run = async (fn) => {
+    if (pending.current)
+      return {
+        [ACTION_FAILURE]: true,
+        message: "上一项操作尚未完成，请稍候。",
+      };
+    pending.current = true;
     setBusy(true);
     try {
       return await fn();
     } catch (e) {
-      notify(e.message, "error");
-      return null;
+      const message = e?.message || "操作失败，请重试";
+      notify(message, "error");
+      return { [ACTION_FAILURE]: true, message };
     } finally {
+      pending.current = false;
       setBusy(false);
     }
   };
   return [run, busy];
 }
-export function Button({ icon: Icon, children, ...props }) {
+export function Button({ icon: Icon, children, ref, ...props }) {
   return (
-    <button {...props}>
+    <button ref={ref} {...props}>
       {Icon && <Icon size={17} />} {children}
     </button>
   );
 }
 export function Field({ label, children }) {
+  const labelId = useId();
   return (
     <label className="field">
-      <span>{label}</span>
-      {children}
+      <span id={labelId}>{label}</span>
+      {Children.map(children, (child) =>
+        isValidElement(child) &&
+        ["input", "textarea", "select"].includes(child.type) &&
+        !child.props["aria-label"] &&
+        !child.props["aria-labelledby"]
+          ? cloneElement(child, { "aria-labelledby": labelId })
+          : child,
+      )}
     </label>
   );
 }
-export function Empty({ children }) {
-  return <div className="empty">{children}</div>;
+export function Empty({ children, action }) {
+  return (
+    <div className="empty">
+      <div>{children}</div>
+      {action && <div className="empty-action">{action}</div>}
+    </div>
+  );
 }
 export function ErrorNote({ error }) {
   return error ? (
@@ -179,65 +222,259 @@ export function Pagination({ page, setPage, total, size = 30 }) {
     </div>
   ) : null;
 }
-export function Modal({ title, onClose, children, wide = false }) {
-  const ref = useRef(null);
+// Track actual opening order, not z-index or DOM order, including nested dialogs.
+const modalLayers = [];
+const topModal = () => modalLayers.findLast((el) => el.isConnected && el.open);
+const announceLayer = () =>
+  window.dispatchEvent(new Event("frame-modal-layer"));
+export function Notification({ notice, onClose }) {
+  const [target, setTarget] = useState(null);
   useEffect(() => {
-    const before = document.activeElement;
+    const update = () =>
+      setTarget(topModal()?.querySelector("[data-modal-notices]") || null);
+    update();
+    window.addEventListener("frame-modal-layer", update);
+    return () => window.removeEventListener("frame-modal-layer", update);
+  }, []);
+  if (!notice) return null;
+  const content = (
+    <div
+      className={"toast " + notice.type + (target ? " inside-modal" : "")}
+      role={notice.type === "error" ? "alert" : "status"}
+    >
+      <span>{notice.text}</span>
+      <Button type="button" icon={X} aria-label="关闭通知" onClick={onClose} />
+    </div>
+  );
+  return target ? createPortal(content, target) : content;
+}
+
+export function Modal({ title, onClose, children, wide = false }) {
+  const ref = useRef(null),
+    outside = useRef(false),
+    focusBeforeClose = useRef(null);
+  const [closing, setClosing] = useState("");
+  const requestClose = () => {
     const el = ref.current;
-    el.showModal();
-    const key = (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        onClose();
-      }
-    };
-    el.addEventListener("keydown", key);
+    focusBeforeClose.current = document.activeElement;
+    if (el.querySelector('form[data-pending="true"]')) {
+      setClosing("busy");
+      return;
+    }
+    if (el.querySelector('form[data-dirty="true"]')) {
+      setClosing("dirty");
+      return;
+    }
+    onClose();
+  };
+  useEffect(() => {
+    const before = document.activeElement,
+      el = ref.current;
+    if (!el.open) el.showModal();
+    modalLayers.push(el);
+    announceLayer();
     return () => {
-      el.removeEventListener("keydown", key);
+      const index = modalLayers.indexOf(el);
+      if (index >= 0) modalLayers.splice(index, 1);
       el.close();
-      before?.focus?.();
+      announceLayer();
+      if (before?.isConnected) before.focus?.();
     };
   }, []);
+  const isOutside = (event) => {
+    if (event.target !== event.currentTarget) return false;
+    const r = event.currentTarget.getBoundingClientRect();
+    return (
+      event.clientX < r.left ||
+      event.clientX > r.right ||
+      event.clientY < r.top ||
+      event.clientY > r.bottom
+    );
+  };
   return (
     <dialog
       ref={ref}
       aria-label={title}
       className={"modal " + (wide ? "wide" : "")}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) {
-          const r = e.currentTarget.getBoundingClientRect();
-          if (
-            e.clientX < r.left ||
-            e.clientX > r.right ||
-            e.clientY < r.top ||
-            e.clientY > r.bottom
-          )
-            onClose();
-        }
+      onCancel={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        requestClose();
+      }}
+      onPointerDown={(event) => {
+        outside.current = isOutside(event);
+      }}
+      onPointerUp={(event) => {
+        if (outside.current && isOutside(event)) requestClose();
+        outside.current = false;
       }}
     >
       <header>
         <h2>{title}</h2>
-        <Button icon={X} aria-label="关闭弹窗" onClick={onClose} />
+        <Button
+          type="button"
+          icon={X}
+          aria-label="关闭弹窗"
+          onClick={requestClose}
+        />
       </header>
+      <div className="modal-notices" data-modal-notices />
+      {closing && (
+        <section
+          className="discard-warning"
+          role="alert"
+          aria-label="关闭前确认"
+        >
+          <strong>
+            {closing === "busy" ? "操作仍在进行" : "有尚未保存的修改"}
+          </strong>
+          <p>
+            {closing === "busy"
+              ? "请等待本次操作返回结果，避免重复提交。"
+              : "关闭将放弃本次输入。已保存的作品内容不会改变。"}
+          </p>
+          <div className="row">
+            <Button
+              type="button"
+              autoFocus
+              onClick={() => {
+                setClosing("");
+                focusBeforeClose.current?.focus?.();
+              }}
+            >
+              继续编辑
+            </Button>
+            {closing === "dirty" && (
+              <Button type="button" className="danger-text" onClick={onClose}>
+                放弃修改并关闭
+              </Button>
+            )}
+          </div>
+        </section>
+      )}
       <div className="modal-content">{children}</div>
     </dialog>
   );
 }
-export function Form({ children, onSubmit, busy, submit = "保存" }) {
+
+// Compare values in memory only. Passwords and file bytes are never persisted.
+const formSnapshot = (form) =>
+  JSON.stringify(
+    [...form.querySelectorAll("input,textarea,select")].map((el) => [
+      el.name || el.getAttribute("aria-label") || "",
+      el.type,
+      el.type === "checkbox" || el.type === "radio"
+        ? [el.checked, el.value]
+        : el.type === "file"
+          ? [...(el.files || [])].map((f) => [f.name, f.size, f.lastModified])
+          : el.value,
+    ]),
+  );
+export function Form({
+  children,
+  onSubmit,
+  busy = false,
+  disabled = false,
+  submit = "保存",
+  protect = true,
+}) {
+  const ref = useRef(null),
+    baseline = useRef(null),
+    dirtyRef = useRef(false),
+    pendingRef = useRef(false),
+    mounted = useRef(true);
+  const [dirty, setDirty] = useState(false),
+    [pending, setPending] = useState(false),
+    [error, setError] = useState("");
+  const markDirty = () => {
+    if (baseline.current === null) return;
+    const changed = formSnapshot(ref.current) !== baseline.current;
+    dirtyRef.current = changed;
+    setDirty(changed);
+  };
+  useEffect(() => {
+    mounted.current = true;
+    baseline.current = formSnapshot(ref.current);
+    const unload = (event) => {
+      if (protect && (dirtyRef.current || pendingRef.current)) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+    window.addEventListener("beforeunload", unload);
+    return () => {
+      mounted.current = false;
+      window.removeEventListener("beforeunload", unload);
+    };
+  }, [protect]);
   return (
     <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit(Object.fromEntries(new FormData(e.currentTarget)));
+      ref={ref}
+      data-dirty={protect && dirty}
+      data-pending={pending || busy}
+      aria-busy={pending || busy}
+      onInputCapture={markDirty}
+      onChangeCapture={markDirty}
+      onSubmit={async (event) => {
+        event.preventDefault();
+        if (pendingRef.current || busy || disabled) return;
+        const form = event.currentTarget,
+          submitted = formSnapshot(form);
+        const values = Object.fromEntries(new FormData(form));
+        pendingRef.current = true;
+        setPending(true);
+        setError("");
+        try {
+          const result = await onSubmit(values);
+          if (result?.[ACTION_FAILURE]) throw new Error(result.message);
+          if (mounted.current) {
+            baseline.current = submitted;
+            markDirty();
+          }
+        } catch (e) {
+          if (mounted.current)
+            setError(e?.message || "未能保存，输入已保留，请重试。");
+        } finally {
+          pendingRef.current = false;
+          if (mounted.current) setPending(false);
+        }
       }}
     >
       {children}
+      <ErrorNote error={error} />
       <div className="form-actions">
-        <Button className="primary" disabled={busy}>
-          {busy ? "处理中…" : submit}
+        {protect && dirty && <small role="status">尚未保存</small>}
+        <Button
+          type="submit"
+          className="primary"
+          disabled={busy || pending || disabled}
+        >
+          {busy || pending ? "处理中…" : submit}
         </Button>
       </div>
     </form>
   );
+}
+
+export function useDebouncedValue(value, delay = 220) {
+  const [current, setCurrent] = useState(value);
+  useEffect(() => {
+    const timer = setTimeout(() => setCurrent(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+  return current;
+}
+
+export function useMediaQuery(query) {
+  const [matches, setMatches] = useState(
+    () => window.matchMedia(query).matches,
+  );
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const change = () => setMatches(media.matches);
+    change();
+    media.addEventListener("change", change);
+    return () => media.removeEventListener("change", change);
+  }, [query]);
+  return matches;
 }

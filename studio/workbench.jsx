@@ -25,12 +25,14 @@ import {
   go,
   states,
   kinds,
+  Notification,
 } from "./ui";
 import { WorkLibrary, Repositories } from "./library";
 import { Creation } from "./creation";
 import { Materials } from "./work-panels";
 import { Settings } from "./accounts";
 import "./workbench.css";
+import "./workspace.css";
 
 function Background({ notify }) {
   const query = useQuery("works_background", {}, 2000),
@@ -45,7 +47,7 @@ function Background({ notify }) {
       {query.data?.map((w) => (
         <article className="background-project panel" key={w.id}>
           <div>
-            <a href={"#/work/" + w.id}>
+            <a href={"#/work/" + w.id} target="_blank" rel="noopener">
               <h2>
                 {w.title} <ArrowUpRight size={16} />
               </h2>
@@ -60,7 +62,14 @@ function Background({ notify }) {
             </div>
           </div>
           <div className="row">
-            <Button onClick={() => go("work/" + w.id)}>打开作品</Button>
+            <a
+              className="button"
+              href={"#/work/" + w.id}
+              target="_blank"
+              rel="noopener"
+            >
+              打开作品 ↗
+            </a>
             <Button
               icon={Square}
               disabled={busy || !w.tasks.some((t) => ["queued", "running", "cancelling"].includes(t.state))}
@@ -133,7 +142,7 @@ function App() {
     localStorage.setItem("frame.nav-collapsed", String(collapsed));
   }, [collapsed]);
   useEffect(() => {
-    if (!notice) return;
+    if (!notice || notice.type === "error") return;
     const timer = setTimeout(
       () => setNotice(null),
       notice.type === "error" ? 15000 : 6000,
@@ -198,59 +207,61 @@ function App() {
       ["settings", Settings2, "设置"],
     ];
   return (
-    <div className={"workbench " + (collapsed ? "nav-collapsed" : "")}>
-      <aside className="navigation">
-        <a className="brand" href="#/recent">
-          <Film size={25} />
-          <span>FRAME</span>
-        </a>
-        <nav>
-          {navigation.map(([id, Icon, label]) => (
-            <a
-              href={"#/" + id}
-              key={id}
-              title={label}
-              className={
-                section === id ||
-                (id === "repositories" &&
-                  ["repository", "work"].includes(section))
-                  ? "selected"
-                  : ""
-              }
+    <div
+      className={
+        "workbench " +
+        (isWork ? "work-focus" : collapsed ? "nav-collapsed" : "")
+      }
+    >
+      {!isWork && (
+        <aside className="navigation">
+          <a className="brand" href="#/recent">
+            <Film size={25} />
+            <span>FRAME</span>
+          </a>
+          <nav>
+            {navigation.map(([id, Icon, label]) => (
+              <a
+                href={"#/" + id}
+                key={id}
+                title={label}
+                className={
+                  section === id ||
+                  (id === "repositories" &&
+                    ["repository", "work"].includes(section))
+                    ? "selected"
+                    : ""
+                }
+              >
+                <Icon size={20} />
+                <span>{label}</span>
+              </a>
+            ))}
+          </nav>
+          <footer>
+            <Button
+              icon={collapsed ? PanelLeftOpen : PanelLeftClose}
+              aria-label={collapsed ? "展开导航" : "收起导航"}
+              onClick={() => setCollapsed(!collapsed)}
             >
-              <Icon size={20} />
-              <span>{label}</span>
-            </a>
-          ))}
-        </nav>
-        <footer>
-          <Button
-            icon={collapsed ? PanelLeftOpen : PanelLeftClose}
-            aria-label={collapsed ? "展开导航" : "收起导航"}
-            onClick={() => setCollapsed(!collapsed)}
-          >
-            <span>{collapsed ? "展开" : "收起导航"}</span>
-          </Button>
-          <Button
-            icon={LogOut}
-            aria-label="退出登录"
-            onClick={async () => {
-              await request("/api/logout", { method: "POST" });
-              setMe(null);
-            }}
-          >
-            <span>退出登录</span>
-          </Button>
-        </footer>
-      </aside>
+              <span>{collapsed ? "展开" : "收起导航"}</span>
+            </Button>
+            <Button
+              icon={LogOut}
+              aria-label="退出登录"
+              onClick={async () => {
+                await request("/api/logout", { method: "POST" });
+                setMe(null);
+              }}
+            >
+              <span>退出登录</span>
+            </Button>
+          </footer>
+        </aside>
+      )}
       <main className={isWork ? "workspace" : "page"}>
         {section === "work" ? (
-          <Creation
-            key={route[1]}
-            id={route[1]}
-            notify={notify}
-            onToggleNav={() => setCollapsed(!collapsed)}
-          />
+          <Creation key={route[1]} id={route[1]} notify={notify} />
         ) : section === "repository" ? (
           <RepositoryWorks key={route[1]} id={route[1]} notify={notify} />
         ) : section === "repositories" ? (
@@ -268,19 +279,7 @@ function App() {
           <WorkLibrary recent notify={notify} />
         )}
       </main>
-      {notice && (
-        <div
-          className={"toast " + notice.type}
-          role={notice.type === "error" ? "alert" : "status"}
-        >
-          <span>{notice.text}</span>
-          <Button
-            icon={X}
-            aria-label="关闭通知"
-            onClick={() => setNotice(null)}
-          />
-        </div>
-      )}
+      <Notification notice={notice} onClose={() => setNotice(null)} />
     </div>
   );
 }

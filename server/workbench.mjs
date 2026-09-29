@@ -56,6 +56,7 @@ export function workbenchOperations({
       repo: uuid.optional(),
       recent: z.boolean().default(false),
       deleted: z.boolean().default(false),
+      status: z.enum(["", "draft", "review", "finished"]).default(""),
       search,
       limit,
       offset,
@@ -63,8 +64,8 @@ export function workbenchOperations({
     async (a) => {
       const items = await works.list(a);
       const total = await db.one(
-        "SELECT count(*)::int AS n FROM works WHERE deleted=$1 AND ($2::uuid IS NULL OR repo=$2) AND (NOT $3 OR opened IS NOT NULL) AND (title ILIKE $4 OR description ILIKE $4)",
-        [a.deleted, a.repo || null, a.recent, "%" + a.search + "%"],
+        "SELECT count(*)::int AS n FROM works WHERE deleted=$1 AND ($2::uuid IS NULL OR repo=$2) AND (NOT $3 OR opened IS NOT NULL) AND (title ILIKE $4 OR description ILIKE $4) AND ($5='' OR status=$5)",
+        [a.deleted, a.repo || null, a.recent, "%" + a.search + "%", a.status],
       );
       return { items, total: total.n };
     },
@@ -297,6 +298,11 @@ export function workbenchOperations({
             ))
           )
             throw problem(400, "素材不属于当前仓库");
+      const assetNames = {};
+      for (const id of a.context?.assets || []) {
+        const asset = await db.one("SELECT name FROM assets WHERE id=$1", [id]);
+        if (asset) assetNames[id] = asset.name;
+      }
       return tasks.create({
         repo: w.repo,
         project: w.project,
@@ -307,7 +313,7 @@ export function workbenchOperations({
           provider: chat.provider,
           connection: chat.connection,
           prompt: a.prompt,
-          context: a.context,
+          context: a.context ? { ...a.context, assetNames } : undefined,
         },
       });
     },
@@ -336,7 +342,7 @@ export function workbenchOperations({
     async (a) => {
       const w = await works.get(a.id);
       return db.all(
-        "SELECT id,state,error,result,created,expires,cleaned FROM tasks WHERE repo=$1 AND project=$2 AND kind IN ('render','agent') ORDER BY created DESC LIMIT 50",
+        "SELECT id,state,error,result,input,progress,created,expires,cleaned FROM tasks WHERE repo=$1 AND project=$2 AND (kind='render' OR (kind='agent' AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(result->'artifacts','[]'::jsonb)) artifact WHERE lower(right(artifact->>'path',4))='.mp4' OR lower(right(artifact->>'path',5))='.webm'))) ORDER BY created DESC LIMIT 50",
         [w.repo, w.project],
       );
     },

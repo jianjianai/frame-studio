@@ -196,6 +196,8 @@ export function operations({
           duration: z.number().positive().max(3600).optional(),
           time: z.number().nonnegative().max(3600).optional(),
           width: z.number().int().min(320).max(3840).multipleOf(32).optional(),
+          fps: z.number().int().min(1).max(120).optional(),
+          subtitles: z.boolean().optional(),
           start: z.number().nonnegative().max(3600).optional(),
           end: z.number().positive().max(3600).optional(),
         })

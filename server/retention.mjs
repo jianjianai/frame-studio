@@ -31,9 +31,10 @@ export class Retention {
         return false;
       if (
         task.kind === "build" &&
+        !task.input?.version &&
         (await this.db
           .one(
-            "SELECT id FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND state='succeeded' AND cleaned IS NULL ORDER BY created DESC LIMIT 1",
+            "SELECT id FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version' IS NULL AND state='succeeded' AND cleaned IS NULL ORDER BY created DESC LIMIT 1",
             [task.repo, task.project],
           )
           .then((row) => row?.id === id))
@@ -75,7 +76,7 @@ export class Retention {
       );
       for (const task of await this.db.all(
         `SELECT t.id FROM tasks t WHERE t.expires<now() AND t.cleaned IS NULL AND t.state IN ('succeeded','failed','cancelled')
-        AND NOT (t.kind='build' AND t.state='succeeded' AND NOT EXISTS(SELECT 1 FROM tasks newer WHERE newer.repo=t.repo AND newer.project=t.project AND newer.kind='build' AND newer.state='succeeded' AND newer.cleaned IS NULL AND newer.created>t.created))
+        AND NOT (t.kind='build' AND t.input->>'version' IS NULL AND t.state='succeeded' AND NOT EXISTS(SELECT 1 FROM tasks newer WHERE newer.repo=t.repo AND newer.project=t.project AND newer.kind='build' AND newer.input->>'version' IS NULL AND newer.state='succeeded' AND newer.cleaned IS NULL AND newer.created>t.created))
         AND NOT EXISTS(SELECT 1 FROM settings s WHERE s.key LIKE 'preview:%' AND s.value->>'task'=t.id::text AND (s.value->>'expires')::bigint>$1)
         ORDER BY t.expires LIMIT 30`,
         [Date.now()],

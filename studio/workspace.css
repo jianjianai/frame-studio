@@ -1,0 +1,587 @@
+/* Focused work tabs never include the library navigation. */
+[hidden] {
+  display: none !important;
+}
+.workbench.work-focus {
+  display: block;
+  height: 100dvh;
+  overflow: hidden;
+}
+.work-focus > .workspace {
+  height: 100%;
+  min-width: 0;
+  overflow: hidden;
+}
+.work-focus .creation {
+  height: 100%;
+  min-height: 0;
+}
+.work-focus .creation-toolbar {
+  padding: 11px 18px;
+  min-height: 66px;
+  gap: 20px;
+  flex-wrap: nowrap;
+}
+.work-identity {
+  min-width: 110px;
+  flex: 1;
+}
+.work-focus .creation-toolbar h1 {
+  max-width: none;
+  font-size: 18px;
+}
+.work-focus .creation-actions {
+  flex-shrink: 0;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 8px;
+}
+.work-focus .creation-actions button {
+  min-height: 35px;
+  padding: 7px 10px;
+}
+.work-focus .creation-actions button span {
+  display: inline;
+}
+.work-focus .creation-split {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  height: 0;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, var(--video-share)) 1px minmax(
+      300px,
+      var(--chat-share)
+    );
+  grid-template-rows: minmax(0, 1fr);
+  overflow: hidden;
+}
+.work-focus .creation-split.chat-closed {
+  grid-template-columns: minmax(0, 1fr);
+}
+.work-focus .preview-pane {
+  background: #edf0e9;
+}
+.work-focus .preview-pane iframe {
+  height: 100%;
+}
+.work-focus .chat-header {
+  gap: 8px;
+  padding: 14px 16px 10px;
+}
+.work-focus .chat-header > .row {
+  margin-right: auto;
+}
+.work-focus .creation-chat {
+  min-height: 0;
+}
+.work-focus .chat-composer {
+  flex-shrink: 0;
+}
+.work-focus .chat-messages {
+  min-height: 0;
+}
+.work-more {
+  position: relative;
+}
+.work-more > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+  list-style: none;
+  background: #fff;
+  min-height: 35px;
+  font-size: 12px;
+}
+.work-more summary::-webkit-details-marker {
+  display: none;
+}
+.work-more-menu {
+  position: absolute;
+  top: calc(100% + 7px);
+  right: 0;
+  z-index: 12;
+  display: grid;
+  min-width: 165px;
+  padding: 5px;
+  background: #fcfdf9;
+  box-shadow: 0 8px 25px #263b3220;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.work-more-menu button {
+  border: none;
+  justify-content: flex-start;
+}
+.work-focus .sync-attention {
+  color: #76541f;
+  border-color: #c9ad71;
+  background: #fff5df;
+}
+.work-focus .sync-error {
+  color: #983c37;
+  background: #fff0ed;
+  border-color: #d6a49d;
+}
+.work-focus .sync-status {
+  color: #426046;
+  background: transparent;
+  border-color: transparent;
+}
+.work-focus .preview-loading {
+  inset: 0;
+  background: #f5f5ef;
+  color: #263b32;
+}
+.chat-scrim {
+  display: none;
+}
+.work-open {
+  text-decoration: none;
+  color: inherit;
+  cursor: pointer;
+}
+.work-open[aria-disabled="true"] {
+  opacity: 0.55;
+  cursor: default;
+}
+@media (max-width: 1050px) {
+  .work-focus .creation-toolbar {
+    gap: 12px;
+  }
+  .work-focus .creation-actions {
+    gap: 5px;
+  }
+}
+@media (max-width: 900px) {
+  .work-focus .creation-split {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .creation-split > .resize-handle {
+    display: none;
+  }
+  .work-focus .creation-chat:not([hidden]) {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    width: min(440px, 100%);
+    z-index: 8;
+    box-shadow: -8px 0 30px #263b3220;
+  }
+  .chat-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: #263b322b;
+  }
+  .work-focus .creation-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 9px 12px;
+  }
+  .work-focus .work-identity {
+    flex-basis: 100%;
+  }
+  .work-focus .creation-actions {
+    width: 100%;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+  }
+  .work-focus .creation-toolbar h1 {
+    font-size: 16px;
+  }
+  .work-focus .creation-actions > .sync-status,
+  .work-focus .creation-actions > .sync-attention,
+  .work-focus .creation-actions > .sync-error {
+    margin-right: auto;
+  }
+  .work-focus .chat-composer textarea {
+    height: 90px;
+  }
+  .work-focus .chat-composer > small {
+    display: block;
+  }
+}
+
+.modal-notices {
+  position: sticky;
+  top: 68px;
+  z-index: 5;
+}
+.toast.inside-modal {
+  position: static;
+  transform: none;
+  max-width: none;
+  margin: 10px 18px 0;
+  border-radius: 8px;
+  box-shadow: none;
+}
+.discard-warning {
+  position: sticky;
+  top: 68px;
+  z-index: 4;
+  padding: 17px 22px;
+  background: #fff5df;
+  color: #5f482b;
+  border-bottom: 1px solid #e3ceaa;
+}
+.discard-warning p {
+  color: #765d36;
+}
+.form-actions {
+  align-items: center;
+  gap: 16px;
+}
+.form-actions > small {
+  margin-right: auto;
+}
+.empty-action {
+  margin-top: 20px;
+}
+.modal-content > form {
+  min-width: 0;
+}
+@media (max-width: 600px) {
+  .modal-notices,
+  .discard-warning {
+    top: 62px;
+  }
+}
+
+.message-text {
+  font-size: 14px;
+  line-height: 1.8;
+  white-space: normal;
+}
+.review-text p {
+  color: inherit;
+  white-space: pre-wrap;
+  margin: 8px 0 12px;
+  line-height: 1.8;
+}
+.review-text h4 {
+  font-size: 15px;
+  margin: 18px 0 8px;
+}
+.review-text h4:first-child {
+  margin-top: 0;
+}
+.review-text ul,
+.review-text ol {
+  padding-left: 22px;
+  margin: 8px 0 14px;
+}
+.review-text li {
+  margin: 5px 0;
+  line-height: 1.7;
+}
+.review-text pre {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f1f4ec;
+  max-height: 280px;
+  overflow: auto;
+}
+.review-text code {
+  font-size: 0.9em;
+}
+.review-text blockquote {
+  margin: 10px 0;
+  border-left: 2px solid #9eb18e;
+  padding-left: 12px;
+  color: #56674d;
+}
+.review-text a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  overflow-wrap: anywhere;
+}
+button.inline-time {
+  display: inline;
+  border: 0;
+  border-radius: 3px;
+  background: #e6eedb;
+  color: #355733;
+  padding: 1px 4px;
+  white-space: normal;
+}
+.assistant-label {
+  font-size: 12px;
+}
+.activity-list {
+  font-size: 12px;
+}
+.activity-list pre {
+  font-size: 12px;
+}
+.turn-actions button {
+  font-size: 12px;
+  padding: 5px 8px;
+}
+.review-context {
+  display: flex;
+  gap: 7px;
+  flex-wrap: wrap;
+  margin: 8px 0;
+}
+.context-chip {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #ccdcbf;
+  background: #f3f7ed;
+  border-radius: 6px;
+  overflow: hidden;
+  max-width: 100%;
+  font-size: 12px;
+}
+.context-chip button {
+  padding: 4px 7px;
+  border: 0;
+  background: transparent;
+  border-radius: 0;
+  font-size: 12px;
+  white-space: normal;
+}
+.context-chip.asset-reference {
+  padding: 5px 8px;
+  overflow-wrap: anywhere;
+}
+.selected-assets .selected-asset {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  font-size: 12px;
+}
+.selected-assets .selected-asset button {
+  padding: 2px 5px;
+  background: transparent;
+  border: 0;
+}
+.selected-assets > small {
+  flex-basis: 100%;
+}
+.follow-latest {
+  align-self: center;
+  margin: 0 0 8px;
+  padding: 5px 11px;
+  font-size: 12px;
+}
+.context-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.context-tools button {
+  font-size: 12px;
+  padding: 4px 7px;
+}
+.connection-hint {
+  font-size: 12px;
+  color: #86652c;
+  margin: 6px 0;
+}
+.chat-composer > small {
+  font-size: 11px;
+}
+.work-focus .chat-composer textarea {
+  font-size: 14px;
+}
+
+.version-review {
+  margin-top: 16px;
+}
+.version-players {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 15px;
+  margin: 16px 0;
+}
+.version-players section {
+  min-width: 0;
+}
+.version-players strong {
+  display: block;
+  margin-bottom: 8px;
+}
+.version-players iframe {
+  width: 100%;
+  height: 335px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.version-seek {
+  margin-top: 16px;
+}
+.version-seek input {
+  width: 100px;
+}
+.version-changes {
+  margin-top: 20px;
+}
+.version-changes summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.version-changes ul {
+  padding: 0;
+  list-style: none;
+  max-height: 240px;
+  overflow: auto;
+}
+.version-changes li {
+  display: flex;
+  gap: 9px;
+  margin: 7px 0;
+  align-items: start;
+  font-size: 12px;
+}
+.version-changes code {
+  overflow-wrap: anywhere;
+}
+.version-progress {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0;
+}
+@media (max-width: 700px) {
+  .version-players {
+    grid-template-columns: 1fr;
+  }
+  .version-players iframe {
+    height: 300px;
+  }
+}
+
+.work-card-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 10px 0;
+}
+.badge.production-review {
+  color: #735425;
+  background: #fff0d6;
+}
+.badge.production-finished {
+  color: #315d34;
+  background: #e2efdd;
+}
+.repo-picker .field {
+  margin: 12px 0;
+}
+.repository-grid,
+.connection-grid {
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+}
+
+.export-settings-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0 18px;
+}
+.export-settings-grid .field {
+  margin: 10px 0;
+}
+.export-explanation {
+  font-size: 13px;
+}
+.export-range .field {
+  flex: 1;
+  min-width: 100px;
+}
+.export-progress {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+}
+.export-progress progress {
+  width: 100%;
+  accent-color: #5c7950;
+}
+.secondary-downloads {
+  padding: 15px 0;
+  border-bottom: 1px solid var(--line);
+}
+.export-history-heading {
+  margin: 22px 0 14px;
+}
+.local-export {
+  border: 1px solid #c6d9b6;
+  border-radius: 9px;
+  padding: 16px;
+  margin-top: 16px;
+  background: #f0f6e9;
+}
+.export-item .section-head {
+  margin: 0 0 8px;
+}
+@media (max-width: 550px) {
+  .export-settings-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.voice-audition {
+  margin: 20px 0;
+  padding: 18px;
+  background: #f1f6eb;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.voice-audition h3,
+.voice-adopted > strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.voice-audition audio {
+  display: block;
+  width: 100%;
+  margin-top: 12px;
+}
+.upload-progress {
+  display: grid;
+  gap: 10px;
+}
+.upload-progress progress {
+  width: 100%;
+}
+.asset-works {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+.material-actions {
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.material-actions button {
+  white-space: normal;
+  font-size: 12px;
+}
+.material-card p {
+  font-size: 12px;
+}
+.sync-counts {
+  gap: 10px;
+}
+.sync-counts > div {
+  min-width: 0;
+  padding: 18px 8px;
+}
+.sync-counts span {
+  text-align: center;
+}

@@ -29,12 +29,12 @@ test(
               ? `
         import React from 'react';
         import { createRoot } from 'react-dom/client';
-        import { WorkChat } from '/studio/creation.jsx';
+        import { WorkChat } from '/studio/work-chat.jsx';
         function Fixture() {
-          const [position, setPosition] = React.useState({ time: 5, selection: { start: 4, end: 6 } });
+          const [position, setPosition] = React.useState({ time: 5, duration: 20, selection: { start: 4, end: 6 } });
           const [error, setError] = React.useState('');
           return React.createElement(React.Fragment, null,
-            React.createElement('button', { onClick: () => setPosition({ time: 10, selection: { start: 9, end: 11 } }) }, 'Move player'),
+            React.createElement('button', { onClick: () => setPosition({ time: 10, duration: 20, selection: { start: 9, end: 11 } }) }, 'Move player'),
             React.createElement('output', { id: 'error' }, error),
             React.createElement(WorkChat, { work: { id: 'work' }, tasks: [], reload() {}, notify: setError,
               position, selectedAssets: [{ id: 'asset', name: 'Fixture asset' }], onClearAssets() {} }));
@@ -151,7 +151,9 @@ test(
               await page
                 .getByLabel("创作要求", { exact: true })
                 .fill("Adjust motion");
-              await page.getByRole("checkbox").check();
+              await page
+                .getByRole("button", { name: "引用选段", exact: true })
+                .click();
               await page
                 .getByRole("button", { name: "发送", exact: true })
                 .click();
@@ -164,8 +166,9 @@ test(
                 .getByRole("button", { name: "Move player", exact: true })
                 .click();
               await page
-                .getByText("附带当前画面 10.00s", { exact: true })
-                .waitFor();
+                .getByRole("button", { name: "引用当前时间", exact: true })
+                .getAttribute("title")
+                .then((title) => assert.match(title, /10/));
               await page
                 .getByRole("button", { name: "发送", exact: true })
                 .click();
@@ -178,7 +181,7 @@ test(
               assert.equal(requests.length, 2);
               assert.deepEqual(requests[1], requests[0]);
               assert.deepEqual(requests[1].context, {
-                time: 5,
+                time: 4,
                 start: 4,
                 end: 6,
                 assets: ["asset"],

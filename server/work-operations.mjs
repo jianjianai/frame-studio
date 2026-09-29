@@ -2,6 +2,8 @@ import { z } from "zod";
 import { Works } from "./works.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { readWorkPreview } from "./preview-state.mjs";
+import { PREVIEW_VERSION } from "./preview-version.mjs";
+import { compareVersion, versionTree } from "./version-review.mjs";
 export function workOperations({
   add,
   registry,
@@ -51,13 +53,17 @@ export function workOperations({
     "Update work title, category, description or production status",
     {
       id: uuid,
-      expectedRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+      expectedRevision: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/)
+        .optional(),
       title: z.string().trim().min(1).max(150).optional(),
       category: z.string().max(80).optional(),
       description: z.string().max(4000).optional(),
       status: z.enum(["draft", "review", "finished"]).optional(),
     },
-    ({ id, expectedRevision, ...a }) => works.update(id, a, { expectedRevision }),
+    ({ id, expectedRevision, ...a }) =>
+      works.update(id, a, { expectedRevision }),
   );
   add(
     "works_trash",
@@ -152,6 +158,7 @@ export function workOperations({
     "List materials present in a work",
     {
       id: uuid,
+      search: z.string().max(200).default(""),
       limit: z.number().int().min(1).max(200).default(60),
       offset: z.number().int().min(0).default(0),
     },
@@ -161,6 +168,7 @@ export function workOperations({
       return assets.list({
         repo: w.repo,
         project: w.project,
+        search: a.search,
         limit: a.limit,
         offset: a.offset,
       });
@@ -174,6 +182,13 @@ export function workOperations({
       const w = await resolve(a.id);
       return assets.attach(a.asset, w.repo, w.project);
     },
+  );
+  add(
+    "works_speech_adopt",
+    "Adopt the exact temporary audition as a work resource",
+    { id: uuid, task: uuid, name: z.string().trim().min(1).max(180) },
+    async ({ id, ...a }) =>
+      invoke("speech_adopt", { ...(await resolve(id)), ...a }),
   );
   add(
     "works_speech",
@@ -246,6 +261,39 @@ export function workOperations({
     (a) => works.version(a.id, a.name),
   );
   add(
+    "works_version_compare",
+    "Compare a work version to the current work without modifying either",
+    { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) },
+    async (a) => compareVersion(repos, await works.get(a.id), a.version),
+  );
+  add(
+    "works_version_preview",
+    "Build an immutable historical preview; does not restore or save the current work",
+    { id: uuid, version: z.string().regex(/^[a-f0-9]{40}$/) },
+    async (a) => {
+      const work = await works.get(a.id, { active: true });
+      await versionTree(repos, work, a.version);
+      return db.lock(
+        "version-preview:" + work.id + ":" + a.version,
+        async () => {
+          const existing = await db.one(
+            "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND input->>'version'=$3 AND cleaned IS NULL AND (state IN ('queued','running','publishing','publish_failed') OR (state='succeeded' AND result->>'previewVersion'=$4)) ORDER BY created DESC LIMIT 1",
+            [work.repo, work.project, a.version, String(PREVIEW_VERSION)],
+          );
+          return (
+            existing ||
+            tasks.create({
+              repo: work.repo,
+              project: work.project,
+              kind: "build",
+              input: { version: a.version },
+            })
+          );
+        },
+      );
+    },
+  );
+  add(
     "works_restore",
     "Restore a work snapshot, saving the current version first",
     { id: uuid, version: z.union([uuid, z.string().regex(/^[a-f0-9]{40}$/)]) },
@@ -261,10 +309,15 @@ export function workOperations({
       return { ok: true };
     },
   );
-  add("works_preview_status", "Compare the current work source with its latest valid preview", { id: uuid }, async (a) => {
-    const work = await works.get(a.id, { active: true });
-    return readWorkPreview({ db, repos, work });
-  });
+  add(
+    "works_preview_status",
+    "Compare the current work source with its latest valid preview",
+    { id: uuid },
+    async (a) => {
+      const work = await works.get(a.id, { active: true });
+      return readWorkPreview({ db, repos, work });
+    },
+  );
   add(
     "works_browser",
     "Get a private AI browser URL with FRAME_AI console controls. Rendering, segment playback, screenshots and WebM exports execute in the client browser. If compilation is needed, returns a durable task; poll and call again.",
@@ -296,7 +349,10 @@ export function workOperations({
           state: pending.state === "publish_failed" ? "attention" : "building",
           task: pending.id,
           kind: pending.kind,
-          next: pending.state === "publish_failed" ? "Inspect task_get and retry with task_retry_publish after resolving the publication error." : "Poll task_get, then call works_browser again.",
+          next:
+            pending.state === "publish_failed"
+              ? "Inspect task_get and retry with task_retry_publish after resolving the publication error."
+              : "Poll task_get, then call works_browser again.",
         };
       const task = await tasks.create({
         repo: w.repo,

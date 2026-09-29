@@ -79,7 +79,7 @@ export class Works {
     if (!this.discovered) await this.discover();
     const rows = await this.db.all(
       `SELECT w.*, r.name AS storage_name, r.url AS remote,
-      (SELECT jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'finished',t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project ORDER BY t.created DESC LIMIT 1) AS activity,
+      (SELECT jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'finished',t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.input->>'version' IS NULL ORDER BY (t.state IN ('queued','running','cancelling','publishing','publish_failed')) DESC,t.created DESC LIMIT 1) AS activity,
       greatest(w.updated,COALESCE((SELECT max(t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.kind IN ('agent','new') AND t.state='succeeded'),w.updated)) AS modified
       FROM works w JOIN repos r ON r.id=w.repo WHERE w.deleted=$1 AND (w.title ILIKE $2 OR w.description ILIKE $2) AND ($3='' OR w.category=$3) AND ($4='' OR w.status=$4) AND ($5::uuid IS NULL OR w.repo=$5) AND (NOT $6 OR w.opened IS NOT NULL)
       ORDER BY CASE WHEN $6 THEN w.opened ELSE w.updated END DESC,w.id LIMIT $7 OFFSET $8`,
@@ -197,13 +197,18 @@ export class Works {
   }
   info(work) {
     return Object.fromEntries(
-      ["title", "category", "status", "description", "deleted"].map((key) => [key, work[key]]),
+      ["title", "category", "status", "description", "deleted"].map((key) => [
+        key,
+        work[key],
+      ]),
     );
   }
   async recoverInfo(id = null) {
     const root = path.join(this.data, "metadata-recovery");
     if (!fs.existsSync(root)) return;
-    const ids = id ? [id] : fs.readdirSync(root).map((name) => name.replace(/\.json$/, ""));
+    const ids = id
+      ? [id]
+      : fs.readdirSync(root).map((name) => name.replace(/\.json$/, ""));
     for (const key of ids) {
       if (!/^[0-9a-f-]{36}$/.test(key)) continue;
       const file = path.join(root, key + ".json");
@@ -227,7 +232,9 @@ export class Works {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     const temp = file + ".tmp-" + randomUUID();
     try {
-      fs.writeFileSync(temp, JSON.stringify(this.info(work), null, 2) + "\n", { flag: "wx" });
+      fs.writeFileSync(temp, JSON.stringify(this.info(work), null, 2) + "\n", {
+        flag: "wx",
+      });
       fs.renameSync(temp, file);
     } finally {
       fs.rmSync(temp, { force: true });
@@ -248,15 +255,15 @@ export class Works {
       try {
         await this.saveInfo(next);
         await this.db.pool.query(
-        "UPDATE works SET title=$2,category=$3,status=$4,description=$5,deleted=$6,updated=now() WHERE id=$1",
-        [
-          id,
-          next.title,
-          next.category,
-          next.status,
-          next.description,
-          next.deleted,
-        ],
+          "UPDATE works SET title=$2,category=$3,status=$4,description=$5,deleted=$6,updated=now() WHERE id=$1",
+          [
+            id,
+            next.title,
+            next.category,
+            next.status,
+            next.description,
+            next.deleted,
+          ],
         );
       } catch (error) {
         // Re-read SQL rather than blindly restoring an old snapshot: COMMIT may

@@ -12,15 +12,27 @@ test("web and AI preview status detect changed source independently of task-page
     fs.writeFileSync(path.join(dir, "scene.ts"), "first version");
     const latest = { id: "old-build", fingerprint: treeHash(dir) };
     let query;
-    const args = { work: { repo: "repo", project: "film" }, repos: { project: async () => ({ dir }) }, db: { one: async (sql) => { query = sql; return latest; } } };
+    const args = {
+      work: { repo: "repo", project: "film" },
+      repos: { project: async () => ({ dir }) },
+      db: {
+        one: async (sql) => {
+          query = sql;
+          return latest;
+        },
+      },
+    };
     assert.equal((await readWorkPreview(args)).stale, false);
     fs.writeFileSync(path.join(dir, "scene.ts"), "MCP edit");
     const changed = await readWorkPreview(args);
     assert.equal(changed.stale, true);
     assert.notEqual(changed.sourceRevision, changed.previewRevision);
     assert.match(query, /cleaned IS NULL/);
+    assert.match(query, /input->>'version' IS NULL/);
     assert.match(query, /ORDER BY created DESC,id DESC LIMIT 1/);
     latest.fingerprint = treeHash(dir);
     assert.equal((await readWorkPreview(args)).stale, false);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

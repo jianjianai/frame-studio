@@ -1,8 +1,12 @@
-import { subscribe } from "./realtime";
-import { loadTaskEvents } from "./task-events";
-import { canClearDraft, canReuseSubmission } from "./chat-draft";
+import { WorkChat } from "./work-chat";
 import { useEffect, useRef, useState } from "react";
 import { previewCacheBridge } from "./preview-cache";
+import { ResizeHandle } from "../src/ui/ResizeHandle";
+import {
+  readPreference,
+  writePreference,
+  boundedPreference,
+} from "../src/ui/view-preferences";
 import {
   ArrowUp,
   Square,
@@ -12,9 +16,8 @@ import {
   X,
   Play,
   RefreshCw,
-  PanelLeftClose,
-  Columns2,
-  Rows2,
+  MoreHorizontal,
+  PanelRightClose,
   History,
   Image,
   Download,
@@ -40,6 +43,7 @@ import {
   kinds,
   date,
   go,
+  useMediaQuery,
 } from "./ui";
 import {
   Materials,
@@ -50,415 +54,7 @@ import {
   Exports,
 } from "./work-panels";
 
-function useEvents(tasks, chat) {
-  const cache = useRef({}),
-    [events, setEvents] = useState({}),
-    [error, setError] = useState(""),
-    [connectionError, setConnectionError] = useState(""),
-    [reconnected, setReconnected] = useState(0);
-  const signature = tasks.filter((t) => t.chat === chat).map((t) => t.id + ":" + t.state).join(",");
-  useEffect(() => {
-    setError("");
-    const stop = loadTaskEvents({
-      tasks: tasks.filter((task) => task.chat === chat), cache: cache.current,
-      call: api, subscribe, onChange: setEvents, onError: setError,
-    });
-    const connection = (e) => {
-      if (e.detail === "connected") {
-        setConnectionError("");
-        setReconnected((value) => value + 1);
-      } else setConnectionError("连接暂时中断，正在重新连接；服务器上的创作会继续。");
-    };
-    window.addEventListener("frame-connection", connection);
-    return () => { stop(); window.removeEventListener("frame-connection", connection); };
-  }, [chat, signature, reconnected]);
-  return { events, error: connectionError || error };
-}
-function Turn({ task, events, onRetry, onStop, onRetryPublication }) {
-  const messages = new Map(),
-    activities = new Map();
-  let delta = "";
-  for (const row of events || []) {
-    const e = row.data;
-    if (row.kind === "message") {
-      messages.set(e.id || row.id, e.text);
-      delta = "";
-    } else if (row.kind === "summary" && e.text) {
-      if (![...messages.values()].includes(e.text))
-        messages.set("summary", e.text);
-      delta = "";
-    } else if (row.kind === "delta") delta += e.text;
-    else if (row.kind === "activity") {
-      const previous = activities.get(e.id);
-      activities.set(e.id || row.id, {
-        ...previous,
-        ...e,
-        text: e.tool === "result" && previous ? previous.text : e.text,
-      });
-    }
-  }
-  return (
-    <article className="chat-turn">
-      <div className="human-message">
-        {task.input.prompt}
-        {task.input.context?.time !== undefined && (
-          <small>审片位置 {task.input.context.time.toFixed(2)} 秒</small>
-        )}
-      </div>
-      <div className="assistant-message">
-        <div className="assistant-label">
-          <Sparkles size={14} />
-          <strong>{states[task.state]}</strong>
-          <span>{date(task.created)}</span>
-        </div>
-        {[...messages].map(([id, text]) => (
-          <div className="message-text" key={id}>
-            {text}
-          </div>
-        ))}
-        {delta && <div className="message-text streaming">{delta}</div>}
-        {activities.size > 0 && (
-          <details className="activity-list">
-            <summary>
-              {active(task) ? "查看正在进行的工作" : "查看制作过程"} ·{" "}
-              {activities.size} 项
-            </summary>
-            {[...activities].slice(-30).map(([id, e]) => (
-              <div key={id}>
-                <span>
-                  {e.phase === "done" ? "✓" : "·"} {e.text}
-                </span>
-                {e.output && <pre>{e.output}</pre>}
-              </div>
-            ))}
-          </details>
-        )}
-        {!messages.size && !delta && active(task) && (
-          <p className="quiet">
-            {task.state === "queued"
-              ? "已排队，前一项工作结束后自动开始。"
-              : "AI 正在制作作品…"}
-          </p>
-        )}
-        {task.error && (
-          <p role="alert" className="error">
-            {task.error}
-          </p>
-        )}
-        <div className="row">
-          {task.state === "failed" && (
-            <Button onClick={() => onRetry(task.input.prompt)}>
-              保留上下文重试
-            </Button>
-          )}
-          {task.state === "publish_failed" && (
-            <Button onClick={() => onRetryPublication(task.id)}>重试保存结果（不重跑 AI）</Button>
-          )}
-          {cancellable(task) && (
-            <Button icon={Square} onClick={() => onStop(task.id)}>
-              停止本次创作
-            </Button>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
-export function WorkChat({
-  work,
-  tasks,
-  reload,
-  notify,
-  position,
-  selectedAssets,
-  onClearAssets,
-}) {
-  const chats = useQuery("works_chats", { id: work.id }),
-    connections = useQuery("connections_list"),
-    [chat, setChat] = useState(""),
-    [connection, setConnection] = useState(""),
-    [prompt, setPrompt] = useState(
-      () => sessionStorage.getItem("draft:" + work.id) || "",
-    ),
-    [usePosition, setUsePosition] = useState(false),
-    [run, busy] = useAction(notify);
-  const initialized = useRef(false),
-    requestKey = useRef(null),
-    draftRevision = useRef(0),
-    chatRevision = useRef(0),
-    promptRef = useRef(prompt),
-    sending = useRef(false),
-    messages = useRef(null),
-    follow = useRef(true);
-  promptRef.current = prompt;
-  const editPrompt = (value) => { draftRevision.current++; promptRef.current = value; setPrompt(value); };
-  const chooseChat = (value) => { initialized.current = true; chatRevision.current++; setChat(value); };
-  const currentTurns = useQuery(
-    chat ? "works_chat_turns" : null,
-    { id: work.id, chat, limit: 30 },
-    1500,
-  );
-  const [older, setOlder] = useState([]),
-    [more, setMore] = useState(true);
-  useEffect(() => {
-    setOlder([]);
-    setMore(true);
-  }, [chat]);
-  useEffect(() => {
-    if (!initialized.current && chats.data) {
-      setChat(chats.data[0]?.id || "");
-      initialized.current = true;
-    }
-  }, [chats.data]);
-  useEffect(() => {
-    if (!connection && connections.data?.length)
-      setConnection(
-        connections.data.find((c) => c.configured)?.id ||
-          connections.data[0].id,
-      );
-  }, [connections.data, connection]);
-  useEffect(() => {
-    sessionStorage.setItem("draft:" + work.id, prompt);
-  }, [prompt, work.id]);
-  const conversationTasks = [
-    ...new Map(
-      [...older, ...(currentTurns.data || []), ...tasks]
-        .filter((t) => t.chat === chat)
-        .map((t) => [t.id, t]),
-    ).values(),
-  ].sort((a, b) => new Date(b.created) - new Date(a.created));
-  const stream = useEvents(conversationTasks, chat),
-    turns = conversationTasks.toReversed(),
-    selected = chats.data?.find((c) => c.id === chat),
-    chosen = selected?.connection || connection;
-  useEffect(() => {
-    if (follow.current && messages.current)
-      messages.current.scrollTop = messages.current.scrollHeight;
-  }, [stream.events, tasks]);
-  const send = async (text = prompt) => {
-    if (sending.current || !text.trim() || !chosen) return;
-    sending.current = true;
-    initialized.current = true;
-    const sent = { text, version: draftRevision.current, conversation: chatRevision.current };
-    const assetIds = selectedAssets.map((asset) => asset.id);
-    const intent = {
-      id: work.id, chat, connection: chosen, prompt: text,
-      context: {
-        ...(usePosition ? { time: position.time || 0 } : {}),
-        ...(usePosition && position.selection?.start !== undefined && position.selection?.end > position.selection.start
-          ? { start: position.selection.start, end: position.selection.end } : {}),
-        ...(assetIds.length ? { assets: assetIds } : {}),
-      },
-    };
-    const previous = requestKey.current;
-    const snapshot = { ...sent, work: work.id, chat, connection: chosen, usePosition, assetIds };
-    // A retry after a lost acknowledgement must retain the original review time
-    // and request key, even when the player has advanced in the meantime.
-    const submission = previous && canReuseSubmission({ ...previous.snapshot, chat: previous.chat }, snapshot)
-      ? previous : { key: crypto.randomUUID(), intent, chat, snapshot };
-    requestKey.current = submission;
-    try {
-      await run(async () => {
-        const frozen = submission.intent;
-        if (!submission.chat) {
-          const created = await api("works_chat_create", {
-            id: frozen.id, connection: frozen.connection, title: frozen.prompt.slice(0, 60),
-          });
-          submission.chat = created.id;
-          if (chatRevision.current === sent.conversation) setChat(created.id);
-          chats.refresh();
-        }
-        await api("works_chat_send", {
-          id: frozen.id, chat: submission.chat, prompt: frozen.prompt,
-          requestKey: submission.key, context: frozen.context,
-        });
-        if (requestKey.current === submission) requestKey.current = null;
-        if (canClearDraft(sent, { text: promptRef.current, version: draftRevision.current, conversation: chatRevision.current }))
-          editPrompt("");
-        if (chatRevision.current === sent.conversation) {
-          onClearAssets(assetIds);
-          follow.current = true;
-        }
-        reload();
-      });
-    } finally { sending.current = false; }
-  };
-  const stop = (id) =>
-    run(async () => {
-      await api("task_cancel", { id });
-      reload();
-    });
-  return (
-    <section className="creation-chat">
-      <header className="chat-header">
-        <div className="row">
-          <MessageSquare size={18} />
-          <h2>AI 创作</h2>
-        </div>
-        <Button
-          icon={Plus}
-          aria-label="新对话"
-          onClick={() => {
-            chooseChat("");
-            editPrompt("");
-          }}
-        >
-          新对话
-        </Button>
-      </header>
-      <div className="chat-selectors">
-        <select
-          aria-label="创作对话"
-          value={chat}
-          onChange={(e) => chooseChat(e.target.value)}
-        >
-          <option value="">新的创作对话</option>
-          {chats.data?.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.title}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="模型连接"
-          value={chosen}
-          disabled={!!chat}
-          onChange={(e) => setConnection(e.target.value)}
-        >
-          <option value="">选择模型连接</option>
-          {connections.data?.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name}
-              {c.configured ? "" : " · 未连接"}
-            </option>
-          ))}
-        </select>
-      </div>
-      <ErrorNote error={chats.error || connections.error} />
-      {stream.error && (
-        <p className="reconnecting" role="status">
-          {stream.error}
-        </p>
-      )}
-      <div
-        className="chat-messages"
-        ref={messages}
-        onScroll={(e) => {
-          const t = e.currentTarget;
-          follow.current = t.scrollHeight - t.scrollTop - t.clientHeight < 80;
-        }}
-      >
-        <ErrorNote error={currentTurns.error} />
-        {more && conversationTasks.length >= 30 && (
-          <Button
-            disabled={busy}
-            onClick={() =>
-              run(async () => {
-                const page = await api("works_chat_turns", {
-                  id: work.id,
-                  chat,
-                  limit: 30,
-                  before: turns[0].id,
-                });
-                follow.current = false;
-                setOlder((previous) => [...previous, ...page]);
-                setMore(page.length === 30);
-              })
-            }
-          >
-            加载更早的对话
-          </Button>
-        )}
-        {!turns.length && (
-          <div className="chat-intro">
-            <Sparkles size={27} />
-            <h3>从一个想法开始</h3>
-            <p>告诉 AI 想表达什么。画面、分镜、声音与节奏，可以边看边调整。</p>
-            <div className="suggestions">
-              {[
-                "先帮我设计这个作品的分镜与风格",
-                "制作一段简洁、有节奏的开场动画",
-              ].map((s) => (
-                <button key={s} onClick={() => editPrompt(s)}>
-                  {s}
-                </button>
-              ))}
-            </div>
-            {!connections.data?.some((c) => c.configured) && (
-              <a href="#/settings">连接创作模型 →</a>
-            )}
-          </div>
-        )}
-        {turns.map((t) => (
-          <Turn
-            key={t.id}
-            task={t}
-            events={stream.events[t.id]}
-            onRetry={send}
-            onStop={stop}
-            onRetryPublication={(id) => run(async () => { await api("task_retry_publish", { id }); reload(); })}
-          />
-        ))}
-      </div>
-      <form
-        className="chat-composer"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send();
-        }}
-      >
-        {selectedAssets.length > 0 && (
-          <div className="selected-assets">
-            {selectedAssets.map((a) => (
-              <span key={a.id}>{a.name}</span>
-            ))}
-            <Button
-              icon={X}
-              aria-label="清除素材引用"
-              type="button"
-              onClick={() => onClearAssets()}
-            />
-          </div>
-        )}
-        <textarea
-          aria-label="创作要求"
-          value={prompt}
-          onChange={(e) => editPrompt(e.target.value)}
-          placeholder="描述想法，或告诉 AI 这一段怎样调整…"
-          rows="4"
-          required
-          maxLength="40000"
-          onKeyDown={(e) => {
-            if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-              e.preventDefault();
-              if (prompt.trim() && !busy) void send();
-            }
-          }}
-        />
-        <div className="composer-options">
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={usePosition}
-              onChange={(e) => setUsePosition(e.target.checked)}
-            />
-            附带当前画面 {Number(position.time || 0).toFixed(2)}s
-          </label>
-          <Button
-            className="primary"
-            icon={ArrowUp}
-            disabled={busy || !prompt.trim() || !chosen}
-          >
-            {busy ? "发送中" : "发送"}
-          </Button>
-        </div>
-        <small>关闭浏览器后继续制作 · Ctrl / ⌘ + Enter 发送</small>
-      </form>
-    </section>
-  );
-}
-
-export function Creation({ id, notify, onToggleNav }) {
+export function Creation({ id, notify }) {
   const query = useQuery("works_open", { id }),
     taskQuery = useQuery("works_tasks", { id }, 2000),
     previewQuery = useQuery("works_preview_status", { id }, 1),
@@ -469,16 +65,83 @@ export function Creation({ id, notify, onToggleNav }) {
   const [preview, setPreview] = useState(null),
     [previewStage, setPreviewStage] = useState("正在获取作品…"),
     [panel, setPanel] = useState(""),
-    [layout, setLayout] = useState(
-      () => localStorage.getItem("frame.layout") || "columns",
+    [chatOpen, setChatOpen] = useState(() =>
+      readPreference("frame.chat-open", window.innerWidth > 900),
     ),
     [ratio, setRatio] = useState(() =>
-      Number(localStorage.getItem("frame.ratio") || 62),
+      boundedPreference(
+        readPreference("frame.workspace-split", 68),
+        68,
+        35,
+        80,
+      ),
     ),
     [dragging, setDragging] = useState(false),
     [position, setPosition] = useState({ time: 0 }),
-    [assets, setAssets] = useState([]),
+    [assets, setAssets] = useState(() => {
+      try {
+        const value = JSON.parse(
+          sessionStorage.getItem("frame.assets:" + id) || "[]",
+        );
+        return Array.isArray(value)
+          ? value
+              .filter(
+                (a) =>
+                  a && typeof a.id === "string" && typeof a.name === "string",
+              )
+              .slice(0, 20)
+          : [];
+      } catch {
+        return [];
+      }
+    }),
+    [suggestion, setSuggestion] = useState(null),
+    [browserJob, setBrowserJob] = useState(null),
     [run, busy] = useAction(notify);
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(
+        "frame.assets:" + id,
+        JSON.stringify(assets.map(({ id, name }) => ({ id, name }))),
+      );
+    } catch {}
+  }, [assets, id]);
+  const addAsset = (asset) =>
+    setAssets((old) =>
+      old.some((item) => item.id === asset.id)
+        ? old
+        : old.length < 20
+          ? [...old, { id: asset.id, name: asset.name }]
+          : old,
+    );
+  const browserRequest = useRef(null);
+  const browserFile = useRef(null);
+  useEffect(
+    () => () => {
+      if (browserFile.current) URL.revokeObjectURL(browserFile.current.url);
+    },
+    [],
+  );
+  const browserBusy = ["queued", "running", "cancelling"].includes(
+    browserJob?.state,
+  );
+  const compact = useMediaQuery("(max-width: 900px)");
+  const chatToggle = useRef(null);
+  const playerPreferences = useRef(readPreference("frame.player-view", {}));
+  const sendPlayer = (command, extra = {}) =>
+    iframe.current?.contentWindow?.postMessage(
+      { type: "frame-player-command", command, ...extra },
+      "*",
+    );
+  const closeChat = () => {
+    setChatOpen(false);
+    chatToggle.current?.focus();
+  };
+  useEffect(() => {
+    document.title = query.data
+      ? query.data.title + " · FRAME"
+      : "作品 · FRAME";
+  }, [query.data?.title]);
   useEffect(() => {
     let last = 0,
       pending = false;
@@ -501,7 +164,7 @@ export function Creation({ id, notify, onToggleNav }) {
     lastPreview = useRef(""),
     buildRequested = useRef(false);
   useEffect(() => {
-    if (!latest || latest.id === lastPreview.current) return;
+    if (!latest || latest.id === lastPreview.current || browserBusy) return;
     let cancelled = false;
     request(`/api/tasks/${latest.id}/preview`, { method: "POST" })
       .then((link) => {
@@ -515,7 +178,7 @@ export function Creation({ id, notify, onToggleNav }) {
     return () => {
       cancelled = true;
     };
-  }, [latest?.id]);
+  }, [latest?.id, browserBusy]);
   useEffect(() => {
     if (
       !taskQuery.data ||
@@ -539,6 +202,32 @@ export function Creation({ id, notify, onToggleNav }) {
   useEffect(() => {
     const receive = (e) => {
       if (e.source !== iframe.current?.contentWindow) return;
+      if (
+        e.data?.type === "frame-export-state" &&
+        e.data.id === browserRequest.current
+      ) {
+        const { type, blob, ...state } = e.data;
+        if (blob instanceof Blob && state.state === "succeeded") {
+          if (browserFile.current) URL.revokeObjectURL(browserFile.current.url);
+          browserFile.current = {
+            url: URL.createObjectURL(blob),
+            name: state.filename,
+          };
+        }
+        setBrowserJob(state);
+        if (state.state === "failed")
+          notify(state.error || "本机导出失败", "error");
+      }
+      if (e.data?.type === "frame-download-error")
+        notify(e.data.message, "error");
+      if (e.data?.type === "frame-player-ready")
+        sendPlayer("configure-view", {
+          preferences: playerPreferences.current,
+        });
+      if (e.data?.type === "frame-player-preferences") {
+        playerPreferences.current = e.data.preferences;
+        writePreference("frame.player-view", e.data.preferences);
+      }
       if (e.data?.type === "frame-preview-loading")
         setPreviewStage(e.data.message || "");
       if (
@@ -555,39 +244,53 @@ export function Creation({ id, notify, onToggleNav }) {
     [preview?.url],
   );
   useEffect(() => {
-    localStorage.setItem("frame.layout", layout);
-    localStorage.setItem("frame.ratio", String(ratio));
-  }, [layout, ratio]);
+    writePreference("frame.chat-open", chatOpen);
+    writePreference("frame.workspace-split", ratio);
+  }, [chatOpen, ratio]);
   useEffect(() => {
-    if (!latest) return;
+    if (!latest || browserBusy) return;
+    let cancelled = false;
     const timer = setInterval(
       () =>
         request("/api/tasks/" + latest.id + "/preview", { method: "POST" })
-          .then((link) => setPreview({ ...link, id: latest.id }))
+          .then((link) => {
+            if (!cancelled) setPreview({ ...link, id: latest.id });
+          })
           .catch(() => {}),
       20 * 60000,
     );
-    return () => clearInterval(timer);
-  }, [latest?.id]);
-  const drag = (e) => {
-    e.currentTarget.setPointerCapture(e.pointerId);
-    setDragging(true);
-  };
-  const move = (e) => {
-    if (!dragging) return;
-    const rect = split.current.getBoundingClientRect();
-    setRatio(
-      Math.max(
-        30,
-        Math.min(
-          78,
-          layout === "columns" && window.innerWidth > 760
-            ? ((e.clientX - rect.left) / rect.width) * 100
-            : ((e.clientY - rect.top) / rect.height) * 100,
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [latest?.id, browserBusy]);
+  useEffect(() => {
+    if (!browserBusy) return;
+    const protect = (event) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", protect);
+    return () => window.removeEventListener("beforeunload", protect);
+  }, [browserBusy]);
+  useEffect(() => {
+    if (browserJob?.state !== "queued") return;
+    const id = browserJob.id;
+    const timer = setTimeout(
+      () =>
+        setBrowserJob((previous) =>
+          previous?.id === id && previous.state === "queued"
+            ? {
+                ...previous,
+                state: "failed",
+                error: "播放器没有确认导出请求，请刷新预览后重试",
+              }
+            : previous,
         ),
-      ),
+      15000,
     );
-  };
+    return () => clearTimeout(timer);
+  }, [browserJob?.id, browserJob?.state]);
   if (query.loading && !query.data) return <Loading />;
   if (query.error) return <ErrorNote error={query.error} />;
   const work = query.data;
@@ -605,91 +308,124 @@ export function Creation({ id, notify, onToggleNav }) {
   return (
     <div className="creation">
       <header className="creation-toolbar">
-        <div className="row">
-          <Button
-            icon={PanelLeftClose}
-            aria-label="收起或展开导航"
-            onClick={onToggleNav}
-          />
-          <div>
-            <a className="breadcrumb" href={"#/repository/" + work.repo}>
-              {work.repository?.name}
-            </a>
-            <h1>{work.title}</h1>
-          </div>
+        <div className="work-identity">
+          <span className="breadcrumb">{work.repository?.name}</span>
+          <h1 title={work.title}>{work.title}</h1>
         </div>
         <div className="creation-actions">
           <Button
-            icon={RefreshCw}
-            disabled={busy || running.some((t) => t.kind === "build")}
-            onClick={() =>
-              run(async () => {
-                await api("works_task", { id, kind: "build" });
-                taskQuery.refresh();
-              })
-            }
-          >
-            刷新预览
-          </Button>
-          <Button icon={ListTodo} onClick={() => setPanel("tasks")}>
-            后台任务{running.length ? ` · ${running.length}` : ""}
-          </Button>
-
-          {[
-            ["sync", GitPullRequest, "同步"],
-            ["materials", Image, "素材"],
-            ["voice", Mic, "配音"],
-            ["versions", History, "版本"],
-            ["exports", Download, "导出"],
-            ["details", Info, "资料"],
-          ].map(([key, Icon, label]) => (
-            <Button
-              key={key}
-              icon={Icon}
-              title={
-                key === "sync"
-                  ? syncQuery.error || syncQuery.data?.error || label
-                  : label
-              }
-              className={
-                key === "sync" &&
-                (syncQuery.data?.ahead ||
-                  syncQuery.data?.behind ||
-                  syncQuery.data?.dirty)
+            icon={GitPullRequest}
+            className={
+              syncQuery.error || syncQuery.data?.error
+                ? "sync-error"
+                : syncQuery.data?.ahead ||
+                    syncQuery.data?.behind ||
+                    syncQuery.data?.dirty
                   ? "sync-attention"
-                  : undefined
-              }
-              onClick={() => setPanel(key)}
-            >
-              <span>
-                {label}
-                {key === "sync" && (
-                  <>
-                    {syncQuery.data?.ahead > 0 && ` ↑${syncQuery.data.ahead}`}
-                    {syncQuery.data?.behind > 0 && ` ↓${syncQuery.data.behind}`}
-                    {syncQuery.data?.dirty > 0 &&
-                      ` 待保存 ${syncQuery.data.dirty}`}
-                  </>
-                )}
-              </span>
-            </Button>
-          ))}
+                  : "sync-status"
+            }
+            aria-label="查看同步状态"
+            title={
+              syncQuery.error ||
+              syncQuery.data?.error ||
+              "查看作品保存与同步状态"
+            }
+            onClick={() => setPanel("sync")}
+          >
+            {syncQuery.error || syncQuery.data?.error
+              ? "同步需处理"
+              : syncQuery.data?.dirty
+                ? "有未保存修改"
+                : syncQuery.data?.behind
+                  ? "有远端更新"
+                  : syncQuery.data?.ahead
+                    ? "待同步 " + syncQuery.data.ahead
+                    : syncQuery.data
+                      ? syncQuery.data.remote
+                        ? "已同步"
+                        : "保存在服务器"
+                      : "正在检查"}
+          </Button>
           <Button
-            icon={layout === "columns" ? Rows2 : Columns2}
-            aria-label="切换左右或上下布局"
-            onClick={() => setLayout(layout === "columns" ? "rows" : "columns")}
-          />
+            icon={ListTodo}
+            aria-label="后台任务"
+            onClick={() => setPanel("tasks")}
+          >
+            任务{running.length ? " · " + running.length : ""}
+          </Button>
+          <Button
+            icon={MessageSquare}
+            ref={chatToggle}
+            aria-label={chatOpen ? "关闭 AI 对话" : "打开 AI 对话"}
+            aria-controls="work-chat"
+            aria-expanded={chatOpen}
+            onClick={() => setChatOpen(!chatOpen)}
+          >
+            AI 对话
+          </Button>
+          <details className="work-more">
+            <summary aria-label="更多作品操作">
+              <MoreHorizontal size={19} /> 更多
+            </summary>
+            <div className="work-more-menu">
+              <Button
+                icon={RefreshCw}
+                disabled={busy || running.some((t) => t.kind === "build")}
+                onClick={(event) => {
+                  event.currentTarget.closest("details").open = false;
+                  void run(async () => {
+                    await api("works_task", { id, kind: "build" });
+                    taskQuery.refresh();
+                  });
+                }}
+              >
+                刷新预览
+              </Button>
+              {[
+                ["materials", Image, "素材"],
+                ["voice", Mic, "配音"],
+                ["versions", History, "版本"],
+                ["details", Info, "作品资料"],
+              ].map(([key, Icon, label]) => (
+                <Button
+                  key={key}
+                  icon={Icon}
+                  onClick={(event) => {
+                    event.currentTarget.closest("details").open = false;
+                    setPanel(key);
+                  }}
+                >
+                  {label}
+                </Button>
+              ))}
+            </div>
+          </details>
+          <Button
+            className="primary"
+            icon={Download}
+            onClick={() => setPanel("exports")}
+          >
+            {browserBusy ? "正在本机导出" : "导出"}
+          </Button>
         </div>
       </header>
       <div
         ref={split}
-        className={`creation-split ${layout} ${dragging ? "dragging" : ""}`}
-        style={{ "--split": ratio + "%" }}
+        className={`creation-split ${chatOpen ? "chat-open" : "chat-closed"} ${dragging ? "dragging" : ""}`}
+        style={{
+          "--video-share": ratio + "fr",
+          "--chat-share": 100 - ratio + "fr",
+        }}
       >
-        <div className="preview-pane">
+        <div
+          className="preview-pane"
+          inert={compact && chatOpen ? true : undefined}
+        >
           {(previewQuery.error || (preview && previewQuery.data?.stale)) && (
             <div className="preview-version-note" role="status">
-              {previewQuery.error ? "暂时无法核对预览版本：" + previewQuery.error : "当前播放的是旧版本；最新修改尚未生成预览，请点击「刷新预览」。"}
+              {previewQuery.error
+                ? "暂时无法核对预览版本：" + previewQuery.error
+                : "当前播放的是旧版本；最新修改尚未生成预览，请点击「刷新预览」。"}
             </div>
           )}
           {preview ? (
@@ -705,6 +441,11 @@ export function Creation({ id, notify, onToggleNav }) {
                 ref={iframe}
                 title="作品播放器"
                 src={preview.url}
+                onLoad={() =>
+                  sendPlayer("configure-view", {
+                    preferences: playerPreferences.current,
+                  })
+                }
                 sandbox="allow-scripts allow-downloads"
                 allow="autoplay; fullscreen"
                 allowFullScreen
@@ -731,40 +472,26 @@ export function Creation({ id, notify, onToggleNav }) {
             </div>
           )}
         </div>
-        <div
-          className="splitter"
-          role="separator"
-          aria-label="调整播放器和 AI 区域大小"
-          aria-orientation={layout === "columns" ? "vertical" : "horizontal"}
-          aria-valuenow={Math.round(ratio)}
-          aria-valuemin={30}
-          aria-valuemax={78}
-          tabIndex="0"
-          onPointerDown={drag}
-          onPointerMove={move}
-          onPointerUp={() => setDragging(false)}
-          onPointerCancel={() => setDragging(false)}
-          onKeyDown={(e) => {
-            if (
-              ["ArrowLeft", "ArrowUp", "ArrowRight", "ArrowDown"].includes(
-                e.key,
-              )
-            ) {
-              e.preventDefault();
-              setRatio((r) =>
-                Math.max(
-                  30,
-                  Math.min(
-                    78,
-                    r + (["ArrowLeft", "ArrowUp"].includes(e.key) ? -2 : 2),
-                  ),
-                ),
-              );
-            }
-          }}
-        >
-          <i />
-        </div>
+        {chatOpen && (
+          <ResizeHandle
+            axis="vertical"
+            value={ratio}
+            min={35}
+            max={80}
+            containerRef={split}
+            onChange={setRatio}
+            onDragChange={setDragging}
+            label="调整播放器和 AI 区域大小"
+          />
+        )}
+        {chatOpen && (
+          <button
+            className="chat-scrim"
+            aria-label="收起 AI 对话"
+            onClick={closeChat}
+            tabIndex={-1}
+          />
+        )}
         <WorkChat
           key={id}
           work={work}
@@ -773,14 +500,34 @@ export function Creation({ id, notify, onToggleNav }) {
           notify={notify}
           position={position}
           selectedAssets={assets}
-          onClearAssets={(ids) => setAssets((current) => ids ? current.filter((asset) => !ids.includes(asset.id)) : [])}
+          suggestion={suggestion}
+          visible={chatOpen}
+          onClose={closeChat}
+          compact={compact}
+          onRecall={(context) => {
+            sendPlayer("seek", {
+              time: context.start ?? context.time ?? 0,
+              ...(context.end > context.start
+                ? { selection: { start: context.start, end: context.end } }
+                : {}),
+            });
+            if (compact) closeChat();
+          }}
+          onRemoveAsset={(id) =>
+            setAssets((old) => old.filter((a) => a.id !== id))
+          }
+          onClearAssets={(ids) =>
+            setAssets((current) =>
+              ids ? current.filter((asset) => !ids.includes(asset.id)) : [],
+            )
+          }
         />
       </div>
       {panel && (
         <Modal
           title={title}
           onClose={() => setPanel("")}
-          wide={["materials", "exports"].includes(panel)}
+          wide={["materials", "exports", "versions"].includes(panel)}
         >
           {panel === "tasks" ? (
             <div className="task-dialog-list">
@@ -822,9 +569,23 @@ export function Creation({ id, notify, onToggleNav }) {
                     </small>
                   )}
                   {task.error && <ErrorNote error={task.error} />}
-                  {task.monitor && <ErrorNote error={"监控暂时不可用：" + task.monitor.message} />}
+                  {task.monitor && (
+                    <ErrorNote
+                      error={"监控暂时不可用：" + task.monitor.message}
+                    />
+                  )}
                   {task.state === "publish_failed" && (
-                    <Button disabled={busy} onClick={() => run(async () => { await api("task_retry_publish", { id: task.id }); taskQuery.refresh(); })}>重试保存结果</Button>
+                    <Button
+                      disabled={busy}
+                      onClick={() =>
+                        run(async () => {
+                          await api("task_retry_publish", { id: task.id });
+                          taskQuery.refresh();
+                        })
+                      }
+                    >
+                      重试保存结果
+                    </Button>
                   )}
                   {cancellable(task) && (
                     <Button
@@ -847,19 +608,53 @@ export function Creation({ id, notify, onToggleNav }) {
             <Materials
               work={work}
               notify={notify}
-              onSelect={(a) =>
-                setAssets((old) =>
-                  old.some((x) => x.id === a.id) ? old : [...old, a],
-                )
-              }
+              selectedAssets={assets}
+              onSelect={addAsset}
+              onDone={() => {
+                setPanel("");
+                setChatOpen(true);
+              }}
             />
           ) : panel === "voice" ? (
-            <Voice work={work} notify={notify} />
+            <Voice
+              work={work}
+              notify={notify}
+              position={position}
+              onAdopt={(asset, review) => {
+                if (
+                  assets.length >= 20 &&
+                  !assets.some((a) => a.id === asset.id)
+                ) {
+                  notify(
+                    "当前已引用 20 个素材，请先移除部分引用再添加配音",
+                    "error",
+                  );
+                  return;
+                }
+                addAsset(asset);
+                setSuggestion({
+                  id: crypto.randomUUID(),
+                  text:
+                    "请将配音资源“" +
+                    asset.name +
+                    "”编排到作品中，保持声画与字幕同步。",
+                  review,
+                });
+                setPanel("");
+                setChatOpen(true);
+              }}
+            />
           ) : panel === "versions" ? (
             <Versions
               work={work}
               notify={notify}
-              onRestore={taskQuery.refresh}
+              onRestore={() => {
+                taskQuery.refresh();
+                query.refresh();
+              }}
+              currentPreview={preview?.url}
+              position={position}
+              onPause={() => sendPlayer("pause")}
             />
           ) : panel === "details" ? (
             <Details work={work} notify={notify} onSave={query.refresh} />
@@ -873,13 +668,35 @@ export function Creation({ id, notify, onToggleNav }) {
             <Exports
               work={work}
               notify={notify}
-              onBrowserExport={() => {
-                iframe.current?.contentWindow?.postMessage(
-                  { type: "frame-player-command", command: "export" },
-                  "*",
-                );
-                setPanel("");
+              position={position}
+              previewReady={!!preview && !previewStage && !!position.duration}
+              browserJob={browserJob}
+              onBrowserExport={(options) => {
+                if (browserBusy || !preview || previewStage)
+                  throw new Error("请等待播放器就绪或当前导出完成");
+                const id = crypto.randomUUID();
+                browserRequest.current = id;
+                setBrowserJob({ id, state: "queued" });
+                sendPlayer("export-start", { id, options });
               }}
+              onBrowserCancel={() => {
+                sendPlayer("export-cancel");
+                setBrowserJob((previous) => ({
+                  ...previous,
+                  state: "cancelling",
+                }));
+              }}
+              onBrowserDownload={() => {
+                if (browserFile.current) {
+                  const a = document.createElement("a");
+                  a.href = browserFile.current.url;
+                  a.download = browserFile.current.name;
+                  a.click();
+                } else
+                  notify("本机导出文件已不在当前标签页中，请重新导出", "error");
+              }}
+              onSnapshot={() => sendPlayer("snapshot")}
+              onSubtitles={() => sendPlayer("subtitles")}
             />
           )}
         </Modal>
