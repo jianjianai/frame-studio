@@ -211,6 +211,7 @@ export function WorkChat({
   suggestion,
   visible = true,
   compact = false,
+  embedded = false,
 }) {
   const chats = useQuery("works_chats", { id: work.id }),
     connections = useQuery("connections_list");
@@ -422,9 +423,10 @@ export function WorkChat({
       className="creation-chat"
       hidden={!visible}
       aria-label="AI 创作对话"
-      role={compact ? "dialog" : undefined}
-      aria-modal={compact && visible ? true : undefined}
+      role={compact && !embedded ? "dialog" : undefined}
+      aria-modal={compact && visible && !embedded ? true : undefined}
       onKeyDown={(event) => {
+        if (embedded) return;
         if (event.key === "Escape" && compact) {
           event.preventDefault();
           event.stopPropagation();

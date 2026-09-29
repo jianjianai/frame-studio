@@ -126,9 +126,10 @@ test(
       const player = page.frameLocator('iframe[title="作品播放器"]');
       await page.getByRole("button", { name: "导出", exact: true }).waitFor();
       await page.getByRole("button", { name: "后台任务", exact: true }).click();
-      await page.getByRole("dialog", { name: "后台任务" }).waitFor();
+      await page.getByRole("complementary", { name: "后台任务" }).waitFor();
       assert.equal(await page.locator(".creation-status").count(), 0);
-      await page.getByRole("button", { name: "关闭弹窗" }).click();
+      await page.getByRole("button", { name: "关闭后台任务" }).click();
+      await page.getByRole("button", { name: "打开 AI 对话" }).click();
       await player.getByTestId("play-toggle").waitFor({ timeout: 30000 });
       await player.getByTestId("play-toggle").click();
       await page.waitForTimeout(350);
@@ -183,8 +184,10 @@ test(
         .getByRole("button", { name: "关闭 AI 对话" })
         .click();
       await page.getByRole("button", { name: "打开 AI 对话" }).click();
-      await page.locator(".work-more > summary").click();
-      await page.getByRole("button", { name: "版本", exact: true }).click();
+      await page.getByRole("button", { name: "作品菜单" }).click();
+      await page
+        .getByRole("menuitem", { name: "版本管理", exact: true })
+        .click();
       const versions = page.getByRole("dialog", { name: "版本管理" });
       await versions.getByLabel("版本名称").fill("审片确认");
       await versions.getByRole("button", { name: "保存当前版本" }).click();
@@ -194,14 +197,10 @@ test(
         .getByRole("button", { name: "查看同步状态", exact: true })
         .click();
       await page
-        .getByRole("dialog")
+        .getByRole("complementary", { name: "同步状态" })
         .getByText(work.branch, { exact: true })
         .waitFor();
-      await page.getByRole("button", { name: "关闭弹窗" }).click();
-      await page
-        .locator(".creation-toolbar")
-        .getByRole("button", { name: "关闭 AI 对话" })
-        .click();
+      await page.getByRole("button", { name: "关闭同步状态" }).click();
       fs.mkdirSync(path.join(platformRoot, ".cache/validation"), {
         recursive: true,
       });

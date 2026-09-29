@@ -258,7 +258,7 @@ export async function timelineChecks(h) {
       ]) {
         await page.setViewportSize(viewport);
         const close = page
-          .locator(".creation-actions")
+          .locator("#work-chat")
           .getByRole("button", { name: "关闭 AI 对话", exact: true });
         if (await close.count()) await close.click();
         await end.press("Home");

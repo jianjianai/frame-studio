@@ -4,6 +4,7 @@ import {
   workChatCreateSchema,
   reviewContextSchema,
   playerCommandSchema,
+  previewMessageSchema,
   taskStateSchema,
 } from "../../src/contracts/platform.mjs";
 const id = "e119cb8c-6933-43f3-9f3d-a3ea99cd23cb";
@@ -91,4 +92,41 @@ test("workspace commands preserve selection, view preferences and narrow portrai
   );
   for (const command of ["export-cancel", "export-download", "snapshot"])
     assert.equal(parse({ command }), true);
+});
+
+test("work context and preview update requests are bounded and contain no execution payload", () => {
+  const context = {
+    title: "作品",
+    compact: false,
+    previewStatus: "stale",
+    updateDisabled: false,
+  };
+  const command = {
+    type: "frame-player-command",
+    command: "configure-work",
+    context,
+  };
+  assert.equal(playerCommandSchema.safeParse(command).success, true);
+  for (const invalid of [
+    { ...context, title: "x".repeat(401) },
+    { ...context, previewStatus: "execute" },
+    { ...context, source: "arbitrary" },
+  ])
+    assert.equal(
+      playerCommandSchema.safeParse({ ...command, context: invalid }).success,
+      false,
+    );
+  assert.equal(
+    previewMessageSchema.safeParse({ type: "frame-preview-update-request" })
+      .success,
+    true,
+  );
+  assert.equal(
+    previewMessageSchema.safeParse({
+      type: "frame-preview-update-request",
+      id,
+      command: "arbitrary",
+    }).success,
+    false,
+  );
 });

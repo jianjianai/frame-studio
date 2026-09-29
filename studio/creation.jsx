@@ -1,5 +1,8 @@
 import { previewMessageSchema } from "../src/contracts/platform.mjs";
 import { WorkChat } from "./work-chat";
+import { WorkTools } from "./work-tools";
+import { WorkDock } from "./work-dock";
+import { ExportProgress, exportState } from "./exports";
 import { useEffect, useRef, useState } from "react";
 import { previewCacheBridge } from "./preview-cache";
 import { ResizeHandle } from "../src/ui/ResizeHandle";
@@ -8,33 +11,13 @@ import {
   writePreference,
   boundedPreference,
 } from "../src/ui/view-preferences";
-import {
-  ArrowUp,
-  Square,
-  Plus,
-  MessageSquare,
-  ChevronDown,
-  X,
-  Play,
-  RefreshCw,
-  MoreHorizontal,
-  PanelRightClose,
-  History,
-  Image,
-  Download,
-  Info,
-  Mic,
-  GitPullRequest,
-  Sparkles,
-  ListTodo,
-} from "lucide-react";
+import { Square, Play, RefreshCw } from "lucide-react";
 import {
   api,
   request,
   useQuery,
   useAction,
   Button,
-  Field,
   Modal,
   ErrorNote,
   Loading,
@@ -43,7 +26,6 @@ import {
   states,
   kinds,
   date,
-  go,
   useMediaQuery,
 } from "./ui";
 import {
@@ -66,9 +48,19 @@ export function Creation({ id, notify }) {
   const [preview, setPreview] = useState(null),
     [previewStage, setPreviewStage] = useState("正在获取作品…"),
     [panel, setPanel] = useState(""),
-    [chatOpen, setChatOpen] = useState(() =>
-      readPreference("frame.chat-open", window.innerWidth > 900),
-    ),
+    [tool, setTool] = useState(() => {
+      const fallback = readPreference(
+        "frame.chat-open",
+        window.innerWidth > 900,
+      )
+        ? "ai"
+        : "";
+      const saved = readPreference("frame.work-tool", fallback);
+      return ["ai", "materials", "voice", "tasks", "sync", ""].includes(saved)
+        ? saved
+        : fallback;
+    }),
+    [visited, setVisited] = useState({ ai: true }),
     [ratio, setRatio] = useState(() =>
       boundedPreference(
         readPreference("frame.workspace-split", 68),
@@ -96,6 +88,7 @@ export function Creation({ id, notify }) {
         return [];
       }
     }),
+    [requestingBuild, setRequestingBuild] = useState(false),
     [suggestion, setSuggestion] = useState(null),
     [browserJob, setBrowserJob] = useState(null),
     [run, busy] = useAction(notify);
@@ -127,17 +120,80 @@ export function Creation({ id, notify }) {
     browserJob?.state,
   );
   const compact = useMediaQuery("(max-width: 900px)");
-  const chatToggle = useRef(null);
+  const toolbarRef = useRef(null);
+  const returnFocus = useRef(null);
+  const dockOpen = !!tool;
+  const chatOpen = tool === "ai";
+  const openTool = (key, trigger) => {
+    returnFocus.current =
+      trigger || toolbarRef.current?.querySelector(`[data-tool-key="${key}"]`);
+    setVisited((previous) => ({ ...previous, [key]: true }));
+    setTool(key);
+  };
+  useEffect(() => {
+    if (tool)
+      setVisited((previous) =>
+        previous[tool] ? previous : { ...previous, [tool]: true },
+      );
+  }, [tool]);
+  const closeTool = () => {
+    setTool("");
+    requestAnimationFrame(() => {
+      const previous = returnFocus.current;
+      const fallback = toolbarRef.current?.querySelector(
+        `[data-tool-key="${compact && tool !== "ai" ? "tools" : tool}"]`,
+      );
+      (previous?.isConnected && previous.getClientRects().length
+        ? previous
+        : fallback
+      )?.focus();
+    });
+  };
   const playerPreferences = useRef(readPreference("frame.player-view", {}));
   const sendPlayer = (command, extra = {}) =>
     iframe.current?.contentWindow?.postMessage(
       { type: "frame-player-command", command, ...extra },
       "*",
     );
-  const closeChat = () => {
-    setChatOpen(false);
-    chatToggle.current?.focus();
+  const closeChat = closeTool;
+  const building = tasks.some((task) => task.kind === "build" && active(task));
+  const buildRequestPending = useRef(false);
+  const updatePreview = async () => {
+    if (buildRequestPending.current || busy || building || browserBusy) return;
+    buildRequestPending.current = true;
+    setRequestingBuild(true);
+    try {
+      await run(async () => {
+        await api("works_task", { id, kind: "build" });
+        taskQuery.refresh();
+        previewQuery.refresh();
+      });
+    } finally {
+      buildRequestPending.current = false;
+      setRequestingBuild(false);
+    }
   };
+  const updatePreviewRef = useRef(updatePreview);
+  updatePreviewRef.current = updatePreview;
+  const workContext = useRef(null);
+  workContext.current = {
+    title: query.data?.title || "作品",
+    compact,
+    previewStatus:
+      building || requestingBuild
+        ? "building"
+        : previewQuery.error
+          ? "unknown"
+          : previewQuery.data?.stale
+            ? "stale"
+            : "ready",
+    updateDisabled: busy || building || requestingBuild || browserBusy,
+  };
+  const workContextKey = JSON.stringify(workContext.current);
+  useEffect(() => {
+    if (preview) sendPlayer("configure-work", { context: workContext.current });
+  }, [workContextKey, preview?.url]);
+
   useEffect(() => {
     document.title = query.data
       ? query.data.title + " · FRAME"
@@ -221,17 +277,26 @@ export function Creation({ id, notify }) {
       }
       if (e.data?.type === "frame-download-error")
         notify(e.data.message, "error");
-      if (e.data?.type === "frame-player-ready")
+      if (e.data?.type === "frame-player-ready") {
         sendPlayer("configure-view", {
           preferences: playerPreferences.current,
         });
+        sendPlayer("configure-work", { context: workContext.current });
+      }
       if (e.data?.type === "frame-player-preferences") {
         playerPreferences.current = e.data.preferences;
         writePreference("frame.player-view", e.data.preferences);
       }
       const message = previewMessageSchema.safeParse(e.data);
-      if (message.success && message.data.type === "frame-preview-loading") setPreviewStage(message.data.message);
-      if (message.success && message.data.type === "frame-player-state") setPosition(message.data);
+      if (
+        message.success &&
+        message.data.type === "frame-preview-update-request"
+      )
+        void updatePreviewRef.current();
+      if (message.success && message.data.type === "frame-preview-loading")
+        setPreviewStage(message.data.message);
+      if (message.success && message.data.type === "frame-player-state")
+        setPosition(message.data);
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
@@ -242,8 +307,9 @@ export function Creation({ id, notify }) {
   );
   useEffect(() => {
     writePreference("frame.chat-open", chatOpen);
+    writePreference("frame.work-tool", tool);
     writePreference("frame.workspace-split", ratio);
-  }, [chatOpen, ratio]);
+  }, [tool, ratio]);
   useEffect(() => {
     if (!latest || browserBusy) return;
     let cancelled = false;
@@ -280,7 +346,7 @@ export function Creation({ id, notify }) {
             ? {
                 ...previous,
                 state: "failed",
-                error: "播放器没有确认导出请求，请刷新预览后重试",
+                error: "播放器没有确认导出请求，请更新预览后重试",
               }
             : previous,
         ),
@@ -294,121 +360,30 @@ export function Creation({ id, notify }) {
   if (!work) return null;
   const running = tasks.filter(active),
     title = {
-      materials: "素材",
-      voice: "配音",
       versions: "版本管理",
       exports: "导出",
       details: "作品资料",
-      sync: "同步状态",
-      tasks: "后台任务",
     }[panel];
   return (
     <div className="creation">
-      <header className="creation-toolbar">
-        <div className="work-identity">
-          <span className="breadcrumb">{work.repository?.name}</span>
-          <h1 title={work.title}>{work.title}</h1>
-        </div>
-        <div className="creation-actions">
-          <Button
-            icon={GitPullRequest}
-            className={
-              syncQuery.error || syncQuery.data?.error
-                ? "sync-error"
-                : syncQuery.data?.ahead ||
-                    syncQuery.data?.behind ||
-                    syncQuery.data?.dirty
-                  ? "sync-attention"
-                  : "sync-status"
-            }
-            aria-label="查看同步状态"
-            title={
-              syncQuery.error ||
-              syncQuery.data?.error ||
-              "查看作品保存与同步状态"
-            }
-            onClick={() => setPanel("sync")}
-          >
-            {syncQuery.error || syncQuery.data?.error
-              ? "同步需处理"
-              : syncQuery.data?.dirty
-                ? "有未保存修改"
-                : syncQuery.data?.behind
-                  ? "有远端更新"
-                  : syncQuery.data?.ahead
-                    ? "待同步 " + syncQuery.data.ahead
-                    : syncQuery.data
-                      ? syncQuery.data.remote
-                        ? "已同步"
-                        : "保存在服务器"
-                      : "正在检查"}
-          </Button>
-          <Button
-            icon={ListTodo}
-            aria-label="后台任务"
-            onClick={() => setPanel("tasks")}
-          >
-            任务{running.length ? " · " + running.length : ""}
-          </Button>
-          <Button
-            icon={MessageSquare}
-            ref={chatToggle}
-            aria-label={chatOpen ? "关闭 AI 对话" : "打开 AI 对话"}
-            aria-controls="work-chat"
-            aria-expanded={chatOpen}
-            onClick={() => setChatOpen(!chatOpen)}
-          >
-            AI 对话
-          </Button>
-          <details className="work-more">
-            <summary aria-label="更多作品操作">
-              <MoreHorizontal size={19} /> 更多
-            </summary>
-            <div className="work-more-menu">
-              <Button
-                icon={RefreshCw}
-                disabled={busy || running.some((t) => t.kind === "build")}
-                onClick={(event) => {
-                  event.currentTarget.closest("details").open = false;
-                  void run(async () => {
-                    await api("works_task", { id, kind: "build" });
-                    taskQuery.refresh();
-                  });
-                }}
-              >
-                刷新预览
-              </Button>
-              {[
-                ["materials", Image, "素材"],
-                ["voice", Mic, "配音"],
-                ["versions", History, "版本"],
-                ["details", Info, "作品资料"],
-              ].map(([key, Icon, label]) => (
-                <Button
-                  key={key}
-                  icon={Icon}
-                  onClick={(event) => {
-                    event.currentTarget.closest("details").open = false;
-                    setPanel(key);
-                  }}
-                >
-                  {label}
-                </Button>
-              ))}
-            </div>
-          </details>
-          <Button
-            className="primary"
-            icon={Download}
-            onClick={() => setPanel("exports")}
-          >
-            {browserBusy ? "正在本机导出" : "导出"}
-          </Button>
-        </div>
-      </header>
+      <WorkTools
+        work={work}
+        tool={tool}
+        compact={compact}
+        running={running.length + (browserBusy ? 1 : 0)}
+        sync={syncQuery.data}
+        syncError={syncQuery.error}
+        browserBusy={browserBusy}
+        inert={compact && dockOpen}
+        toolbarRef={toolbarRef}
+        onModal={setPanel}
+        onTool={(key, trigger) =>
+          tool === key ? closeTool() : openTool(key, trigger)
+        }
+      />
       <div
         ref={split}
-        className={`creation-split ${chatOpen ? "chat-open" : "chat-closed"} ${dragging ? "dragging" : ""}`}
+        className={`creation-split ${dockOpen ? "chat-open" : "chat-closed"} ${dragging ? "dragging" : ""}`}
         style={{
           "--video-share": ratio + "fr",
           "--chat-share": 100 - ratio + "fr",
@@ -416,13 +391,18 @@ export function Creation({ id, notify }) {
       >
         <div
           className="preview-pane"
-          inert={compact && chatOpen ? true : undefined}
+          inert={compact && dockOpen ? true : undefined}
         >
-          {(previewQuery.error || (preview && previewQuery.data?.stale)) && (
+          {preview && Number(latest?.result?.previewVersion || 0) < 9 && (
             <div className="preview-version-note" role="status">
-              {previewQuery.error
-                ? "暂时无法核对预览版本：" + previewQuery.error
-                : "当前播放的是旧版本；最新修改尚未生成预览，请点击「刷新预览」。"}
+              当前预览使用旧版播放器。
+              <Button
+                icon={RefreshCw}
+                disabled={busy || building || requestingBuild || browserBusy}
+                onClick={() => void updatePreview()}
+              >
+                {building || requestingBuild ? "正在更新预览" : "更新预览"}
+              </Button>
             </div>
           )}
           {preview ? (
@@ -438,11 +418,14 @@ export function Creation({ id, notify }) {
                 ref={iframe}
                 title="作品播放器"
                 src={preview.url}
-                onLoad={() =>
+                onLoad={() => {
                   sendPlayer("configure-view", {
                     preferences: playerPreferences.current,
-                  })
-                }
+                  });
+                  sendPlayer("configure-work", {
+                    context: workContext.current,
+                  });
+                }}
                 sandbox="allow-scripts allow-downloads"
                 allow="autoplay; fullscreen"
                 allowFullScreen
@@ -455,6 +438,14 @@ export function Creation({ id, notify }) {
               <p>
                 {running.length ? "正在准备作品预览…" : "还没有可播放的预览"}
               </p>
+              <ErrorNote error={previewQuery.error || taskQuery.error} />
+              <Button
+                icon={RefreshCw}
+                disabled={busy || building || requestingBuild || browserBusy}
+                onClick={() => void updatePreview()}
+              >
+                {building || requestingBuild ? "正在更新预览" : "更新预览"}
+              </Button>
               {tasks.find(
                 (t) => t.kind === "build" && t.state === "failed",
               ) && (
@@ -469,7 +460,7 @@ export function Creation({ id, notify }) {
             </div>
           )}
         </div>
-        {chatOpen && (
+        {dockOpen && (
           <ResizeHandle
             axis="vertical"
             value={ratio}
@@ -478,55 +469,141 @@ export function Creation({ id, notify }) {
             containerRef={split}
             onChange={setRatio}
             onDragChange={setDragging}
-            label="调整播放器和 AI 区域大小"
+            label="调整播放器和工作面板大小"
           />
         )}
-        {chatOpen && (
+        {dockOpen && (
           <button
             className="chat-scrim"
-            aria-label="收起 AI 对话"
+            aria-label="收起工作面板"
             onClick={closeChat}
             tabIndex={-1}
           />
         )}
-        <WorkChat
-          key={id}
-          work={work}
-          tasks={tasks}
-          reload={taskQuery.refresh}
-          notify={notify}
-          position={position}
-          selectedAssets={assets}
-          suggestion={suggestion}
-          visible={chatOpen}
-          onClose={closeChat}
-          compact={compact}
-          onRecall={(context) => {
-            sendPlayer("seek", {
-              time: context.start ?? context.time ?? 0,
-              ...(context.end > context.start
-                ? { selection: { start: context.start, end: context.end } }
-                : {}),
-            });
-            if (compact) closeChat();
-          }}
-          onRemoveAsset={(id) =>
-            setAssets((old) => old.filter((a) => a.id !== id))
-          }
-          onClearAssets={(ids) =>
-            setAssets((current) =>
-              ids ? current.filter((asset) => !ids.includes(asset.id)) : [],
-            )
-          }
-        />
-      </div>
-      {panel && (
-        <Modal
-          title={title}
-          onClose={() => setPanel("")}
-          wide={["materials", "exports", "versions"].includes(panel)}
-        >
-          {panel === "tasks" ? (
+        <WorkDock tool={tool} compact={compact} onClose={closeTool}>
+          <div
+            className="work-tool-pane chat-tool-pane"
+            data-dock-pane="ai"
+            hidden={!chatOpen}
+          >
+            <WorkChat
+              embedded
+              key={id}
+              work={work}
+              tasks={tasks}
+              reload={taskQuery.refresh}
+              notify={notify}
+              position={position}
+              selectedAssets={assets}
+              suggestion={suggestion}
+              visible={chatOpen}
+              onClose={closeChat}
+              compact={compact}
+              onRecall={(context) => {
+                sendPlayer("seek", {
+                  time: context.start ?? context.time ?? 0,
+                  ...(context.end > context.start
+                    ? { selection: { start: context.start, end: context.end } }
+                    : {}),
+                });
+                if (compact) closeChat();
+              }}
+              onRemoveAsset={(id) =>
+                setAssets((old) => old.filter((a) => a.id !== id))
+              }
+              onClearAssets={(ids) =>
+                setAssets((current) =>
+                  ids ? current.filter((asset) => !ids.includes(asset.id)) : [],
+                )
+              }
+            />
+          </div>
+          {visited.materials && (
+            <div
+              className="work-tool-pane dock-content"
+              data-dock-pane="materials"
+              hidden={tool !== "materials"}
+            >
+              <Materials
+                work={work}
+                visible={tool === "materials"}
+                notify={notify}
+                selectedAssets={assets}
+                onSelect={addAsset}
+                onDone={() => {
+                  openTool("ai");
+                }}
+              />
+            </div>
+          )}
+          {visited.voice && (
+            <div
+              className="work-tool-pane dock-content"
+              data-dock-pane="voice"
+              hidden={tool !== "voice"}
+            >
+              <Voice
+                work={work}
+                notify={notify}
+                position={position}
+                onAdopt={(asset, review) => {
+                  if (
+                    assets.length >= 20 &&
+                    !assets.some((a) => a.id === asset.id)
+                  ) {
+                    notify(
+                      "当前已引用 20 个素材，请先移除部分引用再添加配音",
+                      "error",
+                    );
+                    return;
+                  }
+                  addAsset(asset);
+                  setSuggestion({
+                    id: crypto.randomUUID(),
+                    text:
+                      "请将配音资源“" +
+                      asset.name +
+                      "”编排到作品中，保持声画与字幕同步。",
+                    review,
+                  });
+                  openTool("ai");
+                }}
+              />
+            </div>
+          )}
+          <div
+            className="work-tool-pane dock-content"
+            data-dock-pane="tasks"
+            hidden={tool !== "tasks"}
+          >
+            <ErrorNote error={taskQuery.error} />
+            {taskQuery.error && (
+              <Button onClick={taskQuery.refresh}>重试读取任务</Button>
+            )}
+            {browserJob && (
+              <section
+                className="export-item local-export"
+                aria-label="本机导出任务"
+              >
+                <div className="row">
+                  <strong>本机 WebM</strong>
+                  <span>{exportState(browserJob)}</span>
+                </div>
+                {browserBusy && (
+                  <ExportProgress
+                    value={browserJob.progress}
+                    label="本机导出进度"
+                  />
+                )}
+                <ErrorNote error={browserJob.error} />
+                <p>
+                  本机导出依赖当前标签页；收起面板不会停止，关闭标签页会中断。
+                </p>
+                <Button onClick={() => setPanel("exports")}>
+                  查看导出详情
+                </Button>
+              </section>
+            )}
             <div className="task-dialog-list">
               <p>
                 关闭浏览器后任务继续运行。AI
@@ -601,47 +678,30 @@ export function Creation({ id, notify }) {
                 </div>
               ))}
             </div>
-          ) : panel === "materials" ? (
-            <Materials
-              work={work}
-              notify={notify}
-              selectedAssets={assets}
-              onSelect={addAsset}
-              onDone={() => {
-                setPanel("");
-                setChatOpen(true);
-              }}
-            />
-          ) : panel === "voice" ? (
-            <Voice
-              work={work}
-              notify={notify}
-              position={position}
-              onAdopt={(asset, review) => {
-                if (
-                  assets.length >= 20 &&
-                  !assets.some((a) => a.id === asset.id)
-                ) {
-                  notify(
-                    "当前已引用 20 个素材，请先移除部分引用再添加配音",
-                    "error",
-                  );
-                  return;
-                }
-                addAsset(asset);
-                setSuggestion({
-                  id: crypto.randomUUID(),
-                  text:
-                    "请将配音资源“" +
-                    asset.name +
-                    "”编排到作品中，保持声画与字幕同步。",
-                  review,
-                });
-                setPanel("");
-                setChatOpen(true);
-              }}
-            />
-          ) : panel === "versions" ? (
+          </div>
+          {visited.sync && (
+            <div
+              className="work-tool-pane dock-content"
+              data-dock-pane="sync"
+              hidden={tool !== "sync"}
+            >
+              <SyncPanel
+                work={work}
+                notify={notify}
+                visible={tool === "sync"}
+                onChange={syncQuery.refresh}
+              />
+            </div>
+          )}
+        </WorkDock>
+      </div>
+      {panel && (
+        <Modal
+          title={title}
+          onClose={() => setPanel("")}
+          wide={["exports", "versions"].includes(panel)}
+        >
+          {panel === "versions" ? (
             <Versions
               work={work}
               notify={notify}
@@ -655,12 +715,6 @@ export function Creation({ id, notify }) {
             />
           ) : panel === "details" ? (
             <Details work={work} notify={notify} onSave={query.refresh} />
-          ) : panel === "sync" ? (
-            <SyncPanel
-              work={work}
-              notify={notify}
-              onChange={syncQuery.refresh}
-            />
           ) : (
             <Exports
               work={work}

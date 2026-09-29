@@ -1,22 +1,27 @@
+import { useEffect } from "react";
 import { RefreshCw } from "lucide-react";
 import { api, useQuery, useAction, Button, ErrorNote, date } from "./ui";
-export function SyncPanel({ work, notify, onChange }) {
+export function SyncPanel({ work, notify, onChange, visible = true }) {
   return (
     <BranchSync
       work={work}
       repo={work.repo}
       notify={notify}
       onChange={onChange}
+      visible={visible}
     />
   );
 }
-export function BranchSync({ work, repo, notify, onChange }) {
+export function BranchSync({ work, repo, notify, onChange, visible = true }) {
   const args = work ? { id: work.id } : { repo },
     operation = work ? "works_sync" : "repositories_sync",
     status = work ? "works_sync_status" : "repositories_check";
   const query = useQuery(status, args),
     [run, busy] = useAction(notify),
     state = query.data;
+  useEffect(() => {
+    if (visible) query.refresh();
+  }, [visible]);
   const sync = (action) =>
     run(async () => {
       await api(operation, { ...args, action });

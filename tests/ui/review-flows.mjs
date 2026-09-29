@@ -39,7 +39,10 @@ export async function flowChecks(h) {
   });
   await check("素材引用不复制，资源加入与回收站分离", async () => {
     await more("素材");
-    const dialog = page.getByRole("dialog", { name: "素材", exact: true });
+    const dialog = page.getByRole("complementary", {
+      name: "素材",
+      exact: true,
+    });
     await expect(
       dialog.getByText("已加入的旁白.wav", { exact: true }),
     ).toBeVisible();
@@ -75,7 +78,10 @@ export async function flowChecks(h) {
   });
   await check("先试听再采用原音频，编排只写入AI草稿", async () => {
     await more("配音");
-    const dialog = page.getByRole("dialog", { name: "配音", exact: true });
+    const dialog = page.getByRole("complementary", {
+      name: "配音",
+      exact: true,
+    });
     await dialog.getByLabel("配音文字", { exact: true }).fill("请听这段旁白");
     await dialog
       .getByRole("button", { name: "生成试听（不加入作品）", exact: true })

@@ -320,3 +320,92 @@
     gap: 8px;
   }
 }
+
+/* Reuse the existing monitor information row; no extra work-title toolbar. */
+.work-stage-top {
+  gap: 10px;
+}
+.work-stage-top > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+.work-preview-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 600;
+  color: #dce5d4;
+}
+.work-stage-top .preview-quality {
+  flex-shrink: 0;
+}
+.preview-update-controls {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+.work-preview-status {
+  font-size: 10px;
+  white-space: nowrap;
+}
+.work-preview-status.stale,
+.work-preview-status.unknown {
+  color: #efcd8f;
+}
+.work-preview-status.building {
+  color: #d1e5b8;
+}
+.preview-update-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid #aec59636;
+  border-radius: 5px;
+  color: #dce5d4;
+  background: transparent;
+  padding: 4px 6px;
+  font-size: 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.preview-update-button:hover {
+  background: #aec59620;
+}
+.preview-update-button:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.preview-update-button:focus-visible {
+  outline: 2px solid #d0e8a8;
+  outline-offset: 2px;
+}
+.work-stage-top .stage-diagnostics {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+@media (max-width: 900px) {
+  .work-stage-top .stage-diagnostics {
+    display: none;
+  }
+}
+@media (max-width: 520px) {
+  .work-stage-top {
+    gap: 6px;
+    padding-inline: 9px;
+  }
+  .work-preview-status.ready {
+    display: none;
+  }
+  .preview-update-button {
+    min-height: 32px;
+  }
+}
+@media (pointer: coarse) {
+  .preview-update-button {
+    min-height: 44px;
+  }
+}
