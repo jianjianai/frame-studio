@@ -253,7 +253,7 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
         while (Date.now() < deadline) {
           await platform.tasks.tick();
           task = await platform.tasks.get(task.id);
-          if (!["queued", "running", "cancelling"].includes(task.state)) break;
+          if (!["queued", "running", "cancelling", "publishing"].includes(task.state)) break;
           await delay(500);
         }
         if (invalid) {

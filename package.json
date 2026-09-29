@@ -18,7 +18,7 @@
     "render": "node scripts/render.mjs",
     "assets": "node scripts/prepare-assets.mjs",
     "format": "prettier --write src scripts tests templates/*.txt package.json tsconfig.json vite.config.ts vitest.config.ts playwright.config.ts README.md AGENTS.md docs/*.md --ignore-unknown",
-    "verify": "pnpm project:check && pnpm typecheck && pnpm test && pnpm test:mcp && pnpm build && pnpm test:server && pnpm build:studio",
+    "verify": "pnpm verify:core && pnpm test:server",
     "posters": "node scripts/render.mjs --posters",
     "env:check": "node scripts/doctor.mjs",
     "assets:import": "node scripts/import-asset.mjs",
@@ -34,8 +34,14 @@
     "platform": "node scripts/platform-cli.mjs",
     "server": "node server/app.mjs",
     "build:studio": "vite build --config studio/vite.config.mjs",
-    "test:server": "node --test --test-concurrency=1 tests/server/*.test.mjs",
-    "verify:content": "pnpm project:check --strict && pnpm exec vitest run --config vitest.content.config.ts && pnpm build && pnpm test:e2e"
+    "test:server": "node scripts/test-server.mjs",
+    "verify:content": "pnpm project:check --strict && pnpm exec vitest run --config vitest.content.config.ts && pnpm build && pnpm test:e2e",
+    "check:platform": "node scripts/check-platform.mjs",
+    "typecheck:platform": "tsc --noEmit -p tsconfig.platform.json",
+    "verify:core": "pnpm project:check && pnpm check:platform && pnpm typecheck && pnpm typecheck:platform && pnpm test && pnpm test:mcp && pnpm build && pnpm build:studio",
+    "test:server:light": "node scripts/test-server.mjs --allow-skip",
+    "test:server:release": "node scripts/test-server.mjs --release",
+    "verify:release": "pnpm verify:core && pnpm test:server:release"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",

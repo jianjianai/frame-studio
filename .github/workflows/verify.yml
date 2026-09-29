@@ -1,0 +1,49 @@
+name: Release verification
+on:
+  workflow_call:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: frame
+          POSTGRES_PASSWORD: frame-test-only
+          POSTGRES_DB: frame_test_release
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U frame -d frame_test_release"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install pinned tools and browser prerequisites
+        run: |
+          npm install --global pnpm@12.4.2
+          pnpm install --frozen-lockfile
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg git-lfs fonts-noto-cjk
+          pnpm exec playwright install --with-deps chromium
+      - name: Build candidate executor without publishing
+        run: docker build -f deploy/Dockerfile -t frame-studio:verification --build-arg REVISION="$GITHUB_SHA" .
+      - name: Run the same release gate used for local releases
+        env:
+          FRAME_TEST_DATABASE_URL: postgres://frame:frame-test-only@127.0.0.1:5432/frame_test_release
+          FRAME_TEST_EXECUTOR: "1"
+          FRAME_TEST_HOST_ROOT: ${{ github.workspace }}
+          FRAME_EXECUTOR_IMAGE: frame-studio:verification
+        run: |
+          BROWSER=$(node --input-type=module -e "import {chromium} from '@playwright/test'; console.log(chromium.executablePath())")
+          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          sudo env PATH="$PATH" FRAME_BROWSER="$BROWSER" \
+            FRAME_TEST_DATABASE_URL="$FRAME_TEST_DATABASE_URL" \
+            FRAME_TEST_EXECUTOR="$FRAME_TEST_EXECUTOR" \
+            FRAME_TEST_HOST_ROOT="$FRAME_TEST_HOST_ROOT" \
+            FRAME_EXECUTOR_IMAGE="$FRAME_EXECUTOR_IMAGE" pnpm verify:release
