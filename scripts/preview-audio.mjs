@@ -4,6 +4,10 @@ import http from "node:http";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { launchBrowser } from "./browser.mjs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { audioCacheKeys, restoreAudioTrack, saveAudioCache } from "./preview-audio-cache.mjs";
+import { projectPath } from "./project-paths.mjs";
 
 export function servePreview(directory) {
   const types = {
@@ -55,7 +59,7 @@ async function encode(pcm, output, signal) {
   signal?.throwIfAborted();
   await new Promise((resolve, reject) => {
     const child = spawn(
-      "ffmpeg",
+      process.env.FFMPEG_PATH || "ffmpeg",
       [
         "-hide_banner",
         "-loglevel",
@@ -86,7 +90,12 @@ async function encode(pcm, output, signal) {
     const stop = () => child.kill();
     signal?.addEventListener("abort", stop, { once: true });
     const timer = setTimeout(stop, 30000);
-    child.once("error", reject);
+    if (signal?.aborted) stop();
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", stop);
+      reject(error);
+    });
     child.once("close", (code) => {
       clearTimeout(timer);
       signal?.removeEventListener("abort", stop);
@@ -99,13 +108,16 @@ async function encode(pcm, output, signal) {
   });
 }
 
-export async function buildPreviewAudio(output, { signal, onLog } = {}) {
+export async function buildPreviewAudio(output, { signal, onLog, root, project } = {}) {
   const server = await servePreview(output);
   let browser;
   const directory = path.join(output, "preview-audio");
   fs.mkdirSync(directory, { recursive: true });
   try {
     browser = await launchBrowser();
+    const encoder = await promisify(execFile)(process.env.FFMPEG_PATH || "ffmpeg", ["-version"], { timeout: 10000, maxBuffer: 65536, windowsHide: true });
+    const cache = root && project ? projectPath(root, project, ".cache/preview-audio-current") : null;
+    const keys = cache ? await audioCacheKeys(root, project, { browser: browser.version(), encoder: encoder.stdout, node: process.versions.node, arch: process.arch, platform: process.platform, image: process.env.FRAME_RUNTIME_IMAGE || null }) : {};
     const stop = () => void browser.close();
     signal?.addEventListener("abort", stop, { once: true });
     try {
@@ -117,11 +129,22 @@ export async function buildPreviewAudio(output, { signal, onLog } = {}) {
         duration: window.__FRAME_PREPARE_AUDIO__.duration,
         tracks: window.__FRAME_PREPARE_AUDIO__.tracks,
       }));
-      const manifest = { version: 1, duration: meta.duration, tracks: [] };
+      const manifest = { version: 1, duration: meta.duration, tracks: [], reusedTracks: 0 };
       let complete = 0;
+      const encoded = new Map();
       const total = meta.tracks.length * Math.ceil(meta.duration / 2);
       for (const id of meta.tracks) {
-        const track = { id, chunks: [] };
+        signal?.throwIfAborted();
+        const cached = await restoreAudioTrack(cache, output, id, keys[id], meta.duration);
+        if (cached) {
+          manifest.tracks.push(cached);
+          manifest.reusedTracks++;
+          complete += cached.chunks.length;
+          previewProgress("复用已验证音轨", complete, total);
+          onLog?.(`Preview audio reused track ${id} (${complete}/${total})\n`);
+          continue;
+        }
+        const track = { id, cacheKey: keys[id] || null, chunks: [] };
         for (let start = 0; start < meta.duration; start += 2) {
           signal?.throwIfAborted();
           const duration = Math.min(2, meta.duration - start);
@@ -133,19 +156,19 @@ export async function buildPreviewAudio(output, { signal, onLog } = {}) {
             ),
             "base64",
           );
-          const temporary = path.join(directory, "encoding.mp3");
-          await encode(pcm, temporary, signal);
-          const bytes = fs.readFileSync(temporary);
-          const sha256 = createHash("sha256").update(bytes).digest("hex");
-          const file = `preview-audio/${sha256}.mp3`;
-          fs.renameSync(temporary, path.join(output, file));
-          track.chunks.push({
-            start,
-            duration,
-            file,
-            sha256,
-            bytes: bytes.length,
-          });
+          const pcmSha256 = createHash("sha256").update(pcm).digest("hex");
+          let encodedChunk = encoded.get(pcmSha256);
+          if (!encodedChunk) {
+            const temporary = path.join(directory, "encoding.mp3");
+            await encode(pcm, temporary, signal);
+            const bytes = fs.readFileSync(temporary);
+            const sha256 = createHash("sha256").update(bytes).digest("hex");
+            const file = `preview-audio/${sha256}.mp3`;
+            fs.renameSync(temporary, path.join(output, file));
+            encodedChunk = { file, sha256, bytes: bytes.length };
+            encoded.set(pcmSha256, encodedChunk);
+          }
+          track.chunks.push({ start, duration, ...encodedChunk });
           complete++;
           onLog?.(`Preview audio ${complete}/${total}\n`);
           previewProgress("准备轻量预览音频", complete, total);
@@ -157,6 +180,12 @@ export async function buildPreviewAudio(output, { signal, onLog } = {}) {
         path.join(output, "preview-audio.json"),
         JSON.stringify(manifest),
       );
+      if (cache) {
+        // Do not retain a cache when local files changed during generation.
+        const current = await audioCacheKeys(root, project, { browser: browser.version(), encoder: encoder.stdout, node: process.versions.node, arch: process.arch, platform: process.platform, image: process.env.FRAME_RUNTIME_IMAGE || null });
+        if (JSON.stringify(current) !== JSON.stringify(keys)) throw Error("Audio inputs changed while preparing preview; rebuild this work");
+        await saveAudioCache(output, cache, manifest);
+      }
       return manifest;
     } finally {
       signal?.removeEventListener("abort", stop);

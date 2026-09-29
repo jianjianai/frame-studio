@@ -12,6 +12,7 @@ import {
 import { applyProject } from "./apply-project.mjs";
 import { copyTree, treeHash } from "./project-files.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
+import { seedPreviewAudio } from "./preview-audio-seed.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { taskKindSchema } from "../src/contracts/platform.mjs";
 export class Tasks {
@@ -137,6 +138,7 @@ export class Tasks {
           t.kind === "agent" ? "AI 修改前自动保存" : "生成预览或导出前保存",
         );
     }
+    await seedPreviewAudio({ db: this.db, data: this.data, task: t, run });
     let config = {};
     if (t.kind === "agent") {
       if (t.input.connection)
