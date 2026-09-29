@@ -1,6 +1,5 @@
 import { subscribe } from "./realtime";
 import { useEffect, useRef, useState } from "react";
-import { PREVIEW_VERSION } from "../server/preview-version.mjs";
 import { previewCacheBridge } from "./preview-cache";
 import {
   ArrowUp,
@@ -471,6 +470,7 @@ export function WorkChat({
 export function Creation({ id, notify, onToggleNav }) {
   const query = useQuery("works_open", { id }),
     taskQuery = useQuery("works_tasks", { id }, 2000),
+    previewQuery = useQuery("works_preview_status", { id }, 1),
     syncQuery = useQuery("works_sync_status", { id }, 1),
     tasks = taskQuery.data || [],
     iframe = useRef(null),
@@ -506,13 +506,7 @@ export function Creation({ id, notify, onToggleNav }) {
     window.addEventListener("focus", check);
     return () => window.removeEventListener("focus", check);
   }, [id]);
-  const latest = tasks.find(
-      (t) =>
-        t.kind === "build" &&
-        t.state === "succeeded" &&
-        t.result?.previewVersion === PREVIEW_VERSION &&
-        !t.cleaned,
-    ),
+  const latest = previewQuery.data?.latest,
     lastPreview = useRef(""),
     buildRequested = useRef(false);
   useEffect(() => {
@@ -534,7 +528,9 @@ export function Creation({ id, notify, onToggleNav }) {
   useEffect(() => {
     if (
       !taskQuery.data ||
+      !previewQuery.data ||
       latest ||
+      tasks.some((t) => t.state === "publish_failed") ||
       tasks.some(active) ||
       buildRequested.current
     )
@@ -543,7 +539,12 @@ export function Creation({ id, notify, onToggleNav }) {
     api("works_task", { id, kind: "build" })
       .then(taskQuery.refresh)
       .catch((e) => notify(e.message, "error"));
-  }, [taskQuery.data, latest?.id, id]);
+  }, [taskQuery.data, previewQuery.data, latest?.id, id]);
+  useEffect(() => {
+    const check = () => previewQuery.refresh();
+    window.addEventListener("focus", check);
+    return () => window.removeEventListener("focus", check);
+  }, [id]);
   useEffect(() => {
     const receive = (e) => {
       if (e.source !== iframe.current?.contentWindow) return;
@@ -695,6 +696,11 @@ export function Creation({ id, notify, onToggleNav }) {
         style={{ "--split": ratio + "%" }}
       >
         <div className="preview-pane">
+          {(previewQuery.error || (preview && previewQuery.data?.stale)) && (
+            <div className="preview-version-note" role="status">
+              {previewQuery.error ? "暂时无法核对预览版本：" + previewQuery.error : "当前播放的是旧版本；最新修改尚未生成预览，请点击「刷新预览」。"}
+            </div>
+          )}
           {preview ? (
             <>
               {previewStage && (

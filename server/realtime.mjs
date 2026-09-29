@@ -4,6 +4,7 @@ import { hash } from "./security.mjs";
 const watched = {
   engines_list: ["engines"],
   works_tasks: ["tasks"],
+  works_preview_status: ["works", "previews"],
   works_chat_turns: ["tasks"],
   works_background: ["tasks"],
   works_exports: ["tasks"],

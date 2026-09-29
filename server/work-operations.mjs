@@ -1,8 +1,7 @@
 import { z } from "zod";
 import { Works } from "./works.mjs";
 import { browserPreview } from "./browser-preview.mjs";
-import { treeHash } from "./security.mjs";
-import { PREVIEW_VERSION } from "./preview-version.mjs";
+import { readWorkPreview } from "./preview-state.mjs";
 export function workOperations({
   add,
   registry,
@@ -262,18 +261,18 @@ export function workOperations({
       return { ok: true };
     },
   );
+  add("works_preview_status", "Compare the current work source with its latest valid preview", { id: uuid }, async (a) => {
+    const work = await works.get(a.id, { active: true });
+    return readWorkPreview({ db, repos, work });
+  });
   add(
     "works_browser",
     "Get a private AI browser URL with FRAME_AI console controls. Rendering, segment playback, screenshots and WebM exports execute in the client browser. If compilation is needed, returns a durable task; poll and call again.",
     { id: uuid, rebuild: z.boolean().default(false) },
     async (a) => {
       const w = await works.get(a.id, { active: true });
-      const { dir } = await repos.project(w.repo, w.project);
-      const latest = await db.one(
-        "SELECT * FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND state='succeeded' AND result->>'previewVersion'=$3 ORDER BY created DESC LIMIT 1",
-        [w.repo, w.project, String(PREVIEW_VERSION)],
-      );
-      if (latest && !a.rebuild && latest.fingerprint === treeHash(dir)) {
+      const { latest, stale } = await readWorkPreview({ db, repos, work: w });
+      if (latest && !a.rebuild && !stale) {
         const link = await browserPreview(db, latest, { ai: true });
         return {
           state: "ready",

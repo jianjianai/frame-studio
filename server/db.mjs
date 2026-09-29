@@ -57,12 +57,27 @@ export async function database(url, password) {
     CREATE OR REPLACE FUNCTION frame_notify_change() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN PERFORM pg_notify('frame_changes', TG_TABLE_NAME); RETURN NULL; END $$;
     DO $$ DECLARE t text; BEGIN
-      FOREACH t IN ARRAY ARRAY['tasks','events','auth_flows','settings','engines','connections'] LOOP
+      FOREACH t IN ARRAY ARRAY['tasks','events','auth_flows','settings','engines','connections','works'] LOOP
         IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='frame_changed_'||t) THEN
           EXECUTE format('CREATE TRIGGER %I AFTER INSERT OR UPDATE OR DELETE ON %I FOR EACH STATEMENT EXECUTE FUNCTION frame_notify_change()', 'frame_changed_'||t, t);
         END IF;
       END LOOP;
     END $$;
+    CREATE OR REPLACE FUNCTION frame_notify_preview() RETURNS trigger LANGUAGE plpgsql AS $
+    BEGIN
+      IF NEW.kind='build' AND NEW.state='succeeded' THEN
+        IF TG_OP='INSERT' THEN PERFORM pg_notify('frame_changes', 'previews');
+        ELSIF NEW.state IS DISTINCT FROM OLD.state OR NEW.cleaned IS DISTINCT FROM OLD.cleaned THEN
+          PERFORM pg_notify('frame_changes', 'previews');
+        END IF;
+      END IF;
+      RETURN NULL;
+    END $;
+    DO $ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='frame_preview_changed') THEN
+        CREATE TRIGGER frame_preview_changed AFTER INSERT OR UPDATE ON tasks FOR EACH ROW EXECUTE FUNCTION frame_notify_preview();
+      END IF;
+    END $;
     CREATE OR REPLACE FUNCTION frame_notify_work_sync() RETURNS trigger LANGUAGE plpgsql AS $$
     BEGIN IF NEW.state IS DISTINCT FROM OLD.state THEN PERFORM pg_notify('frame_changes', 'work_sync'); END IF; RETURN NULL; END $$;
     DO $$ BEGIN

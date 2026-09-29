@@ -1448,3 +1448,5 @@ audio {
     padding: 18px;
   }
 }
+
+.preview-version-note { position: absolute; z-index: 4; top: 8px; left: 8px; right: 8px; padding: 10px 14px; border-radius: 8px; background: #fff4cc; color: #493b16; font-size: 13px; box-shadow: 0 2px 8px #0002; }
