@@ -23,6 +23,8 @@ AI 消息提交后在独立容器执行，关闭浏览器不停止任务。通�
 
 外部 AI 使用带 Bearer 令牌的 `/mcp`；CLI 使用 `FRAME_URL`、`FRAME_TOKEN` 和 `pnpm platform works_list`。作品操作统一使用作品 UUID。隔离任务内使用 `pnpm film` 和 `node scripts/work-tool.mjs`。
 
+远程接手先用 `frame_workspace_context`，查询参数用 `frame_tool_describe` / `pnpm --silent platform describe`。分页搜索、精确补丁、任务等待、产物下载与断点上传见 [远程 MCP 与 CLI 工具指南](docs/PLATFORM-TOOLS.md)。
+
 支持浏览器的 AI 可通过 `works_browser` 获取[专用审片页](docs/AI-BROWSER.md)，使用控制台 `FRAME_AI` 在本机浏览器查看帧、播放片段、截图和导出，减少服务器计算。
 
 ## 开发与验证

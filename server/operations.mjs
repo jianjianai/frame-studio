@@ -1,3 +1,6 @@
+import { readUpload } from "./upload-state.mjs";
+import { projectTextOperations, readSource } from "./project-text.mjs";
+import { agentToolkitOperations } from "./agent-toolkit.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -96,90 +99,36 @@ export function operations({
     { repo: uuid, project },
     async (a) => {
       const { dir } = await repos.project(a.repo, a.project);
+      const optional = async (file) => {
+        const source = await readSource(dir, file, { missing: true });
+        return source
+          ? {
+              content: source.content.slice(0, 16000),
+              truncated: source.content.length > 16000,
+              sha256: source.sha256,
+            }
+          : null;
+      };
+      const metadata = await readSource(dir, "project.ts"),
+        readme = await optional("README.md");
       return {
         project: a.project,
-        metadata: fs.readFileSync(confined(dir, "project.ts"), "utf8"),
-        readme: fs.existsSync(confined(dir, "README.md"))
-          ? fs.readFileSync(confined(dir, "README.md"), "utf8")
-          : "",
+        metadata: metadata.content.slice(0, 16000),
+        metadataTruncated: metadata.content.length > 16000,
+        readme: readme?.content ?? "",
+        readmeTruncated: readme?.truncated ?? false,
+        projectInstructions: await optional("AGENTS.md"),
+        brief: await optional("production/brief.md"),
         authoring: fs.readFileSync(
           new URL("../docs/AUTHORING.md", import.meta.url),
           "utf8",
         ),
         instructions:
-          "Use project_files and project_read. Edits need expectedSha256. Create preview tasks; poll task_get. Tasks persist after MCP disconnect.",
+          "Use project_files_page, project_search and project_read with repo/project, or use frame_works_context with the work UUID for public MCP tools. Read partial files in pages; edit with expectedSha256. Create tasks, then poll task_status.",
       };
     },
   );
-  add(
-    "project_files",
-    "List files inside one project",
-    { repo: uuid, project },
-    async (a) => {
-      const { dir } = await repos.project(a.repo, a.project),
-        files = [];
-      function walk(folder, relative = "") {
-        for (const name of fs.readdirSync(folder)) {
-          if (
-            name.startsWith(".") ||
-            name === "exports" ||
-            name === "node_modules"
-          )
-            continue;
-          const rel = relative ? relative + "/" + name : name,
-            file = confined(dir, rel),
-            st = fs.statSync(file);
-          if (st.isDirectory()) walk(file, rel);
-          else files.push({ path: rel, bytes: st.size });
-          if (files.length > 5000) throw problem(400, "Too many files");
-        }
-      }
-      walk(dir);
-      return files;
-    },
-  );
-  add(
-    "project_read",
-    "Read a UTF-8 file with its SHA-256 for conflict-safe editing",
-    { repo: uuid, project, path: z.string().max(512) },
-    async (a) => {
-      const { dir } = await repos.project(a.repo, a.project),
-        file = confined(dir, a.path);
-      if (fs.statSync(file).size > 1024 * 1024)
-        throw problem(413, "Text file exceeds 1 MiB");
-      const content = fs.readFileSync(file, "utf8");
-      return { path: a.path, content, sha256: hash(content) };
-    },
-  );
-  add(
-    "project_write",
-    "Create or replace a project file; null hash means new file",
-    {
-      repo: uuid,
-      project,
-      path: z.string().max(512),
-      expectedSha256: z.string().length(64).nullable(),
-      content: z.string().max(1024 * 1024),
-    },
-    async (a) =>
-      db.lock(`${a.repo}:${a.project}`, async () => {
-        await repos.writable(a.repo, a.project);
-        const { dir } = await repos.project(a.repo, a.project),
-          file = confined(dir, a.path);
-        if (!/\.(ts|tsx|js|mjs|json|md|txt|svg|css|glsl|wgsl)$/.test(file))
-          throw problem(400, "Unsupported text file");
-        const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
-        if ((previous ? hash(previous) : null) !== a.expectedSha256)
-          throw problem(409, "File changed; read the current version first");
-        await repos.revisions?.invalidate(a.repo, a.project);
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        const temp = file + ".frame-" + randomUUID();
-        fs.writeFileSync(temp, a.content);
-        fs.renameSync(temp, file);
-        await repos.revisions?.invalidate(a.repo, a.project);
-        return { sha256: hash(a.content) };
-      }),
-  );
+  projectTextOperations({ add, db, repos, uuid, project });
   add(
     "task_create",
     "Create a durable project task. Rendering runs in a separate container",
@@ -225,33 +174,85 @@ export function operations({
       ),
     }),
   );
-  add("task_cancel", "Cancel a queued or running task", workIdRequestSchema, (a) =>
-    tasks.cancel(a.id),
+  add(
+    "task_cancel",
+    "Cancel a queued or running task",
+    workIdRequestSchema,
+    (a) => tasks.cancel(a.id),
   );
-  add("task_retry_publish", "Retry saving an already completed result without re-running AI", workIdRequestSchema, (a) => tasks.retryPublication(a.id));
+  add(
+    "task_retry_publish",
+    "Retry saving an already completed result without re-running AI",
+    workIdRequestSchema,
+    (a) => tasks.retryPublication(a.id),
+  );
   add(
     "artifact_read",
     "Read a completed task PNG for visual inspection; JSON and subtitles return as text",
     { id: uuid, path: z.string().max(1024) },
     async (a) => {
       const task = await tasks.get(a.id);
-      if (
-        task.state !== "succeeded" ||
-        !task.result?.artifacts?.some((f) => f.path === a.path)
-      )
-        throw problem(404, "Artifact not available");
-      const file = confined(path.join(data, "runs", a.id), a.path),
-        st = fs.statSync(file);
-      if (st.size > 6 * 1024 * 1024)
-        throw problem(413, "Use a smaller frame or download the artifact");
-      if (/\.png$/.test(file))
-        return {
-          mimeType: "image/png",
-          dataBase64: fs.readFileSync(file).toString("base64"),
+      if (task.state !== "succeeded")
+        throw Object.assign(
+          problem(
+            409,
+            "Task is not complete; inspect task_status before reading artifacts.",
+          ),
+          { code: "TASK_NOT_COMPLETE", recovery: "task-status" },
+        );
+      if (task.cleaned)
+        throw Object.assign(
+          problem(
+            410,
+            "Artifact expired; create a new preview or render task.",
+          ),
+          { code: "ARTIFACT_EXPIRED", recovery: "create-new-task" },
+        );
+      if (!task.result?.artifacts?.some((f) => f.path === a.path))
+        throw problem(
+          404,
+          "Artifact is not listed in this task; inspect task_status.",
+        );
+      const release = await retention?.lease?.(a.id);
+      try {
+        const file = confined(path.join(data, "runs", a.id), a.path),
+          st = fs.statSync(file);
+        if (!st.isFile()) throw problem(404, "Artifact is not a file.");
+        if (st.size > 6 * 1024 * 1024)
+          throw problem(
+            413,
+            "Use a smaller frame or platform download with this task id and artifact path.",
+          );
+        const metadata = {
+          id: a.id,
+          path: a.path,
+          bytes: st.size,
+          downloadPath:
+            `/api/tasks/${a.id}/file/` +
+            a.path.split("/").map(encodeURIComponent).join("/"),
         };
-      if (/\.(json|srt)$/.test(file))
-        return { text: fs.readFileSync(file, "utf8") };
-      throw problem(400, "Use PNG for AI visual inspection");
+        if (/\.png$/i.test(file))
+          return {
+            ...metadata,
+            mimeType: "image/png",
+            dataBase64: fs.readFileSync(file).toString("base64"),
+          };
+        if (/\.(json|srt)$/i.test(file))
+          return { ...metadata, text: fs.readFileSync(file, "utf8") };
+        throw problem(
+          400,
+          "Use PNG/JSON/SRT for inline inspection; platform download supports video and audio.",
+        );
+      } catch (error) {
+        if (error.code === "ENOENT")
+          throw Object.assign(
+            problem(404, "Artifact file is missing; create a new task."),
+            { code: "ARTIFACT_MISSING", recovery: "create-new-task" },
+          );
+        throw error;
+      } finally {
+        await release?.();
+      }
     },
   );
   add(
@@ -316,19 +317,81 @@ export function operations({
       license: z.string().min(1).max(2000),
       mime: z.string().max(120).default("application/octet-stream"),
       repo: uuid,
+      requestKey: uuid.optional(),
     },
-    async (a) => {
-      await repos.get(a.repo);
-      const id = randomUUID(),
-        dir = path.join(data, "uploads", id);
-      fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(
-        dir + "/meta.json",
-        JSON.stringify({ ...a, created: Date.now() }),
-      );
-      fs.writeFileSync(dir + "/bytes", Buffer.alloc(0));
-      return { id, offset: 0, chunkBytes: 768 * 1024 };
-    },
+    async (a) =>
+      db.lock("upload:" + (a.requestKey ?? randomUUID()), async () => {
+        await repos.get(a.repo);
+        const id = a.requestKey ?? randomUUID(),
+          dir = path.join(data, "uploads", id);
+        if (fs.existsSync(dir)) {
+          const { meta } = readUpload(data, id);
+          if (
+            ["name", "bytes", "sha256", "license", "mime", "repo"].some(
+              (key) => meta[key] !== a[key],
+            )
+          )
+            throw problem(
+              409,
+              "requestKey already belongs to a different upload.",
+            );
+          return {
+            id,
+            offset: meta.result ? meta.bytes : fs.statSync(dir + "/bytes").size,
+            chunkBytes: 768 * 1024,
+            result: meta.result ?? null,
+          };
+        }
+        fs.mkdirSync(dir);
+        fs.writeFileSync(
+          dir + "/meta.json",
+          JSON.stringify({ ...a, created: Date.now() }),
+          { flag: "wx", mode: 0o600 },
+        );
+        fs.writeFileSync(dir + "/bytes", Buffer.alloc(0), {
+          flag: "wx",
+          mode: 0o600,
+        });
+        return { id, offset: 0, chunkBytes: 768 * 1024 };
+      }),
+  );
+  add(
+    "upload_status",
+    "Read a resumable upload's exact offset and metadata, or the already completed asset. Never starts or restarts an upload.",
+    { id: uuid },
+    (a) =>
+      db.lock("upload:" + a.id, async () => {
+        const { dir, meta } = readUpload(data, a.id);
+        return {
+          id: a.id,
+          name: meta.name,
+          repo: meta.repo,
+          bytes: meta.bytes,
+          sha256: meta.sha256,
+          license: meta.license,
+          mime: meta.mime,
+          state: meta.result ? "complete" : "uploading",
+          offset: meta.result ? meta.bytes : fs.statSync(dir + "/bytes").size,
+          chunkBytes: 768 * 1024,
+          result: meta.result ?? null,
+        };
+      }),
+  );
+  add(
+    "upload_abort",
+    "Discard only an unfinished upload session. Completed library assets are never deleted by this tool.",
+    { id: uuid },
+    (a) =>
+      db.lock("upload:" + a.id, async () => {
+        const { dir, meta } = readUpload(data, a.id);
+        if (meta.result)
+          throw problem(
+            409,
+            "Upload already completed; use the asset recycle bin instead.",
+          );
+        fs.rmSync(dir, { recursive: true });
+        return { id: a.id, aborted: true };
+      }),
   );
   add(
     "upload_chunk",
@@ -340,14 +403,25 @@ export function operations({
     },
     async (a) =>
       db.lock("upload:" + a.id, async () => {
-        const dir = path.join(data, "uploads", a.id),
-          meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8")),
-          file = dir + "/bytes",
-          bytes = Buffer.from(a.base64, "base64"),
-          size = fs.statSync(file).size;
+        const { dir, meta } = readUpload(data, a.id);
+        if (meta.result)
+          throw problem(
+            409,
+            "Upload is already complete; use upload_status or upload_finish for its asset.",
+          );
+        const file = dir + "/bytes",
+          bytes = Buffer.from(a.base64, "base64");
+        if (!bytes.length || bytes.toString("base64") !== a.base64)
+          throw problem(400, "Chunk must be nonempty canonical base64.");
+        const size = fs.statSync(file).size;
         if (a.offset + bytes.length > meta.bytes)
           throw problem(400, "Upload exceeds declared size");
         if (a.offset < size) {
+          if (a.offset + bytes.length > size)
+            throw problem(
+              409,
+              "Chunk overlaps the current end; resume at the offset from upload_status.",
+            );
           const fd = fs.openSync(file, "r"),
             old = Buffer.alloc(bytes.length);
           try {
@@ -369,13 +443,12 @@ export function operations({
     { id: uuid },
     async (a) =>
       db.lock("upload:" + a.id, async () => {
-        const dir = path.join(data, "uploads", a.id),
-          meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
+        const { dir, meta } = readUpload(data, a.id);
         if (meta.result) return meta.result;
         const { fileSha256 } = await import("./project-files.mjs");
         if (
           fs.statSync(dir + "/bytes").size !== meta.bytes ||
-          await fileSha256(dir + "/bytes") !== meta.sha256
+          (await fileSha256(dir + "/bytes")) !== meta.sha256
         )
           throw problem(409, "Upload size or checksum mismatch");
         const result = await assets.register(dir + "/bytes", meta);
@@ -504,6 +577,7 @@ export function operations({
       github,
       retention,
     });
+  agentToolkitOperations({ add, registry, db, works, tasks });
   return {
     works,
     registry,
