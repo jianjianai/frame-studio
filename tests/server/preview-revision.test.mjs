@@ -1,26 +1,21 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { treeHash } from "../../server/security.mjs";
 import { readWorkPreview } from "../../server/preview-state.mjs";
 
-test("web and AI preview status detect changed source independently of task-page limits", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "frame-revision-"));
-  try {
-    fs.writeFileSync(path.join(dir, "scene.ts"), "first version");
-    const latest = { id: "old-build", fingerprint: treeHash(dir) };
-    let query;
-    const args = { work: { repo: "repo", project: "film" }, repos: { project: async () => ({ dir }) }, db: { one: async (sql) => { query = sql; return latest; } } };
-    assert.equal((await readWorkPreview(args)).stale, false);
-    fs.writeFileSync(path.join(dir, "scene.ts"), "MCP edit");
-    const changed = await readWorkPreview(args);
-    assert.equal(changed.stale, true);
-    assert.notEqual(changed.sourceRevision, changed.previewRevision);
-    assert.match(query, /cleaned IS NULL/);
-    assert.match(query, /ORDER BY created DESC,id DESC LIMIT 1/);
-    latest.fingerprint = treeHash(dir);
-    assert.equal((await readWorkPreview(args)).stale, false);
-  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+test("preview subscriptions only read persisted revisions and never scan project files", async () => {
+  const latest = { id: "old-build", fingerprint: "a".repeat(64) };
+  const work = { repo: "repo", project: "film", source_revision: latest.fingerprint };
+  let query;
+  const args = { work, repos: { project: () => { throw Error("No filesystem access on status queries"); } }, db: { one: async sql => { query = sql; return latest; } } };
+  assert.equal((await readWorkPreview(args)).stale, false);
+  work.source_revision = null;
+  assert.equal((await readWorkPreview(args)).stale, true);
+  work.source_revision = "b".repeat(64);
+  const changed = await readWorkPreview(args);
+  assert.equal(changed.stale, true);
+  assert.notEqual(changed.sourceRevision, changed.previewRevision);
+  assert.match(query, /cleaned IS NULL/);
+  assert.match(query, /ORDER BY created DESC,id DESC LIMIT 1/);
+  latest.fingerprint = work.source_revision;
+  assert.equal((await readWorkPreview(args)).stale, false);
 });

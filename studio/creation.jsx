@@ -533,7 +533,10 @@ export function Creation({ id, notify, onToggleNav }) {
       .catch((e) => notify(e.message, "error"));
   }, [taskQuery.data, previewQuery.data, latest?.id, id]);
   useEffect(() => {
-    const check = () => previewQuery.refresh();
+    const check = () => {
+      if (!document.hidden) api("works_preview_status", { id, refresh: true })
+        .then(previewQuery.refresh).catch(() => previewQuery.refresh());
+    };
     window.addEventListener("focus", check);
     return () => window.removeEventListener("focus", check);
   }, [id]);

@@ -4,14 +4,13 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { command } from "./process.mjs";
 import {
-  copyTree,
-  treeHash,
   confined,
   problem,
   token,
   hash,
 } from "./security.mjs";
 import { applyProject } from "./apply-project.mjs";
+import { copyTree, treeHash } from "./project-files.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { taskKindSchema } from "../src/contracts/platform.mjs";
@@ -124,9 +123,13 @@ export class Tasks {
       });
       if (t.kind === "new" && fs.existsSync(dir))
         throw problem(409, "Project already exists");
-      fingerprint = treeHash(dir);
-      if (fs.existsSync(dir))
-        copyTree(dir, path.join(run, "projects", t.project));
+      fingerprint = await treeHash(dir);
+      if (fs.existsSync(dir)) {
+        const snapshot = path.join(run, "projects", t.project);
+        await copyTree(dir, snapshot);
+        if (await treeHash(snapshot) !== fingerprint || await treeHash(dir) !== fingerprint)
+          throw problem(409, "Source changed while preparing the isolated task");
+      }
       if (t.kind !== "new")
         sourceCommit = await this.repos.checkpoint(
           t.repo,
@@ -321,8 +324,9 @@ export class Tasks {
         });
         const source = confined(run, "projects/" + t.project);
         // After a process restart, an already applied identical result is safe to finish publishing.
-        if (treeHash(dir) !== treeHash(source))
-          applyProject({
+        await this.repos.revisions?.invalidate(t.repo, t.project);
+        if (await treeHash(dir) !== await treeHash(source))
+          await applyProject({
             source,
             destination: dir,
             run,
@@ -375,7 +379,7 @@ export class Tasks {
           for (const relative of directories) {
             if (!relative.startsWith(`projects/${t.project}/exports/`))
               throw new Error("Invalid preview output");
-            fs.cpSync(confined(run, relative), confined(previewRun, relative), {
+            await fs.promises.cp(confined(run, relative), confined(previewRun, relative), {
               recursive: true,
               filter: (file) => !fs.lstatSync(file).isSymbolicLink(),
             });
@@ -391,7 +395,7 @@ export class Tasks {
                 previewVersion: PREVIEW_VERSION,
                 artifacts: result.previewArtifacts,
               },
-              treeHash(dir),
+              await treeHash(dir),
               result.commit || t.source_commit,
             ],
           );
@@ -403,6 +407,8 @@ export class Tasks {
       }
       await this.repos.onChange?.(t.repo, t.project);
     }
+    if (t.repo && (["new", "build"].includes(t.kind) || (t.kind === "agent" && !this.repos.onChange)))
+      await this.repos.revisions?.refresh(t.repo, t.project);
     await this.db.pool.query(
       "INSERT INTO events(task,kind,data,source_offset) VALUES($1,'result',$2,-1) ON CONFLICT DO NOTHING",
       [t.id, result],

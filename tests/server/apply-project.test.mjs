@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { applyProject } from "../../server/apply-project.mjs";
 import { treeHash } from "../../server/security.mjs";
-test("applying output survives repeated completion and a crash after backing up the original", (t) => {
+test("applying output survives repeated completion and a crash after backing up the original", async (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "frame-apply-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const source = path.join(root, "source"),
@@ -27,8 +27,8 @@ test("applying output survives repeated completion and a crash after backing up 
     JSON.stringify({ output: treeHash(source) }),
   );
   fs.renameSync(destination, path.join(run, "original-project"));
-  applyProject(args);
-  applyProject(args);
+  await applyProject(args);
+  await applyProject(args);
   assert.equal(
     fs.readFileSync(path.join(destination, "project.ts"), "utf8"),
     "new",
@@ -38,7 +38,7 @@ test("applying output survives repeated completion and a crash after backing up 
     "original",
   );
   fs.writeFileSync(path.join(destination, "project.ts"), "external edit");
-  assert.throws(() => applyProject(args));
+  await assert.rejects(applyProject(args));
   assert.equal(
     fs.readFileSync(path.join(destination, "project.ts"), "utf8"),
     "external edit",

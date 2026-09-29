@@ -232,9 +232,13 @@ export function workOperations({
       return { ok: true };
     },
   );
-  add("works_preview_status", "Compare the current work source with its latest valid preview", { id: uuid }, async (a) => {
-    const work = await works.get(a.id, { active: true });
-    return readWorkPreview({ db, repos, work });
+  add("works_preview_status", "Read indexed source and preview revisions; refresh explicitly scans external changes", { id: uuid, refresh: z.boolean().default(false) }, async (a) => {
+    let work = await works.get(a.id, { active: true });
+    if (a.refresh) {
+      await repos.revisions?.refresh(work.repo, work.project);
+      work = await works.get(a.id, { active: true });
+    }
+    return readWorkPreview({ db, work });
   });
   add(
     "works_browser",

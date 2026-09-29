@@ -169,10 +169,12 @@ export function operations({
         const previous = fs.existsSync(file) ? fs.readFileSync(file) : null;
         if ((previous ? hash(previous) : null) !== a.expectedSha256)
           throw problem(409, "File changed; read the current version first");
+        await repos.revisions?.invalidate(a.repo, a.project);
         fs.mkdirSync(path.dirname(file), { recursive: true });
         const temp = file + ".frame-" + randomUUID();
         fs.writeFileSync(temp, a.content);
         fs.renameSync(temp, file);
+        await repos.revisions?.invalidate(a.repo, a.project);
         return { sha256: hash(a.content) };
       }),
   );
@@ -366,10 +368,10 @@ export function operations({
         const dir = path.join(data, "uploads", a.id),
           meta = JSON.parse(fs.readFileSync(dir + "/meta.json", "utf8"));
         if (meta.result) return meta.result;
-        const { fileSha256 } = await import("../scripts/production-input.mjs");
+        const { fileSha256 } = await import("./project-files.mjs");
         if (
           fs.statSync(dir + "/bytes").size !== meta.bytes ||
-          fileSha256(dir + "/bytes") !== meta.sha256
+          await fileSha256(dir + "/bytes") !== meta.sha256
         )
           throw problem(409, "Upload size or checksum mismatch");
         const result = await assets.register(dir + "/bytes", meta);

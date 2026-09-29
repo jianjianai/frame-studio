@@ -73,10 +73,15 @@ export function workbenchOperations({
     "Open a work and remember its access time",
     { id: uuid },
     async (a) => {
-      const w = await works.get(a.id, { active: true });
+      let w = await works.get(a.id, { active: true });
+      let revisionError = null;
+      try { await repos.revisions?.refresh(w.repo, w.project); }
+      catch (error) { revisionError = error.message; }
+      w = await works.get(a.id, { active: true });
       await db.pool.query("UPDATE works SET opened=now() WHERE id=$1", [a.id]);
       return {
         ...w,
+        revisionError,
         repository: await repos.get(w.repo).then(({ root, ...r }) => r),
       };
     },

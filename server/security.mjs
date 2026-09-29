@@ -56,7 +56,7 @@ export function problem(status, message) {
   error.statusCode = status;
   return error;
 }
-export function confined(base, relative) {
+export function relativeParts(relative) {
   if (
     typeof relative !== "string" ||
     !relative ||
@@ -78,8 +78,11 @@ export function confined(base, relative) {
     )
   )
     throw problem(400, "Invalid path");
+  return parts;
+}
+export function confined(base, relative) {
   let current = path.resolve(base);
-  for (const part of parts) {
+  for (const part of relativeParts(relative)) {
     current = path.join(current, part);
     try {
       const st = fs.lstatSync(current);
