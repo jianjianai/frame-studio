@@ -64,7 +64,8 @@ test(
           id,
           repo.id,
           {
-            runtimeFingerprint: (await runtimeIdentity()).fingerprint, previewVersion: PREVIEW_VERSION,
+            runtimeFingerprint: (await runtimeIdentity()).fingerprint,
+            previewVersion: PREVIEW_VERSION,
             artifacts: [{ name: "index.html", path: relative + "/index.html" }],
           },
           treeHash(path.join(data, "works", work.id, "projects/test-film")),
@@ -74,9 +75,20 @@ test(
       const historicalId = randomUUID();
       await db.pool.query(
         "INSERT INTO tasks(id,repo,project,kind,state,input,result,created) VALUES($1,$2,'test-film','build','succeeded',$3,$4,now()+interval '1 second')",
-        [historicalId, repo.id, { version: "a".repeat(40) }, { previewVersion: PREVIEW_VERSION, runtimeFingerprint: (await runtimeIdentity()).fingerprint }],
+        [
+          historicalId,
+          repo.id,
+          { version: "a".repeat(40) },
+          {
+            previewVersion: PREVIEW_VERSION,
+            runtimeFingerprint: (await runtimeIdentity()).fingerprint,
+          },
+        ],
       );
-      assert.equal((await call("works_preview_status", { id: work.id })).latest.id, id);
+      assert.equal(
+        (await call("works_preview_status", { id: work.id })).latest.id,
+        id,
+      );
       await db.pool.query("DELETE FROM tasks WHERE id=$1", [historicalId]);
       await app.listen({ host: "127.0.0.1", port });
       browser = await launchBrowser();
@@ -138,13 +150,17 @@ test(
       );
       assert.equal(state.playing, false);
       assert(Math.abs(state.time - 1) < 0.1, JSON.stringify(state));
-      await player.getByLabel("时间轴缩放").selectOption("4");
+      await player
+        .getByRole("slider", { name: "时间轴可视终点", exact: true })
+        .press("Home");
       assert(
         await player
           .locator(".timeline-scroll")
           .evaluate((element) => element.scrollWidth > element.clientWidth * 3),
       );
-      await player.getByLabel("时间轴缩放").selectOption("1");
+      await player
+        .getByRole("slider", { name: "时间轴可视范围", exact: true })
+        .press("0");
       await player.locator(".timeline-options summary").click();
       const separator = page.getByRole("separator"),
         before = await page.locator(".preview-pane").boundingBox(),

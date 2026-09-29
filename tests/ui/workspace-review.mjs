@@ -7,6 +7,7 @@ import { launchBrowser } from "../../scripts/browser.mjs";
 import { mockApi } from "./review-fixture.mjs";
 import { layoutChecks, responsiveChecks } from "./review-layout.mjs";
 import { flowChecks, libraryChecks } from "./review-flows.mjs";
+import { populateTimelineFixture, timelineChecks } from "./review-timeline.mjs";
 import { persistenceChecks } from "./review-persistence.mjs";
 const reportDir = path.join(root, ".cache/frontend-validation/workspace");
 fs.mkdirSync(reportDir, { recursive: true });
@@ -21,6 +22,8 @@ const prior = Object.fromEntries(
 );
 try {
   f = fixture({ browser: true, renderer: "canvas" });
+  populateTimelineFixture(f);
+  const originalProject = fs.readFileSync(f.file("project.ts"), "utf8");
   process.env.FRAME_WORK_PREVIEW = "1";
   process.env.FRAME_PROJECT = "test-film";
   process.env.VITE_FRAME_PREVIEW_AUDIO = "0";
@@ -82,6 +85,12 @@ try {
       .getByRole("button", { name: "关闭弹窗", exact: true })
       .click();
   await layoutChecks(h);
+  await timelineChecks(h);
+  assert.equal(
+    fs.readFileSync(f.file("project.ts"), "utf8"),
+    originalProject,
+    "Timeline gestures must not rewrite source code",
+  );
   await flowChecks(h);
   await persistenceChecks(h);
   await responsiveChecks(h);

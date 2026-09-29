@@ -585,3 +585,122 @@ button.inline-time {
 .sync-counts span {
   text-align: center;
 }
+
+/* The work's own tools use width on a wide screen, never a full-height library sidebar. */
+@media (min-width: 901px) {
+  .work-focus .creation {
+    display: grid;
+    grid-template-columns: 92px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+  }
+  .work-focus .creation-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    height: 100%;
+    min-height: 0;
+    gap: 16px;
+    padding: 13px 7px;
+    border-bottom: 0;
+    border-right: 1px solid var(--line);
+    z-index: 9;
+  }
+  .work-focus .work-identity {
+    min-width: 0;
+    flex: none;
+    padding: 0 3px;
+  }
+  .work-focus .work-identity .breadcrumb {
+    display: none;
+  }
+  .work-focus .creation-toolbar h1 {
+    font-size: 12px;
+    line-height: 1.5;
+    white-space: normal;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    overflow-wrap: anywhere;
+  }
+  .work-focus .creation-actions {
+    flex-direction: column;
+    gap: 7px;
+    width: 100%;
+    align-items: stretch;
+  }
+  .work-focus .creation-actions > button,
+  .work-focus .work-more > summary {
+    width: 100%;
+    min-height: 49px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    padding: 6px 3px;
+    font-size: 11px;
+    line-height: 1.25;
+    white-space: normal;
+    text-align: center;
+  }
+  .work-focus
+    .creation-actions
+    > button:not(.primary):not(.sync-error):not(.sync-attention),
+  .work-focus .work-more > summary {
+    border-color: transparent;
+    background: transparent;
+  }
+  .work-focus .creation-actions > button:hover,
+  .work-focus .work-more > summary:hover {
+    background: #e7edde;
+  }
+  .work-focus .creation-actions > button[aria-expanded="true"] {
+    background: #e1ebd5;
+    color: #405c34;
+  }
+  .work-focus .work-more-menu {
+    right: auto;
+    left: calc(100% + 9px);
+    top: auto;
+    bottom: 0;
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+  }
+  .work-focus .work-more-menu button {
+    flex-direction: row;
+    white-space: nowrap;
+    min-height: 35px;
+  }
+  .work-focus .creation-split {
+    height: 100%;
+  }
+}
+@media (max-width: 900px) {
+  .work-focus .creation-toolbar {
+    padding: 6px 9px;
+    gap: 5px;
+    min-height: 0;
+  }
+  .work-focus .work-identity .breadcrumb {
+    display: none;
+  }
+  .work-focus .creation-toolbar h1 {
+    font-size: 14px;
+  }
+  .work-focus .creation-actions button {
+    padding: 5px 7px;
+    min-height: 31px;
+  }
+}
+@media (min-width: 901px) and (max-height: 540px) {
+  .work-focus .creation-toolbar {
+    gap: 8px;
+    padding-block: 8px;
+  }
+  .work-focus .creation-actions {
+    gap: 4px;
+  }
+  .work-focus .creation-actions > button,
+  .work-focus .work-more > summary {
+    min-height: 38px;
+  }
+}

@@ -114,13 +114,17 @@ export async function layoutChecks(h) {
     await locate.fill("18");
     await locate.press("Enter");
     await p.getByRole("button", { name: "设为出点" }).click();
-    await p.getByLabel("时间轴缩放").selectOption("4");
+    await p
+      .getByRole("slider", { name: "时间轴可视终点", exact: true })
+      .press("Home");
     assert(
       await p
         .locator(".timeline-scroll")
         .evaluate((el) => el.scrollWidth > el.clientWidth * 3),
     );
-    await p.getByLabel("时间轴缩放").selectOption("1");
+    await p
+      .getByRole("slider", { name: "时间轴可视范围", exact: true })
+      .press("0");
   });
   await check("选段引用、Markdown和安全链接", async () => {
     await page.getByRole("button", { name: "引用选段", exact: true }).click();
