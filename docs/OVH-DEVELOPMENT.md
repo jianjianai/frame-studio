@@ -33,6 +33,10 @@ ssh host 'sudo -n docker exec frame-development pnpm build:studio'
 
 若需从 AgentDock 浏览器访问开发容器，可以通过 `ssh host 'sudo -n docker inspect frame-development --format "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"'` 查询开发容器 IP，然后用只绑定 AgentDock 回环地址的 SSH 本地转发访问该 IP 的开发端口。不要把开发服务直接接入生产 Caddy。
 
+## 授权生产更新
+
+后续更新按用户要求默认跳过发布前备份：不自动转储数据库、打包数据目录，也不重复完整校验历史备份。保留构建与测试、活动任务检查、必要服务切换和上线验收；不为备份停机。已有备份和旧镜像保留。不可逆数据迁移或删除另行说明并确认，备份仅在用户明确要求时执行。完整约定见根 `AGENTS.md` 的“发布与备份”；不要直接复用历史记录或缓存脚本中的全量备份发布流程。
+
 ## 重建与维护
 
 容器启动参数可通过 `ssh host 'sudo -n docker inspect frame-development'` 检查，但环境字段含测试库口令，不应完整输出到聊天或日志。安全查看挂载、镜像和状态时应使用相应 `--format`。重新创建容器时挂载源为 `/var/lib/docker/volumes/agent-dock_agentdock_workspace/_data/frame-studio`，目标 `/workspace`；加载该目录 `.cache/ovh-dev/dev.env`，保持工作目录和用户不变。
