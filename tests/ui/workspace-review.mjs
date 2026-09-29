@@ -89,11 +89,17 @@ try {
         .click();
       await h.page
         .getByRole("menuitem", {
-          name: name === "版本" ? "版本管理" : name,
+          name: name === "版本" ? "源代码管理" : name,
           exact: true,
         })
         .click();
     }
+  };
+  const originalMore = h.more;
+  h.more = async (name) => {
+    await originalMore(name);
+    if (name === "版本")
+      await h.page.getByRole("tab", { name: "历史", exact: true }).click();
   };
   h.closeModal = async () =>
     h.page

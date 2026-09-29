@@ -7,7 +7,7 @@ import {
   ListTodo,
   GitPullRequest,
   Download,
-  History,
+  GitBranch,
   Info,
   ChevronDown,
   PanelsTopLeft,
@@ -44,9 +44,9 @@ export function WorkTools({
   const focusKey = keys.includes(focused) ? focused : "work";
   const syncLabel =
     syncError || sync?.error
-      ? "同步失败，请查看详情"
+      ? "远端检查失败，请查看详情"
       : sync?.dirty
-        ? "有未保存修改"
+        ? `有 ${sync.dirty} 个未提交文件`
         : sync?.behind
           ? "有远端更新"
           : sync?.ahead
@@ -128,7 +128,13 @@ export function WorkTools({
       )}
       {key === "sync" && attention && (
         <span className="tool-badge" aria-hidden="true">
-          !
+          {failed
+            ? "!"
+            : sync?.dirty
+              ? sync.dirty > 99
+                ? "99+"
+                : sync.dirty
+              : "↑↓"}
         </span>
       )}
     </button>
@@ -218,10 +224,10 @@ export function WorkTools({
               "aria-label": "后台任务",
               title: running ? `${running} 项任务进行中` : "后台任务",
             })}
-            {button("sync", failed ? AlertCircle : GitPullRequest, "同步", {
-              "aria-label": "查看同步状态",
+            {button("sync", failed ? AlertCircle : GitBranch, "版本", {
+              "aria-label": "源代码管理",
               "aria-description": syncLabel,
-              title: syncLabel,
+              title: `源代码管理 · ${syncLabel}（Ctrl / ⌘ + Shift + G）`,
               className: `work-tool sync-tool ${failed ? "sync-failed" : attention ? "sync-pending" : ""}`,
             })}
           </div>
@@ -287,10 +293,10 @@ export function WorkTools({
               <button
                 role="menuitem"
                 tabIndex={-1}
-                onClick={() => select("versions", true)}
+                onClick={() => select("sync")}
               >
-                <History size={17} />
-                版本管理
+                <GitBranch size={17} />
+                源代码管理
               </button>
             </>
           ) : (
@@ -327,7 +333,7 @@ export function WorkTools({
               >
                 <GitPullRequest size={17} />
                 <span>
-                  同步状态<small>{syncLabel}</small>
+                  源代码管理<small>{syncLabel}</small>
                 </span>
               </button>
             </>

@@ -182,6 +182,49 @@ export async function mockApi(context, playerUrl, uiUrl) {
         return [connection];
       case "works_chat_turns":
         return state.tasks.filter((t) => t.chat === args.chat);
+      case "works_scm_status":
+        return {
+          revision: (state.scmFiles?.length ? "d" : "b").repeat(64),
+          head: state.versions[0]?.id,
+          branch: work.branch,
+          expectedBranch: work.branch,
+          files: state.scmFiles || [],
+          total: state.scmFiles?.length || 0,
+          staged: 0,
+          unstaged: state.scmFiles?.length || 0,
+          conflicts: 0,
+          outside: 0,
+          blocked: "",
+          busy: null,
+          sync: {
+            remote: repo.url,
+            remoteExists: true,
+            ahead: 2,
+            behind: 0,
+            checked: now,
+          },
+        };
+      case "works_scm_commit":
+        return {
+          id: args.version,
+          parent: "c".repeat(40),
+          name: "已确认开场",
+          author: "FRAME",
+          created: now,
+          files: [{ path: "projects/test-film/scene.ts", status: "M" }],
+          total: 1,
+          truncated: false,
+        };
+      case "works_scm_diff":
+        return {
+          path: args.path,
+          area: args.area,
+          version: args.version,
+          revision: (state.scmFiles?.length ? "d" : "b").repeat(64),
+          before: { kind: "text", bytes: 16 },
+          after: { kind: "text", bytes: 16 },
+          patch: "@@ -1 +1 @@\n-const n = 1;\n+const n = 2;\n",
+        };
       case "works_sync_status":
         return {
           branch: work.branch,

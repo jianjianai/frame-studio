@@ -1,3 +1,4 @@
+import { sourceControlFlow } from "../ui/source-control-flow.mjs";
 import { runtimeIdentity } from "../../scripts/runtime-identity.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -15,7 +16,7 @@ import { PREVIEW_VERSION } from "../../server/preview-version.mjs";
 const url = process.env.FRAME_TEST_DATABASE_URL;
 test(
   "workbench browser: repository navigation, real sandboxed preview, resizing, dialogs and background continuity",
-  { skip: !url, timeout: 120000 },
+  { skip: !url, timeout: 180000 },
   async () => {
     const port = Number(process.env.FRAME_TEST_PORT || 55173),
       origin = `http://127.0.0.1:${port}`;
@@ -184,23 +185,13 @@ test(
         .getByRole("button", { name: "关闭 AI 对话" })
         .click();
       await page.getByRole("button", { name: "打开 AI 对话" }).click();
-      await page.getByRole("button", { name: "作品菜单" }).click();
-      await page
-        .getByRole("menuitem", { name: "版本管理", exact: true })
-        .click();
-      const versions = page.getByRole("dialog", { name: "版本管理" });
-      await versions.getByLabel("版本名称").fill("审片确认");
-      await versions.getByRole("button", { name: "保存当前版本" }).click();
-      await versions.getByText("审片确认", { exact: true }).waitFor();
-      await versions.getByRole("button", { name: "关闭弹窗" }).click();
-      await page
-        .getByRole("button", { name: "查看同步状态", exact: true })
-        .click();
-      await page
-        .getByRole("complementary", { name: "同步状态" })
-        .getByText(work.branch, { exact: true })
-        .waitFor();
-      await page.getByRole("button", { name: "关闭同步状态" }).click();
+      await sourceControlFlow({
+        page,
+        call,
+        work,
+        data,
+        reportDir: path.join(platformRoot, ".cache/scm-validation"),
+      });
       fs.mkdirSync(path.join(platformRoot, ".cache/validation"), {
         recursive: true,
       });

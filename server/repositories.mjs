@@ -189,17 +189,35 @@ export class Repositories {
         [id, project],
       )
     )
-      throw problem(409, "作品存在运行中或待恢复的任务，请等待完成、停止执行或恢复发布后再修改");
+      throw problem(
+        409,
+        "作品存在运行中或待恢复的任务，请等待完成、停止执行或恢复发布后再修改",
+      );
   }
   async checkpoint(id, project, message, { named = false } = {}) {
-    const { repo } = await this.project(id, project);
+    const { repo } = await this.project(id, project, { exists: false });
+    // Automatic saves must not overwrite a user's distinct index version.
+    const staged = (await this.git(repo.root, ["diff", "--cached", "--name-only", "--no-renames", "-z"])).split("\0").filter(Boolean);
+    if (staged.length) {
+      const working = new Set([
+        ...(await this.git(repo.root, ["diff", "--name-only", "--no-renames", "-z"])).split("\0"),
+        ...(await this.git(repo.root, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0"),
+      ]);
+      if (staged.some((file) => working.has(file)))
+        throw problem(409, "暂存区与工作区存在不同版本，请先在源代码管理中提交或取消暂存，再执行自动保存");
+    }
+    const tracked = (await this.git(repo.root, ["ls-files", "-z"])).split("\0");
     const files = [
       `projects/${project}`,
       "README.md",
       ".gitattributes",
       ".gitignore",
-    ].filter((file) => fs.existsSync(path.join(repo.root, file)));
-    await this.git(repo.root, ["add", "--", ...files]);
+    ].filter(
+      (file) =>
+        fs.existsSync(path.join(repo.root, file)) ||
+        tracked.some((name) => name === file || name.startsWith(file + "/")),
+    );
+    if (files.length) await this.git(repo.root, ["add", "--", ...files]);
     const changed = await this.git(repo.root, [
       "diff",
       "--cached",
@@ -408,7 +426,7 @@ export class Repositories {
     }
     return rows;
   }
-  async status(id, { fetch = false, work = null } = {}) {
+  async status(id, { fetch = false, work = null, prune = false } = {}) {
     const w = work
       ? await this.db.one("SELECT * FROM works WHERE id=$1 AND repo=$2", [
           work,
@@ -417,7 +435,7 @@ export class Repositories {
       : null;
     if (work && !w) throw problem(404, "Work not found");
     const r = w
-      ? (await this.project(id, w.project)).repo
+      ? (await this.project(id, w.project, { exists: false })).repo
       : await this.library(id);
     let checked = (w || r).sync_state?.checked || null,
       error = fetch ? null : (w || r).sync_state?.error || null;
@@ -425,7 +443,12 @@ export class Repositories {
       try {
         await this.git(
           r.root,
-          ["fetch", "origin", "+refs/heads/*:refs/remotes/origin/*"],
+          [
+            "fetch",
+            ...(prune ? ["--prune"] : []),
+            "origin",
+            "+refs/heads/*:refs/remotes/origin/*",
+          ],
           true,
         );
         checked = new Date().toISOString();
@@ -541,7 +564,7 @@ export class Repositories {
       async () => {
         if (w) await this.writable(id, w.project);
         const r = w
-          ? (await this.project(id, w.project)).repo
+          ? (await this.project(id, w.project, { exists: false })).repo
           : await this.library(id);
         if (action === "fetch") return this.status(id, { fetch: true, work });
         if (action === "pull") {

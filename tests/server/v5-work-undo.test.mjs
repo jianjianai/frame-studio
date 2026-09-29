@@ -256,6 +256,15 @@ test(
         f.repos.writable(f.repo.id, f.work.project),
         (e) => e.code === "UNDO_RECOVERY_REQUIRED",
       );
+      const scm = await f.actions.call("works_scm_status", { id: f.work.id });
+      assert.match(scm.blocked, /撤销/);
+      await assert.rejects(
+        f.actions.call("works_scm_change", {
+          id: f.work.id, action: "checkpoint", message: "Blocked during undo",
+          expectedRevision: scm.revision,
+        }),
+        (e) => e.code === "UNDO_RECOVERY_REQUIRED",
+      );
       const result = await new WorkUndo(options).undo(request);
       assert.equal(result.state, "succeeded");
       assert.equal(
@@ -315,6 +324,15 @@ test(
       });
       assert.equal(review.undo.recovery, true);
       assert.equal(review.undo.available, true);
+      const scm = await f.actions.call("works_scm_status", { id: f.work.id });
+      assert.match(scm.blocked, /撤销/);
+      await assert.rejects(
+        f.actions.call("works_scm_change", {
+          id: f.work.id, action: "checkpoint", message: "Blocked during undo",
+          expectedRevision: scm.revision,
+        }),
+        (e) => e.code === "UNDO_RECOVERY_REQUIRED",
+      );
       const result = await new WorkUndo(options).undo(request);
       assert.equal(result.state, "succeeded");
       assert.equal(

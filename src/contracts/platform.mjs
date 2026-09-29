@@ -130,6 +130,7 @@ export const workVersionRequestSchema = workIdRequestSchema.extend({
 });
 export const workRestoreRequestSchema = workIdRequestSchema.extend({
   version: z.union([uuid, commitSchema]),
+  expectedRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
 });
 export const workChatTurnsRequestSchema = workIdRequestSchema.extend({
   chat: uuid,

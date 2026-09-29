@@ -1,25 +1,20 @@
 import { useEffect, useRef, useState } from "react";
-import { Play, History, RefreshCw } from "lucide-react";
+import { Play, RefreshCw } from "lucide-react";
 import {
   api,
   request,
   useQuery,
   useAction,
   Button,
-  Field,
-  Form,
-  Modal,
   ErrorNote,
   Loading,
-  Empty,
-  date,
   states,
   active,
   cancellable,
 } from "./ui";
 import { reviewTime } from "./review-text";
 
-function VersionReview({
+export function VersionReview({
   work,
   version,
   currentPreview,
@@ -275,134 +270,5 @@ function VersionReview({
         )
       )}
     </section>
-  );
-}
-
-export function Versions({
-  work,
-  notify,
-  onRestore,
-  currentPreview,
-  position,
-  onPause,
-}) {
-  const [offset, setOffset] = useState(0),
-    [selected, setSelected] = useState(null),
-    [restore, setRestore] = useState(null);
-  const query = useQuery("works_versions", { id: work.id, limit: 50, offset }),
-    [run, busy] = useAction(notify);
-  return (
-    <>
-      <p>
-        AI
-        修改会自动保存版本。先预览或比较，再决定是否恢复；恢复会保留当前内容并追加记录。
-      </p>
-      <Form
-        busy={busy}
-        submit="保存当前版本"
-        onSubmit={(a) =>
-          run(async () => {
-            await api("works_checkpoint", { id: work.id, name: a.name });
-            query.refresh();
-            notify("当前版本已保存");
-          })
-        }
-      >
-        <Field label="版本名称">
-          <input
-            name="name"
-            required
-            maxLength={150}
-            placeholder="例如：已确认的开场"
-          />
-        </Field>
-      </Form>
-      <ErrorNote error={query.error} />
-      {query.error && <Button onClick={query.refresh}>重试加载版本</Button>}
-      {query.loading && !query.data ? (
-        <Loading />
-      ) : !query.error && !query.data?.length ? (
-        <Empty>尚无可用历史版本。</Empty>
-      ) : (
-        query.data?.map((version) => (
-          <div className="settings-row" key={version.id}>
-            <div>
-              <strong>{version.name}</strong>
-              <p>
-                {date(version.created)} ·{" "}
-                {version.kind === "git"
-                  ? version.id.slice(0, 8)
-                  : "早期本地快照"}
-              </p>
-            </div>
-            <div className="row">
-              <Button icon={History} onClick={() => setSelected(version)}>
-                预览与比较
-              </Button>
-              <Button disabled={busy} onClick={() => setRestore(version)}>
-                恢复
-              </Button>
-            </div>
-          </div>
-        ))
-      )}
-      <div className="pagination">
-        <Button
-          disabled={!offset || query.loading}
-          onClick={() => setOffset(Math.max(0, offset - 50))}
-        >
-          上一页
-        </Button>
-        <span>第 {Math.floor(offset / 50) + 1} 页</span>
-        <Button
-          disabled={
-            query.loading ||
-            (query.data?.filter((v) => v.kind === "git").length || 0) < 50
-          }
-          onClick={() => setOffset(offset + 50)}
-        >
-          下一页
-        </Button>
-      </div>
-      {selected && (
-        <Modal title="版本预览与比较" wide onClose={() => setSelected(null)}>
-          <VersionReview
-            key={selected.id}
-            work={work}
-            version={selected}
-            currentPreview={currentPreview}
-            position={position}
-            onPause={onPause}
-            notify={notify}
-          />
-        </Modal>
-      )}
-      {restore && (
-        <Modal title="恢复作品版本" onClose={() => setRestore(null)}>
-          <p>
-            恢复到“{restore.name}
-            ”？当前内容会先自动保存，恢复后重新生成预览。此操作不是仅查看。
-          </p>
-          <Form
-            busy={busy}
-            protect={false}
-            submit="确认恢复"
-            onSubmit={() =>
-              run(async () => {
-                await api("works_restore", {
-                  id: work.id,
-                  version: restore.id,
-                });
-                await api("works_task", { id: work.id, kind: "build" });
-                setRestore(null);
-                query.refresh();
-                onRestore?.();
-                notify("已恢复作品，正在准备预览");
-              })
-            }
-          />
-        </Modal>
-      )}
-    </>
   );
 }

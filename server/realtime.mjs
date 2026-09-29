@@ -17,6 +17,7 @@ const watched = {
   task_get: ["events", "tasks"],
   tools_info: ["settings"],
   works_sync_status: ["work_sync"],
+  works_scm_status: ["works", "work_sync", "tasks", "work_undos"],
 };
 export async function installRealtime(app, db, actions, origin) {
   const wss = new WebSocketServer({
