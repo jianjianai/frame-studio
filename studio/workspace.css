@@ -44,3 +44,13 @@
   .work-focus .chat-composer textarea { height: 90px; }
   .work-focus .chat-composer > small { display: block; }
 }
+
+.modal-notices { position: sticky; top: 68px; z-index: 5; }
+.toast.inside-modal { position: static; transform: none; max-width: none; margin: 10px 18px 0; border-radius: 8px; box-shadow: none; }
+.discard-warning { position: sticky; top: 68px; z-index: 4; padding: 17px 22px; background: #fff5df; color: #5f482b; border-bottom: 1px solid #e3ceaa; }
+.discard-warning p { color: #765d36; }
+.form-actions { align-items: center; gap: 16px; }
+.form-actions > small { margin-right: auto; }
+.empty-action { margin-top: 20px; }
+.modal-content > form { min-width: 0; }
+@media(max-width:600px) { .modal-notices, .discard-warning { top: 62px; } }

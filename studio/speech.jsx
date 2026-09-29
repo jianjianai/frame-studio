@@ -90,6 +90,7 @@ function Audition({ engine, onClose }) {
             );
           } catch (e) {
             setError(e.message);
+            throw e;
           } finally {
             setBusy(false);
           }
@@ -159,6 +160,7 @@ function ExternalEditor({ engine, model, onSaved }) {
           onSaved(result.id);
         } catch (e) {
           setError(e.message);
+          throw e;
         } finally {
           setBusy(false);
         }

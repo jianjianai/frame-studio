@@ -25,6 +25,7 @@ import {
   go,
   states,
   kinds,
+  Notification,
 } from "./ui";
 import { WorkLibrary, Repositories } from "./library";
 import { Creation } from "./creation";
@@ -134,7 +135,7 @@ function App() {
     localStorage.setItem("frame.nav-collapsed", String(collapsed));
   }, [collapsed]);
   useEffect(() => {
-    if (!notice) return;
+    if (!notice || notice.type === "error") return;
     const timer = setTimeout(
       () => setNotice(null),
       notice.type === "error" ? 15000 : 6000,
@@ -268,19 +269,7 @@ function App() {
           <WorkLibrary recent notify={notify} />
         )}
       </main>
-      {notice && (
-        <div
-          className={"toast " + notice.type}
-          role={notice.type === "error" ? "alert" : "status"}
-        >
-          <span>{notice.text}</span>
-          <Button
-            icon={X}
-            aria-label="关闭通知"
-            onClick={() => setNotice(null)}
-          />
-        </div>
-      )}
+      <Notification notice={notice} onClose={() => setNotice(null)} />
     </div>
   );
 }
