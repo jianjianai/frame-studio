@@ -2,7 +2,7 @@
 
 `pnpm verify` 是完整平台验收：工程检查、全部 server/studio JS/JSX 语法与相对导入检查、原 TypeScript 检查、关键聊天模块 JSDoc 类型检查、单元/MCP 测试、播放器和工作台构建、服务端与真实浏览器测试。工作台先构建，再执行浏览器测试，避免使用上次构建结果。
 
-本次没有把整个既有 JavaScript 平台一次改成 TypeScript。`tsconfig.platform.json` 先覆盖草稿快照和事件加载；`check:platform` 覆盖全部平台源码的语法及相对依赖，不冒充类型检查。
+平台类型检查采用增量方式，而非一次重写全部既有 JavaScript。`tsconfig.platform.json` 先覆盖草稿快照和事件加载；`check:platform` 覆盖全部平台源码的语法及相对依赖，不冒充类型检查。
 
 ## 本地统一验收
 
