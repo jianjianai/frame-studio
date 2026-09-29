@@ -179,6 +179,10 @@ export class Repositories {
     }
   }
   async writable(id, project = null) {
+    const undo = await this.db.one(
+      "SELECT u.id FROM work_undos u JOIN works w ON w.id=u.work WHERE w.repo=$1 AND ($2::text IS NULL OR w.project=$2) AND u.state IN ('applying','failed') LIMIT 1", [id, project],
+    );
+    if (undo) throw Object.assign(problem(409, "作品有尚未完成的撤销，请先在创作结果中重试完成撤销"), { code: "UNDO_RECOVERY_REQUIRED", recovery: "retry-undo" });
     if (
       await this.db.one(
         "SELECT id FROM tasks WHERE repo=$1 AND ($2::text IS NULL OR project=$2) AND state IN ('queued','running','cancelling','publishing','publish_failed') LIMIT 1",

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { command } from "./process.mjs";
 import { confined, problem } from "./security.mjs";
 
-export async function versionTree(repos, work, version) {
+export async function versionTree(repos, work, version, { detached = false } = {}) {
   if (!/^[a-f0-9]{40}$/.test(version))
     throw problem(400, "只能预览当前作品的 Git 历史版本");
   const { repo } = await repos.project(work.repo, work.project);
@@ -16,7 +16,8 @@ export async function versionTree(repos, work, version) {
       () => true,
       () => false,
     );
-  if (!ancestor) throw problem(400, "该版本不属于当前作品历史");
+  // detached is reserved for a locally generated inverse commit; no API accepts this option.
+  if (!ancestor && !detached) throw problem(400, "该版本不属于当前作品历史");
   const prefix = `projects/${work.project}/`;
   const output = await command(
     "git",
@@ -87,8 +88,8 @@ async function copyBlob(root, oid, target) {
     clearTimeout(timer);
   }
 }
-export async function snapshotVersion(repos, work, version, destination) {
-  const tree = await versionTree(repos, work, version);
+export async function snapshotVersion(repos, work, version, destination, options = {}) {
+  const tree = await versionTree(repos, work, version, options);
   if (fs.existsSync(destination)) throw problem(409, "历史预览输出已存在");
   fs.mkdirSync(destination, { recursive: true });
   // Avoid unbounded memory/file descriptors when a work contains many assets.
@@ -97,7 +98,8 @@ export async function snapshotVersion(repos, work, version, destination) {
       tree.entries
         .slice(i, i + 4)
         .map((entry) =>
-          copyBlob(tree.root, entry.oid, confined(destination, entry.path)),
+          copyBlob(tree.root, entry.oid, confined(destination, entry.path)).then(() =>
+            fs.chmodSync(confined(destination, entry.path), entry.mode === "100755" ? 0o755 : 0o644)),
         ),
     );
     const failure = results.find((result) => result.status === "rejected");

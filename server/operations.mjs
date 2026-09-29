@@ -7,6 +7,7 @@ import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
 import { chatOperations } from "./chat-operations.mjs";
 import { createOperationRegistry } from "./operation-registry.mjs";
+import { workResultOperations } from "./work-results.mjs";
 import { taskGetRequestSchema } from "../src/contracts/platform.mjs";
 import { hash, token, confined, problem } from "./security.mjs";
 const uuid = z.string().uuid(),
@@ -484,6 +485,7 @@ export function operations({
     tasks,
   });
   chatOperations({ add, db, works, repos, tasks, connections, secrets });
+  workResultOperations({ add, db, data, works, repos, tasks });
   if (connections)
     workbenchOperations({
       add,
