@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "project": "work-39d8b371",
+  "checks": {
+    "deterministicFrames": true,
+    "subtitlesToggleChangesPixels": true,
+    "independentTracksNonSilent": true,
+    "noPcmClipping": true,
+    "segmentMatchesFullMix": true,
+    "trackSumMatchesMix": true,
+    "fullMp4Decoded": true,
+    "browserWebmDecoded": true
+  },
+  "audio": {
+    "mixed": {
+      "samples": 96000,
+      "rms": 0.06485960183464579,
+      "peak": 0.520294189453125
+    },
+    "pulse": {
+      "samples": 96000,
+      "rms": 0.050316731684564,
+      "peak": 0.40325927734375
+    },
+    "harmony": {
+      "samples": 96000,
+      "rms": 0.04529398357307898,
+      "peak": 0.187652587890625
+    },
+    "segmentMaxDifference": 0,
+    "mixMaxDifference": 1,
+    "unit": "16-bit PCM LSB"
+  },
+  "media": [
+    {
+      "file": "exports/signal-journey.mp4",
+      "bytes": 4546962,
+      "sha256": "045810d667c96b1927075a59a15c55d7429e1899c71f387298e4ab89c57c79a3",
+      "video": {
+        "codec": "h264",
+        "width": 1280,
+        "height": 720,
+        "frames": 720,
+        "fps": "30/1",
+        "duration": "24.000000"
+      },
+      "audio": {
+        "codec": "aac",
+        "channels": 2,
+        "sampleRate": "48000",
+        "integratedLufs": "-22.35",
+        "truePeakDb": "-3.85",
+        "silence": []
+      }
+    },
+    {
+      "file": "exports/toolchain-browser/browser-clip.webm",
+      "bytes": 651338,
+      "sha256": "c45f56a66c19c3a2e2abe13800ea1fbd5fb33e2b59af5e84aeb118f6eddfe67a",
+      "video": {
+        "codec": "vp9",
+        "width": 640,
+        "height": 360,
+        "frames": 60,
+        "fps": "30/1",
+        "duration": "2.020000"
+      },
+      "audio": {
+        "codec": "opus",
+        "channels": 2,
+        "sampleRate": "48000",
+        "integratedLufs": "-22.07",
+        "truePeakDb": "-5.61",
+        "silence": []
+      }
+    }
+  ],
+  "frameSha256": "d82273e7ad55b59c663e958f30c5cf4e00273ca1ee34eab72f87a883efa80901",
+  "visualReview": "inspect_saved_frames_separately",
+  "listening": "not_confirmed_by_human"
+}

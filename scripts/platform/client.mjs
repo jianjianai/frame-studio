@@ -505,7 +505,14 @@ export class PlatformClient {
       // link is an atomic no-clobber publish on the same filesystem; --force uses atomic replacement.
       if (force) await fsp.rename(temporary, target);
       else await fsp.link(temporary, target);
-      return { taskId: id, path: artifact.path, output: target, bytes, sha256 };
+      return {
+        taskId: id,
+        path: artifact.path,
+        output: target,
+        bytes,
+        sha256,
+        checksumVerified: Boolean(artifact.sha256),
+      };
     } finally {
       if (owned) await fsp.rm(temporary, { force: true });
     }

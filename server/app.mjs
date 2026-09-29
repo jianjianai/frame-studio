@@ -1,3 +1,4 @@
+import { operationDescription } from "./tool-catalog.mjs";
 import {
   describeTool,
   isMcpOperation,
@@ -192,14 +193,31 @@ export async function createApp({
       return res.code(304).send();
     return res.send(cover.buffer);
   });
-  app.get("/api/actions", async () =>
-    Object.fromEntries(
-      Object.entries(actions.registry).map(([name, op]) => [
-        name,
-        { description: op.description },
-      ]),
-    ),
-  );
+  app.get("/api/actions", async (req) => {
+    const search =
+      typeof req.query.search === "string"
+        ? req.query.search.toLowerCase()
+        : "";
+    const exact =
+      typeof req.query.name === "string"
+        ? req.query.name.replace(/^frame_/, "")
+        : null;
+    return Object.fromEntries(
+      Object.entries(actions.registry)
+        .filter(
+          ([name, op]) =>
+            (!exact || name === exact) &&
+            (!search ||
+              (name + " " + op.description).toLowerCase().includes(search)),
+        )
+        .map(([name, op]) => [
+          name,
+          operationDescription(name, op, {
+            schema: req.query.schema === "1" || Boolean(exact),
+          }),
+        ]),
+    );
+  });
   app.get("/api/actions/:name", async (req) => {
     const name = req.params.name.replace(/^frame_/, "");
     if (!Object.hasOwn(actions.registry, name))

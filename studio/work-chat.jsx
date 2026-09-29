@@ -176,11 +176,11 @@ export function WorkChat({
     { id: work.id, chat, limit: 30 },
     1500,
   );
-  const switchChat = (next) => {
+  const switchChat = (next, preserveDraft = false) => {
     initialized.current = true;
     conversationRevision.current++;
     draftWrite(draftKey(chat), { prompt, review, modelChoice });
-    const draft = draftRead(draftKey(next));
+    const draft = preserveDraft ? { prompt, review, modelChoice } : draftRead(draftKey(next));
     if (!next)
       setConnection(
         preferences.defaultSelection?.connection ||
@@ -205,7 +205,8 @@ export function WorkChat({
     const id = chats.data.some((c) => c.id === remembered)
       ? remembered
       : chats.data[0]?.id || "";
-    switchChat(id);
+    // A user may type before the initial conversation subscription arrives.
+    switchChat(id, draftRevision.current > 0);
   }, [chats.data]);
   useEffect(() => {
     if (!connection && connections.data?.length)

@@ -24,6 +24,7 @@ const extensions = new Set([
   ".frag",
   ".csv",
   ".srt",
+  ".vtt",
 ]);
 const ignored = new Set(["exports", "node_modules"]);
 const sha = z.string().regex(/^[a-f0-9]{64}$/);

@@ -150,10 +150,16 @@ export function checkProjects(root = process.cwd(), options = {}) {
       continue;
     }
     const { meta, loadPath } = record;
-    try { compositionSize(meta); }
-    catch (error) { report("error", "COMPOSITION", file, error.message); }
-    try { assertEngineProtocol(meta); }
-    catch (error) { report("error", "ENGINE_PROTOCOL", file, error.message); }
+    try {
+      compositionSize(meta);
+    } catch (error) {
+      report("error", "COMPOSITION", file, error.message);
+    }
+    try {
+      assertEngineProtocol(meta);
+    } catch (error) {
+      report("error", "ENGINE_PROTOCOL", file, error.message);
+    }
     if (
       meta.posterTime !== undefined &&
       (!Number.isFinite(meta.posterTime) ||
@@ -317,7 +323,12 @@ export function checkProjects(root = process.cwd(), options = {}) {
       const beat = beats[i];
       if (beat?.id !== undefined) {
         if (!shotIdSchema.safeParse(beat.id).success || shotIds.has(beat.id))
-          report("error", "SHOT_ID", file, `Shot marker ${i} has an invalid or duplicate id`);
+          report(
+            "error",
+            "SHOT_ID",
+            file,
+            `Shot marker ${i} has an invalid or duplicate id`,
+          );
         shotIds.add(beat.id);
       }
       if (
@@ -513,7 +524,21 @@ export function checkProjects(root = process.cwd(), options = {}) {
               "Runtime CDN imports are not permitted",
             );
           if (spec.value.startsWith(".")) {
-            const resolved = importFile(codeFile, spec.value);
+            const engineRoot = path.join(root, "src/engine");
+            const sharedEngineRoot = options.sharedEngineRoot
+              ? path.resolve(options.sharedEngineRoot)
+              : engineRoot;
+            const requested = path.resolve(path.dirname(codeFile), spec.value);
+            // Sparse platform branches resolve only public engine imports against the
+            // installed runtime. Arbitrary missing imports cannot use this fallback.
+            const resolved =
+              importFile(codeFile, spec.value) ||
+              (options.sharedEngineRoot && inside(engineRoot, requested)
+                ? importFile(
+                    path.join(sharedEngineRoot, "__entry.ts"),
+                    "./" + path.relative(engineRoot, requested),
+                  )
+                : undefined);
             if (!resolved)
               emit(
                 "IMPORT_MISSING",
@@ -528,7 +553,8 @@ export function checkProjects(root = process.cwd(), options = {}) {
               );
             else if (
               !inside(folder, resolved) &&
-              !inside(path.join(root, "src/engine"), resolved)
+              !inside(engineRoot, resolved) &&
+              !inside(sharedEngineRoot, resolved)
             )
               emit(
                 "PRIVATE_PLATFORM_IMPORT",

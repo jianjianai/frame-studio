@@ -1,0 +1,90 @@
+{
+  "schemaVersion": 1,
+  "passed": true,
+  "codeCommit": "1f6da98178f5b5d56f125c9296e071c7c8c98652",
+  "candidateImage": "sha256:87af961ea8eab6a97714319f72603a29972a726dce91af43999a5883dcd0e4e8",
+  "evidenceKind": "Observed command-session terminal results and retained machine reports; this summary is not a raw test log.",
+  "targeted": {
+    "command": "node --test --test-concurrency=1 tests/server/platform-cli.test.mjs tests/server/toolchain-source.test.mjs",
+    "tests": 30,
+    "pass": 30,
+    "fail": 0,
+    "skipped": 0,
+    "log": ".cache/real-film/final-targeted.tap"
+  },
+  "verify": {
+    "command": "pnpm verify",
+    "exitCode": 0,
+    "session": "session-4b0d3ff207b18c3f464beb10",
+    "elapsedMs": 348311,
+    "typecheck": "passed",
+    "platformTypecheck": "passed",
+    "platformImportCheck": "passed",
+    "playerBuild": "passed",
+    "studioBuild": "passed",
+    "unit": {
+      "tests": 74,
+      "pass": 74,
+      "fail": 0,
+      "skipped": 0
+    },
+    "localMcp": {
+      "tests": 69,
+      "pass": 68,
+      "fail": 0,
+      "skipped": 1
+    },
+    "server": {
+      "tests": 129,
+      "pass": 124,
+      "fail": 0,
+      "skipped": 5
+    }
+  },
+  "releaseGate": {
+    "command": "pnpm test:server:release",
+    "exitCode": 0,
+    "session": "session-fb66cbb594e32fedcd71632f",
+    "elapsedMs": 154161,
+    "tests": 129,
+    "pass": 128,
+    "fail": 0,
+    "skipped": 1,
+    "realDockerExecutorsRan": true,
+    "actualMcpCliFilmRan": true,
+    "remainingSkip": "GeneralUser SF2 sample bank was not provided"
+  },
+  "skipExplanation": {
+    "ordinaryServer": "Three existing real-CLI executor tests and the new real-film executor test are disabled in ordinary verify and pass in the release gate. One GeneralUser SF2 test remains optional.",
+    "localMcp": "The browser sampled-bank test needs FRAME_TEST_SF2; this does not skip generated audio tests."
+  },
+  "fixtureCreation": "passed; a second creation was rejected without overwriting",
+  "frameVisualReview": {
+    "completed": true,
+    "method": "Opened the native MCP storyboard image and the five-frame local storyboard image",
+    "localTimesSeconds": [
+      1,
+      7,
+      13,
+      20,
+      23
+    ]
+  },
+  "audioListening": "not_confirmed_by_human",
+  "paidModelProviders": "not_exercised; real CLI executor tests used deterministic test upstreams",
+  "productionDeployment": false,
+  "merged": false,
+  "pushed": false,
+  "cleanup": {
+    "ownContainersRemoved": [
+      "frame-realfilm-gate",
+      "frame-realfilm-dev",
+      "frame-realfilm-pg"
+    ],
+    "ownNetworkRemoved": "frame-realfilm",
+    "remainingOwnTestContainers": 0,
+    "candidateImageRetained": true,
+    "movieAndWorktreeRetained": true,
+    "productionContainersTouched": false
+  }
+}

@@ -56,7 +56,7 @@ test(
       errors = [],
       serverErrors = [],
       diagnostics = [];
-    let browser, page, native, eventTimer;
+    let browser, page, native, eventTimer, releaseInitialChats = () => {};
     const previousPreview = process.env.FRAME_WORK_PREVIEW;
     process.env.FRAME_WORK_PREVIEW = "1";
     try {
@@ -127,12 +127,22 @@ test(
         .getByLabel("登录密码", { exact: true })
         .fill("fixture-password-at-least-14");
       await page.getByRole("button", { name: "进入工作台" }).click();
+      // Hold the real initial conversation response until the user has typed.
+      const initialChats = new Promise(resolve => { releaseInitialChats = resolve; });
+      const originalCall = actions.call;
+      actions.call = async (name, args) => {
+        if (name === "works_chats") await initialChats;
+        return originalCall(name, args);
+      };
       await page.goto(origin + "/#/work/" + work.id);
       const textarea = page.getByRole("textbox", {
         name: "创作要求",
         exact: true,
       });
       await textarea.fill("优化开场节奏，先确认我的偏好，保留音乐和字幕。");
+      releaseInitialChats();
+      await expect(page.getByText("开场节奏与声音优化", { exact: true })).toBeVisible();
+      await expect(textarea).toHaveValue("优化开场节奏，先确认我的偏好，保留音乐和字幕。");
       await page.getByRole("button", { name: "发送", exact: true }).click();
       await expect(textarea).toHaveValue("");
       const task = (
@@ -193,6 +203,7 @@ test(
         } catch (error) {
           serverErrors.push(error.message);
         } finally {
+      releaseInitialChats();
           draining = false;
         }
       }, 80);

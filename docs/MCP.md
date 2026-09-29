@@ -1,5 +1,7 @@
 # FRAME MCP：AI 动画编辑服务
 
+本文介绍目录工程的本地/远程 MCP。部署平台的 `/mcp` 使用作品 UUID 和 `frame_works_*` 工具，从 `frame_help` 开始；参数发现、事务编辑、任务等待与媒体传输见 [平台 MCP / CLI 工作流](PLATFORM-TOOLS.md)。两套入口的标识和工具名不要混用。
+
 本地 stdio 和远程 Streamable HTTP MCP 共用现有工程源码与 film 工具。场景、音轨、字幕和镜头标记仍是项目文件，播放器与导出继续使用同一绝对时间接口。MCP 提供可验证的编辑工作流，不另造一套时间轴或渲染引擎。外部 AI 的 OAuth、Bearer token 和 Cloudflare Tunnel 配置见 [远程接入](MCP-REMOTE.md)。
 
 编辑、检查点、审片、交付验证、旁白与正式导出同时提供命令行入口，详见 [AI 制作工作流](AI-PRODUCTION.md)。MCP 和 CLI 共用项目服务与制作模块。

@@ -6,6 +6,7 @@ import { readProject, validProjectId } from "./project-metadata.mjs";
 import { projectPath } from "./project-paths.mjs";
 
 export const commandHelp = `FRAME · 视频制作工具
+  pnpm film platform help                   远程平台 CLI（作品 UUID），任务等待/上传/下载
   pnpm film list [--json]                     列出项目
   pnpm film inspect <id> [--json]             元数据、素材、音轨和时间标记
   pnpm film context <id> [--json]             AI 接手上下文与修改边界（只读）
@@ -110,6 +111,18 @@ export function inspectProject(root, id) {
 
 export function runFilm(args, root = process.cwd()) {
   const [command = "help", ...rest] = args;
+  if (command === "platform") {
+    process.argv = [
+      process.execPath,
+      fileURLToPath(new URL("platform-cli.mjs", import.meta.url)),
+      ...rest,
+    ];
+    void import("./platform-cli.mjs").catch((error) => {
+      console.error(error.message);
+      process.exitCode = 1;
+    });
+    return 0;
+  }
   if (command === "mcp-remote") {
     process.argv = [
       process.execPath,

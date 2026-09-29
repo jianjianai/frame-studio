@@ -23,6 +23,8 @@ const textExtensions = new Set([
   ".vert",
   ".frag",
   ".csv",
+  ".srt",
+  ".vtt",
 ]);
 const reserved = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 export const sha256 = (value) =>

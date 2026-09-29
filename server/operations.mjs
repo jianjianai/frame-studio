@@ -1,3 +1,4 @@
+import { registerToolHelp } from "./tool-catalog.mjs";
 import { readUpload } from "./upload-state.mjs";
 import { projectTextOperations, readSource } from "./project-text.mjs";
 import { agentToolkitOperations } from "./agent-toolkit.mjs";
@@ -382,7 +383,15 @@ export function operations({
     { id: uuid },
     (a) =>
       db.lock("upload:" + a.id, async () => {
-        const { dir, meta } = readUpload(data, a.id);
+        let upload;
+        try {
+          upload = readUpload(data, a.id);
+        } catch (error) {
+          if (error.code === "UPLOAD_NOT_FOUND")
+            return { id: a.id, aborted: false };
+          throw error;
+        }
+        const { dir, meta } = upload;
         if (meta.result)
           throw problem(
             409,
@@ -578,6 +587,7 @@ export function operations({
       retention,
     });
   agentToolkitOperations({ add, registry, db, works, tasks });
+  registerToolHelp(add, registry);
   return {
     works,
     interactions,

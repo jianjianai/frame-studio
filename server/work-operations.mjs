@@ -1,3 +1,4 @@
+import { workSourceTools } from "./work-source-tools.mjs";
 import { compactTask, TASK_SUMMARY_COLUMNS } from "./agent-toolkit.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
@@ -56,6 +57,8 @@ export function workOperations({
       repo: uuid,
       renderer: z.enum(["canvas", "pixi", "three"]).default("canvas"),
       duration: z.number().positive().max(3600).default(12),
+      fps: z.number().int().min(12).max(60).default(30),
+      audio: z.enum(["silent", "generated"]).default("silent"),
       composition: compositionSchema.optional(),
       category: z.string().max(80).default(""),
     },
@@ -381,6 +384,7 @@ export function workOperations({
       };
     },
   );
+  workSourceTools({ add, works, repos, db, registry });
   sourceControlOperations({ add, db, repos, works });
   return works;
 }

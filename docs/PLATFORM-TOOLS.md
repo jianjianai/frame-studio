@@ -119,3 +119,12 @@ HTTP/MCP 错误包含 `error`、`status`、`code`、`recovery` 等机器可读�
 回归测试集中在 `tests/server/agent-toolkit.test.mjs`、`agent-toolkit-integration.test.mjs`、`platform-cli.test.mjs`，并纳入 `pnpm verify`。涉及 PostgreSQL 的测试必须使用专用 `frame_test` 数据库；发布执行器的额外门禁见 [VERIFICATION](VERIFICATION.md)。
 
 远程 CLI 默认要求 HTTPS；localhost、127.0.0.1、[::1] 可使用 HTTP。仅对明确可信的内网测试服务器传 `--allow-http`。
+
+## 原子批量编辑与真实影片验收
+
+`works_edit` 一次创建、替换或删除 1–20 个文本文件：`{id, changes:[{path, expectedSha256, content}], dryRun}`。创建时 hash 为 null，删除时 content 为 null。结构校验失败会回滚整批修改；dryRun 不写文件或历史。
+`works_patch_batch` 使用 `{id, changes:[{path, expectedSha256, replacements:[{find, replace, count}]}], dryRun}` 执行跨文件精确替换及同样的原子校验。
+`works_patch` 继续使用单文件 `{id,path,expectedSha256,edits:[{oldText,newText,expectedMatches}]}`，允许分步编辑。两者有独立名称和精确 schema，避免同名工具接受两套不兼容参数。
+`works_read_lines` 是带完整文件 hash 的分页读取入口；`frame_help` 提供可搜索和分页的工具目录，`frame_tool_describe` 返回单个工具的精确 schema。
+创建作品可传 `fps:12..60` 与 `audio:"silent"|"generated"`。远程 CLI 也可通过 `pnpm film platform` 调用。
+`tests/server/toolchain-real-executor.test.mjs` 在发布门禁中通过 MCP 安装影片源码，运行真实 Docker 帧渲染和带声音的 MP4 导出，再用统一 CLI 等待、下载并解码检查。

@@ -145,6 +145,8 @@ export class Works {
     repo,
     renderer = "canvas",
     duration = 12,
+    fps = 30,
+    audio = "silent",
     composition,
     category = "",
   }) {
@@ -170,6 +172,10 @@ export class Works {
             renderer,
             "--duration",
             String(duration),
+            "--fps",
+            String(fps),
+            "--audio",
+            audio,
             ...(composition
               ? [
                   "--width",

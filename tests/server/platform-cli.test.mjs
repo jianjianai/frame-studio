@@ -253,6 +253,7 @@ test("download streams exact bytes, preserves existing output and publishes with
   });
   const result = await f.client.download(id, "movie.mp4", output);
   assert.equal(result.sha256, sha(bytes));
+  assert.equal(result.checksumVerified, Boolean(artifact.sha256));
   assert(fs.readFileSync(output).equals(bytes));
   await assert.rejects(f.client.download(id, "movie.mp4", output), {
     code: "OUTPUT_EXISTS",
@@ -424,4 +425,21 @@ test("remote plaintext HTTP requires explicit opt-in before sending credentials"
   assert.doesNotThrow(
     () => new PlatformClient({ url: "http://[::1]:5178", token: "fixture" }),
   );
+});
+
+test("film platform delegates to the canonical offline CLI", async () => {
+  const result = await new Promise((resolve) => {
+    const child = spawn(
+      process.execPath,
+      ["scripts/film.mjs", "platform", "--help"],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stdout = "",
+      stderr = "";
+    child.stdout.on("data", (chunk) => (stdout += chunk));
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("close", (code) => resolve({ code, stdout, stderr }));
+  });
+  assert.equal(result.code, 0, result.stderr);
+  assert.match(result.stdout, /workspace_context/);
 });

@@ -302,8 +302,9 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           "SELECT * FROM events WHERE task=$1 ORDER BY id",
           [task.id],
         );
-        assert(events.some((e) => e.kind === "message"));
-        assert(events.some((e) => e.kind === "activity"));
+        const items = events.filter((e) => e.kind === "agent-item").map((e) => e.data);
+        assert(items.some((item) => item.version === 1 && item.kind === "message" && item.text.includes("作品修改完成")), "persist a public native message");
+        assert(items.some((item) => item.version === 1 && item.kind === "command" && item.phase === "completed" && item.command.includes("Durable fixture edit")), "persist completed native command activity");
         assert(!JSON.stringify(events).includes("fixture-provider-key"));
         assert(
           await db.one(

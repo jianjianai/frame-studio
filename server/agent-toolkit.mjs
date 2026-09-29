@@ -6,10 +6,12 @@ import { problem } from "./security.mjs";
 
 // This allowlist is shared by discovery and MCP registration, never by authorization.
 export const isMcpOperation = (name) =>
-  /^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$|workspace_context$|tool_describe$)/.test(
+  /^(help$|works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$|workspace_context$|tool_describe$)/.test(
     name,
   );
 const readOnly = new Set([
+  "help",
+  "works_read_lines",
   "workspace_context",
   "tool_describe",
   "upload_status",
@@ -89,7 +91,7 @@ export function artifactDescriptor(task, artifact) {
   )
     return null;
   return {
-    ...choose(artifact, ["name", "path", "bytes"]),
+    ...choose(artifact, ["name", "path", "bytes", "sha256"]),
     downloadPath:
       `/api/tasks/${task.id}/file/` +
       artifact.path.split("/").map(encodeURIComponent).join("/"),
