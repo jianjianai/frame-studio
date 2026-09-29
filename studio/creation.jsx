@@ -65,7 +65,12 @@ export function Creation({ id, notify }) {
     [dragging, setDragging] = useState(false),
     [position, setPosition] = useState({ time: 0 }),
     [assets, setAssets] = useState([]),
+    [browserJob, setBrowserJob] = useState(null),
     [run, busy] = useAction(notify);
+  const browserRequest = useRef(null);
+  const browserFile = useRef(null);
+  useEffect(() => () => { if (browserFile.current) URL.revokeObjectURL(browserFile.current.url); }, []);
+  const browserBusy = ["queued", "running", "cancelling"].includes(browserJob?.state);
   const compact = useMediaQuery("(max-width: 900px)");
   const chatToggle = useRef(null);
   const playerPreferences = useRef(readPreference("frame.player-view", {}));
@@ -101,7 +106,7 @@ export function Creation({ id, notify }) {
     lastPreview = useRef(""),
     buildRequested = useRef(false);
   useEffect(() => {
-    if (!latest || latest.id === lastPreview.current) return;
+    if (!latest || latest.id === lastPreview.current || browserBusy) return;
     let cancelled = false;
     request(`/api/tasks/${latest.id}/preview`, { method: "POST" })
       .then((link) => {
@@ -115,7 +120,7 @@ export function Creation({ id, notify }) {
     return () => {
       cancelled = true;
     };
-  }, [latest?.id]);
+  }, [latest?.id, browserBusy]);
   useEffect(() => {
     if (
       !taskQuery.data ||
@@ -132,6 +137,16 @@ export function Creation({ id, notify }) {
   useEffect(() => {
     const receive = (e) => {
       if (e.source !== iframe.current?.contentWindow) return;
+      if (e.data?.type === "frame-export-state" && e.data.id === browserRequest.current) {
+        const { type, blob, ...state } = e.data;
+        if (blob instanceof Blob && state.state === "succeeded") {
+          if (browserFile.current) URL.revokeObjectURL(browserFile.current.url);
+          browserFile.current = { url: URL.createObjectURL(blob), name: state.filename };
+        }
+        setBrowserJob(state);
+        if (state.state === "failed") notify(state.error || "本机导出失败", "error");
+      }
+      if (e.data?.type === "frame-download-error") notify(e.data.message, "error");
       if (e.data?.type === "frame-player-ready") sendPlayer("configure-view", { preferences: playerPreferences.current });
       if (e.data?.type === "frame-player-preferences") {
         playerPreferences.current = e.data.preferences;
@@ -167,6 +182,18 @@ export function Creation({ id, notify }) {
     );
     return () => clearInterval(timer);
   }, [latest?.id]);
+  useEffect(() => {
+    if (!browserBusy) return;
+    const protect = event => { event.preventDefault(); event.returnValue = ""; };
+    window.addEventListener("beforeunload", protect);
+    return () => window.removeEventListener("beforeunload", protect);
+  }, [browserBusy]);
+  useEffect(() => {
+    if (browserJob?.state !== "queued") return;
+    const id = browserJob.id;
+    const timer = setTimeout(() => setBrowserJob(previous => previous?.id === id && previous.state === "queued" ? { ...previous, state: "failed", error: "播放器没有确认导出请求，请刷新预览后重试" } : previous), 15000);
+    return () => clearTimeout(timer);
+  }, [browserJob?.id, browserJob?.state]);
   if (query.loading && !query.data) return <Loading />;
   if (query.error) return <ErrorNote error={query.error} />;
   const work = query.data;
@@ -206,7 +233,7 @@ export function Creation({ id, notify }) {
                 <Button key={key} icon={Icon} onClick={(event) => { event.currentTarget.closest("details").open = false; setPanel(key); }}>{label}</Button>)}
             </div>
           </details>
-          <Button className="primary" icon={Download} onClick={() => setPanel("exports")}>导出</Button>
+          <Button className="primary" icon={Download} onClick={() => setPanel("exports")}>{browserBusy ? "正在本机导出" : "导出"}</Button>
         </div>
       </header>
       <div
@@ -369,13 +396,19 @@ export function Creation({ id, notify }) {
             <Exports
               work={work}
               notify={notify}
-              onBrowserExport={() => {
-                iframe.current?.contentWindow?.postMessage(
-                  { type: "frame-player-command", command: "export" },
-                  "*",
-                );
-                setPanel("");
+              position={position}
+              previewReady={!!preview && !previewStage && !!position.duration}
+              browserJob={browserJob}
+              onBrowserExport={options => {
+                if (browserBusy || !preview || previewStage) throw new Error("请等待播放器就绪或当前导出完成");
+                const id = crypto.randomUUID(); browserRequest.current = id;
+                setBrowserJob({ id, state: "queued" }); sendPlayer("export-start", { id, options });
               }}
+              onBrowserCancel={() => { sendPlayer("export-cancel"); setBrowserJob(previous => ({ ...previous, state: "cancelling" })); }}
+              onBrowserDownload={() => { if (browserFile.current) { const a = document.createElement("a"); a.href = browserFile.current.url; a.download = browserFile.current.name; a.click(); } else notify("本机导出文件已不在当前标签页中，请重新导出", "error"); }}
+              onSnapshot={() => sendPlayer("snapshot")}
+              onSubtitles={() => sendPlayer("subtitles")}
+
             />
           )}
         </Modal>

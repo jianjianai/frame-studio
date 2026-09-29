@@ -301,6 +301,8 @@ try {
         );
       if (["frame", "storyboard", "render"].includes(task.kind)) {
         if (input.width) args.push("--width", String(input.width));
+        if (input.fps) args.push("--fps", String(input.fps));
+        if (input.subtitles === false) args.push("--no-subtitles");
         if (task.kind === "frame") args.push("--time", String(input.time || 0));
         if (task.kind === "render") {
           if (input.start !== undefined)

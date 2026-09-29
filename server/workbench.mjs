@@ -339,7 +339,7 @@ export function workbenchOperations({
     async (a) => {
       const w = await works.get(a.id);
       return db.all(
-        "SELECT id,state,error,result,created,expires,cleaned FROM tasks WHERE repo=$1 AND project=$2 AND kind IN ('render','agent') ORDER BY created DESC LIMIT 50",
+        "SELECT id,state,error,result,input,progress,created,expires,cleaned FROM tasks WHERE repo=$1 AND project=$2 AND (kind='render' OR (kind='agent' AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(result->'artifacts','[]'::jsonb)) artifact WHERE lower(right(artifact->>'path',4))='.mp4' OR lower(right(artifact->>'path',5))='.webm'))) ORDER BY created DESC LIMIT 50",
         [w.repo, w.project],
       );
     },

@@ -153,6 +153,8 @@ export function Player({
       element.scrollLeft = Math.max(0, x - element.clientWidth / 4);
   }, [view.time, view.playing, zoom, project.duration]);
   const exportAbort = useRef<AbortController | null>(null);
+  const lastExport = useRef<Blob | null>(null);
+  const reportExport = (id: string | undefined, result: Record<string, unknown>) => { if (id && embedded && parent !== window) parent.postMessage({ type: "frame-export-state", id, ...result }, "*"); };
   const publish = () => {
     const a = transport.current;
     if (a) {
@@ -185,6 +187,11 @@ export function Player({
   const commandHandler = useRef<(data: Record<string, any>) => void>(() => {});
   commandHandler.current = (data) => {
     if (data.command === "export") setExportOpen(true);
+    if (data.command === "export-start") void renderWebm({ ...data.options, requestId: String(data.id || "") });
+    if (data.command === "export-cancel") exportAbort.current?.abort();
+    if (data.command === "export-download" && lastExport.current) downloadBlob(lastExport.current, project.id + ".webm");
+    if (data.command === "snapshot" && canvas.current) void downloadCanvas(canvas.current, project.id + "-frame-" + Math.round(view.time * project.fps) + ".png").catch(error => parent.postMessage({ type: "frame-download-error", message: String(error) }, "*"));
+    if (data.command === "subtitles") downloadBlob(new Blob([toSrt(project.subtitles)], { type: "text/plain;charset=utf-8" }), project.id + ".srt");
     if (data.command === "pause") { transport.current?.pause(); publish(); }
     if (data.command === "seek" && Number.isFinite(data.time)) {
       transport.current?.pause();
@@ -528,9 +535,11 @@ export function Player({
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   });
-  async function renderWebm() {
+  async function renderWebm(options?: { requestId: string; width: number; fps: number; start?: number; end?: number; subtitles: boolean }) {
     const sound = transport.current;
-    if (!sound || exportAbort.current) return;
+    if (!sound || loading || exportAbort.current) { reportExport(options?.requestId, { state: "failed", error: "播放器未就绪或已有导出正在进行" }); return; }
+    if (options && (!Number.isInteger(options.width) || options.width < 320 || options.width > 3840 || !Number.isInteger(options.fps) || options.fps < 1 || options.fps > 120 || typeof options.subtitles !== "boolean")) { reportExport(options.requestId, { state: "failed", error: "导出参数无效" }); return; }
+    lastExport.current = null;
     const abort = new AbortController();
     exportAbort.current = abort;
     sound.pause();
@@ -539,6 +548,7 @@ export function Player({
     setExporting(true);
     setExportOpen(false);
     setExportProgress({ phase: "preparing", completed: 0, total: 0 });
+    reportExport(options?.requestId, { state: "running", progress: { phase: "preparing", completed: 0, total: 0 } });
     try {
       type FileWriter = {
         write(chunk: unknown): Promise<void>;
@@ -553,7 +563,7 @@ export function Player({
         }
       ).showSaveFilePicker;
       const writer =
-        exportToDisk && picker
+        !options && exportToDisk && picker
           ? await (
               await picker.call(window, {
                 suggestedName: project.id + ".webm",
@@ -570,13 +580,15 @@ export function Player({
       try {
         const { exportWebm } = await import("../engine/browser-export");
         blob = await exportWebm(project, {
-          width: exportWidth,
-          fps: exportFps,
-          subtitles: subtitleRef.current,
-          controls: new Map(sound.controls),
-          volume: sound.muted ? 0 : sound.volume,
+          width: options?.width ?? exportWidth,
+          fps: options?.fps ?? exportFps,
+          start: options?.start,
+          end: options?.end,
+          subtitles: options?.subtitles ?? subtitleRef.current,
+          controls: options ? undefined : new Map(sound.controls),
+          volume: options ? 1 : sound.muted ? 0 : sound.volume,
           signal: abort.signal,
-          onProgress: setExportProgress,
+          onProgress: progress => { setExportProgress(progress); reportExport(options?.requestId, { state: "running", progress }); },
           writable: writer
             ? new WritableStream({ write: (chunk) => writer.write(chunk) })
             : undefined,
@@ -587,10 +599,11 @@ export function Player({
         await writer?.abort().catch(() => {});
         throw error;
       }
-      if (blob && !abort.signal.aborted)
-        downloadBlob(blob, project.id + ".webm");
+      if (blob && !abort.signal.aborted) { lastExport.current = blob; downloadBlob(blob, project.id + ".webm"); }
+      reportExport(options?.requestId, { state: "succeeded", filename: project.id + ".webm", bytes: blob?.size || 0, blob });
     } catch (error) {
       if (!abort.signal.aborted) setError("逐帧导出失败：" + String(error));
+      reportExport(options?.requestId, { state: abort.signal.aborted ? "cancelled" : "failed", ...(!abort.signal.aborted ? { error: String(error) } : {}) });
     } finally {
       if (exportAbort.current === abort) {
         exportAbort.current = null;

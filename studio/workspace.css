@@ -104,3 +104,15 @@ button.inline-time { display: inline; border: 0; border-radius: 3px; background:
 .badge.production-finished { color: #315d34; background: #e2efdd; }
 .repo-picker .field { margin: 12px 0; }
 .repository-grid, .connection-grid { grid-template-columns: repeat(auto-fill,minmax(min(260px,100%),1fr)); }
+
+.export-settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 18px; }
+.export-settings-grid .field { margin: 10px 0; }
+.export-explanation { font-size: 13px; }
+.export-range .field { flex: 1; min-width: 100px; }
+.export-progress { display: grid; gap: 6px; margin: 10px 0; }
+.export-progress progress { width: 100%; accent-color: #5c7950; }
+.secondary-downloads { padding: 15px 0; border-bottom: 1px solid var(--line); }
+.export-history-heading { margin: 22px 0 14px; }
+.local-export { border: 1px solid #c6d9b6; border-radius: 9px; padding: 16px; margin-top: 16px; background: #f0f6e9; }
+.export-item .section-head { margin: 0 0 8px; }
+@media(max-width:550px) { .export-settings-grid { grid-template-columns: 1fr; } }
