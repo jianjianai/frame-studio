@@ -1,3 +1,5 @@
+# Keep only long-running services in this Dockge stack.
+# One-time data ownership setup runs outside Compose; see docs/SERVER.md.
 name: frame
 services:
   studio:
@@ -30,7 +32,6 @@ services:
       caddy.reverse_proxy: "{{upstreams 3000}}"
       caddy.encode: zstd gzip
     depends_on:
-      data-init: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       speech: { condition: service_started }
     healthcheck:
@@ -45,17 +46,6 @@ services:
       timeout: 5s
       retries: 5
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
-  data-init:
-    image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.2.0}
-    user: "0:0"
-    network_mode: none
-    read_only: true
-    cap_drop: [ALL]
-    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
-    security_opt: [no-new-privileges:true]
-    volumes: [./data:/data]
-    command: [node, server/initialize-data.mjs]
-    restart: "no"
   controller:
     image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.2.0}
     restart: unless-stopped

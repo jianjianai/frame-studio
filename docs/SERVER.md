@@ -8,9 +8,38 @@
 
 模板使用已有 `caddy_caddy` 网络和域名 `frame.nerviloom.com`，部署到其他主机时修改域名、外部网络和 `FRAME_HOST_DATA`。后者必须是 Docker 宿主机上 `./data` 的绝对路径。数据库与语音服务不发布公网端口。
 
-更新流程：等待当前任务完成，备份数据库、`.env` 和 `data/models` 目录，修改 `.env` 中的明确版本，执行 `docker compose pull && docker compose up -d`，检查 `docker compose ps`、`/healthz` 和一次作品预览。保留旧镜像标签供回退；数据库发生不兼容迁移时连同备份回退。数据库在线备份使用 `pg_dump`；直接复制 `postgres` 目录必须先停止数据库。不得使用 `down -v` 更新。
+更新流程：等待当前任务完成，先完成候选构建与测试，修改 `.env` 中的明确版本，拉取并仅切换本次需要更新的服务，检查 `docker compose ps -a`、`/healthz`、`/readyz` 和一次作品预览。按用户要求，发布默认不执行备份，也不重复完整校验历史备份或为备份停机；备份仅在用户另行明确要求时执行。保留旧镜像；不兼容数据迁移或回退先说明影响并确认，不能只换镜像。不得使用 `down -v` 更新。
 
-HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `controller` 通过数据库领导者锁接管调度、监控和发布，仅此服务挂载 socket 并加入其宿主机组；它属于可信控制层，不接入公开代理网络。一次性 `data-init` 为共享数据目录准备权限，两项长期服务均使用只读根文件系统和临时 `/tmp`。升级后须确认 controller 健康且 `/readyz` 就绪，只有 HTTP 存活不代表可以执行任务。执行器不会挂载 socket、数据库或主密钥，只能读写自己的工作副本和会话目录。为选择的 AI 提供的 API Key 仍属于该 AI 的运行凭据；仅在可信的个人作品中执行代码。
+HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `controller` 通过数据库领导者锁接管调度、监控和发布，仅此服务挂载 socket 并加入其宿主机组；它属于可信控制层，不接入公开代理网络。共享数据目录在首次部署时通过栈外一次性容器准备权限（见下节），不将 `data-init` 声明在 Dockge 栈内；两项长期服务均使用只读根文件系统和临时 `/tmp`。升级后须确认 controller 健康且 `/readyz` 就绪，只有 HTTP 存活不代表可以执行任务。执行器不会挂载 socket、数据库或主密钥，只能读写自己的工作副本和会话目录。为选择的 AI 提供的 API Key 仍属于该 AI 的运行凭据；仅在可信的个人作品中执行代码。
+
+## 一次性初始化与 Dockge 状态
+
+生产 Compose 只保留 `studio`、`controller`、`postgres`、`speech` 四个常驻服务。初始化任务正常退出也会影响 Dockge 的整栈状态，不应作为服务保留，不能用 `sleep` 或重启循环掩盖状态。
+
+首次部署或明确需要修复旧数据权限时，在 Docker 宿主机的栈目录执行下面的一次性初始化。已有 `.frame-ownership-v1` 且服务可写的数据目录无需每次更新重跑。旧数据迁移前须停止写入并确认操作范围，初始化不会删除作品或素材。
+
+```sh
+# 在已配置 compose.yaml 与 .env 的栈目录，以有 Docker 权限的账户执行。
+# 子 shell 遇到错误即停止；镜像版本直接取当前 Compose，不 source .env。
+(
+  set -eu
+  docker compose config --quiet
+  FRAME_INIT_IMAGE=$(docker compose config --images | grep -m 1 '^ghcr.io/jianjianai/frame-studio[:@]')
+  test -n "$FRAME_INIT_IMAGE"
+  test ! -L ./data
+  mkdir -p ./data
+  docker run --rm --network none --read-only --user 0:0 \
+    --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER \
+    --security-opt no-new-privileges:true \
+    --mount "type=bind,source=$(pwd -P)/data,target=/data" \
+    "$FRAME_INIT_IMAGE" node server/initialize-data.mjs
+)
+# 确认初始化成功后再启动首次部署的常驻服务。
+```
+
+此容器只有 `/data` 挂载，无网络、Docker socket、数据库或主密钥，不带 Compose 项目标签，退出后通过 `--rm` 自动移除。初始化实现仍保留在平台镜像中；不要改成 `docker compose run` 或把初始化服务放回生产模板。
+
+旧栈迁移：先删除 Compose 中的 `data-init` 服务及相应 `depends_on`，运行 `docker compose config --quiet` 验证；确认旧 `frame-data-init-1` 属于本栈、已经退出且挂载仅为数据目录，再使用 `docker rm frame-data-init-1`（不加 `-f` 或 `-v`）。不要执行广泛的容器清理或重启正常服务。完成后 `docker compose ls --all` 的本栈状态应仅有 `running`，`docker compose ps -a` 只列出四个健康常驻服务。
 
 ## 平台代码与作品仓库
 
