@@ -19,7 +19,11 @@ export function createOperationRegistry() {
     if (typeof name !== "string" || !Object.hasOwn(registry, name))
       throw Object.assign(new Error("Unknown operation"), { statusCode: 404 });
     const op = registry[name];
-    return parseOperationResult(name, await op.fn(op.schema.parse(args ?? {})));
+    const value = await op.fn(op.schema.parse(args ?? {}));
+    try { return parseOperationResult(name, value); }
+    catch (cause) {
+      throw Object.assign(new Error("Operation returned an invalid response: " + name, { cause }), { statusCode: 500 });
+    }
   };
   return { registry, add, call };
 }
