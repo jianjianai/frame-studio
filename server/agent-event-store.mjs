@@ -87,7 +87,9 @@ export async function agentEventTransaction(
       } finally {
         fs.closeSync(fd);
       }
-      more = cursor < size && size - cursor >= 1024 * 1024;
+      // A capped batch may leave less than 1 MiB of complete events.
+      // At the actual end of the file only an incomplete line can remain.
+      more = endAt < size;
     }
     if (cursor !== Number(task.log_cursor || 0)) {
       await client.query("UPDATE tasks SET log_cursor=$2 WHERE id=$1", [

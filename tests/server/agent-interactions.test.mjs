@@ -405,6 +405,25 @@ test(
         12,
         "Byte-limited reads must not omit the remaining events",
       );
+      const bulkDir = path.join(data, "runs", pageTask.id);
+      fs.mkdirSync(bulkDir, { recursive: true });
+      const bulkFile = path.join(bulkDir, "events.ndjson");
+      const bulk = Array.from({ length: 85 }, (_, n) =>
+        JSON.stringify({ type: "message", id: "bulk-" + n, text: "x".repeat(100000) }) + "\n"
+      ).join("");
+      fs.writeFileSync(bulkFile, bulk);
+      assert.equal(await ingestAgentEvents(db, data, await tasks.get(pageTask.id)), true,
+        "An 8 MiB batch must report its remaining complete events even below 1 MiB");
+      assert.equal(await ingestAgentEvents(db, data, await tasks.get(pageTask.id)), false);
+      assert.equal((await db.one("SELECT count(*)::int AS n FROM events WHERE task=$1", [pageTask.id])).n, 97);
+      assert.equal(Number((await tasks.get(pageTask.id)).log_cursor), Buffer.byteLength(bulk));
+      fs.appendFileSync(bulkFile, '{"type":"message","id":"partial"');
+      assert.equal(await ingestAgentEvents(db, data, await tasks.get(pageTask.id)), false,
+        "An incomplete final line must wait for its writer rather than spin");
+      fs.appendFileSync(bulkFile, '}\n');
+      assert.equal(await ingestAgentEvents(db, data, await tasks.get(pageTask.id)), false);
+      assert.equal((await db.one("SELECT count(*)::int AS n FROM events WHERE task=$1", [pageTask.id])).n, 98);
+
     } finally {
       await app.close();
       fs.rmSync(data, { recursive: true, force: true });
