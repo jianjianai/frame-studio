@@ -183,9 +183,10 @@ export function workOperations({
       engine: uuid,
       text: z.string().min(1).max(4000),
       voice: z.string().max(150).optional(),
+      speed: z.number().min(0.5).max(2).default(1),
     },
     async ({ id, ...a }) =>
-      invoke("speech_test", { ...(await resolve(id)), ...a }),
+      invoke("speech_generate", { ...(await resolve(id)), ...a }),
   );
   add(
     "works_chats",

@@ -31,6 +31,7 @@ import { Retention } from "./retention.mjs";
 import { sendMedia } from "./media.mjs";
 import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
+import { seedSpeech } from "./speech.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
@@ -79,23 +80,7 @@ export async function createApp({
   await db.pool.query(
     "UPDATE tasks SET expires=finished+interval '7 days' WHERE finished IS NOT NULL AND expires IS NULL",
   );
-  if (!(await db.setting("speech-seeded"))) {
-    if (!(await db.one("SELECT id FROM engines LIMIT 1")))
-      await db.pool.query(
-        "INSERT INTO engines(id,name,config) VALUES($1,$2,$3)",
-        [
-          randomUUID(),
-          "Kokoro 中文 · 本地 CPU",
-          secrets.encrypt({
-            url: (process.env.FRAME_SPEECH_URL || "http://speech:8000") + "/v1",
-            model: "builtin",
-            voice: "zf_xiaobei",
-            apiKey: "",
-          }),
-        ],
-      );
-    await db.setting("speech-seeded", true);
-  }
+  await seedSpeech(db, secrets);
   const app = Fastify({
     logger: {
       level: "info",
@@ -182,7 +167,7 @@ export async function createApp({
     await db.one("SELECT 1");
     return {
       status: "ok",
-      version: "4.1.1",
+      version: "4.2.0",
       revision: process.env.FRAME_REVISION || "development",
     };
   });
@@ -378,10 +363,10 @@ export async function createApp({
   });
   const mcp = createMcpHandler(
     () => {
-      const server = new McpServer({ name: "frame-studio", version: "4.1.1" });
+      const server = new McpServer({ name: "frame-studio", version: "4.2.0" });
       for (const [name, op] of Object.entries(actions.registry)) {
         if (
-          !/^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|cancel)$|artifact_read$|engines_list$)/.test(
+          !/^(works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|cancel)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$)/.test(
             name,
           )
         )
@@ -400,6 +385,22 @@ export async function createApp({
           async (args) => {
             try {
               const value = await op.fn(args);
+              if (name === "speech_test" && value.bytes <= 8 * 1024 * 1024) {
+                const audio = confined(
+                  path.join(data, "runs", value.task),
+                  value.path,
+                );
+                return {
+                  content: [
+                    { type: "text", text: JSON.stringify(value) },
+                    {
+                      type: "audio",
+                      mimeType: value.mime,
+                      data: fs.readFileSync(audio).toString("base64"),
+                    },
+                  ],
+                };
+              }
               if (name === "artifact_read" && value.dataBase64)
                 return {
                   content: [

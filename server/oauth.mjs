@@ -102,17 +102,15 @@ export async function installOAuth(app, db, actions, origin) {
         "INSERT INTO oauth_clients(id,name,redirects) VALUES($1,$2,$3)",
         [id, name, JSON.stringify(a.redirect_uris)],
       );
-      return res
-        .code(201)
-        .send({
-          client_id: id,
-          client_name: name,
-          redirect_uris: a.redirect_uris,
-          token_endpoint_auth_method: "none",
-          grant_types: issuer.grant_types_supported,
-          response_types: ["code"],
-          scope,
-        });
+      return res.code(201).send({
+        client_id: id,
+        client_name: name,
+        redirect_uris: a.redirect_uris,
+        token_endpoint_auth_method: "none",
+        grant_types: issuer.grant_types_supported,
+        response_types: ["code"],
+        scope,
+      });
     },
   );
   app.get(
@@ -165,9 +163,13 @@ export async function installOAuth(app, db, actions, origin) {
           "SELECT hash FROM sessions WHERE hash=$1 AND expires>now()",
           [hash(req.cookies.frame_session)],
         ));
+      // no-referrer makes Chromium send Origin: null on this native POST form.
+      // Preserve same-origin CSRF validation without leaking the authorization URL to ChatGPT.
+      res.header("Referrer-Policy", "same-origin");
       res.header(
         "Content-Security-Policy",
-        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+        // Browsers also apply form-action to the final redirect after the POST.
+        `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${a.redirect_uri}; frame-ancestors 'none'; base-uri 'none'`,
       );
       return res
         .type("text/html; charset=utf-8")

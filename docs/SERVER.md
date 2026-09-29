@@ -4,7 +4,7 @@
 
 `deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio:<版本>` 与 `ghcr.io/jianjianai/frame-speech:<版本>`。服务器需要 Linux x86_64、Docker、HTTPS 反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
 
-在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像，默认保留 3.0.0。主密钥必须与数据库、文件一起备份，丢失后无法恢复加密凭据。
+在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像，4.2 起默认 4.2.0，升级时同步切换才能使用新增内置引擎。主密钥必须与数据库、文件一起备份，丢失后无法恢复加密凭据。
 
 模板使用已有 `caddy_caddy` 网络和域名 `frame.nerviloom.com`，部署到其他主机时修改域名、外部网络和 `FRAME_HOST_DATA`。后者必须是 Docker 宿主机上 `./data` 的绝对路径。数据库与语音服务不发布公网端口。
 
@@ -32,11 +32,15 @@
 
 ## 语音
 
-内置 Kokoro 82M 中文模型与三种声线，镜像构建时下载模型与字典，运行时不需要下载。外部引擎使用 OpenAI Speech 兼容的 `POST /audio/speech`，配置基础地址、模型、声线与可选密钥。设置中的试听保存为 24 小时临时文件，作品配音才保存为仓库素材并复制进作品。
+内置 Kokoro 中文（8 条声线）、MeloTTS 中英混合、Piper 英文多声线（界面提供 8 条精选声线，API 可用 0–903 speaker ID）。模型与字典随语音镜像构建下载，运行无需联网、密钥或手工添加，CPU 上同时仅保留一个模型。内置引擎由平台维护，网页和 API 均不能新增副本、修改、停用或删除。
 
-内置权重来自 [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)，固定 revision `f3ff3571791e39611d31c381e3a41a3af07b4987`，Apache-2.0 许可；模型卡和许可证随语音镜像保留。内置声线为 `zf_xiaobei`、`zf_xiaoni`、`zm_yunxi`。
+Kokoro 来自 [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)，固定 revision `f3ff3571791e39611d31c381e3a41a3af07b4987`，Apache-2.0。MeloTTS 来自 [MyShell 中文模型](https://huggingface.co/myshell-ai/MeloTTS-Chinese)，MIT；通过 sherpa-onnx 推理，英文读音受词典覆盖限制。Piper 使用 [LibriTTS-R 模型](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/libritts_r/medium/MODEL_CARD)，MIT / 训练数据 CC BY 4.0。ONNX 下载归档固定 SHA-256，来源与模型卡随镜像保留。
 
-模型上传支持 Kokoro 的 `config.json`、`model.pth`、`voices/<名称>.pt`；不接受任意脚本或压缩包。权重以 PyTorch `weights_only=True` 加载。添加模型后上传完整文件，再添加为语音引擎并测试。模型文件就绪不代表实际合成通过，试听结果才是运行验证。
+设置页分内置与自定义两类，每个引擎通过“试听”弹窗选声线、语速、文字。“添加自定义引擎”可接入兼容 OpenAI Speech 的 API，或上传 Kokoro 的 `config.json`、`model.pth`、`voices/<名称>.pt`。上传可分批继续，完整文件就绪后保存为引擎；不接受任意脚本或压缩包，PyTorch 文件使用 `weights_only=True` 加载。未完成的模型可以继续上传或删除；已被引擎引用的模型需先删除对应自定义引擎。模型文件就绪不代表合成成功，应先试听。
+
+`speech_test` 只接受引擎、文字、声线和语速，始终生成 24 小时临时文件，不进入素材库，不修改作品；传入仓库参数会被拒绝。`works_speech` 才将正式配音保存到作品和对应仓库素材库。外部服务可返回 WAV 或 MP3，文件类型经内容验证。原 `speech_test` 附带 repo/project 的旧调用应改用 `works_speech`（平台内部为 `speech_generate`）。
+
+远程 MCP 提供 `frame_engines_list/save/delete/local`、`frame_models_list` 和 `frame_speech_test`；短试听直接返回 MCP 音频，超过 8 MiB 返回临时下载信息。API 令牌和 CLI 使用相同操作。引擎列表隐藏密钥。容器 AI 使用 `node scripts/work-tool.mjs engines|engine_add|engine_test|speech`；`engine_add` 只添加新自定义配置，不能覆盖已有配置；`engine_test` 将试听放在当前任务作品的 `.cache/speech/`，`speech` 才生成素材。后台 AI 不获得管理员 API 或其他任务文件权限。
 
 ## AI 创作与工具升级
 
@@ -79,7 +83,7 @@ FRAME_ASSET_LICENSE=原创 pnpm platform upload ./image.png
 
 ChatGPT 添加远程 MCP `https://frame.nerviloom.com/mcp`，认证选择 OAuth，客户端 ID/密钥留空。通过动态客户端注册（DCR）和授权码 + S256 PKCE，跳转 FRAME 输入管理员密码并明确授权。访问令牌仅用于 MCP，一小时过期；刷新令牌旋转，授权最长 30 天。可以在「设置 → 访问设置 → OAuth 连接」撤销。
 
-元数据：`/.well-known/oauth-protected-resource/mcp` 与 `/.well-known/oauth-authorization-server`。`resource` 必须精确为本站 `/mcp` URL。DCR 仅接受 ChatGPT 的 HTTPS 回调（稳定回调与 connector/oauth 的专属回调），不允许任意重定向。服务器保存令牌散列，拒绝代码重放、错误 PKCE、错误 audience、过期或撤销令牌；刷新令牌重复使用会撤销同一授权。修改环境变量中的管理员密码会撤销现有 OAuth 授权。原有 Bearer API Token 接入继续可用。
+元数据：`/.well-known/oauth-protected-resource/mcp` 与 `/.well-known/oauth-authorization-server`。`resource` 必须精确为本站 `/mcp` URL。DCR 仅接受 ChatGPT 的 HTTPS 回调（稳定回调与 connector/oauth 的专属回调），不允许任意重定向。授权表单保留同源 Origin 校验，Referrer-Policy 使用 same-origin，CSP 只允许本站与当前已登记回调，避免浏览器将合法提交或回跳拦截。服务器保存令牌散列，拒绝代码重放、错误 PKCE、错误 audience、过期或撤销令牌；刷新令牌重复使用会撤销同一授权。修改环境变量中的管理员密码会撤销现有 OAuth 授权。原有 Bearer API Token 接入继续可用。
 
 接口实现按 [OpenAI 官方认证文档](https://developers.openai.com/plugins/build/auth)；ChatGPT 账号侧最终添加连接需要用户在自己的 ChatGPT 界面完成。
 

@@ -2,6 +2,7 @@ import { WebSocketServer } from "ws";
 import { hash } from "./security.mjs";
 
 const watched = {
+  engines_list: ["engines"],
   works_tasks: ["tasks"],
   works_chat_turns: ["tasks"],
   works_background: ["tasks"],

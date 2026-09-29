@@ -244,28 +244,6 @@ export function workbenchOperations({
     return rows;
   });
   add(
-    "engines_local",
-    "Add a local Kokoro model as an engine",
-    { model: z.string().min(1).max(150), voice: z.string().min(1).max(150) },
-    async (a) => {
-      const id = randomUUID();
-      await db.pool.query(
-        "INSERT INTO engines(id,name,config) VALUES($1,$2,$3)",
-        [
-          id,
-          "Kokoro · " + a.model,
-          repos.secrets.encrypt({
-            url: (process.env.FRAME_SPEECH_URL || "http://speech:8000") + "/v1",
-            model: a.model,
-            voice: a.voice,
-            apiKey: "",
-          }),
-        ],
-      );
-      return { id };
-    },
-  );
-  add(
     "works_chat_create",
     "Create a conversation bound to a named model connection",
     {

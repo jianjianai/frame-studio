@@ -1,0 +1,57 @@
+[
+  {
+    "key": "kokoro",
+    "id": "bca45000-0000-4000-8000-000000000001",
+    "name": "Kokoro 中文",
+    "description": "轻量中文配音，提供多种男女声。",
+    "languages": ["中文"],
+    "model": "builtin",
+    "voice": "zf_xiaobei",
+    "license": "Apache-2.0",
+    "source": "https://huggingface.co/hexgrad/Kokoro-82M",
+    "voices": [
+      { "id": "zf_xiaobei", "name": "晓贝 · 女声" },
+      { "id": "zf_xiaoni", "name": "晓妮 · 女声" },
+      { "id": "zf_xiaoxiao", "name": "晓晓 · 女声" },
+      { "id": "zf_xiaoyi", "name": "晓伊 · 女声" },
+      { "id": "zm_yunjian", "name": "云健 · 男声" },
+      { "id": "zm_yunxi", "name": "云希 · 男声" },
+      { "id": "zm_yunxia", "name": "云夏 · 男声" },
+      { "id": "zm_yunyang", "name": "云扬 · 男声" }
+    ]
+  },
+  {
+    "key": "melo",
+    "id": "bca45000-0000-4000-8000-000000000002",
+    "name": "MeloTTS 中英混合",
+    "description": "适合中文夹杂英文词汇的讲解和旁白。英文读音取决于内置词典。",
+    "languages": ["中文", "英语"],
+    "model": "melo",
+    "voice": "0",
+    "license": "MIT",
+    "source": "https://huggingface.co/myshell-ai/MeloTTS-Chinese",
+    "voices": [{ "id": "0", "name": "中英混合声线" }]
+  },
+  {
+    "key": "piper",
+    "id": "bca45000-0000-4000-8000-000000000003",
+    "name": "Piper 英文多声线",
+    "description": "轻量英语配音，可选择不同朗读声线。",
+    "languages": ["英语"],
+    "model": "piper",
+    "voice": "0",
+    "license": "MIT / 数据集 CC BY 4.0",
+    "source": "https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/libritts_r/medium/MODEL_CARD",
+    "voices": [
+      { "id": "0", "name": "英语声线 1" },
+      { "id": "1", "name": "英语声线 2" },
+      { "id": "2", "name": "英语声线 3" },
+      { "id": "3", "name": "英语声线 4" },
+      { "id": "4", "name": "英语声线 5" },
+      { "id": "5", "name": "英语声线 6" },
+      { "id": "6", "name": "英语声线 7" },
+      { "id": "7", "name": "英语声线 8" }
+    ],
+    "speakerCount": 904
+  }
+]

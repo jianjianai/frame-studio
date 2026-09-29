@@ -2,7 +2,7 @@ import fs from "node:fs";
 const [name, input = "{}"] = process.argv.slice(2);
 if (!name || name === "help") {
   console.log(
-    'Work material tools: node scripts/work-tool.mjs assets \'{"search":"背景"}\' | engines | use \'{"asset":"UUID"}\' | speech \'{"engine":"UUID","text":"旁白"}\'. JSON also accepts @file or stdin (-). All files are saved inside the current work.',
+    'Work tools: node scripts/work-tool.mjs assets \'{"search":"背景"}\' | engines | engine_add \'{"name":"My TTS","url":"https://service.example/v1","model":"tts","voice":"default","apiKey":"..."}\' | engine_test \'{"engine":"UUID","text":"试听","speed":1}\' | use \'{"asset":"UUID"}\' | speech \'{"engine":"UUID","text":"正式旁白","voice":"voice-id","speed":1}\'. JSON also accepts @file or stdin (-); use these for secrets. engines lists built-ins and voices. engine_test creates only temporary audio in the work cache; speech saves narration as a work material. Built-ins are ready and immutable.',
   );
 } else {
   if (!process.env.FRAME_AGENT_URL || !process.env.FRAME_AGENT_TOKEN)

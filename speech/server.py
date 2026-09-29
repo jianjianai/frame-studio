@@ -1,4 +1,5 @@
-"""CPU-only Kokoro service. Uploaded weights are loaded with weights_only=True."""
+"""Offline CPU speech engines. Only custom Kokoro models are writable."""
+import gc
 import io
 import json
 import re
@@ -8,6 +9,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 import torch
+import sherpa_onnx
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from kokoro import KModel, KPipeline
@@ -15,6 +17,10 @@ from kokoro import KModel, KPipeline
 ROOT = Path('/models')
 ROOT.mkdir(exist_ok=True)
 BUILTIN = Path('/opt/builtin')
+CATALOG = {m['model']: m for m in json.loads(Path(__file__).with_name('catalog.json').read_text())}
+ONNX = {'melo': Path('/opt/builtin-onnx/vits-melo-tts-zh_en'),
+        'piper': Path('/opt/builtin-onnx/vits-piper-en_US-libritts_r-medium')}
+ONNX_FILES = {'melo': 'model.onnx', 'piper': 'en_US-libritts_r-medium.onnx'}
 LOCK = threading.RLock()
 CACHE = {}
 torch.set_num_threads(2)
@@ -23,24 +29,33 @@ app = FastAPI(docs_url=None, redoc_url=None)
 def directory(model):
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,63}', model):
         raise HTTPException(400, 'Invalid model id')
-    return BUILTIN if model == 'builtin' else ROOT / model
+    folder = BUILTIN if model == 'builtin' else ONNX.get(model, ROOT / model)
+    if folder.is_symlink():
+        raise HTTPException(400, 'Symbolic model directories are not supported')
+    return folder
 
 @app.get('/healthz')
 def health():
-    return {'status': 'ok', 'engine': 'kokoro', 'device': 'cpu'}
+    return {'status': 'ok', 'engines': list(CATALOG), 'device': 'cpu'}
 
 @app.get('/models')
 def models():
     result = []
-    for model in ['builtin'] + sorted(p.name for p in ROOT.iterdir() if p.is_dir() and not p.is_symlink()):
+    for model in list(CATALOG) + sorted(p.name for p in ROOT.iterdir() if p.is_dir() and not p.is_symlink() and p.name not in CATALOG):
         folder = directory(model)
-        result.append({'id': model, 'ready': (folder/'config.json').is_file() and (folder/'model.pth').is_file(),
-                       'voices': sorted(p.stem for p in (folder/'voices').glob('*.pt'))})
+        if model in ONNX:
+            weights = folder/ONNX_FILES[model]
+            ready = weights.is_file() and weights.stat().st_size > 1024*1024 and (folder/'tokens.txt').is_file()
+            voices = [v['id'] for v in CATALOG[model]['voices']]
+        else:
+            voices = sorted(p.stem for p in (folder/'voices').glob('*.pt') if not p.is_symlink())
+            ready = (folder/'config.json').is_file() and (folder/'model.pth').is_file() and bool(voices)
+        result.append({'id': model, 'builtin': model in CATALOG, 'ready': bool(ready), 'voices': voices})
     return result
 
 @app.post('/models/{model}')
 def create(model: str):
-    if model == 'builtin':
+    if model in CATALOG:
         raise HTTPException(409, 'Built-in model is immutable')
     folder = directory(model)
     if folder.exists():
@@ -50,7 +65,7 @@ def create(model: str):
 
 @app.delete('/models/{model}')
 def delete(model: str):
-    if model == 'builtin':
+    if model in CATALOG:
         raise HTTPException(409, 'Built-in model is immutable')
     with LOCK:
         folder = directory(model)
@@ -62,7 +77,7 @@ def delete(model: str):
 
 @app.put('/models/{model}/file')
 async def upload(model: str, path: str, request: Request):
-    if model == 'builtin' or not re.fullmatch(r'(config\.json|model\.pth|voices/[a-z][a-z0-9_]{0,79}\.pt)', path):
+    if model in CATALOG or not re.fullmatch(r'(config\.json|model\.pth|voices/[a-z][a-z0-9_]{0,79}\.pt)', path):
         raise HTTPException(400, 'Allowed: config.json, model.pth, voices/name.pt')
     folder = directory(model)
     if not folder.is_dir():
@@ -102,6 +117,34 @@ def speak(body: Speech):
     if body.response_format != 'wav':
         raise HTTPException(400, 'This engine produces WAV')
     folder = directory(body.model)
+    if body.model in ONNX:
+        if not body.voice.isdecimal() or not 0 <= int(body.voice) < CATALOG[body.model].get('speakerCount', 1):
+            raise HTTPException(400, 'Invalid speaker ID')
+        with LOCK:
+            if body.model not in CACHE:
+                CACHE.clear()
+                gc.collect()
+                config = sherpa_onnx.OfflineTtsConfig(
+                    model=sherpa_onnx.OfflineTtsModelConfig(
+                        vits=sherpa_onnx.OfflineTtsVitsModelConfig(
+                            model=str(folder/ONNX_FILES[body.model]), tokens=str(folder/'tokens.txt'),
+                            lexicon=str(folder/'lexicon.txt') if body.model == 'melo' else '',
+                            data_dir=str(folder/'espeak-ng-data') if body.model == 'piper' else ''),
+                        num_threads=2, provider='cpu'),
+                    rule_fsts=','.join(str(folder/f) for f in ['date.fst','number.fst','phone.fst'] if (folder/f).is_file()),
+                    max_num_sentences=1)
+                if not config.validate():
+                    raise HTTPException(503, 'Built-in model files are incomplete')
+                CACHE[body.model] = sherpa_onnx.OfflineTts(config)
+            generation = sherpa_onnx.GenerationConfig()
+            generation.sid = int(body.voice)
+            generation.speed = body.speed
+            audio = CACHE[body.model].generate(body.input, generation)
+            if len(audio.samples) == 0:
+                raise HTTPException(422, 'No speech generated')
+            output = io.BytesIO()
+            sf.write(output, audio.samples, audio.sample_rate, format='WAV', subtype='PCM_16')
+            return Response(output.getvalue(), media_type='audio/wav')
     if not re.fullmatch(r'[a-z][a-z0-9_]{0,79}', body.voice):
         raise HTTPException(400, 'Invalid voice')
     voice = folder / 'voices' / (body.voice + '.pt')
@@ -111,6 +154,7 @@ def speak(body: Speech):
         if body.model not in CACHE:
             # Retain one model at a time to bound CPU memory.
             CACHE.clear()
+            gc.collect()
             model = KModel(repo_id='hexgrad/Kokoro-82M', config=str(folder/'config.json'), model=str(folder/'model.pth')).eval().to('cpu')
             CACHE[body.model] = KPipeline(lang_code='z', repo_id='hexgrad/Kokoro-82M', model=model, device='cpu')
         pipeline = CACHE[body.model]

@@ -95,6 +95,19 @@ test(
           .statusCode,
         403,
       );
+      for (const invalidOrigin of ["null", "https://evil.test"]) {
+        assert.equal(
+          (
+            await app.inject({
+              method: "POST",
+              url: "/oauth/authorize",
+              headers: { origin: invalidOrigin, cookie },
+              payload: form,
+            })
+          ).statusCode,
+          403,
+        );
+      }
       const authorized = await post("/oauth/authorize", form, cookie);
       assert.equal(authorized.statusCode, 302);
       const callback = new URL(authorized.headers.location);

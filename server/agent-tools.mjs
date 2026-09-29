@@ -13,15 +13,42 @@ export function agentTools({ app, db, data, assets, actions }) {
         repo: task.repo,
       });
     if (name === "engines") return actions.call("engines_list", {});
+    if (name === "engine_add") {
+      if (args.id)
+        throw problem(
+          403,
+          "Task AI can add a custom engine, not replace existing configurations",
+        );
+      return actions.call("engines_save", args);
+    }
+    if (name === "engine_test") {
+      const preview = await actions.call("speech_test", args);
+      const relative = `projects/${task.project}/.cache/speech/${preview.task}.${preview.mime === "audio/wav" ? "wav" : "mp3"}`;
+      const target = confined(path.join(data, "runs", task.id), relative);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.copyFileSync(
+        confined(path.join(data, "runs", preview.task), preview.path),
+        target,
+      );
+      if (process.platform !== "win32")
+        await command("chown", ["1000:1000", path.dirname(target), target]);
+      return {
+        path: relative,
+        temporary: true,
+        elapsedMs: preview.elapsedMs,
+        expiresAt: preview.expiresAt,
+      };
+    }
     if (name === "use" || name === "speech") {
       const asset =
         name === "speech"
           ? (
-              await actions.call("speech_test", {
+              await actions.call("speech_generate", {
                 engine: args.engine,
                 text: args.text,
                 repo: task.repo,
                 ...(args.voice ? { voice: args.voice } : {}),
+                ...(args.speed !== undefined ? { speed: args.speed } : {}),
               })
             ).asset
           : await assets.get(args.asset);
@@ -86,7 +113,7 @@ export function agentTools({ app, db, data, assets, actions }) {
     }
     throw problem(
       403,
-      "Only assets, engines, use and speech are allowed for this task",
+      "Allowed: assets, engines, engine_add, engine_test, use and speech",
     );
   });
 }
