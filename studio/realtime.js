@@ -40,6 +40,9 @@ function connect() {
         };
       sub?.receive(value);
     } else {
+      // Compatibility with servers that used a result envelope for subscription rejection.
+      const sub = subscriptions.get(value.id);
+      if (sub && value.error) { sub.receive(value); return; }
       const call = calls.get(value.id);
       if (!call) return;
       calls.delete(value.id);

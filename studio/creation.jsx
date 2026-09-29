@@ -1,4 +1,5 @@
 import { subscribe } from "./realtime";
+import { loadTaskEvents } from "./task-events";
 import { useEffect, useRef, useState } from "react";
 import { previewCacheBridge } from "./preview-cache";
 import {
@@ -51,53 +52,26 @@ import {
 function useEvents(tasks, chat) {
   const cache = useRef({}),
     [events, setEvents] = useState({}),
-    [error, setError] = useState("");
-  const signature = tasks
-    .filter((t) => t.chat === chat)
-    .map((t) => t.id + ":" + t.state)
-    .join(",");
+    [error, setError] = useState(""),
+    [connectionError, setConnectionError] = useState(""),
+    [reconnected, setReconnected] = useState(0);
+  const signature = tasks.filter((t) => t.chat === chat).map((t) => t.id + ":" + t.state).join(",");
   useEffect(() => {
-    const stops = tasks
-      .filter((t) => t.chat === chat)
-      .map((task) => {
-        const c = (cache.current[task.id] ||= { after: 0, rows: [] });
-        return subscribe(
-          "task_get",
-          { id: task.id, after: c.after },
-          ({ result, error }) => {
-            if (error) {
-              setError(error);
-              return;
-            }
-            const rows = new Map(c.rows.map((row) => [row.id, row]));
-            for (const row of result.events) rows.set(row.id, row);
-            c.rows = [...rows.values()];
-            c.after = Number(c.rows.at(-1)?.id || 0);
-            setEvents(
-              Object.fromEntries(
-                Object.entries(cache.current).map(([id, v]) => [
-                  id,
-                  [...v.rows],
-                ]),
-              ),
-            );
-            setError("");
-          },
-        );
-      });
-    const connection = (e) =>
-      setError(
-        e.detail === "connected"
-          ? ""
-          : "连接暂时中断，正在重新连接；服务器上的创作会继续。",
-      );
-    window.addEventListener("frame-connection", connection);
-    return () => {
-      stops.forEach((stop) => stop());
-      window.removeEventListener("frame-connection", connection);
+    setError("");
+    const stop = loadTaskEvents({
+      tasks: tasks.filter((task) => task.chat === chat), cache: cache.current,
+      call: api, subscribe, onChange: setEvents, onError: setError,
+    });
+    const connection = (e) => {
+      if (e.detail === "connected") {
+        setConnectionError("");
+        setReconnected((value) => value + 1);
+      } else setConnectionError("连接暂时中断，正在重新连接；服务器上的创作会继续。");
     };
-  }, [chat, signature]);
-  return { events, error };
+    window.addEventListener("frame-connection", connection);
+    return () => { stop(); window.removeEventListener("frame-connection", connection); };
+  }, [chat, signature, reconnected]);
+  return { events, error: connectionError || error };
 }
 function Turn({ task, events, onRetry, onStop, onRetryPublication }) {
   const messages = new Map(),

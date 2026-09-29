@@ -142,11 +142,12 @@ export async function installRealtime(app, db, actions, origin) {
       }, 80);
     };
     ws.on("message", async (data) => {
-      let message;
+      let message, counted = false;
       try {
         message = JSON.parse(data.toString());
         if (typeof message.id !== "string" || message.id.length > 80)
           throw Error("Invalid request id");
+        counted = true;
         if (++inFlight > 32) throw Error("Too many requests");
         if (!(await authorized(ws.session))) {
           ws.close(4401, "Please sign in");
@@ -165,7 +166,7 @@ export async function installRealtime(app, db, actions, origin) {
         } else throw Error("Unknown message");
       } catch (e) {
         send({
-          type: "result",
+          type: message?.type === "subscribe" ? "update" : "result",
           id: message?.id,
           error:
             e.statusCode && e.statusCode < 500
@@ -174,7 +175,7 @@ export async function installRealtime(app, db, actions, origin) {
           status: e.name === "ZodError" ? 400 : e.statusCode || 500,
         });
       } finally {
-        inFlight = Math.max(0, inFlight - 1);
+        if (counted) inFlight = Math.max(0, inFlight - 1);
       }
     });
     ws.on("pong", () => {
