@@ -8,7 +8,7 @@
 
 模板使用已有 `caddy_caddy` 网络和域名 `frame.nerviloom.com`，部署到其他主机时修改域名、外部网络和 `FRAME_HOST_DATA`。后者必须是 Docker 宿主机上 `./data` 的绝对路径。数据库与语音服务不发布公网端口。
 
-更新流程：等待当前任务完成，备份数据库与 data/models 卷，修改 `.env` 中的明确版本，执行 `docker compose pull && docker compose up -d`，检查 `docker compose ps`、`/healthz` 和一次作品预览。保留旧镜像标签供回退；数据库发生不兼容迁移时连同备份回退。不得使用 `down -v` 更新。
+更新流程：等待当前任务完成，备份数据库、`.env` 和 `data/models` 目录，修改 `.env` 中的明确版本，执行 `docker compose pull && docker compose up -d`，检查 `docker compose ps`、`/healthz` 和一次作品预览。保留旧镜像标签供回退；数据库发生不兼容迁移时连同备份回退。数据库在线备份使用 `pg_dump`；直接复制 `postgres` 目录必须先停止数据库。不得使用 `down -v` 更新。
 
 平台容器需要 Docker socket 来启动独立执行器，因此它属于可信控制层。执行器不会挂载 socket、数据库或主密钥，只能读写自己的工作副本和会话目录。为选择的 AI 提供的 API Key 仍属于该 AI 的运行凭据；仅在可信的个人作品中执行代码。
 
