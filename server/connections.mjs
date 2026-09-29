@@ -3,7 +3,12 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { command } from "./process.mjs";
-import { problem } from "./security.mjs";
+import {
+  providerModelsSchema,
+  providerModels,
+} from "../src/contracts/ai-models.mjs";
+import { discoverModels, recordConnectionTest } from "./provider-catalog.mjs";
+import { problem, hash } from "./security.mjs";
 
 export function toolBinary(data, tool) {
   const bin = tool === "codex" ? "codex" : "claude";
@@ -28,8 +33,16 @@ export class Connections {
       return {
         ...row,
         config: undefined,
+        revision: hash(row.name + "\n" + row.config),
         baseUrl: c.baseUrl || "",
         model: c.model || "",
+        models:
+          c.models ||
+          (c.model
+            ? [{ id: c.model, name: c.model.slice(0, 100), enabled: true }]
+            : []),
+        enabled: c.enabled !== false,
+        lastTest: c.lastTest || null,
         configured:
           row.mode === "official" ? row.state === "ready" : !!c.apiKey,
       };
@@ -43,10 +56,19 @@ export class Connections {
     baseUrl = "",
     model = "",
     apiKey,
+    models,
+    enabled,
+    expectedRevision,
   }) {
     if (baseUrl) {
       const u = new URL(baseUrl);
-      if (!["http:", "https:"].includes(u.protocol) || u.username || u.password)
+      if (
+        !["http:", "https:"].includes(u.protocol) ||
+        u.username ||
+        u.password ||
+        u.search ||
+        u.hash
+      )
         throw problem(400, "Invalid provider URL");
     }
     const old = await this.db.one("SELECT * FROM connections WHERE id=$1", [
@@ -57,7 +79,37 @@ export class Connections {
         409,
         "Create another connection to change tool or authentication type",
       );
+    if (
+      old &&
+      expectedRevision &&
+      expectedRevision !== hash(old.name + "\n" + old.config)
+    )
+      throw problem(409, "提供商配置已在其他位置更新，请重新打开配置后再保存");
     const config = old ? this.secrets.decrypt(old.config) : {};
+    if (enabled !== undefined) config.enabled = enabled;
+    if (models !== undefined)
+      config.models = providerModelsSchema.parse(models);
+    if (config.models) {
+      if (
+        model &&
+        !config.models.some((entry) => entry.id === model && entry.enabled)
+      )
+        throw problem(400, "默认模型必须属于已启用的模型列表");
+      if (
+        mode === "api" &&
+        config.models.length &&
+        !model &&
+        config.enabled !== false
+      )
+        throw problem(400, "请从已启用模型中选择默认模型");
+    }
+    if (
+      config.baseUrl !== baseUrl ||
+      apiKey ||
+      config.model !== model ||
+      models !== undefined
+    )
+      delete config.lastTest;
     Object.assign(config, { baseUrl, model });
     if (apiKey) config.apiKey = apiKey;
     const state =
@@ -66,11 +118,19 @@ export class Connections {
           ? "ready"
           : "unconfigured"
         : old?.state || "unconfigured";
-    await this.db.pool.query(
-      `INSERT INTO connections(id,name,tool,mode,config,state) VALUES($1,$2,$3,$4,$5,$6)
-      ON CONFLICT(id) DO UPDATE SET name=$2,config=$5,state=$6,error=NULL`,
-      [id, name, tool, mode, this.secrets.encrypt(config), state],
-    );
+    if (old) {
+      const saved = await this.db.pool.query(
+        "UPDATE connections SET name=$2,config=$3,state=$4,error=NULL WHERE id=$1 AND config=$5 AND name=$6",
+        [id, name, this.secrets.encrypt(config), state, old.config, old.name],
+      );
+      if (!saved.rowCount)
+        throw problem(409, "提供商配置刚刚发生变化，请重新打开后保存");
+    } else {
+      await this.db.pool.query(
+        "INSERT INTO connections(id,name,tool,mode,config,state) VALUES($1,$2,$3,$4,$5,$6)",
+        [id, name, tool, mode, this.secrets.encrypt(config), state],
+      );
+    }
     return (await this.list()).find((x) => x.id === id);
   }
   async resolve(id) {
@@ -80,15 +140,68 @@ export class Connections {
     if (!row) throw problem(404, "AI connection not found");
     if (row.state !== "ready")
       throw problem(409, "请先连接或重新登录这个模型提供商");
-    return { ...row, ...this.secrets.decrypt(row.config) };
+    const config = this.secrets.decrypt(row.config);
+    if (config.enabled === false)
+      throw problem(409, "此提供商已停用，请在设置中启用");
+    return { ...row, ...config };
   }
-  async test(id) {
+  async selection(id, model) {
+    const config = await this.resolve(id);
+    const selected = model === undefined ? config.model || "" : model;
+    if (
+      !providerModels(config).some(
+        (entry) => entry.id === selected && entry.enabled !== false,
+      )
+    )
+      throw problem(400, "所选模型已停用或不属于此提供商，请重新选择");
+    return { ...config, model: selected };
+  }
+  async setEnabled(id, enabled) {
+    const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
+      id,
+    ]);
+    if (!row) throw problem(404, "AI connection not found");
+    const config = this.secrets.decrypt(row.config);
+    config.enabled = enabled;
+    const result = await this.db.pool.query(
+      "UPDATE connections SET config=$2 WHERE id=$1 AND config=$3",
+      [id, this.secrets.encrypt(config), row.config],
+    );
+    if (!result.rowCount)
+      throw problem(409, "提供商配置刚刚发生变化，请刷新后重试");
+    return (await this.list()).find((entry) => entry.id === id);
+  }
+  async discover(id) {
+    const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
+      id,
+    ]);
+    if (!row) throw problem(404, "AI connection not found");
+    return discoverModels({ ...row, ...this.secrets.decrypt(row.config) });
+  }
+  async test(id, model) {
     const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
       id,
     ]);
     if (!row) throw problem(404, "AI connection not found");
     const config = this.secrets.decrypt(row.config),
       started = Date.now();
+    if (model !== undefined) {
+      if (
+        !providerModels({ ...row, ...config }).some(
+          (entry) => entry.id === model && entry.enabled !== false,
+        )
+      )
+        throw problem(400, "模型不属于此提供商或已停用");
+      config.model = model;
+    }
+    const saveTest = (ok, message) =>
+      recordConnectionTest(this, id, config, {
+        ok,
+        model: config.model || "",
+        at: new Date().toISOString(),
+        elapsedMs: Date.now() - started,
+        message,
+      });
     try {
       if (row.mode === "official") {
         const root = path.join(this.data, "auth", id);
@@ -125,6 +238,7 @@ export class Connections {
                 : "/v1/messages"),
           {
             method: "POST",
+            redirect: "error",
             headers: {
               "Content-Type": "application/json",
               ...(codex
@@ -166,6 +280,12 @@ export class Connections {
         "UPDATE connections SET state='ready',error=NULL WHERE id=$1",
         [id],
       );
+      await saveTest(
+        true,
+        row.mode === "official"
+          ? "官方账号登录有效；模型能力需在创作时确认"
+          : "模型请求成功",
+      );
       return {
         ok: true,
         elapsedMs: Date.now() - started,
@@ -180,6 +300,7 @@ export class Connections {
         : row.mode === "official"
           ? "官方登录检查失败，请重新登录"
           : "模型连接失败或超时，请检查服务地址与网络";
+      await saveTest(false, message);
       if (row.mode === "official")
         await this.db.pool.query(
           "UPDATE connections SET state='expired',error=$2 WHERE id=$1",
