@@ -1,21 +1,9 @@
 import { z } from "zod";
 import { randomUUID } from "node:crypto";
 import { problem } from "./security.mjs";
+import { chatSubmissionShape as submission, workChatCreateSchema, workChatSendSchema } from "../src/contracts/platform.mjs";
 
 const uuid = z.string().uuid();
-const context = z.strictObject({
-  time: z.number().min(0).max(3600).optional(),
-  start: z.number().min(0).max(3600).optional(),
-  end: z.number().min(0).max(3600).optional(),
-  assets: z.array(uuid).max(20).optional(),
-}).refine(a => (a.start === undefined && a.end === undefined) ||
-  (a.start !== undefined && a.end !== undefined && a.end > a.start), "Invalid review range");
-const submission = {
-  prompt: z.string().trim().min(1).max(40000),
-  requestKey: uuid.optional(),
-  context: context.optional(),
-};
-
 /** Legacy project identifiers are adapters, not a second conversation implementation. */
 export function chatOperations({ add, db, works, repos, tasks, connections }) {
   const create = async ({ repo, project, connection, provider, title }) => {
@@ -53,16 +41,11 @@ export function chatOperations({ add, db, works, repos, tasks, connections }) {
   add("chats_send", "Legacy conversation submission using the same durable protocol", {
     id: uuid, ...submission,
   }, send);
-  add("works_chat_create", "Create a conversation bound to an explicit model connection", {
-    id: uuid, connection: uuid.optional(), provider: z.enum(["codex", "claude"]).optional(),
-    title: z.string().min(1).max(120).default("创作对话"),
-  }, async ({ id, ...args }) => {
+  add("works_chat_create", "Create a conversation bound to an explicit model connection", workChatCreateSchema, async ({ id, ...args }) => {
     const work = await works.get(id, { active: true });
     return create({ ...args, repo: work.repo, project: work.project });
   });
-  add("works_chat_send", "Persist an idempotent creation turn with frozen review context", {
-    id: uuid, chat: uuid, ...submission,
-  }, async ({ id, chat, ...args }) => {
+  add("works_chat_send", "Persist an idempotent creation turn with frozen review context", workChatSendSchema, async ({ id, chat, ...args }) => {
     const work = await works.get(id, { active: true });
     return send({ ...args, id: chat, repo: work.repo, project: work.project });
   });

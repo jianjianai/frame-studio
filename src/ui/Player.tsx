@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useRef, useState } from "react";
+import { playerCommandSchema } from "../contracts/platform.mjs";
 import {
   Play,
   Pause,
@@ -170,10 +171,11 @@ export function Player({
         event.data?.type !== "frame-player-command"
       )
         return;
-      if (event.data.command === "export") setExportOpen(true);
-      if (event.data.command === "pause") transport.current?.pause();
-      if (event.data.command === "seek" && Number.isFinite(event.data.time))
-        seek(event.data.time);
+      const message = playerCommandSchema.safeParse(event.data);
+      if (!message.success) return;
+      if (message.data.command === "export") setExportOpen(true);
+      if (message.data.command === "pause") transport.current?.pause();
+      if (message.data.command === "seek") seek(message.data.time);
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { X, LoaderCircle, ChevronLeft, ChevronRight } from "lucide-react";
 import { socketCall, subscribe } from "./realtime";
+import { isActiveTask, isCancellableTask, taskStateLabels } from "../src/contracts/platform.mjs";
 export async function request(url, options = {}) {
   const response = await fetch(url, {
     ...options,
@@ -40,19 +41,9 @@ export const bytes = (value) =>
 export const go = (path) => {
   location.hash = "/" + path;
 };
-export const active = (task) =>
-  ["queued", "running", "cancelling", "publishing"].includes(task.state);
-export const cancellable = (task) => ["queued", "running", "cancelling"].includes(task.state);
-export const states = {
-  queued: "等待开始",
-  running: "正在制作",
-  cancelling: "正在停止",
-  cancelled: "已停止",
-  publishing: "正在保存结果",
-  publish_failed: "结果保存待恢复",
-  failed: "需要处理",
-  succeeded: "已完成",
-};
+export const active = isActiveTask;
+export const cancellable = isCancellableTask;
+export const states = taskStateLabels;
 export const kinds = {
   agent: "AI 创作",
   build: "准备预览",

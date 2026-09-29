@@ -7,6 +7,7 @@ import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
 import { chatOperations } from "./chat-operations.mjs";
 import { createOperationRegistry } from "./operation-registry.mjs";
+import { taskGetRequestSchema } from "../src/contracts/platform.mjs";
 import { hash, token, confined, problem } from "./security.mjs";
 const uuid = z.string().uuid(),
   text = z.string().max(20000),
@@ -209,7 +210,7 @@ export function operations({
   add(
     "task_get",
     "Read durable task state, artifacts and incremental events",
-    { id: uuid, after: z.number().int().nonnegative().default(0) },
+    taskGetRequestSchema,
     async (a) => ({
       task: await tasks.get(a.id),
       events: await db.all(

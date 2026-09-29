@@ -1,4 +1,5 @@
 import { subscribe } from "./realtime";
+import { previewMessageSchema } from "../src/contracts/platform.mjs";
 import { loadTaskEvents } from "./task-events";
 import { canClearDraft, canReuseSubmission } from "./chat-draft";
 import { useEffect, useRef, useState } from "react";
@@ -539,13 +540,10 @@ export function Creation({ id, notify, onToggleNav }) {
   useEffect(() => {
     const receive = (e) => {
       if (e.source !== iframe.current?.contentWindow) return;
-      if (e.data?.type === "frame-preview-loading")
-        setPreviewStage(e.data.message || "");
-      if (
-        e.data?.type === "frame-player-state" &&
-        typeof e.data.time === "number"
-      )
-        setPosition(e.data);
+      const message = previewMessageSchema.safeParse(e.data);
+      if (!message.success) return;
+      if (message.data.type === "frame-preview-loading") setPreviewStage(message.data.message);
+      if (message.data.type === "frame-player-state") setPosition(message.data);
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);

@@ -45,6 +45,7 @@ export function inputFiles(root, id) {
   }
   for (const name of [
     "src/engine",
+    "src/contracts",
     "public",
     "scripts",
     "package.json",

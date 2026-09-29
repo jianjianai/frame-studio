@@ -14,6 +14,7 @@ import {
 import { applyProject } from "./apply-project.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
+import { taskKindSchema } from "../src/contracts/platform.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets, { runCommand = command } = {}) {
     this.command = runCommand;
@@ -40,18 +41,7 @@ export class Tasks {
     requestKey = null,
   }) {
     input = JSON.parse(JSON.stringify(input));
-    if (
-      ![
-        "new",
-        "validate",
-        "frame",
-        "storyboard",
-        "render",
-        "build",
-        "agent",
-        "tools-update",
-      ].includes(kind)
-    )
+    if (!taskKindSchema.safeParse(kind).success)
       throw problem(400, "Unknown task kind");
     if (kind === "tools-update") {
       if (
