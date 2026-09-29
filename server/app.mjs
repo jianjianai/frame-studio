@@ -10,80 +10,33 @@ import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import staticPlugin from "@fastify/static";
 import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
-import { database } from "./db.mjs";
 import {
   hash,
   token,
-  vault,
   passwordMatches,
   confined,
   problem,
 } from "./security.mjs";
-import { Repositories } from "./repositories.mjs";
-import { Assets } from "./assets.mjs";
-import { Tasks } from "./tasks.mjs";
-import { operations } from "./operations.mjs";
 import { agentTools } from "./agent-tools.mjs";
 import { browserPreview } from "./browser-preview.mjs";
-import { Connections } from "./connections.mjs";
-import { GitHub } from "./github.mjs";
-import { Retention } from "./retention.mjs";
 import { sendMedia } from "./media.mjs";
+import { createServices } from "./services.mjs";
 import { rasterCover } from "./covers.mjs";
 import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
-import { seedSpeech } from "./speech.mjs";
-import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
 export async function createApp({
   db,
   data = process.env.FRAME_DATA || "/data",
   masterKey = process.env.FRAME_MASTER_KEY,
   origin = process.env.FRAME_PUBLIC_URL || "http://localhost:3000",
-  scheduler = true,
+  scheduler = process.env.FRAME_ROLE !== "api",
 } = {}) {
-  fs.mkdirSync(data, { recursive: true });
-  fs.mkdirSync(path.join(data, "uploads"), { recursive: true });
-  fs.mkdirSync(path.join(data, "tools"), { recursive: true });
-  db ||= await database(
-    process.env.DATABASE_URL,
-    process.env.FRAME_ADMIN_PASSWORD,
-  );
-  await runtimeIdentity(); // Warm once, never hash platform code for each preview subscription.
-  const secrets = vault(masterKey),
-    repos = new Repositories(db, data, secrets),
-    assets = new Assets(db, data, repos),
-    tasks = new Tasks(db, data, repos, secrets);
-  const connections = new Connections(db, data, secrets),
-    github = new GitHub(db, secrets, repos, data),
-    retention = new Retention(db, data);
-  connections.github = github;
-  tasks.connections = connections;
-  const actions = operations({
-    db,
-    data,
-    repos,
-    assets,
-    tasks,
-    secrets,
-    connections,
-    github,
-    retention,
-  });
-  repos.onChange = async (id, project = null) => {
-    if (!project) await assets.indexRepository(id);
-    await actions.works.discover(id, project);
-    assets.scans?.delete(id);
-    assets.scans?.delete("all");
-  };
-  await connections.migrate();
-  await github.migrate();
-  await assets.migrate();
-  await actions.works.discover();
-  await db.pool.query(
-    "UPDATE tasks SET expires=finished+interval '7 days' WHERE finished IS NOT NULL AND expires IS NULL",
-  );
-  await seedSpeech(db, secrets);
+  if (process.env.FRAME_ROLE === "controller") throw new Error("The controller role must not expose the HTTP application");
+  if (process.env.FRAME_ROLE === "api" && scheduler) throw new Error("The public API role cannot start a controller");
+  const services = await createServices({ db, data, masterKey });
+  ({ db } = services);
+  const { repos, assets, tasks, retention, actions } = services;
   const app = Fastify({
     logger: {
       level: "info",
@@ -465,15 +418,11 @@ export async function createApp({
     app.setNotFoundHandler((req, res) => res.sendFile("index.html"));
   }
   if (scheduler) {
-    tasks.startLoop();
-    retention.start();
+    tasks.startLoop({ onLeadership: leader => leader ? retention.start() : retention.stop() });
   }
   app.addHook("onClose", async () => {
-    await tasks.close();
-    await retention.close();
-    connections.close();
     await mcp.close();
-    await db.pool.end();
+    await services.close();
   });
   return { app, db, repos, assets, tasks, actions };
 }

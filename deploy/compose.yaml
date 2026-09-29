@@ -3,7 +3,14 @@ services:
   studio:
     image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.2.0}
     restart: unless-stopped
-    environment:
+    user: "1000:1000"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment: &platform-environment
+      FRAME_ROLE: api
+      HOME: /tmp/frame-home
       DATABASE_URL: postgres://frame:${POSTGRES_PASSWORD}@postgres:5432/frame
       FRAME_MASTER_KEY: ${FRAME_MASTER_KEY}
       FRAME_ADMIN_PASSWORD: ${FRAME_ADMIN_PASSWORD}
@@ -17,13 +24,13 @@ services:
       FRAME_SPEECH_URL: http://speech:8000
     volumes:
       - ./data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
     networks: [internal, caddy]
     labels:
       caddy: ${FRAME_DOMAIN:-frame.nerviloom.com}
       caddy.reverse_proxy: "{{upstreams 3000}}"
       caddy.encode: zstd gzip
     depends_on:
+      data-init: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       speech: { condition: service_started }
     healthcheck:
@@ -37,6 +44,44 @@ services:
       interval: 20s
       timeout: 5s
       retries: 5
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
+  data-init:
+    image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.2.0}
+    user: "0:0"
+    network_mode: none
+    read_only: true
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, FOWNER]
+    security_opt: [no-new-privileges:true]
+    volumes: [./data:/data]
+    command: [node, server/initialize-data.mjs]
+    restart: "no"
+  controller:
+    image: ghcr.io/jianjianai/frame-studio:${FRAME_VERSION:-4.2.0}
+    restart: unless-stopped
+    user: "1000:1000"
+    group_add: ["${FRAME_DOCKER_GID:?Set FRAME_DOCKER_GID to the Docker socket group ID}"]
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      <<: *platform-environment
+      FRAME_ROLE: controller
+    volumes:
+      - ./data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks: [internal]
+    command: [node, server/controller.mjs]
+    depends_on:
+      studio: { condition: service_healthy }
+    healthcheck:
+      test: [CMD, node, server/controller-health.mjs]
+      interval: 20s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
+    stop_grace_period: 120s
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   postgres:
     image: postgres:18-alpine

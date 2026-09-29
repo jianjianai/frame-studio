@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { command } from "./process.mjs";
+import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 
 export function runtimeLimits(env = process.env) {
   const concurrency = Number(env.FRAME_TASK_CONCURRENCY ?? 2);
@@ -56,8 +57,13 @@ export class RuntimeStatus {
       try { return { ok: true, ...(await fn()) }; }
       catch { return { ok: false }; }
     };
+    const controller = process.env.FRAME_ROLE === "api" ? await this.db.setting("controller-runtime") : null;
+    const currentRuntime = process.env.FRAME_ROLE === "api" ? await runtimeIdentity() : null;
+    const controllerReady = !!controller?.leader && Date.now() - controller.checked < 40000 && controller.runtimeFingerprint === currentRuntime?.fingerprint;
     const [docker, speech, disk, queue] = await Promise.all([
-      probe(async () => ({ version: (await command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 3000, max: 65536 })).trim() })),
+      process.env.FRAME_ROLE === "api"
+        ? Promise.resolve(controllerReady ? controller.docker : { ok: false, error: "控制器未连接、心跳过期或运行时版本不一致" })
+        : probe(async () => ({ version: (await command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 3000, max: 65536 })).trim() })),
       probe(async () => {
         const response = await fetch(this.speechUrl + "/healthz", { signal: AbortSignal.timeout(3000) });
         if (!response.ok) throw Error("Speech unavailable");
@@ -70,10 +76,11 @@ export class RuntimeStatus {
     for (const name of ["works", "repos", "libraries", "blobs", "runs", "sessions", "tools"])
       sizes[name] = await usage(path.join(this.data, name), deadline);
     const schema = await this.db.all("SELECT id,checksum,applied FROM frame_schema_migrations ORDER BY id");
-    const limits = this.tasks.limits;
+    const limits = controllerReady ? controller.limits : this.tasks.limits;
     return {
       checked: Date.now(), docker, speech, disk, queue, schema, sizes, limits,
-      queueBlocked: this.tasks.queueBlocked || null,
+      controller: process.env.FRAME_ROLE === "api" ? { connected: controllerReady, checked: controller?.checked || null } : { embedded: true },
+      queueBlocked: controllerReady ? controller.queueBlocked : this.tasks.queueBlocked || null,
       ready: docker.ok && speech.ok && disk.ok && disk.freeBytes >= limits.minFreeBytes,
     };
   }

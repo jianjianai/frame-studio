@@ -302,7 +302,7 @@ export class Tasks {
     ];
     if (t.kind === "tools-update") {
       fs.mkdirSync(path.join(this.data, "tools"), { recursive: true });
-      await this.command("chmod", ["a+rwx", path.join(this.data, "tools")]);
+      await this.command("chmod", ["u+rwx", path.join(this.data, "tools")]);
     }
     if ((await this.get(t.id)).state !== "running") {
       await this.finishCancellation(t.id);
