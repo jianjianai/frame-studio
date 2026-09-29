@@ -41,7 +41,9 @@
     "verify:core": "pnpm project:check && pnpm check:platform && pnpm typecheck && pnpm typecheck:platform && pnpm test && pnpm test:mcp && pnpm build && pnpm build:studio",
     "test:server:light": "node scripts/test-server.mjs --allow-skip",
     "test:server:release": "node scripts/test-server.mjs --release",
-    "verify:release": "pnpm verify:core && pnpm test:server:release"
+    "verify:release": "pnpm verify:core && pnpm test:server:release",
+    "backup": "node scripts/backup.mjs",
+    "restore:check": "node scripts/restore-check.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
