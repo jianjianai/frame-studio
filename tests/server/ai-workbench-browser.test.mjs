@@ -65,6 +65,7 @@ test(
         mode: "api",
         baseUrl,
         apiKey: "fixture-only-secret",
+        publicCatalog: false,
         model: "model-large",
         models: [
           { id: "model-large", name: "主力创作", enabled: true },
@@ -78,6 +79,7 @@ test(
         mode: "api",
         baseUrl,
         apiKey: "fixture-only-secret",
+        publicCatalog: false,
         model: "claude-primary",
         models: [{ id: "claude-primary", name: "备用创作", enabled: true }],
       });

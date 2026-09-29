@@ -3,6 +3,7 @@ import { hash } from "./security.mjs";
 
 const watched = {
   connections_list: ["connections"],
+  connections_usage: ["connections", "tasks", "auth_flows", "chats"],
   engines_list: ["engines"],
   works_tasks: ["tasks"],
   works_preview_status: ["works", "previews"],
@@ -143,7 +144,8 @@ export async function installRealtime(app, db, actions, origin) {
       }, 80);
     };
     ws.on("message", async (data) => {
-      let message, counted = false;
+      let message,
+        counted = false;
       try {
         message = JSON.parse(data.toString());
         if (typeof message.id !== "string" || message.id.length > 80)
@@ -170,7 +172,7 @@ export async function installRealtime(app, db, actions, origin) {
           type: message?.type === "subscribe" ? "update" : "result",
           id: message?.id,
           error:
-            e.statusCode && e.statusCode < 500
+            e.expose === true || (e.statusCode && e.statusCode < 500)
               ? e.message
               : "操作未完成，请检查状态后重试",
           status: e.name === "ZodError" ? 400 : e.statusCode || 500,

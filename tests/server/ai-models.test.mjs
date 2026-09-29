@@ -14,11 +14,14 @@ import {
   providerAvailable,
 } from "../../src/contracts/ai-models.mjs";
 import {
-  discoverModels,
+  discoverModels as discoverProviderModels,
   recordConnectionTest,
 } from "../../server/provider-catalog.mjs";
 import { database } from "../../server/db.mjs";
 import { createApp } from "../../server/app.mjs";
+
+const discoverModels = (config, fetcher) =>
+  discoverProviderModels(config, fetcher, async () => ({}));
 
 const models = [
   { id: "model-small", name: "快速模型", enabled: true },
@@ -131,11 +134,11 @@ test("model discovery is bounded, deduplicated, protocol-aware and never follows
     async () =>
       new Response(
         JSON.stringify({
-          data: Array.from({ length: 205 }, (_, i) => ({ id: `m-${i}` })),
+          data: Array.from({ length: 1005 }, (_, i) => ({ id: `m-${i}` })),
         }),
       ),
   );
-  assert.equal(capped.models.length, 200);
+  assert.equal(capped.models.length, 1000);
   assert.equal(capped.truncated, true);
 });
 
@@ -211,6 +214,7 @@ test(
         model: models[0].id,
         models,
         apiKey: "fixture-not-a-real-secret",
+        publicCatalog: false,
       };
       let connection = await call("connections_save", input);
       assert.equal(connection.models.length, 2);

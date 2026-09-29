@@ -46,3 +46,22 @@ export function useAiPreferences() {
   }, []);
   return [value, saveAiPreferences];
 }
+
+/** Remove only browser shortcuts for a provider explicitly deleted in this browser. */
+export function forgetProviderPreferences(connection) {
+  const preferences = readAiPreferences();
+  const favorites = preferences.favorites.filter((key) => {
+    try {
+      return JSON.parse(key)?.[0] !== connection;
+    } catch {
+      return true;
+    }
+  });
+  saveAiPreferences({
+    favorites,
+    defaultSelection:
+      preferences.defaultSelection?.connection === connection
+        ? null
+        : preferences.defaultSelection,
+  });
+}

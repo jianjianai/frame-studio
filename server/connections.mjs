@@ -8,6 +8,11 @@ import {
   providerModels,
 } from "../src/contracts/ai-models.mjs";
 import { discoverModels, recordConnectionTest } from "./provider-catalog.mjs";
+import {
+  deleteProvider,
+  providerUsage,
+  normalizeProviderUrl,
+} from "./provider-lifecycle.mjs";
 import { problem, hash } from "./security.mjs";
 
 export function toolBinary(data, tool) {
@@ -27,7 +32,9 @@ export class Connections {
   }
   async list() {
     return (
-      await this.db.all("SELECT * FROM connections ORDER BY created")
+      await this.db.all(
+        "SELECT * FROM connections WHERE state<>'deleted' ORDER BY created",
+      )
     ).map((row) => {
       const c = this.secrets.decrypt(row.config);
       return {
@@ -35,6 +42,7 @@ export class Connections {
         config: undefined,
         revision: hash(row.name + "\n" + row.config),
         baseUrl: c.baseUrl || "",
+        publicCatalog: c.publicCatalog !== false,
         model: c.model || "",
         models:
           c.models ||
@@ -59,21 +67,14 @@ export class Connections {
     models,
     enabled,
     expectedRevision,
+    publicCatalog,
   }) {
-    if (baseUrl) {
-      const u = new URL(baseUrl);
-      if (
-        !["http:", "https:"].includes(u.protocol) ||
-        u.username ||
-        u.password ||
-        u.search ||
-        u.hash
-      )
-        throw problem(400, "Invalid provider URL");
-    }
+    baseUrl = normalizeProviderUrl(baseUrl);
     const old = await this.db.one("SELECT * FROM connections WHERE id=$1", [
       id,
     ]);
+    if (old?.state === "deleted")
+      throw problem(404, "提供商已删除，不能重新保存；请新建提供商");
     if (old && (old.tool !== tool || old.mode !== mode))
       throw problem(
         409,
@@ -86,6 +87,7 @@ export class Connections {
     )
       throw problem(409, "提供商配置已在其他位置更新，请重新打开配置后再保存");
     const config = old ? this.secrets.decrypt(old.config) : {};
+    if (publicCatalog !== undefined) config.publicCatalog = publicCatalog;
     if (enabled !== undefined) config.enabled = enabled;
     if (models !== undefined)
       config.models = providerModelsSchema.parse(models);
@@ -120,7 +122,7 @@ export class Connections {
         : old?.state || "unconfigured";
     if (old) {
       const saved = await this.db.pool.query(
-        "UPDATE connections SET name=$2,config=$3,state=$4,error=NULL WHERE id=$1 AND config=$5 AND name=$6",
+        "UPDATE connections SET name=$2,config=$3,state=$4,error=NULL WHERE id=$1 AND config=$5 AND name=$6 AND state<>'deleted'",
         [id, name, this.secrets.encrypt(config), state, old.config, old.name],
       );
       if (!saved.rowCount)
@@ -137,7 +139,8 @@ export class Connections {
     const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
       id,
     ]);
-    if (!row) throw problem(404, "AI connection not found");
+    if (!row || row.state === "deleted")
+      throw problem(404, "提供商已删除或不存在");
     if (row.state !== "ready")
       throw problem(409, "请先连接或重新登录这个模型提供商");
     const config = this.secrets.decrypt(row.config);
@@ -160,7 +163,8 @@ export class Connections {
     const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
       id,
     ]);
-    if (!row) throw problem(404, "AI connection not found");
+    if (!row || row.state === "deleted")
+      throw problem(404, "提供商已删除或不存在");
     const config = this.secrets.decrypt(row.config);
     config.enabled = enabled;
     const result = await this.db.pool.query(
@@ -175,14 +179,26 @@ export class Connections {
     const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
       id,
     ]);
-    if (!row) throw problem(404, "AI connection not found");
-    return discoverModels({ ...row, ...this.secrets.decrypt(row.config) });
+    if (!row || row.state === "deleted")
+      throw problem(404, "提供商已删除或不存在");
+    return discoverModels(
+      { ...row, ...this.secrets.decrypt(row.config) },
+      fetch,
+      this.catalogLoader,
+    );
+  }
+  async usage(id) {
+    return providerUsage(this.db, id);
+  }
+  async delete(args) {
+    return deleteProvider(this, args);
   }
   async test(id, model) {
     const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
       id,
     ]);
-    if (!row) throw problem(404, "AI connection not found");
+    if (!row || row.state === "deleted")
+      throw problem(404, "提供商已删除或不存在");
     const config = this.secrets.decrypt(row.config),
       started = Date.now();
     if (model !== undefined) {
@@ -277,7 +293,7 @@ export class Connections {
           throw problem(502, "模型服务返回错误，请检查连接配置");
       }
       await this.db.pool.query(
-        "UPDATE connections SET state='ready',error=NULL WHERE id=$1",
+        "UPDATE connections SET state='ready',error=NULL WHERE id=$1 AND state<>'deleted'",
         [id],
       );
       await saveTest(
@@ -303,7 +319,7 @@ export class Connections {
       await saveTest(false, message);
       if (row.mode === "official")
         await this.db.pool.query(
-          "UPDATE connections SET state='expired',error=$2 WHERE id=$1",
+          "UPDATE connections SET state='expired',error=$2 WHERE id=$1 AND state<>'deleted'",
           [id, message],
         );
       throw problem(error.statusCode || 502, message);
@@ -333,11 +349,23 @@ export class Connections {
     );
   }
   async begin(kind, target) {
+    return kind === "github"
+      ? this.beginLogin(kind, target)
+      : this.db.lock(`connection:${target}`, () =>
+          this.beginLogin(kind, target),
+        );
+  }
+  async beginLogin(kind, target) {
     if (kind !== "github") {
       const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [
         target,
       ]);
-      if (!row || row.mode !== "official" || row.tool !== kind)
+      if (
+        !row ||
+        row.state === "deleted" ||
+        row.mode !== "official" ||
+        row.tool !== kind
+      )
         throw problem(400, "Choose an official account connection");
       if (
         await this.db.one(
@@ -475,7 +503,7 @@ export class Connections {
           } else {
             await command("chown", ["-R", "1000:1000", root]);
             await this.db.pool.query(
-              "UPDATE connections SET state='ready',error=NULL WHERE id=$1",
+              "UPDATE connections SET state='ready',error=NULL WHERE id=$1 AND state<>'deleted'",
               [target],
             );
           }
