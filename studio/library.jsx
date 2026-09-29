@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Plus,
   FolderGit2,
@@ -22,48 +22,44 @@ import {
   Pagination,
   date,
   go,
+  useDebouncedValue,
+  states,
+  kinds,
 } from "./ui";
 import { RepositorySettings } from "./repository-settings";
 import { LoginFlow } from "./accounts";
 
-export function RepoPicker({ value, onChange }) {
-  const [search, setSearch] = useState(""),
-    query = useQuery("repositories_page", { search, limit: 30 });
-  return (
-    <Field label="所属仓库">
-      <input
-        aria-label="搜索仓库"
-        value={search}
-        onChange={(e) => setSearch(e.target.value)}
-        placeholder="搜索仓库名称"
-      />
-      <select
-        aria-label="所属仓库"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        required
-      >
-        <option value="">选择仓库</option>
-        {query.data?.items.map((r) => (
-          <option key={r.id} value={r.id}>
-            {r.name}
-          </option>
-        ))}
-      </select>
-      <ErrorNote error={query.error} />
-    </Field>
-  );
+export function RepoPicker({ value, onChange, refreshKey = 0 }) {
+  const [search, setSearch] = useState("");
+  const query = useQuery("repositories_page", { search: useDebouncedValue(search), limit: 30 });
+  const selected = useQuery(value ? "repositories_get" : null, { repo: value });
+  useEffect(() => { query.refresh(); }, [refreshKey]);
+  useEffect(() => { if (!value && !search && query.data?.items.length === 1) onChange(query.data.items[0].id); }, [query.data, value, search]);
+  const items = query.data?.items || [];
+  return <div className="repo-picker">
+    <Field label="搜索仓库"><input aria-label="搜索仓库" value={search} onChange={event => setSearch(event.target.value)} placeholder="搜索仓库名称" maxLength={200}/></Field>
+    <Field label="所属仓库"><select aria-label="所属仓库" value={value} onChange={event => onChange(event.target.value)} required disabled={query.loading && !query.data}><option value="">选择仓库</option>
+      {selected.data && !items.some(r => r.id === value) && <option value={value}>{selected.data.name}</option>}
+      {items.map(repo => <option key={repo.id} value={repo.id}>{repo.name}</option>)}
+    </select></Field>
+    {query.loading && !query.data && <small role="status">正在读取仓库…</small>}
+    <ErrorNote error={query.error || selected.error}/>{query.error && <Button type="button" onClick={query.refresh}>重试读取仓库</Button>}
+    {!query.loading && !query.error && !items.length && <p className="quiet">{search ? "没有匹配的仓库，换个名称搜索。" : "尚未添加仓库，请先添加一个存放作品的位置。"}</p>}
+  </div>;
 }
 export function NewWork({ repo, onClose, notify }) {
   const [selected, setSelected] = useState(repo?.id || ""),
     [created, setCreated] = useState(null),
+    [adding, setAdding] = useState(false),
+    [pickerRevision, setPickerRevision] = useState(0),
     [run, busy] = useAction(notify);
   return (
     <Modal title="新建作品" onClose={onClose}>
       {created && <p role="status">作品已创建。浏览器未打开新标签页，<a href={"#/work/" + created.id} target="_blank" rel="noopener" onClick={onClose}>点击打开作品 ↗</a></p>}
       <p>{repo ? `保存到 ${repo.name}` : "选择一个仓库保存作品"}</p>
-      <Form
+      {!created && <Form
         busy={busy}
+        disabled={!selected}
         submit="创建并开始创作"
         onSubmit={(a) =>
           run(async () => {
@@ -80,7 +76,7 @@ export function NewWork({ repo, onClose, notify }) {
           })
         }
       >
-        {!repo && <RepoPicker value={selected} onChange={setSelected} />}
+        {!repo && <><RepoPicker value={selected} onChange={setSelected} refreshKey={pickerRevision}/><Button type="button" icon={Plus} onClick={() => setAdding(true)}>添加作品仓库</Button></>}
         <Field label="作品名称">
           <input
             name="title"
@@ -91,11 +87,13 @@ export function NewWork({ repo, onClose, notify }) {
           />
         </Field>
         <p>进入作品后告诉 AI 你的想法，画面、声音和制作方式交给 AI。</p>
-      </Form>
+      </Form>}
+      {adding && <AddRepository notify={notify} onClose={() => setAdding(false)} onAdded={repo => { setSelected(repo.id); setPickerRevision(n => n + 1); setAdding(false); }}/>}
     </Modal>
   );
 }
 export function WorkLibrary({ repo, recent = false, notify }) {
+  const [status, setStatus] = useState("");
   const [page, setPage] = useState(0),
     [search, setSearch] = useState(""),
     [deleted, setDeleted] = useState(false),
@@ -108,10 +106,12 @@ export function WorkLibrary({ repo, recent = false, notify }) {
     ...(repo ? { repo: repo.id } : {}),
     recent,
     deleted,
-    search,
+    status,
+    search: useDebouncedValue(search),
     limit: 30,
     offset: page * 30,
   });
+  useEffect(() => { const refresh = () => query.refresh(); window.addEventListener("focus", refresh); return () => window.removeEventListener("focus", refresh); }, []);
   return (
     <>
       <div className="page-heading row">
@@ -146,6 +146,7 @@ export function WorkLibrary({ repo, recent = false, notify }) {
             placeholder="搜索作品"
           />
         </div>
+        <select aria-label="制作状态筛选" value={status} onChange={event => { setStatus(event.target.value); setPage(0); }}><option value="">全部制作状态</option><option value="draft">制作中</option><option value="review">待审片</option><option value="finished">已完成</option></select>
         {repo && (
           <Button
             icon={Trash2}
@@ -160,7 +161,7 @@ export function WorkLibrary({ repo, recent = false, notify }) {
         )}
       </div>
       <ErrorNote error={query.error} />
-      {query.loading && !query.data ? (
+      {query.error ? <Empty action={<Button onClick={query.refresh}>重试加载作品</Button>}>暂时无法读取作品，已有作品不会因此丢失。</Empty> : query.loading && !query.data ? (
         <Loading />
       ) : query.data?.items.length ? (
         <div className="work-grid">
@@ -181,7 +182,12 @@ export function WorkLibrary({ repo, recent = false, notify }) {
                   )}
                 </div>
                 <div className="work-card-info">
-                  <h3>{w.title}</h3>
+                  <h3 title={w.title}>{w.title}</h3>
+                  <div className="work-card-status"><span className={"badge production-" + w.status}>{{draft:"制作中", review:"待审片", finished:"已完成"}[w.status] || "制作中"}</span>
+                    {w.activity && w.activity.state !== "succeeded" && <span className={"badge " + w.activity.state}>{kinds[w.activity.kind] || "任务"} · {states[w.activity.state] || "状态更新中"}</span>}
+                    {w.modified && new Date(w.modified) > new Date(w.opened || 0) && <span className="badge ready">有新修改</span>}
+                    {w.unavailable && <span className="badge failed">内容需检查</span>}
+                  </div>
                   <p>
                     {recent ? w.storage_name : date(w.modified || w.updated)}
                   </p>
@@ -234,12 +240,8 @@ export function WorkLibrary({ repo, recent = false, notify }) {
           ))}
         </div>
       ) : (
-        <Empty>
-          {recent
-            ? "还没有最近打开的作品。先打开一个仓库，或创建你的第一个作品。"
-            : deleted
-              ? "回收站为空"
-              : "这个仓库还没有作品，点击“新建作品”开始。"}
+        <Empty action={search || status ? <Button onClick={() => { setSearch(""); setStatus(""); setPage(0); }}>清除筛选</Button> : !deleted ? <Button onClick={() => setCreate(true)}>创建作品</Button> : null}>
+          {search || status ? "没有符合当前筛选条件的作品。" : deleted ? "回收站为空。" : recent ? "还没有最近打开的作品。可以打开作品仓库，或开始一个新想法。" : "这个仓库还没有作品。"}
         </Empty>
       )}
       <Pagination
@@ -322,7 +324,7 @@ export function Repositories({ notify, onOpen }) {
     [account, setAccount] = useState(""),
     [add, setAdd] = useState(false);
   const query = useQuery("repositories_page", {
-      search,
+      search: useDebouncedValue(search),
       limit: 30,
       offset: page * 30,
       ...(account ? { account } : {}),
@@ -389,8 +391,9 @@ export function Repositories({ notify, onOpen }) {
           ))}
         </div>
       )}
-      {!query.loading && !query.data?.items.length && (
-        <Empty>添加已有仓库，或创建新的 GitHub 作品仓库。</Empty>
+      {query.error && <Button onClick={query.refresh}>重试加载仓库</Button>}
+      {!query.loading && !query.error && !query.data?.items.length && (
+        <Empty action={search || account ? <Button onClick={() => { setSearch(""); setAccount(""); setPage(0); }}>清除筛选</Button> : <Button onClick={() => setAdd(true)}>添加仓库</Button>}>{search || account ? "没有匹配的仓库。" : "添加已有仓库，或创建新的 GitHub 作品仓库。"}</Empty>
       )}
       <Pagination
         page={page}
@@ -469,7 +472,8 @@ function AddRepository({ notify, onClose, onAdded }) {
         <Empty>选择账号后列出可用仓库。</Empty>
       ) : (
         <Form
-          busy={busy || (!account && mode !== "local")}
+          busy={busy}
+          disabled={!account && mode !== "local"}
           submit="创建仓库"
           onSubmit={(a) =>
             run(async () =>

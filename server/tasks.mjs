@@ -55,7 +55,7 @@ export class Tasks {
       )
         throw problem(400, "Choose a provider and explicit semver version");
     } else await this.repos.project(repo, project, { exists: kind !== "new" });
-    if (input.version) {
+    if (input.version && kind !== "tools-update") {
       if (kind !== "build") throw problem(400, "历史版本只支持只读预览");
       await versionTree(this.repos, { repo, project }, input.version);
     }
@@ -325,7 +325,7 @@ export class Tasks {
       }
     };
     walk(base);
-    result = { ...result, artifacts, ...(t.input.version ? { readonlyVersion: t.input.version } : {}) };
+    result = { ...result, artifacts, ...(t.kind === "build" && t.input.version ? { readonlyVersion: t.input.version } : {}) };
     await this.db.pool.query(
       "UPDATE tasks SET state='succeeded',result=$2,source_commit=COALESCE($3,source_commit),finished=now(),expires=now()+interval '7 days' WHERE id=$1",
       [t.id, result, result.commit || null],

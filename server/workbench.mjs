@@ -53,6 +53,7 @@ export function workbenchOperations({
       repo: uuid.optional(),
       recent: z.boolean().default(false),
       deleted: z.boolean().default(false),
+      status: z.enum(["", "draft", "review", "finished"]).default(""),
       search,
       limit,
       offset,
@@ -60,8 +61,8 @@ export function workbenchOperations({
     async (a) => {
       const items = await works.list(a);
       const total = await db.one(
-        "SELECT count(*)::int AS n FROM works WHERE deleted=$1 AND ($2::uuid IS NULL OR repo=$2) AND (NOT $3 OR opened IS NOT NULL) AND (title ILIKE $4 OR description ILIKE $4)",
-        [a.deleted, a.repo || null, a.recent, "%" + a.search + "%"],
+        "SELECT count(*)::int AS n FROM works WHERE deleted=$1 AND ($2::uuid IS NULL OR repo=$2) AND (NOT $3 OR opened IS NOT NULL) AND (title ILIKE $4 OR description ILIKE $4) AND ($5='' OR status=$5)",
+        [a.deleted, a.repo || null, a.recent, "%" + a.search + "%", a.status],
       );
       return { items, total: total.n };
     },

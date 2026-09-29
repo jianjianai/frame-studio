@@ -98,3 +98,9 @@ button.inline-time { display: inline; border: 0; border-radius: 3px; background:
 .version-changes code { overflow-wrap: anywhere; }
 .version-progress { display: grid; gap: 10px; margin: 14px 0; }
 @media (max-width: 700px) { .version-players { grid-template-columns: 1fr; } .version-players iframe { height: 300px; } }
+
+.work-card-status { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.badge.production-review { color: #735425; background: #fff0d6; }
+.badge.production-finished { color: #315d34; background: #e2efdd; }
+.repo-picker .field { margin: 12px 0; }
+.repository-grid, .connection-grid { grid-template-columns: repeat(auto-fill,minmax(min(260px,100%),1fr)); }

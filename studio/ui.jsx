@@ -60,54 +60,25 @@ export const kinds = {
   storyboard: "分镜预览",
 };
 export function useQuery(name, args = {}, interval = 0) {
-  const key = JSON.stringify(args),
-    [data, setData] = useState(null),
-    [error, setError] = useState(""),
-    [loading, setLoading] = useState(true),
-    [revision, refresh] = useState(0);
+  const key = JSON.stringify(args), identity = name + ":" + key;
+  const [state, setState] = useState({ identity, data: null, error: "", loading: !!name }), [revision, refresh] = useState(0);
   useEffect(() => {
-    let cancelled = false,
-      timer;
-    if (!name) {
-      setData(null);
-      setLoading(false);
-      setError("");
-      return;
-    }
+    let cancelled = false;
+    if (!name) { setState({ identity, data: null, error: "", loading: false }); return; }
+    setState(previous => ({ identity, data: previous.identity === identity ? previous.data : null, error: "", loading: true }));
+    const receive = ({ result, error }) => {
+      if (cancelled) return;
+      setState(previous => ({ identity, data: error ? (previous.identity === identity ? previous.data : null) : result, error: error || "", loading: false }));
+    };
     if (interval) {
-      setLoading(true);
-      return subscribe(name, JSON.parse(key), ({ result, error }) => {
-        if (error) setError(error);
-        else {
-          setData(result);
-          setError("");
-        }
-        setLoading(false);
-      });
+      const stop = subscribe(name, JSON.parse(key), receive);
+      return () => { cancelled = true; stop(); };
     }
-    const load = async () => {
-      try {
-        const value = await api(name, JSON.parse(key));
-        if (!cancelled) {
-          setData(value);
-          setError("");
-        }
-      } catch (e) {
-        if (!cancelled) setError(e.message);
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
-      }
-    };
-    setLoading(true);
-    void load();
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
+    void api(name, JSON.parse(key)).then(result => receive({ result }), error => receive({ error: error.message }));
+    return () => { cancelled = true; };
   }, [name, key, interval, revision]);
-  return { data, error, loading, refresh: () => refresh((n) => n + 1) };
+  const current = state.identity === identity ? state : { data: null, error: "", loading: !!name };
+  return { data: current.data, error: current.error, loading: current.loading, refresh: () => refresh(n => n + 1) };
 }
 const ACTION_FAILURE = Symbol("action-failure");
 export function useAction(notify = () => {}) {
