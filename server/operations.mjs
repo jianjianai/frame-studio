@@ -160,7 +160,7 @@ export function operations({
     },
     async (a) =>
       db.lock(`${a.repo}:${a.project}`, async () => {
-        await repos.writable(a.repo);
+        await repos.writable(a.repo, a.project);
         const { dir } = await repos.project(a.repo, a.project),
           file = confined(dir, a.path);
         if (!/\.(ts|tsx|js|mjs|json|md|txt|svg|css|glsl|wgsl)$/.test(file))
