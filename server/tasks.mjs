@@ -15,7 +15,7 @@ import { copyTree, treeHash } from "./project-files.mjs";
 import { seedPreviewAudio } from "./preview-audio-seed.mjs";
 import { executionRuntime } from "./execution-runtime.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
-import { taskKindSchema } from "../src/contracts/platform.mjs";
+import { executableTaskKindSchema } from "../src/contracts/platform.mjs";
 import { ControllerLease } from "./controller-lease.mjs";
 export class Tasks {
   constructor(db, data, repos, secrets, { runCommand = command } = {}) {
@@ -51,7 +51,7 @@ export class Tasks {
     requestKey = null,
   }) {
     input = JSON.parse(JSON.stringify(input));
-    if (!taskKindSchema.safeParse(kind).success)
+    if (!executableTaskKindSchema.safeParse(kind).success)
       throw problem(400, "Unknown task kind");
     if (kind === "tools-update") {
       if (

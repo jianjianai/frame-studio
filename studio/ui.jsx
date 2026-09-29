@@ -45,6 +45,9 @@ export const active = isActiveTask;
 export const cancellable = isCancellableTask;
 export const states = taskStateLabels;
 export const kinds = {
+  "speech-test": "语音试听",
+  "tools-update": "升级创作工具",
+  new: "创建作品",
   agent: "AI 创作",
   build: "准备预览",
   render: "导出视频",

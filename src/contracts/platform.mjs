@@ -1,7 +1,9 @@
 import { z } from "zod";
 
 export const taskStateSchema = z.enum(["queued", "running", "cancelling", "cancelled", "publishing", "publish_failed", "failed", "succeeded"]);
-export const taskKindSchema = z.enum(["new", "validate", "frame", "storyboard", "render", "build", "agent", "tools-update"]);
+export const executableTaskKindSchema = z.enum(["new", "validate", "frame", "storyboard", "render", "build", "agent", "tools-update"]);
+// Speech auditions are persisted artifacts, not executable queue jobs.
+export const taskKindSchema = z.enum([...executableTaskKindSchema.options, "speech-test"]);
 export const taskStates = Object.freeze(taskStateSchema.options);
 export const taskKinds = Object.freeze(taskKindSchema.options);
 export const taskStateLabels = Object.freeze({

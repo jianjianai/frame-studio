@@ -15,3 +15,9 @@ test("player commands and durable publication states have one runtime contract",
   assert.equal(playerCommandSchema.safeParse({ type: "frame-player-command", command: "seek", time: 3 }).success, true);
   assert.equal(taskStateSchema.safeParse("publish_failed").success, true);
 });
+
+test("stored speech auditions are readable without becoming executable jobs", async () => {
+  const { taskKindSchema, executableTaskKindSchema } = await import("../../src/contracts/platform.mjs");
+  assert.equal(taskKindSchema.safeParse("speech-test").success, true);
+  assert.equal(executableTaskKindSchema.safeParse("speech-test").success, false);
+});
