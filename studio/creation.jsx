@@ -1,5 +1,6 @@
 import { subscribe } from "./realtime";
 import { loadTaskEvents } from "./task-events";
+import { canClearDraft } from "./chat-draft";
 import { useEffect, useRef, useState } from "react";
 import { previewCacheBridge } from "./preview-cache";
 import {
@@ -183,8 +184,15 @@ export function WorkChat({
     [run, busy] = useAction(notify);
   const initialized = useRef(false),
     requestKey = useRef(null),
+    draftRevision = useRef(0),
+    chatRevision = useRef(0),
+    promptRef = useRef(prompt),
+    sending = useRef(false),
     messages = useRef(null),
     follow = useRef(true);
+  promptRef.current = prompt;
+  const editPrompt = (value) => { draftRevision.current++; promptRef.current = value; setPrompt(value); };
+  const chooseChat = (value) => { chatRevision.current++; setChat(value); };
   const currentTurns = useQuery(
     chat ? "works_chat_turns" : null,
     { id: work.id, chat, limit: 30 },
@@ -211,7 +219,6 @@ export function WorkChat({
   }, [connections.data, connection]);
   useEffect(() => {
     sessionStorage.setItem("draft:" + work.id, prompt);
-    requestKey.current = null;
   }, [prompt, work.id]);
   const conversationTasks = [
     ...new Map(
@@ -229,42 +236,47 @@ export function WorkChat({
       messages.current.scrollTop = messages.current.scrollHeight;
   }, [stream.events, tasks]);
   const send = async (text = prompt) => {
-    requestKey.current ||= crypto.randomUUID();
-    await run(async () => {
-      let id = chat;
-      if (!id) {
-        const c = await api("works_chat_create", {
-          id: work.id,
-          connection: chosen,
-          title: text.slice(0, 60),
+    if (sending.current || !text.trim() || !chosen) return;
+    sending.current = true;
+    const sent = { text, version: draftRevision.current, conversation: chatRevision.current };
+    const assetIds = selectedAssets.map((asset) => asset.id);
+    const intent = {
+      id: work.id, chat, connection: chosen, prompt: text,
+      context: {
+        ...(usePosition ? { time: position.time || 0 } : {}),
+        ...(usePosition && position.selection?.start !== undefined && position.selection?.end > position.selection.start
+          ? { start: position.selection.start, end: position.selection.end } : {}),
+        ...(assetIds.length ? { assets: assetIds } : {}),
+      },
+    };
+    const previous = requestKey.current;
+    const submission = previous && JSON.stringify({ ...previous.intent, chat: previous.chat }) === JSON.stringify(intent)
+      ? previous : { key: crypto.randomUUID(), intent, chat };
+    requestKey.current = submission;
+    try {
+      await run(async () => {
+        if (!submission.chat) {
+          const created = await api("works_chat_create", {
+            id: intent.id, connection: intent.connection, title: intent.prompt.slice(0, 60),
+          });
+          submission.chat = created.id;
+          if (chatRevision.current === sent.conversation) setChat(created.id);
+          chats.refresh();
+        }
+        await api("works_chat_send", {
+          id: intent.id, chat: submission.chat, prompt: intent.prompt,
+          requestKey: submission.key, context: intent.context,
         });
-        id = c.id;
-        setChat(id);
-        chats.refresh();
-      }
-      await api("works_chat_send", {
-        id: work.id,
-        chat: id,
-        prompt: text,
-        requestKey: requestKey.current,
-        context: {
-          ...(usePosition ? { time: position.time || 0 } : {}),
-          ...(usePosition &&
-          position.selection?.start !== undefined &&
-          position.selection?.end > position.selection.start
-            ? { start: position.selection.start, end: position.selection.end }
-            : {}),
-          ...(selectedAssets.length
-            ? { assets: selectedAssets.map((a) => a.id) }
-            : {}),
-        },
+        if (requestKey.current === submission) requestKey.current = null;
+        if (canClearDraft(sent, { text: promptRef.current, version: draftRevision.current, conversation: chatRevision.current }))
+          editPrompt("");
+        if (chatRevision.current === sent.conversation) {
+          onClearAssets(assetIds);
+          follow.current = true;
+        }
+        reload();
       });
-      requestKey.current = null;
-      setPrompt("");
-      onClearAssets();
-      reload();
-      follow.current = true;
-    });
+    } finally { sending.current = false; }
   };
   const stop = (id) =>
     run(async () => {
@@ -282,8 +294,8 @@ export function WorkChat({
           icon={Plus}
           aria-label="新对话"
           onClick={() => {
-            setChat("");
-            setPrompt("");
+            chooseChat("");
+            editPrompt("");
           }}
         >
           新对话
@@ -293,7 +305,7 @@ export function WorkChat({
         <select
           aria-label="创作对话"
           value={chat}
-          onChange={(e) => setChat(e.target.value)}
+          onChange={(e) => chooseChat(e.target.value)}
         >
           <option value="">新的创作对话</option>
           {chats.data?.map((c) => (
@@ -362,7 +374,7 @@ export function WorkChat({
                 "先帮我设计这个作品的分镜与风格",
                 "制作一段简洁、有节奏的开场动画",
               ].map((s) => (
-                <button key={s} onClick={() => setPrompt(s)}>
+                <button key={s} onClick={() => editPrompt(s)}>
                   {s}
                 </button>
               ))}
@@ -399,14 +411,14 @@ export function WorkChat({
               icon={X}
               aria-label="清除素材引用"
               type="button"
-              onClick={onClearAssets}
+              onClick={() => onClearAssets()}
             />
           </div>
         )}
         <textarea
           aria-label="创作要求"
           value={prompt}
-          onChange={(e) => setPrompt(e.target.value)}
+          onChange={(e) => editPrompt(e.target.value)}
           placeholder="描述想法，或告诉 AI 这一段怎样调整…"
           rows="4"
           required
@@ -756,7 +768,7 @@ export function Creation({ id, notify, onToggleNav }) {
           notify={notify}
           position={position}
           selectedAssets={assets}
-          onClearAssets={() => setAssets([])}
+          onClearAssets={(ids) => setAssets((current) => ids ? current.filter((asset) => !ids.includes(asset.id)) : [])}
         />
       </div>
       {panel && (
