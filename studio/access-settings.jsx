@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Copy,
   KeyRound,
@@ -90,6 +90,10 @@ export function AccessSettings({ notify }) {
     [revoking, setRevoking] = useState(""),
     [removed, setRemoved] = useState({ oauth: [], tokens: [] }),
     [run, busy] = useAction(notify);
+  const initialFocus = useRef(null);
+  useEffect(() => {
+    if (creating) initialFocus.current?.focus();
+  }, [creating, newToken]);
   const endpoint = location.origin + "/mcp";
   const connections = (grants.data || []).filter(
     (grant) => !grant.revoked && !removed.oauth.includes(grant.id),
@@ -300,6 +304,7 @@ export function AccessSettings({ notify }) {
 
       {creating && (
         <Modal
+          key={newToken ? "token-result" : "token-form"}
           title={newToken ? "访问令牌已创建" : "创建访问令牌"}
           onClose={closeCreate}
         >
@@ -314,6 +319,7 @@ export function AccessSettings({ notify }) {
                   type="button"
                   className="primary"
                   icon={Copy}
+                  ref={initialFocus}
                   onClick={() => copy(newToken, "令牌已复制")}
                 >
                   复制令牌
@@ -341,6 +347,7 @@ export function AccessSettings({ notify }) {
               <p>名称用于识别使用这个令牌的工具。</p>
               <Field label="令牌名称">
                 <input
+                  ref={initialFocus}
                   name="name"
                   required
                   maxLength={100}
