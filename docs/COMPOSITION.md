@@ -4,7 +4,7 @@
 
 ## 项目入口
 
-`pnpm film new my-film "标题"` 默认创建空白合成（renderer: composition），没有预选 2D/3D 引擎，没有预填镜头或动效。显式 `--renderer` 可创建 Canvas、PixiJS、Three.js、Babylon.js 示例。`pnpm film composition engines --json` 输出公共能力注册表。
+`pnpm film new my-film "标题"` 默认创建空白合成（renderer: composition），没有预选 2D/3D 引擎，没有预填镜头或动效；composition 表示基础容器，不是绘制框架选型。显式 `--renderer` 可创建 Canvas、PixiJS、Three.js、Babylon.js 或 Remotion 示例。`pnpm --silent film capabilities --json` 查询完整能力目录，支持 `--category visual|media|animation|audio`、`--query <关键词>` 和 `--id <能力 id>`；分类值每次传入一个，不在 shell 中使用管道符。完整接入说明见 [CAPABILITIES.md](CAPABILITIES.md)。旧 `film composition engines --json` 保留为渲染器目录，不包含全部动画和音频能力。
 
 `project.ts` 保持静态元数据，`composition: {width,height}` 仍仅表示画幅。`loadVisual: () => import('./visual.json')` 声明可编辑合成；`load: () => import('./scene')` 加载场景。旧程序化作品无需迁移。
 
@@ -17,7 +17,7 @@ return createCompositionScene(options, visual, {
 });
 ```
 
-每个模块导出 createScene。可以继续自由编写程序化场景，也可以将其他合成模块作为一个场景嵌套；内部对象、深度与灯光属于各自场景，不自动跨引擎共享。
+每个模块导出 createScene。可以继续自由编写程序化场景，也可以将其他合成模块作为一个场景嵌套；内部对象、深度与灯光属于各自场景，不自动跨引擎共享。以下示例中的 product 是嵌套的 `createCompositionScene` 模块，因此其实际 engine 为 composition；其他模块填写各自真实的 engine，不能用虚构的通用引擎值替代。
 
 ## 权威片段数据
 
@@ -35,7 +35,7 @@ return createCompositionScene(options, visual, {
     },
     {
       "id": "product",
-      "source": {"kind": "scene", "engine": "three", "module": "product"},
+      "source": {"kind": "scene", "engine": "composition", "module": "product"},
       "start": 0, "duration": 5,
       "transform": {"x": 0.25, "y": 0.1, "width": 0.5, "height": 0.8}
     }
@@ -53,8 +53,10 @@ return createCompositionScene(options, visual, {
 | video | src；按时间读取解码帧，失败明确报错；原声显式启用 |
 | sequence | frames: 素材 URL 数组，fps；按时间选择单张图片 |
 | lottie | src；Canvas 运行时，绝对时间定位，图片需内嵌 |
-| scene | module、engine、可选 parameters；项目内任意兼容场景模块 |
+| scene | module、engine、可选 parameters；项目内可输出 CanvasImageSource 的兼容场景模块 |
 | color | color: #RRGGBB 或 #RRGGBBAA |
+
+Remotion 的 React/DOM 输出不能直接作为上述 Canvas 合成图层。混用时，以 Remotion 组件为根，通过 `FrameScene` 嵌入 Canvas/PixiJS/Three.js/Babylon.js/Lottie 或嵌套 composition；Remotion 子组件直接在 React 内组合。两种根入口都支持预览与导出，但截图与浏览器编码边界不同，见 [REMOTION.md](REMOTION.md)。这属于输出类型契约，不是框架优先级。
 
 transform 的 x/y/width/height 为画幅比例，rotation 为度，opacity 为透明度。各字段可为数值或递增的关键帧数组：`[{at:0,value:0,easing:"smooth"},{at:2,value:1}]`。at 使用素材秒数；插值支持 linear/smooth/hold。分割不会重置关键帧或素材循环相位。
 
@@ -94,6 +96,6 @@ pnpm film composition my-film edit --input request.json --dry-run --json
 
 update 替换所给顶层字段；可选 unset 数组显式清除 loop/crop/transform 等字段（例如关闭循环），随后重新应用字段默认值；修改 transform/source 时先读取并保留未修改子字段。CLI 输入为 - 时读取 stdin。replace 用于整文档变更及撤销，同样检查版本。
 
-本地 MCP：frame_renderers、frame_composition、frame_composition_edit、frame_media_probe、frame_media_transcode。平台 GUI/API/远程 MCP：works_composition、works_composition_edit、works_media_probe；平台通用文件写入和版本恢复仍可用。平台媒体上传支持自包含 Lottie JSON，图像序列由项目内图片数组定义。
+完整能力发现使用本地/平台 MCP `frame_capabilities`，与 CLI `film capabilities` 共用目录；按 category/query/id 筛选后再读取对应参考文档。本地 MCP：frame_renderers、frame_composition、frame_composition_edit、frame_media_probe、frame_media_transcode。平台 GUI/API/远程 MCP：works_composition、works_composition_edit、works_media_probe；平台通用文件写入和版本恢复仍可用。平台媒体上传支持自包含 Lottie JSON，图像序列由项目内图片数组定义。
 
 预览关联原声与导出音频使用同一素材时间映射；browser WebM 与 CLI MP4 使用同一合成和离线音频逻辑，编码不同不保证压缩字节一致。浏览器导出可取消；缺素材、越界素材时间、解码或适配器失败均使请求失败。

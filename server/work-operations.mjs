@@ -168,13 +168,14 @@ export function workOperations({
               })),
         authoring: a.detail
           ? context.authoring
-          : "createScene({width,height,quality}) returns {canvas,render(time),dispose()} or a Promise; prepareFrame(time,{signal}) and render may be async. Default works use editable visual.json composition; all media share absolute seconds, with no independent clock. Keep all source/media under this work. Use detail:true for the complete scene/audio/export reference.",
+          : "Default works contain an empty composition, with no artistic framework choice. Canvas-compatible scenes expose {canvas,render(time),dispose()}; initialization, prepareFrame and render may be async. Remotion is a React/DOM root with loadRemotion and can embed Canvas-compatible scenes through FrameScene; its DOM cannot be a visual.json Canvas layer. All media share absolute time. Read frame_capabilities and the selected reference for integration; keep source/media under this work. Use detail:true for the complete reference.",
         instructions:
           "Use frame_works_files_page, frame_works_search and frame_works_read. Paths are work-relative; id is the work UUID. A partial read is NOT a replacement file. Prefer frame_works_patch with the whole-file expectedSha256. Validate and render with frame_works_task; wait with frame_task_status, then inspect artifacts. Tasks survive MCP disconnection.",
         assetIndex: assets.refreshContext(work.repo, work.project),
         assets: await assets.list({ ...args, limit: 20, refresh: false }),
         tasks: taskRows.map((task) => compactTask(task, { artifactLimit: 3 })),
         nextActions: [
+          { tool: "frame_capabilities", arguments: {} },
           { tool: "frame_works_files_page", arguments: { id: a.id } },
           {
             tool: "frame_works_tasks_page",

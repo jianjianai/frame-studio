@@ -31,14 +31,32 @@ export async function runWorkTool(
       "Use @file to avoid shell quoting problems.",
     );
   const args = await readToolInput(input);
+  if (name === "capabilities") {
+    const { getAuthoringCapabilities } =
+      await import("../src/contracts/capabilities.mjs");
+    return getAuthoringCapabilities(args);
+  }
   if (name === "reference") {
-    if (Object.keys(args).some(key => key !== "name") || (args.name !== undefined && typeof args.name !== "string"))
-      throw toolError("INVALID_ARGUMENTS", "Expected an optional reference name.", "node scripts/work-tool.mjs reference");
-    const { referenceCatalog, readAuthoringReference } = await import("./authoring-reference.mjs");
-    return args.name ? readAuthoringReference(root, args.name) : { schemaVersion: 1, references: referenceCatalog() };
+    if (
+      Object.keys(args).some((key) => key !== "name") ||
+      (args.name !== undefined && typeof args.name !== "string")
+    )
+      throw toolError(
+        "INVALID_ARGUMENTS",
+        "Expected an optional reference name.",
+        "node scripts/work-tool.mjs reference",
+      );
+    const { referenceCatalog, readAuthoringReference } =
+      await import("./authoring-reference.mjs");
+    return args.name
+      ? readAuthoringReference(root, args.name)
+      : { schemaVersion: 1, references: referenceCatalog() };
   }
   if (name === "ask") {
-    const answer = await waitForAgentAnswer({ ...args, requestKey: args.requestKey || randomUUID() }, { env });
+    const answer = await waitForAgentAnswer(
+      { ...args, requestKey: args.requestKey || randomUUID() },
+      { env },
+    );
     return { questions: answer.payload.questions, answers: answer.answers };
   }
   if (["context", "check"].includes(name)) {

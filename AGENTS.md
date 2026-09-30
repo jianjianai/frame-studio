@@ -12,11 +12,11 @@
 
 ## 新建和接口
 
-新增使用 `pnpm film new <id> "标题"`，默认空白合成，不预选 2D/3D 引擎。可用能力见 `pnpm film composition engines --json`；显式指定 `--renderer` 仅用于选取已有引擎示例。脚手架先准备完整目录再注册，拒绝覆盖已有目录。自动发现 `projects/*/project.ts`，不改公共列表或路由。
+新增使用 `pnpm film new <id> "标题"`，默认空白合成，不预选 2D/3D 引擎；composition 是基础容器。完整能力目录用 `pnpm --silent film capabilities --json`，支持 `--category visual|media|animation|audio`（每次传一个值）、`--query <关键词>`、`--id <能力 id>`；本地/平台 MCP 为 `frame_capabilities`，任务内 Agent 为 `node scripts/work-tool.mjs capabilities`（可带 JSON 过滤）。接入与限制见 `docs/CAPABILITIES.md`。框架和模板均为平等可选能力，按内容自主选择；显式指定 `--renderer` 仅用于选取已有引擎示例。脚手架先准备完整目录再注册，拒绝覆盖已有目录。自动发现 `projects/*/project.ts`，不改公共列表或路由。
 
-`project.ts` 保持静态元数据；`load: () => import('./scene')`，可选 `loadAudio: () => import('./audio')`。场景接口兼容 `createScene({width,height,quality}) -> {canvas,render(time),dispose()}`，支持异步初始化、`prepareFrame(time,{signal})` 和异步 render。合成项目通过 `loadVisual: () => import("./visual.json")` 声明可编辑文档；GUI/CLI/MCP 共用该文档，保存检查 SHA-256 版本。画面和声音共用绝对时间，场景不自建动画或音频时钟；随机数据可确定性重建。
+`project.ts` 保持静态元数据；`load: () => import('./scene')`，可选 `loadAudio: () => import('./audio')`。场景接口兼容 `createScene({width,height,quality}) -> Scene | Promise<Scene>`；Canvas 输出包含 canvas/render/dispose，Remotion 的 React/DOM 根通过公共适配器接入并额外声明 `loadRemotion`。DOM 不能直接作为 Canvas 合成图层，混用由 Remotion 根通过 `FrameScene` 嵌入其他场景，边界见 `docs/REMOTION.md`。支持异步初始化、`prepareFrame(time,{signal})` 和异步 render。合成项目通过 `loadVisual: () => import("./visual.json")` 声明可编辑文档；GUI/CLI/MCP 共用该文档，保存检查 SHA-256 版本。画面和声音共用绝对时间，场景不自建动画或音频时钟；随机数据可确定性重建。
 
-音频支持 `audioTracks` 的多条文件/代码音轨。生成器使用公共播放器提供的上下文和调度时间，必须支持任意片段、变速与释放；正常播放不需要预先合成音频文件。
+音频通过 `loadAudioDocument: () => import('./audio.json')` 声明权威多轨混音文档；未声明文档的旧工程使用 `audioTracks`。先读 context.authority，避免修改已不控制混音的旧字段。生成器在 loadAudio 加载的模块中导出 generators，使用公共播放器提供的上下文和调度时间，必须支持任意片段、变速与释放；正常播放不需要预先合成音频文件。
 
 运行资源放 `projects/<id>/public/`，浏览器 URL 为 `films/<id>/...`，通过 `assetUrl()` 使用。不得跨项目引用资源或通过路径穿越、符号链接越界。`dispose` 和初始化失败路径只释放本实例资源。
 

@@ -1,6 +1,6 @@
 # 工程接入与接口说明
 
-React 视频组件使用 [Remotion 接入指南](REMOTION.md)，支持原生预览、服务端导出、浏览器导出及混合 Frame 场景。
+默认工程是基础空白容器，不代表已经选择某个框架。先通过 `pnpm --silent film capabilities --json` 或 MCP `frame_capabilities` 查询可用框架、素材类型、接入方式和限制，再按内容自行选择或组合。完整目录见 [能力与接入指南](CAPABILITIES.md)；Canvas、PixiJS、Three.js、Babylon.js、Remotion 和素材合成均为可选能力，目录顺序和模板示例不表示推荐。
 
 V7 的音频编辑、生成框架和处理器见 [AUDIO-V7.md](AUDIO-V7.md)。V6 保留场景/音频协议 1 的旧作品兼容，新增可等待目标帧的协议与独立 `visual.json` 合成文档。默认新建为空白合成，无预选引擎。能力与接口见 [混合合成](COMPOSITION.md)。`beats` 中可选的唯一 `id` 用于更稳定的审片引用，例如 `{ id: 'opening', at: 0, title: '开场', detail: '...' }`；beats 是审片标记，可编辑视觉片段位于 visual.json，两者独立。引用和结果操作见 [V5 升级说明](V5-UPGRADE.md)。
 
@@ -23,25 +23,19 @@ pnpm project:scope my-film
 
 ## 场景接口
 
+以下是所有场景共享的类型签名，不是绘制引擎实现或开工模板：
+
 ```typescript
-import type { Scene, SceneOptions } from "../../src/engine/types";
-export function createScene({ width, height }: SceneOptions): Scene {
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d")!;
-  return {
-    canvas,
-    render(time) {
-      /* 按绝对秒数重绘，允许倒退与重复 */
-    },
-    dispose() {
-      canvas.width = 1;
-      canvas.height = 1;
-    },
-  };
-}
+import type { Scene, SceneModule, SceneOptions } from "../../src/engine/types";
+
+type CreateScene = (options: SceneOptions) => Scene | Promise<Scene>;
+type RenderFrame = Scene["render"];           // (time: number) => void | Promise<void>
+type PrepareFrame = Scene["prepareFrame"];    // 可选；接收绝对时间和 AbortSignal
+type DisposeScene = Scene["dispose"];         // () => void
+type ProjectSceneModule = SceneModule;        // 导出 createScene: CreateScene
 ```
+
+Canvas 输出的场景提供实际的 `scene.canvas`，可用于空白合成的图层；具体实现可以使用不同框架，按其接入指南创建和释放资源。Remotion 使用 React/DOM 根合成，`project.ts` 额外声明 `loadRemotion: () => import('./composition')`，由公共适配器实现 Scene 协议。Remotion 原生 DOM 不是 CanvasImageSource，不能直接放进 `visual.json` 的 Canvas 图层；需要混用时，以 Remotion 为根，通过 `FrameScene` 嵌入 Canvas、PixiJS、Three.js、Babylon.js、Lottie 或其他合成场景。具体入口、截图和导出边界见 [Remotion 接入指南](REMOTION.md)。
 
 render 可返回 Promise；异步资源可在 prepareFrame(time, {signal}) 中就绪，所有预览、截图和导出均等待后再提交画面。快速跳转时旧请求会被取消且不能覆盖新帧。公共播放器和导出器调用同一 render(time)，场景不创建独立时钟。按需要释放 timeline、事件、GPU、纹理与音频节点。初始化失败也回收本实例资源。随机内容采用固定种子。
 

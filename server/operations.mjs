@@ -5,6 +5,7 @@ import { agentToolkitOperations } from "./agent-toolkit.mjs";
 import fs from "node:fs";
 import { readProject } from "../scripts/project-metadata.mjs";
 import { authoringState } from "../scripts/authoring-state.mjs";
+import { authoringCapabilitySummary } from "../src/contracts/capabilities.mjs";
 import { rendererIds } from "../src/engine/adapters.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -120,11 +121,20 @@ export function operations({
       const metadata = await readSource(dir, "project.ts"),
         readme = await optional("README.md");
       let state;
-      try { state = authoringState(readProject(confined(dir, "project.ts"))); }
-      catch (error) { state = { authority: { status: "needs_repair", diagnostics: [{ code: "STATIC_METADATA", message: error.message }] } }; }
+      try {
+        state = authoringState(readProject(confined(dir, "project.ts")));
+      } catch (error) {
+        state = {
+          authority: {
+            status: "needs_repair",
+            diagnostics: [{ code: "STATIC_METADATA", message: error.message }],
+          },
+        };
+      }
       return {
         project: a.project,
         ...state,
+        capabilities: state.capabilities ?? authoringCapabilitySummary(),
         metadata: metadata.content.slice(0, 16000),
         metadataTruncated: metadata.content.length > 16000,
         readme: readme?.content ?? "",

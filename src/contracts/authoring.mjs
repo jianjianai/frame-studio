@@ -36,6 +36,7 @@ export function creationArguments(input) {
     ...(value.composition ? ["--width", String(value.composition.width), "--height", String(value.composition.height)] : [])];
 }
 export const authoringReferences = Object.freeze({
+  capabilities: { path: "docs/CAPABILITIES.md", description: "Complete neutral capability catalog, integration entrypoints and mixing boundaries" },
   rules: { path: "AGENTS.md", description: "Workspace and project write boundaries" },
   standard: { path: "docs/NEW-PROJECT-STANDARD.md", description: "Project layout and creation" },
   authoring: { path: "docs/AUTHORING.md", description: "Scene, audio and export interfaces" },

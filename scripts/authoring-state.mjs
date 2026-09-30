@@ -5,6 +5,7 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import { AUTHORING_PROTOCOL_VERSION, authoringModes } from "../src/contracts/authoring.mjs";
 import { referenceCatalog } from "./authoring-reference.mjs";
+import { authoringCapabilitySummary } from "../src/contracts/capabilities.mjs";
 
 const hash = (file) => createHash("sha256").update(fs.readFileSync(file)).digest("hex");
 const fields = (value, names) => Object.fromEntries(names.filter(k => value[k] !== undefined).map(k => [k, value[k]]));
@@ -15,6 +16,10 @@ export function authoringState(entry) {
   const visual = meta.visual ? validateVisualDocument(meta.visual, scope) : null;
   const tracks = audio?.tracks ?? meta.audioTracks ?? (meta.audio ? [{ id: "main", kind: "file", src: meta.audio }] : []);
   const revision = (name) => hash(path.join(path.dirname(entry.file), name));
+  const visualDocument = visual ? {
+    mode: "document", path: "visual.json", sha256: revision("visual.json"), schemaVersion: visual.schemaVersion,
+    clips: visual.clips.length, read: "composition get", edit: "composition edit", reference: "composition",
+  } : null;
   return {
     authoringProtocol: AUTHORING_PROTOCOL_VERSION,
     entrypoints: {
@@ -32,12 +37,16 @@ export function authoringState(entry) {
         tracks: audio.tracks.length, clips: audio.clips.length, sources: audio.sources.length,
         read: "audio get", edit: "audio edit", reference: "audio-v7",
       } : { mode: "legacy", path: "project.ts", tracks: tracks.length, reference: "audio", migration: "audio get" },
-      visual: visual ? {
-        mode: "document", path: "visual.json", sha256: revision("visual.json"), schemaVersion: visual.schemaVersion,
-        clips: visual.clips.length, read: "composition get", edit: "composition edit", reference: "composition",
-      } : { mode: "code", path: entry.remotionLoadPath ?? entry.loadPath, reference: meta.renderer === "remotion" ? "remotion" : "authoring" },
+      visual: meta.renderer === "remotion" ? {
+        mode: "code", path: entry.remotionLoadPath, reference: "remotion",
+        ...(visualDocument ? { canvasComposition: {
+          ...visualDocument,
+          connection: "Optional Canvas subcomposition. Only visible if the Remotion root explicitly connects it through FrameScene; loadVisual alone does not connect it.",
+        } } : {}),
+      } : visualDocument ?? { mode: "code", path: entry.loadPath, reference: "authoring" },
     },
     references: referenceCatalog(),
     interfaces: authoringModes,
+    capabilities: authoringCapabilitySummary(),
   };
 }

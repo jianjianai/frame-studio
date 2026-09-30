@@ -7,6 +7,7 @@ import {audioEngines,audioProcessors} from "../../src/engine/audio-document.mjs"
 import fs from "node:fs";
 import { projectCreationShape, creationArguments, projectDefaults, authoringReferences, authoringModes } from "../../src/contracts/authoring.mjs";
 import { PLATFORM_VERSION } from "../../src/contracts/version.mjs";
+import { capabilityFilterShape, getAuthoringCapabilities, authoringCapabilitySummary } from "../../src/contracts/capabilities.mjs";
 import { audioEditRequestSchema, visualEditRequestSchema } from "../../src/engine/document-edit.mjs";
 import { sourceEditRequestSchema, sourcePatchRequestSchema } from "../../src/contracts/source-edit.mjs";
 import { readAuthoringReference, referenceCatalog } from "../authoring-reference.mjs";
@@ -78,7 +79,7 @@ export function createFrameServer({
     { name: "frame-animation", version: PLATFORM_VERSION },
     {
       instructions:
-        "Edit one FRAME animation project at a time. Begin with frame_project_context and its references. Read files for SHA-256 before editing. Changes stay in projects/<id>/. Serialize writes and render/validation jobs in one project; different projects can run concurrently. PROJECT_BUSY includes the active job and available actions: query it, wait, or cancel only your own job. A completed check with passed=false is a report, not a malformed tool call. External workspace changes have unknown authors and do not invalidate a passing structural check. Inspect native PNG images; retry presentation=image-only if the client omits the image. Never claim visual/audio review from a file path or metadata. Rendering executes trusted local project code. Authenticated in-scope operations execute without an additional server approval step; the client controls its own approval policy.",
+        "Edit one FRAME animation project at a time. Begin with frame_workspace_context, then frame_project_context and its references. Use focused frame_capabilities queries for supported frameworks, integration entrypoints and mixing boundaries before choosing an approach. Read files for SHA-256 before editing. Changes stay in projects/<id>/. Serialize writes and render/validation jobs in one project; different projects can run concurrently. PROJECT_BUSY includes the active job and available actions: query it, wait, or cancel only your own job. A completed check with passed=false is a report, not a malformed tool call. External workspace changes have unknown authors and do not invalidate a passing structural check. Inspect native PNG images; retry presentation=image-only if the client omits the image. Never claim visual/audio review from a file path or metadata. Rendering executes trusted local project code. Authenticated in-scope operations execute without an additional server approval step; the client controls its own approval policy.",
     },
   );
   const register = (
@@ -131,6 +132,12 @@ export function createFrameServer({
   };
   register("frame_media_probe","Read project media dimensions, duration and codecs",{project,src:z.string()},async({project:id,src})=>{workspace.project(id);return jsonResult(await probeMedia(workspace.root,id,src));});
   register("frame_media_transcode","Create a separate VP9/Opus compatible video copy without overwriting source or output",{project,src:z.string(),out:z.string()},async({project:id,...request})=>{workspace.writable();const release=workspace.lock(id,"media-transcode");try{return jsonResult(await transcodeMedia(workspace.root,id,request));}finally{release();}},{write:true});
+  register(
+    "frame_capabilities",
+    "Discover supported visual, media, animation and audio capabilities, their integration entrypoints and mixing requirements. Works before project creation; no preferred framework.",
+    capabilityFilterShape,
+    (filters) => jsonResult(getAuthoringCapabilities(filters)),
+  );
   register("frame_renderers", "List built-in engines, media sources and their capabilities; no preferred engine", {}, () => jsonResult({adapters}));
   register("frame_audio_export","Export frozen mix and optional channel stems with loudness/true peak report",{project,format:z.enum(["wav","flac","mp3","ogg","m4a"]).default("wav"),stems:z.boolean().default(false),start:z.number().nonnegative().default(0),end:z.number().positive().optional()},async({project:id,...request})=>{workspace.writable();workspace.project(id);const release=workspace.lock(id,"audio-export");try{return jsonResult(await exportAudio(workspace.root,id,request));}finally{release();}},{write:true});
   register("frame_audio_inspect","Read source waveform and sample peak/RMS; not a listening review",{project,src:z.string()},async({project:id,src})=>{workspace.project(id);return jsonResult(await inspectAudio(workspace.root,id,src));});
@@ -258,7 +265,7 @@ export function createFrameServer({
   );
   register(
     "frame_create_project",
-    "Create a complete animation with the existing scaffold; never overwrite. Read the returned project context before editing.",
+    "Create a complete neutral project atomically; default is an empty composition without a preferred 2D/3D framework. Optional renderer selects an example; use frame_capabilities to discover entrypoints and mixing boundaries. Never overwrite. Read the returned project context before editing.",
     {
       project,
       ...projectCreationShape,
@@ -771,6 +778,12 @@ export function createFrameServer({
       return result;
     },
   );
+  server.registerResource(
+    "authoring-capabilities",
+    "frame://capabilities",
+    { description: "Supported authoring capabilities and integration/mixing requirements; use frame_capabilities for focused queries.", mimeType: "application/json" },
+    (uri) => ({ contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(getAuthoringCapabilities()) }] }),
+  );
   for (const [name, relative] of Object.entries(refs)) {
     server.registerResource(
       name,
@@ -843,8 +856,9 @@ export function createFrameServer({
       projects: listing.projects.slice(0, 30), errors: listing.errors.slice(0, 30), total: listing.projects.length,
       moreProjects: listing.projects.length > 30, moreErrors: listing.errors.length > 30,
       allowedProjects: projects, defaults: projectDefaults, interfaces: authoringModes, references: referenceCatalog(),
+      capabilities: authoringCapabilitySummary(),
       workflow: ["frame_project_context", "frame_read_file", "frame_edit_files / frame_patch_files", "frame_check_project", "frame_storyboard / frame_frame", "frame_job"],
-      discovery: "frame_help lists available tools; frame_tool_describe returns one exact schema.",
+      discovery: "frame_capabilities discovers supported frameworks and mixing boundaries; frame_help lists tools; frame_tool_describe returns one exact schema.",
     });
   });
   server.registerPrompt(

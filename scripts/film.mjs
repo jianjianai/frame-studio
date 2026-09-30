@@ -2,7 +2,8 @@ import fs from "node:fs";
 import { authoringState } from "./authoring-state.mjs";
 import { referenceCatalog, readAuthoringReference } from "./authoring-reference.mjs";
 import { errorRecovery } from "./tool-errors.mjs";
-import { commandCatalog, describeFilmCommand } from "./film-command-catalog.mjs";
+import { commandCatalog, describeFilmCommand, parseCommandArgs } from "./film-command-catalog.mjs";
+import { getAuthoringCapabilities } from "../src/contracts/capabilities.mjs";
 import { adapters } from "../src/engine/adapters.mjs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -14,6 +15,7 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film platform help                   远程平台 CLI（作品 UUID），任务等待/上传/下载
   pnpm film describe <command> [action] --json  精确参数、请求结构和默认值
   pnpm film reference [name] --json             参考文档目录或正文
+  pnpm film capabilities [--category visual|media|animation|audio] [--query <text>] [--id <capability>] [--json]
   pnpm film list [--json]                     列出项目
   pnpm film inspect <id> [--json]             元数据、素材、音轨和时间标记
   pnpm film context <id> [--json]             AI 接手上下文与修改边界（只读）
@@ -111,6 +113,7 @@ export function inspectProject(root, id, { detail = true } = {}) {
       brief: read("production/brief.md"),
     },
     commands: {
+      capabilities: "pnpm --silent film capabilities --json",
       check: `pnpm film check ${id} --strict --json`,
       scope: `pnpm film scope ${id}`,
       storyboard: `pnpm film storyboard ${id}`,
@@ -129,11 +132,18 @@ export function inspectProject(root, id, { detail = true } = {}) {
 
 export function runFilm(args, root = process.cwd()) {
   const [command = "help", ...rest] = args;
+  if (command === "capabilities" && rest.some(arg => ["--help", "-h"].includes(arg))) {
+    if (rest.filter(arg => ["--help", "-h"].includes(arg)).length > 1)
+      throw Object.assign(new Error("Duplicate help option."), { code: "INVALID_ARGUMENTS" });
+    const { values } = parseCommandArgs(command, rest.filter(arg => !["--help", "-h"].includes(arg)));
+    const { json, ...filters } = values;
+    getAuthoringCapabilities(filters);
+  }
   if (["help", "describe", "--help", "-h"].includes(command) || (command !== "platform" && (rest.includes("--help") || rest.includes("-h")))) {
     const isRoot = ["help", "describe", "--help", "-h"].includes(command);
     const positional = rest.filter(arg => !["--json", "--help", "-h"].includes(arg));
     const target = isRoot ? positional[0] : command;
-    const action = isRoot ? positional[1] : (positional[0] === "engines" ? "engines" : positional[1]);
+    const action = command === "capabilities" ? undefined : isRoot ? positional[1] : (positional[0] === "engines" ? "engines" : positional[1]);
     if (isRoot && positional.length > 2) throw new Error("Use film describe <command> [action] --json");
     const descriptor = target ? describeFilmCommand(target, action) : { schemaVersion: 1, help: commandHelp, commands: commandCatalog(), guide: "docs/AI-PRODUCTION.md" };
     console.log(rest.includes("--json") || command === "describe" ? JSON.stringify(descriptor) :
@@ -183,6 +193,30 @@ export function runFilm(args, root = process.cwd()) {
     const names = rest.filter(arg => arg !== "--json");
     if (names.length > 1) throw new Error("Use film reference [name] --json");
     console.log(JSON.stringify(names.length ? readAuthoringReference(root, names[0]) : { schemaVersion: 1, references: referenceCatalog() }));
+    return 0;
+  }
+  if (command === "capabilities") {
+    const { values } = parseCommandArgs(command, rest);
+    const { json, ...filters } = values;
+    const report = getAuthoringCapabilities(filters);
+    console.log(json ? JSON.stringify(report) : [
+      "FRAME · 可用能力（按工程需求选择；默认空白合成）",
+      ...report.items.map(item => [
+        "\n" + item.name + " [" + item.id + "]",
+        "类型: " + item.category + " / " + item.kind,
+        item.description,
+        "入口: " + item.integration.entry + "；模块: " + item.integration.module +
+          (item.integration.projectEntry ? "；工程入口: " + item.integration.projectEntry : "") +
+          (item.integration.sourceKind ? "；source.kind: " + item.integration.sourceKind : ""),
+        "支持: " + Object.entries(item.supports).map(([key, value]) => key + "=" + value).join("；"),
+        "边界: " + item.requirements.join("；"),
+        "参考: " + item.reference.path + " (film reference " + item.reference.key + ")",
+      ].join("\n")),
+      ...(report.items.length ? [] : ["没有匹配的能力。"]),
+      "\n混用边界:",
+      ...report.mixing.map(rule => "- " + rule.description + " " + rule.requirements.join("；")),
+      "\n按需获取精确能力: pnpm --silent film capabilities --id <capability> --json",
+    ].join("\n"));
     return 0;
   }
   if (["list", "inspect", "context"].includes(command)) {
