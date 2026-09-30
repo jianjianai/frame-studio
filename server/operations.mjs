@@ -14,6 +14,7 @@ import { agentEventPage } from "./agent-event-page.mjs";
 import { speechOperations } from "./speech.mjs";
 import { workOperations } from "./work-operations.mjs";
 import { workbenchOperations } from "./workbench.mjs";
+import { toolManagementOperations } from "./tool-management.mjs";
 import { chatOperations } from "./chat-operations.mjs";
 import { createOperationRegistry } from "./operation-registry.mjs";
 import { workResultOperations } from "./work-results.mjs";
@@ -38,6 +39,7 @@ export function operations({
   retention,
 }) {
   const { registry, add, call } = createOperationRegistry();
+  toolManagementOperations({ add, db, data, tasks });
   add(
     "repositories_list",
     "List repositories and statically discovered animation projects",
@@ -529,16 +531,6 @@ export function operations({
       if (a.secret) v[a.provider === "github" ? "token" : "apiKey"] = a.secret;
       await db.setting(a.provider, { encrypted: secrets.encrypt(v) });
       return { ok: true };
-    },
-  );
-  add(
-    "tools_update",
-    "Install a specific Codex or Claude CLI version independently",
-    { provider: z.enum(["codex", "claude"]), version: z.string().max(80) },
-    (a) => {
-      if (process.env.FRAME_LOCAL_MODE === "1")
-        throw problem(400, "本地模式使用电脑上的 CLI，请通过其官方安装方式更新");
-      return tasks.create({ kind: "tools-update", input: a });
     },
   );
   add(
