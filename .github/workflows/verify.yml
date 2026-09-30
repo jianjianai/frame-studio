@@ -66,6 +66,9 @@ jobs:
           TEST_HOME="$RUNNER_TEMP/frame-test-home"
           mkdir -p "$TEST_HOME"
           sudo chown -R 1000:1000 "$GITHUB_WORKSPACE" "$TEST_HOME"
+          # Allow the test identity to traverse the hosted runner's public tool paths.
+          sudo chmod o+x "$HOME" "$HOME/work" "$(dirname "$GITHUB_WORKSPACE")" "$HOME/.cache" "$RUNNER_TEMP"
+          sudo chmod -R a+rX "$HOME/.cache/ms-playwright"
           # Only trusted repository fixtures run here; hosted runners have no GPU.
           BROWSER_WRAPPER="$RUNNER_TEMP/frame-chromium"
           printf '#!/bin/sh\nexec "%s" "$@" --use-gl=angle --use-angle=swiftshader-webgl --enable-unsafe-swiftshader\n' "$BROWSER" > "$BROWSER_WRAPPER"
