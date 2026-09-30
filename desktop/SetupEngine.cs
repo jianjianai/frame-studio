@@ -2,8 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Reflection;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 
@@ -101,11 +99,7 @@ namespace FrameStudioDesktop {
       if(movedOld) RemoveTree(displaced,Path.Combine(root,"versions"));
     }
     public static void Shortcut(string file,string target,string arguments) {
-      var shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")); object shortcut=null;
-      try {
-        shortcut=shell.GetType().InvokeMember("CreateShortcut",BindingFlags.InvokeMethod,null,shell,new object[]{file});
-        var type=shortcut.GetType(); type.InvokeMember("TargetPath",BindingFlags.SetProperty,null,shortcut,new object[]{target});type.InvokeMember("Arguments",BindingFlags.SetProperty,null,shortcut,new object[]{arguments});type.InvokeMember("WorkingDirectory",BindingFlags.SetProperty,null,shortcut,new object[]{Path.GetDirectoryName(target)});type.InvokeMember("IconLocation",BindingFlags.SetProperty,null,shortcut,new object[]{target+",0"}); type.InvokeMember("Save",BindingFlags.InvokeMethod,null,shortcut,null);
-      } finally { if(shortcut!=null) Marshal.FinalReleaseComObject(shortcut); Marshal.FinalReleaseComObject(shell); }
+      DesktopShortcut.Create(file,target,arguments);
     }
     public static void RemoveTree(string target,string boundary) {
       if(!DesktopFiles.Within(target,boundary)) throw new Exception("程序清理目录不在安装版本目录内");

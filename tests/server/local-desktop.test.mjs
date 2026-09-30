@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { startLocalApp, freeLocalPort } from "../../server/local-app.mjs";
+import { sqliteDatabase } from "../../server/sqlite.mjs";
 
 test("local browser startup does not wait for speech and exit protects unsaved browser activity", async () => {
   const names = ["FRAME_TEST_LOCAL", "FRAME_LOCAL_MODE", "FRAME_PUBLIC_URL", "FRAME_DATA", "FRAME_SPEECH_URL", "FRAME_LAUNCH_TOKEN"];
@@ -56,6 +57,33 @@ test("closing during speech preparation aborts only the owned service", async ()
     assert.equal(aborted, true);
   } finally {
     await local?.app.close(); fs.rmSync(data, { recursive: true, force: true });
+    for (const name of names) if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+  }
+});
+
+test("failed publication allows Windows restart and preserves its recovery record", async () => {
+  const names = ["FRAME_TEST_LOCAL", "FRAME_LOCAL_MODE", "FRAME_PUBLIC_URL", "FRAME_DATA", "FRAME_SPEECH_URL", "FRAME_LAUNCH_TOKEN"];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-desktop-pending-"));
+  let local, db;
+  try {
+    process.env.FRAME_TEST_LOCAL = "1"; process.env.FRAME_LAUNCH_TOKEN = "pending-publication-private-token";
+    local = await startLocalApp({ data, port: await freeLocalPort(), speechFactory: async () => ({ close: async () => {} }) });
+    db = await sqliteDatabase(path.join(data, "frame.sqlite"));
+    const task = randomUUID();
+    await db.pool.query("INSERT INTO tasks(id,kind,state,input,error) VALUES($1,'frame','publish_failed',$2,$3)", [task, {}, "Saved result awaits publication recovery"]);
+    const status = await local.app.inject({ url: "/api/desktop/status", headers: { host: new URL(local.origin).host, origin: local.origin } });
+    assert.equal(status.statusCode, 200);
+    assert.equal(status.json().active, 0); assert.equal(status.json().pending, 1);
+    const exit = await local.app.inject({ url: "/api/desktop/prepare-exit", method: "POST", payload: {}, headers: { host: new URL(local.origin).host, origin: local.origin, "x-frame-desktop": process.env.FRAME_LAUNCH_TOKEN } });
+    assert.equal(exit.statusCode, 200);
+    await local.app.close();
+    assert.equal((await db.one("SELECT state,error FROM tasks WHERE id=$1", [task])).state, "publish_failed");
+    local = await startLocalApp({ data, port: await freeLocalPort(), speechFactory: async () => ({ close: async () => {} }) });
+    assert.equal((await local.app.inject({ url: "/api/desktop/status", headers: { host: new URL(local.origin).host, origin: local.origin } })).json().pending, 1);
+    assert.equal((await db.one("SELECT error FROM tasks WHERE id=$1", [task])).error, "Saved result awaits publication recovery");
+  } finally {
+    await local?.app.close(); await db?.pool.end(); fs.rmSync(data, { recursive: true, force: true });
     for (const name of names) if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
   }
 });

@@ -52,6 +52,9 @@ try {
   if ((Run-Setup $installer) -ne 0) { throw 'Real installer failed; see installer.log.' }
   $installed = Join-Path $application "versions\$version"
   if ((Get-ItemProperty $registry).DisplayVersion -ne $version -or -not (Test-Path (Join-Path $shortcuts 'FRAME Studio Test.lnk'))) { throw 'Installer registration or shortcut missing.' }
+  foreach ($name in @('Windows 控制中心.lnk','卸载 FRAME Studio.lnk')) {
+    if (-not (Test-Path -LiteralPath (Join-Path $shortcuts $name))) { throw 'A Unicode Start Menu shortcut is missing.' }
+  }
   $selection = Get-Content -Raw (Join-Path $DataRoot 'runtime-selection.json') | ConvertFrom-Json
   $marker = Join-Path $selection.dependencies 'FRAME-RUNTIME.json'
   $before = (Get-Item $marker).LastWriteTimeUtc

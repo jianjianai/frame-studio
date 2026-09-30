@@ -71,6 +71,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'pnpm installation and cache reuse failed' }
           ./tests/desktop/download.test.ps1
           ./tests/desktop/github-cli.test.ps1
+          ./tests/desktop/shortcut.test.ps1
       - name: Build installer and immutable runtime components
         shell: pwsh
         env:
