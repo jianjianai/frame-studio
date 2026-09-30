@@ -1,4 +1,6 @@
-import { useState, useEffect } from "react";
+import { ttsProviders, ttsCapabilities } from "../scripts/tts-capabilities.mjs";
+import "./speech.css";
+import { useState, useEffect, useRef, useId } from "react";
 import {
   Plus,
   Play,
@@ -22,54 +24,476 @@ import {
   Loading,
 } from "./ui";
 
-export function SpeechControls({ engine, voice, setVoice, speed, setSpeed }) {
+const expressionLabels = {
+  language: "语言提示",
+  emotion: "情感",
+  pitch: "音调（半音）",
+  stability: "稳定性",
+  similarity: "音色相似度",
+  style: "风格强度",
+  previousText: "上一段正文",
+  nextText: "下一段正文",
+};
+function ExpressionLines({ label, value = [], set, kind }) {
+  const encode = (v) =>
+    v
+      .map((p) =>
+        kind === "pauses"
+          ? `${p.after}=${p.seconds}`
+          : kind === "dictionaries"
+            ? `${p.id}=${p.version}`
+            : `${p.word}=${p.phonetic}`,
+      )
+      .join("\n");
+  const [draft, setDraft] = useState(() => encode(value));
   return (
-    <div className="speech-controls">
-      <Field label="声线">
-        {engine?.voices?.length ? (
-          <select
-            aria-label="声线"
-            name="voice"
-            value={voice}
-            onChange={(e) => setVoice(e.target.value)}
-          >
-            {engine.voices.map((v) => (
-              <option key={v.id} value={v.id}>
-                {v.name}
-              </option>
-            ))}
-          </select>
-        ) : (
+    <Field label={label}>
+      <textarea
+        rows={3}
+        value={draft}
+        onChange={(event) => {
+          const text = event.target.value;
+          setDraft(text);
+          const pairs = text
+            .split("\n")
+            .filter((l) => l.trim())
+            .map((l) => {
+              const i = l.indexOf("=");
+              return [i < 0 ? l : l.slice(0, i), i < 0 ? "" : l.slice(i + 1)];
+            });
+          set(
+            pairs.length
+              ? pairs.map(([a, b]) =>
+                  kind === "pauses"
+                    ? { after: Number(a), seconds: Number(b) }
+                    : kind === "dictionaries"
+                      ? { id: a.trim(), version: b.trim() }
+                      : { word: a.trim(), phonetic: b.trim() },
+                )
+              : undefined,
+          );
+        }}
+      />
+    </Field>
+  );
+}
+export function useSpeechJob() {
+  const active = useRef(null),
+    [requestId, setRequestId] = useState(null),
+    [status, setStatus] = useState(null),
+    [cancelling, setCancelling] = useState(false);
+  useEffect(() => {
+    if (!requestId) return;
+    let stopped = false,
+      timer;
+    const poll = async () => {
+      try {
+        const s = await api("speech_status", { requestId });
+        if (!stopped) setStatus(s);
+      } catch {
+      } finally {
+        if (!stopped) timer = setTimeout(poll, 700);
+      }
+    };
+    poll();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [requestId]);
+  useEffect(
+    () => () => {
+      if (active.current)
+        api("speech_cancel", { requestId: active.current }).catch(() => {});
+    },
+    [],
+  );
+  return {
+    requestId,
+    status,
+    cancelling,
+    start: () => {
+      const id = crypto.randomUUID();
+      active.current = id;
+      setRequestId(id);
+      setStatus({ phase: "preparing" });
+      setCancelling(false);
+      return id;
+    },
+    finish: () => {
+      active.current = null;
+      setRequestId(null);
+      setCancelling(false);
+    },
+    cancel: async () => {
+      if (!active.current) return;
+      setCancelling(true);
+      try {
+        await api("speech_cancel", { requestId: active.current });
+      } catch (error) {
+        setCancelling(false);
+        throw error;
+      }
+    },
+  };
+}
+export function SpeechProgress({ job, error }) {
+  const phases = {
+    preparing: "正在检查引擎与模型",
+    connecting: "正在连接语音服务",
+    receiving: "正在接收音频",
+    validating: "正在验证音频",
+    completed: "合成完成，正在保存结果",
+    cancelled: "已取消",
+    failed: "合成失败",
+  };
+  return (
+    <div className="speech-feedback" role="status">
+      <progress aria-label="语音合成进度" />
+      <span>
+        {phases[job.status?.phase] || "正在合成"}
+        {job.status?.receivedBytes > 0
+          ? ` · ${(job.status.receivedBytes / 1024).toFixed(0)} KiB`
+          : ""}
+      </span>
+      <Button
+        type="button"
+        disabled={job.cancelling}
+        onClick={() => job.cancel().catch((e) => error(e.message))}
+      >
+        {job.cancelling ? "正在取消…" : "取消合成"}
+      </Button>
+      <small>取消会终止本地等待；远端已接受的请求仍可能计费。</small>
+    </div>
+  );
+}
+export function SpeechControls({
+  engine,
+  voice,
+  setVoice,
+  speed,
+  setSpeed,
+  options = {},
+  setOptions = () => {},
+  disabled = false,
+}) {
+  const id = useId(),
+    [catalog, setCatalog] = useState(null),
+    [discovering, setDiscovering] = useState(false),
+    [error, setError] = useState("");
+  useEffect(() => {
+    setCatalog(null);
+    setError("");
+  }, [engine?.id]);
+  const caps = ttsCapabilities(
+    engine?.provider || engine?.config?.provider || "compatible",
+    engine?.config?.model,
+    voice,
+  );
+  const fields = caps.fields,
+    voices = catalog?.voices || engine?.voices || caps.voices;
+  const set = (key, value) =>
+    setOptions((current) => {
+      const next = { ...current };
+      if (value === undefined || value === "") delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  return (
+    <fieldset disabled={disabled} className="speech-expression">
+      <div className="speech-controls">
+        <Field label="声线">
+          {engine?.builtin && voices?.length ? (
+            <select
+              aria-label="声线"
+              name="voice"
+              value={voice}
+              onChange={(e) => setVoice(e.target.value)}
+            >
+              {!voices.some((v) => v.id === voice) && (
+                <option value={voice}>{voice}</option>
+              )}
+              {voices.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.name || v.id}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <>
+              <input
+                name="voice"
+                required
+                value={voice}
+                list={id}
+                onChange={(e) => setVoice(e.target.value)}
+                placeholder="音色 ID，或从目录选择"
+              />
+              <datalist id={id}>
+                {voices?.map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name} {v.description}
+                  </option>
+                ))}
+              </datalist>
+            </>
+          )}
+        </Field>
+        <Field label={`语速 · ${Number(speed).toFixed(2)}×`}>
           <input
-            name="voice"
-            required
-            value={voice}
-            onChange={(e) => setVoice(e.target.value)}
-            placeholder="服务提供的声线 ID"
+            aria-label="语速"
+            name="speed"
+            type="range"
+            min={caps.speed.min}
+            max={caps.speed.max}
+            step="0.05"
+            value={speed}
+            disabled={caps.speed.min === caps.speed.max}
+            onChange={(e) => setSpeed(Number(e.target.value))}
+          />
+        </Field>
+      </div>
+      {!engine?.builtin && (
+        <div className="row">
+          <Button
+            type="button"
+            disabled={discovering}
+            onClick={async () => {
+              setDiscovering(true);
+              setError("");
+              try {
+                setCatalog(
+                  await api("engines_discover", { engine: engine.id }),
+                );
+              } catch (e) {
+                setError(e.message);
+              } finally {
+                setDiscovering(false);
+              }
+            }}
+          >
+            {discovering ? "读取音色…" : "发现音色与模型"}
+          </Button>
+          {catalog && (
+            <small>
+              {catalog.source === "live"
+                ? "实时服务目录"
+                : "文档目录 / 手动配置"}{" "}
+              · {voices.length} 条音色{catalog.hint ? ` · ${catalog.hint}` : ""}
+            </small>
+          )}
+          {catalog?.nextCursor && (
+            <Button
+              type="button"
+              disabled={discovering}
+              onClick={async () => {
+                setDiscovering(true);
+                try {
+                  const next = await api("engines_discover", {
+                    engine: engine.id,
+                    cursor: catalog.nextCursor,
+                  });
+                  setCatalog({
+                    ...next,
+                    voices: [...catalog.voices, ...next.voices],
+                  });
+                } catch (e) {
+                  setError(e.message);
+                } finally {
+                  setDiscovering(false);
+                }
+              }}
+            >
+              更多音色
+            </Button>
+          )}
+        </div>
+      )}
+      <ErrorNote error={error} />
+      <small>{caps.textHints}</small>
+      {Object.keys(options).some((key) => !fields[key]) && (
+        <div className="row">
+          <small>当前音色不支持部分已填写控制。请清除后重新试听。</small>
+          <Button
+            type="button"
+            onClick={() =>
+              setOptions((current) =>
+                Object.fromEntries(
+                  Object.entries(current).filter(([key]) => fields[key]),
+                ),
+              )
+            }
+          >
+            清除不支持的控制
+          </Button>
+        </div>
+      )}
+      {catalog?.models?.length > 0 && (
+        <details>
+          <summary>服务模型目录 · {catalog.models.length} 个</summary>
+          <ul>
+            {catalog.models.map((m) => (
+              <li key={m.id}>
+                <code>{m.id}</code> · {m.name || m.id}
+                {m.languages?.length ? ` · ${m.languages.join("、")}` : ""}
+              </li>
+            ))}
+          </ul>
+          <small>
+            修改默认模型请返回引擎设置；目录表示账号可见，不保证所有音色适用。
+          </small>
+        </details>
+      )}
+      <details className="speech-direction" key={engine?.id}>
+        <summary>
+          旁白表达 ·{" "}
+          {Object.keys(fields).length
+            ? "按模型能力调节"
+            : "此引擎仅支持基础合成"}
+        </summary>
+        {!!fields.instructions && (
+          <>
+            <div className="row">
+              <Button
+                type="button"
+                onClick={() =>
+                  set(
+                    "instructions",
+                    "用自然流畅的普通话叙述，语气亲切，短句清晰，避免逐字朗读和过度播音腔。",
+                  )
+                }
+              >
+                自然中文
+              </Button>
+              <Button
+                type="button"
+                onClick={() =>
+                  set(
+                    "instructions",
+                    "用沉稳、克制的电影旁白语气说普通话。情绪随语义逐渐展开，关键处轻微重音，句间自然呼吸；避免夸张广告腔和每句拖长。",
+                  )
+                }
+              >
+                电影旁白
+              </Button>
+              <Button
+                type="button"
+                onClick={() => set("instructions", undefined)}
+              >
+                清除指令
+              </Button>
+            </div>
+            <Field label="语气与表达指令">
+              <textarea
+                aria-label="语气与表达指令"
+                rows={4}
+                maxLength={2000}
+                value={options.instructions || ""}
+                onChange={(e) => set("instructions", e.target.value)}
+              />
+            </Field>
+            <small>
+              {fields.instructions.hint ||
+                "模型尽力执行表达指令；先试听一小段确认实际效果。"}
+            </small>
+          </>
+        )}
+        <div className="speech-controls">
+          {Object.entries(fields)
+            .filter(([key]) => expressionLabels[key])
+            .map(([key, f]) => (
+              <Field key={key} label={expressionLabels[key]}>
+                {f.values ? (
+                  <select
+                    value={options[key] ?? ""}
+                    onChange={(e) =>
+                      set(
+                        key,
+                        e.target.value === ""
+                          ? undefined
+                          : f.kind === "enum-number"
+                            ? Number(e.target.value)
+                            : e.target.value,
+                      )
+                    }
+                  >
+                    <option value="">服务默认</option>
+                    {f.values.map((v) => (
+                      <option key={v} value={v}>
+                        {v}
+                      </option>
+                    ))}
+                  </select>
+                ) : f.kind === "number" ? (
+                  <input
+                    type="number"
+                    min={f.min}
+                    max={f.max}
+                    step={key === "pitch" ? 1 : 0.05}
+                    value={options[key] ?? ""}
+                    placeholder="服务默认"
+                    onChange={(e) =>
+                      set(
+                        key,
+                        e.target.value === ""
+                          ? undefined
+                          : Number(e.target.value),
+                      )
+                    }
+                  />
+                ) : (
+                  <textarea
+                    rows={2}
+                    maxLength={4000}
+                    value={options[key] || ""}
+                    onChange={(e) => set(key, e.target.value)}
+                  />
+                )}
+              </Field>
+            ))}
+        </div>
+        {fields.pronunciation && (
+          <ExpressionLines
+            key={engine?.id + "pronunciation"}
+            label="发音字典 · 每行 词语=带调拼音，如 重庆=(chong2)(qing4)"
+            value={options.pronunciation}
+            set={(v) => set("pronunciation", v)}
+            kind="pronunciation"
           />
         )}
-      </Field>
-      <Field label={`语速 · ${Number(speed).toFixed(2)}×`}>
-        <input
-          aria-label="语速"
-          name="speed"
-          type="range"
-          min="0.5"
-          max="2"
-          step="0.05"
-          value={speed}
-          onChange={(e) => setSpeed(Number(e.target.value))}
-        />
-      </Field>
-    </div>
+        {fields.pauses && (
+          <ExpressionLines
+            key={engine?.id + "pauses"}
+            label={`显式停顿 · 每行 原文字符偏移=秒数，最长 ${fields.pauses.max} 秒`}
+            value={options.pauses}
+            set={(v) => set("pauses", v)}
+            kind="pauses"
+          />
+        )}
+        {fields.dictionaries && (
+          <ExpressionLines
+            key={engine?.id + "dictionaries"}
+            label="已有发音字典 · 每行 id=version，最多 3 个"
+            value={options.dictionaries}
+            set={(v) => set("dictionaries", v)}
+            kind="dictionaries"
+          />
+        )}
+        <small>
+          未提供的控制由服务自行决定。不支持的控制不会自动发送。换引擎后重新试听，音色与模型共同决定效果。
+        </small>
+      </details>
+    </fieldset>
   );
 }
 function Audition({ engine, onClose }) {
   const [voice, setVoice] = useState(engine.config.voice),
     [speed, setSpeed] = useState(1),
+    [options, setOptions] = useState({}),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [result, setResult] = useState(null);
+  const job = useSpeechJob();
   return (
     <Modal title={`试听 · ${engine.name}`} onClose={onClose}>
       <p>试听不会保存到素材库或作品，临时音频 24 小时后自动清理。</p>
@@ -81,18 +505,22 @@ function Audition({ engine, onClose }) {
           setError("");
           setResult(null);
           try {
+            const requestId = job.start();
             setResult(
               await api("speech_test", {
                 engine: engine.id,
                 text: a.text,
                 voice,
                 speed,
+                options,
+                requestId,
               }),
             );
           } catch (e) {
             setError(e.message);
             throw e;
           } finally {
+            job.finish();
             setBusy(false);
           }
         }}
@@ -103,6 +531,9 @@ function Audition({ engine, onClose }) {
           setVoice={setVoice}
           speed={speed}
           setSpeed={setSpeed}
+          options={options}
+          setOptions={setOptions}
+          disabled={busy}
         />
         <Field label="试听文字">
           <textarea
@@ -118,18 +549,18 @@ function Audition({ engine, onClose }) {
           />
         </Field>
       </Form>
-      {busy && (
-        <div className="speech-feedback" role="status">
-          <progress aria-label="试听生成进度" />
-          <span>正在合成，首次使用该引擎需要加载模型…</span>
-        </div>
-      )}
+      {busy && <SpeechProgress job={job} error={setError} />}
       <ErrorNote error={error} />
       {result && (
         <div className="speech-result">
           <strong>
             <Check size={16} /> 试听已就绪
           </strong>
+          {result.warnings?.map((w) => (
+            <p key={w.field} role="alert">
+              {w.field}：{w.reason}
+            </p>
+          ))}
           <audio key={result.url} controls autoPlay src={result.url} />
           <small>
             合成耗时 {(result.elapsedMs / 1000).toFixed(1)} 秒 ·
@@ -141,6 +572,10 @@ function Audition({ engine, onClose }) {
   );
 }
 function ExternalEditor({ engine, model, onSaved }) {
+  const [provider, setProvider] = useState(
+    engine.config?.provider || "compatible",
+  );
+  const preset = ttsProviders.find((p) => p.id === provider) || ttsProviders[0];
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   return (
@@ -154,8 +589,16 @@ function ExternalEditor({ engine, model, onSaved }) {
           const { apiKey, ...fields } = a;
           const result = await api("engines_save", {
             ...fields,
+            provider,
             enabled: a.enabled === "true",
-            ...(apiKey ? { apiKey } : {}),
+            ...(apiKey
+              ? { apiKey }
+              : provider !== (engine.config?.provider || "compatible") ||
+                  (engine.config?.url &&
+                    a.url.replace(/\/$/, "") !==
+                      engine.config.url.replace(/\/$/, ""))
+                ? { apiKey: "" }
+                : {}),
             ...(engine.id ? { id: engine.id } : {}),
           });
           onSaved(result.id);
@@ -170,8 +613,36 @@ function ExternalEditor({ engine, model, onSaved }) {
       <p>
         {engine.kind === "local"
           ? "管理这套本地声音的名称、默认声线和启用状态。"
-          : "连接兼容 OpenAI Speech 的服务。添加后可以先试听，再在作品中使用。"}
+          : "选择提供商适配器，再填写已有的服务配置。保存后发现音色并先试听一段代表性旁白。"}
       </p>
+      {engine.config?.configured && (
+        <small>
+          原提供商和原地址下留空保留密钥；切换提供商或地址时，留空将清除密钥，需填写该服务已有的正确配置。
+        </small>
+      )}
+      {engine.kind !== "local" && (
+        <>
+          <Field label="提供商">
+            <select
+              aria-label="提供商"
+              value={provider}
+              onChange={(e) => setProvider(e.target.value)}
+            >
+              {ttsProviders.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <small>{preset.note}</small>
+          {preset.docs && (
+            <a href={preset.docs} target="_blank" rel="noreferrer">
+              官方接口说明 ↗
+            </a>
+          )}
+        </>
+      )}
       <Field label="引擎名称">
         <input
           name="name"
@@ -199,33 +670,65 @@ function ExternalEditor({ engine, model, onSaved }) {
         </>
       ) : (
         <>
-          <Field label="服务地址">
-            <input
-              name="url"
-              type="url"
-              required
-              defaultValue={engine.config?.url}
-              placeholder="https://服务地址/v1"
-              readOnly={engine.kind === "local"}
-            />
-          </Field>
-          <small>填写 API 基础地址，无需附加 /audio/speech。</small>
-          <div className="speech-controls">
-            <Field label="模型名称">
+          <div key={provider}>
+            <Field label="服务地址">
               <input
-                name="model"
+                name="url"
+                type="url"
                 required
-                defaultValue={engine.config?.model}
+                defaultValue={
+                  provider === engine.config?.provider ||
+                  (!engine.config?.provider && provider === "compatible")
+                    ? engine.config?.url
+                    : preset.url
+                }
+                placeholder="https://服务地址/v1"
                 readOnly={engine.kind === "local"}
               />
             </Field>
-            <Field label="默认声线">
-              <input
-                name="voice"
-                required
-                defaultValue={engine.config?.voice}
-              />
-            </Field>
+            <small>
+              填写该提供商的 API 基础地址，路径由适配器补齐；不要填完整合成
+              URL。
+            </small>
+            <div className="speech-controls">
+              <Field label="模型名称">
+                <input
+                  name="model"
+                  required
+                  list="tts-model-presets"
+                  defaultValue={
+                    provider === engine.config?.provider ||
+                    (!engine.config?.provider && provider === "compatible")
+                      ? engine.config?.model
+                      : preset.model
+                  }
+                  readOnly={engine.kind === "local"}
+                />
+              </Field>
+              <Field
+                label={
+                  provider === "elevenlabs"
+                    ? "默认声线 · 可先保存，再发现账号音色"
+                    : "默认声线"
+                }
+              >
+                <input
+                  name="voice"
+                  required={provider !== "elevenlabs"}
+                  defaultValue={
+                    provider === engine.config?.provider ||
+                    (!engine.config?.provider && provider === "compatible")
+                      ? engine.config?.voice
+                      : preset.voice
+                  }
+                />
+              </Field>
+            </div>
+            <datalist id="tts-model-presets">
+              {preset.models.map((m) => (
+                <option key={m}>{m}</option>
+              ))}
+            </datalist>
           </div>
           <Field label="API 密钥">
             <input
@@ -267,9 +770,7 @@ function LocalEditor({ draft, models, refresh, onSaved }) {
   const model = models?.find((m) => m.id === id) || draft;
   return (
     <div>
-      <p>
-        上传自有 Kokoro 模型，再将它保存为一个自定义引擎。
-      </p>
+      <p>上传自有 Kokoro 模型，再将它保存为一个自定义引擎。</p>
       <Field label="引擎名称">
         <input
           value={name}
@@ -418,7 +919,9 @@ export function SpeechSettings({ notify }) {
     [error, setError] = useState("");
   const builtins = engines.data?.filter((e) => e.builtin) || [],
     custom = engines.data?.filter((e) => !e.builtin) || [];
-  const downloading = models.data?.some((m) => ["downloading", "extracting"].includes(m.download?.state));
+  const downloading = models.data?.some((m) =>
+    ["downloading", "extracting"].includes(m.download?.state),
+  );
   useEffect(() => {
     if (!downloading) return;
     const timer = setInterval(models.refresh, 1500);
@@ -484,86 +987,131 @@ export function SpeechSettings({ notify }) {
           const active = ["downloading", "extracting"].includes(job?.state);
           const installed = e.kind === "external" || model?.ready;
           return (
-          <article className="speech-card" key={e.id}>
-            <div className="section-head">
-              <span className="speech-icon">
-                <Mic size={22} />
-              </span>
-              <span className="speech-badge">
-                {e.builtin ? installed ? "已安装" : active ? "下载中" : "未安装" : e.enabled ? "已启用" : "已停用"}
-              </span>
-            </div>
-            <h3>{e.name}</h3>
-            <p>
-              {e.description ||
-                `${e.kind === "local" ? "本地模型" : "外部服务"} · ${e.config.model}`}
-            </p>
-            <div className="speech-tags">
-              {e.languages?.map((l) => (
-                <span key={l}>{l}</span>
-              ))}
-              <span>
-                {e.voices
-                  ? `${e.voices.length} 条${e.speakerCount ? "精选" : ""}声线`
-                  : `默认声线：${e.config.voice}`}
-              </span>
-              {e.builtin && <span>本地运行</span>}
-            </div>
-            {e.source && (
-              <a
-                className="speech-source"
-                href={e.source}
-                target="_blank"
-                rel="noreferrer"
-              >
-                模型来源与许可 ↗
-              </a>
-            )}
-            {active && <div role="status">
-              <progress max={job.totalBytes || undefined} value={job.totalBytes ? job.receivedBytes : undefined} />
-              <small>{job.state === "extracting" ? "正在解压并校验模型" : `已下载 ${(job.receivedBytes / 1048576).toFixed(1)} MiB${job.totalBytes ? ` / ${(job.totalBytes / 1048576).toFixed(1)} MiB` : ""}`}</small>
-            </div>}
-            {job?.error && <ErrorNote error={job.error} />}
-            <div className="speech-card-actions">
-              {e.builtin && !installed && <Button icon={Download} className="primary" disabled={busy || active || !!models.error} onClick={async () => {
-                setBusy(true);
-                try { await api("models_download", { id: e.config.model }); models.refresh(); }
-                catch (error) { notify(error.message); }
-                finally { setBusy(false); }
-              }}>{active ? "下载中…" : job?.state === "failed" ? "重试下载" : "下载模型"}</Button>}
-              <Button
-                icon={Play}
-                className="primary"
-                disabled={!e.enabled || !installed}
-                onClick={() => setAudition(e)}
-              >
-                试听
-              </Button>
-              {e.builtin && installed && <Button icon={Trash2} aria-label={`移除 ${e.name} 模型`} onClick={() => { setError(""); setRemove({ model }); }} />}
-              {!e.builtin && (
-                <>
+            <article className="speech-card" key={e.id}>
+              <div className="section-head">
+                <span className="speech-icon">
+                  <Mic size={22} />
+                </span>
+                <span className="speech-badge">
+                  {e.builtin
+                    ? installed
+                      ? "已安装"
+                      : active
+                        ? "下载中"
+                        : "未安装"
+                    : e.enabled
+                      ? "已启用"
+                      : "已停用"}
+                </span>
+              </div>
+              <h3>{e.name}</h3>
+              <p>
+                {e.description ||
+                  `${e.kind === "local" ? "本地模型" : "外部服务"} · ${e.config.model}`}
+              </p>
+              <div className="speech-tags">
+                {e.languages?.map((l) => (
+                  <span key={l}>{l}</span>
+                ))}
+                <span>
+                  {e.voices
+                    ? `${e.voices.length} 条${e.speakerCount ? "精选" : ""}声线`
+                    : `默认声线：${e.config.voice}`}
+                </span>
+                {e.builtin && <span>本地运行</span>}
+              </div>
+              {e.source && (
+                <a
+                  className="speech-source"
+                  href={e.source}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  模型来源与许可 ↗
+                </a>
+              )}
+              {active && (
+                <div role="status">
+                  <progress
+                    max={job.totalBytes || undefined}
+                    value={job.totalBytes ? job.receivedBytes : undefined}
+                  />
+                  <small>
+                    {job.state === "extracting"
+                      ? "正在解压并校验模型"
+                      : `已下载 ${(job.receivedBytes / 1048576).toFixed(1)} MiB${job.totalBytes ? ` / ${(job.totalBytes / 1048576).toFixed(1)} MiB` : ""}`}
+                  </small>
+                </div>
+              )}
+              {job?.error && <ErrorNote error={job.error} />}
+              <div className="speech-card-actions">
+                {e.builtin && !installed && (
                   <Button
-                    icon={Settings2}
-                    onClick={() => {
-                      setMethod("external");
-                      setEditor(e);
+                    icon={Download}
+                    className="primary"
+                    disabled={busy || active || !!models.error}
+                    onClick={async () => {
+                      setBusy(true);
+                      try {
+                        await api("models_download", { id: e.config.model });
+                        models.refresh();
+                      } catch (error) {
+                        notify(error.message);
+                      } finally {
+                        setBusy(false);
+                      }
                     }}
                   >
-                    配置
+                    {active
+                      ? "下载中…"
+                      : job?.state === "failed"
+                        ? "重试下载"
+                        : "下载模型"}
                   </Button>
+                )}
+                <Button
+                  icon={Play}
+                  className="primary"
+                  disabled={!e.enabled || !installed}
+                  onClick={() => setAudition(e)}
+                >
+                  试听
+                </Button>
+                {e.builtin && installed && (
                   <Button
                     icon={Trash2}
-                    aria-label={`删除 ${e.name}`}
+                    aria-label={`移除 ${e.name} 模型`}
                     onClick={() => {
                       setError("");
-                      setRemove({ engine: e });
+                      setRemove({ model });
                     }}
                   />
-                </>
-              )}
-            </div>
-          </article>
-        ); })}
+                )}
+                {!e.builtin && (
+                  <>
+                    <Button
+                      icon={Settings2}
+                      onClick={() => {
+                        setMethod("external");
+                        setEditor(e);
+                      }}
+                    >
+                      配置
+                    </Button>
+                    <Button
+                      icon={Trash2}
+                      aria-label={`删除 ${e.name}`}
+                      onClick={() => {
+                        setError("");
+                        setRemove({ engine: e });
+                      }}
+                    />
+                  </>
+                )}
+              </div>
+            </article>
+          );
+        })}
       </div>
       {tab === "custom" && !custom.length && (
         <div className="speech-empty">

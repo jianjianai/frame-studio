@@ -1,3 +1,4 @@
+import { speechInputShape } from "../scripts/tts-capabilities.mjs";
 import { workSourceTools } from "./work-source-tools.mjs";
 import { compactTask } from "./agent-toolkit.mjs";
 import { taskSummaryColumns } from "./task-summary.mjs";
@@ -279,10 +280,7 @@ export function workOperations({
     "Synthesize a narration and save it in this work and the global material library",
     {
       id: uuid,
-      engine: uuid,
-      text: z.string().min(1).max(4000),
-      voice: z.string().max(150).optional(),
-      speed: z.number().min(0.5).max(2).default(1),
+      ...speechInputShape,
     },
     async ({ id, ...a }) =>
       invoke("speech_generate", { ...(await resolve(id)), ...a }),

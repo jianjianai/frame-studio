@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { createHash } from "node:crypto";
+import { ttsProviderIds, ttsCapabilities } from "./tts-capabilities.mjs";
 import {
   readSpeechConfig,
   resolveSpeech,
@@ -31,6 +32,14 @@ export function speechStatus(workspace, id) {
         name,
         type: p.type,
         voice: result.voice,
+        model: result.runtime.model,
+        capabilities: ttsProviderIds.includes(result.type)
+          ? ttsCapabilities(
+              result.runtime.provider,
+              result.runtime.model,
+              result.voice,
+            )
+          : undefined,
         ready: !result.missing.length,
         environment: result.required,
       };
@@ -104,7 +113,7 @@ export function initSpeech(workspace, id, { provider = "edge", voice } = {}) {
 export async function listSpeechVoices(
   workspace,
   id,
-  { provider, locale, limit = 100, offset = 0, signal } = {},
+  { provider, locale, limit = 100, offset = 0, signal, cursor, search } = {},
 ) {
   if (
     !Number.isInteger(limit) ||
@@ -112,7 +121,11 @@ export async function listSpeechVoices(
     limit > 200 ||
     !Number.isInteger(offset) ||
     offset < 0 ||
-    (locale && !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8}){0,2}$/.test(locale))
+    (locale && !/^[a-zA-Z]{2,3}(?:-[a-zA-Z0-9]{2,8}){0,2}$/.test(locale)) ||
+    (cursor !== undefined &&
+      (typeof cursor !== "string" || cursor.length > 500)) ||
+    (search !== undefined &&
+      (typeof search !== "string" || search.length > 200))
   )
     throw new Error("Invalid voice filter or pagination");
   const config = readSpeechConfig(workspace, id, SPEECH_CONFIG, true);
@@ -123,7 +136,7 @@ export async function listSpeechVoices(
     {},
     config,
   );
-  let voices, source;
+  let voices, source, catalog;
   if (selected.type === "custom")
     return {
       provider: selected.provider,
@@ -131,46 +144,26 @@ export async function listSpeechVoices(
       source: "project-defined",
       nextAction: "Use the voices documented by the project's custom adapter",
     };
-  if (selected.type === "openai") {
-    if (config?.providers[selected.provider]?.baseUrlEnv)
-      return {
-        provider: selected.provider,
-        voices: [],
-        source: "compatible-provider-defined",
-        nextAction:
-          "Set the voice identifier documented by the configured compatible service",
-      };
-    voices = [
-      "alloy",
-      "ash",
-      "ballad",
-      "coral",
-      "echo",
-      "fable",
-      "onyx",
-      "nova",
-      "sage",
-      "shimmer",
-      "verse",
-      "marin",
-      "cedar",
-    ].map((id) => ({ id, locale: "multilingual" }));
-    source =
-      "documented-built-in-voices; model compatibility must be checked with the provider";
+  if (selected.type === "openai" && selected.runtime.provider === "openai") {
+    voices = ttsCapabilities(
+      "openai",
+      selected.runtime.model,
+      selected.voice,
+    ).voices;
+    source = "documented; not live provider verification";
   } else {
     if (selected.missing.length)
       throw new Error(
         "Missing speech environment variables: " + selected.missing.join(", "),
       );
-    voices = (
-      await runSpeechWorker(
-        { action: "voices", runtime: selected.runtime, locale },
-        { signal, timeoutMs: 30000 },
-      )
-    ).voices;
-    source = "live-provider";
+    catalog = await runSpeechWorker(
+      { action: "voices", runtime: selected.runtime, locale, cursor, search },
+      { signal, timeoutMs: 30000 },
+    );
+    voices = catalog.voices;
+    source = catalog.source || "live-provider";
   }
-  if (locale && selected.type !== "openai")
+  if (locale && ["edge", "azure"].includes(selected.type))
     voices = voices.filter((v) =>
       v.locale?.toLowerCase().startsWith(locale.toLowerCase()),
     );
@@ -178,16 +171,45 @@ export async function listSpeechVoices(
   return {
     provider: selected.provider,
     source,
+    models: catalog?.models || [],
+    nextCursor: catalog?.nextCursor || null,
+    ...(catalog?.hint ? { hint: catalog.hint } : {}),
+    ...(locale && !["edge", "azure"].includes(selected.type)
+      ? { warning: "该目录没有完整音色语言元数据，未按 locale 过滤" }
+      : {}),
     total: voices.length,
     voices: voices.slice(offset, offset + limit),
     nextOffset: offset + limit < voices.length ? offset + limit : null,
   };
 }
-export function speechSamplePlan({ text, provider, speaker, voice }) {
+export function speechSamplePlan({
+  text,
+  provider,
+  speaker,
+  voice,
+  speed,
+  instructions,
+  emotion,
+  language,
+  pitch,
+  options,
+}) {
   if (typeof text !== "string" || !text.trim() || text.length > 4096)
     throw new Error("Use --text with 1..4096 characters");
   return {
     mode: "sequential",
+    settings: {
+      ...(options
+        ? typeof options === "string"
+          ? JSON.parse(options)
+          : options
+        : {}),
+      ...(speed !== undefined ? { speed: Number(speed) } : {}),
+      ...(instructions ? { instructions } : {}),
+      ...(emotion ? { emotion } : {}),
+      ...(language ? { language } : {}),
+      ...(pitch !== undefined ? { pitch: Number(pitch) } : {}),
+    },
     ...(provider ? { provider } : {}),
     sentences: [
       {

@@ -10,7 +10,7 @@ import {
   ErrorNote,
   Loading,
 } from "./ui";
-import { SpeechControls } from "./speech";
+import { SpeechControls, useSpeechJob, SpeechProgress } from "./speech";
 import { reviewTime } from "./review-text";
 const load = (key) => {
   try {
@@ -28,27 +28,38 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
   const [selected, setSelected] = useState(initial.engine || ""),
     [voice, setVoice] = useState(initial.voice || ""),
     [speed, setSpeed] = useState(initial.speed || 1),
+    [options, setOptions] = useState(initial.options || {}),
     [text, setText] = useState(initial.text || "");
   const [name, setName] = useState(initial.name || "中文旁白"),
     [result, setResult] = useState(null),
     [adopted, setAdopted] = useState(null),
     [placement, setPlacement] = useState("none");
+  const job = useSpeechJob(),
+    [error, setError] = useState("");
   const engine =
     engines.data?.find((e) => e.id === selected && e.enabled) ||
     engines.data?.find((e) => e.enabled);
   const chosenVoice = voice || engine?.config?.voice || "";
-  const installed = engine?.kind === "external" || models.data?.some((m) => m.id === engine?.config?.model && m.ready);
-  const settings = { engine: engine?.id, voice: chosenVoice, speed, text };
+  const installed =
+    engine?.kind === "external" ||
+    models.data?.some((m) => m.id === engine?.config?.model && m.ready);
+  const settings = {
+    engine: engine?.id,
+    voice: chosenVoice,
+    speed,
+    text,
+    options,
+  };
   const signature = JSON.stringify(settings),
     stale = result && result.signature !== signature;
   useEffect(() => {
     try {
       sessionStorage.setItem(
         key,
-        JSON.stringify({ engine: selected, voice, speed, text, name }),
+        JSON.stringify({ engine: selected, voice, speed, text, name, options }),
       );
     } catch {}
-  }, [key, selected, voice, speed, text, name]);
+  }, [key, selected, voice, speed, text, name, options]);
   return (
     <>
       <p>
@@ -76,14 +87,31 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
             submit="生成试听（不加入作品）"
             onSubmit={() =>
               run(async () => {
-                const sample = await api("speech_test", settings);
+                setError("");
+                let sample;
+                try {
+                  sample = await api("speech_test", {
+                    ...settings,
+                    requestId: job.start(),
+                  });
+                } finally {
+                  job.finish();
+                }
                 setResult({ ...sample, signature });
                 setAdopted(null);
                 notify("试听已生成，确认后可采用");
               })
             }
           >
-            {!installed && <p>此模型尚未安装，请在<a href="#/settings" target="_blank" rel="noopener">语音引擎列表</a>下载或上传模型后重新打开配音。</p>}
+            {!installed && (
+              <p>
+                此模型尚未安装，请在
+                <a href="#/settings" target="_blank" rel="noopener">
+                  语音引擎列表
+                </a>
+                下载或上传模型后重新打开配音。
+              </p>
+            )}
             <Field label="语音引擎">
               <select
                 name="engine"
@@ -93,6 +121,8 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
                 onChange={(event) => {
                   setSelected(event.target.value);
                   setVoice("");
+                  setOptions({});
+                  setSpeed(1);
                 }}
               >
                 {engines.data
@@ -110,6 +140,9 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
               setVoice={setVoice}
               speed={speed}
               setSpeed={setSpeed}
+              options={options}
+              setOptions={setOptions}
+              disabled={busy}
             />
             <Field label="配音文字">
               <textarea
@@ -126,11 +159,18 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
               文字与设置会在当前浏览器会话中保留。首次调用引擎可能需要加载模型。
             </small>
           </Form>
+          {job.requestId && <SpeechProgress job={job} error={setError} />}
+          <ErrorNote error={error} />
           {result && (
             <section className="voice-audition">
               <h3>
                 <Play size={17} /> 试听结果
               </h3>
+              {result.warnings?.map((w) => (
+                <p key={w.field} role="alert">
+                  {w.field}：{w.reason}
+                </p>
+              ))}
               <audio controls src={result.url} preload="metadata" />
               <p>
                 临时试听保留至{" "}

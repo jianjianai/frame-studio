@@ -3,16 +3,18 @@ import path from "node:path";
 import { confined, problem } from "./security.mjs";
 import { fileSha256 } from "./project-files.mjs";
 import { command } from "./process.mjs";
-export function agentTools({ app, db, data, assets, actions }) {
+export function agentTools({ app, db, data, assets, actions, localMode = false }) {
   app.post("/api/agent/action", async (req) => {
     const task = req.agentTask;
     if (!task) throw problem(403, "Task credential required");
     const { name, args = {} } = req.body || {};
     if (!args || typeof args !== "object" || Array.isArray(args))
       throw problem(400, "Tool args must be a JSON object");
-    if (name === "question_create") return actions.interactions.create(task.id, args);
+    if (name === "question_create")
+      return actions.interactions.create(task.id, args);
     if (name === "question_poll") {
-      if (typeof args.id !== "string" || !/^[0-9a-f-]{36}$/i.test(args.id)) throw problem(400, "Invalid question id");
+      if (typeof args.id !== "string" || !/^[0-9a-f-]{36}$/i.test(args.id))
+        throw problem(400, "Invalid question id");
       return actions.interactions.poll(task.id, args.id);
     }
     if (name === "assets") {
@@ -37,6 +39,15 @@ export function agentTools({ app, db, data, assets, actions }) {
       });
     }
     if (name === "engines") return actions.call("engines_list", {});
+    if (
+      [
+        "speech_providers",
+        "engines_discover",
+        "speech_status",
+        "speech_cancel",
+      ].includes(name)
+    )
+      return actions.call(name, args);
     if (name === "engine_add") {
       if (args.id)
         throw problem(
@@ -54,28 +65,28 @@ export function agentTools({ app, db, data, assets, actions }) {
         confined(path.join(data, "runs", preview.task), preview.path),
         target,
       );
-      if (process.platform !== "win32")
+      if (process.platform !== "win32" && !localMode)
         await command("chown", ["1000:1000", path.dirname(target), target]);
       return {
         path: relative,
         temporary: true,
         elapsedMs: preview.elapsedMs,
+        requestId: preview.requestId,
+        applied: preview.applied,
+        warnings: preview.warnings,
         expiresAt: preview.expiresAt,
       };
     }
     if (name === "use" || name === "speech") {
-      const asset =
+      const speechResult =
         name === "speech"
-          ? (
-              await actions.call("speech_generate", {
-                engine: args.engine,
-                text: args.text,
-                repo: task.repo,
-                ...(args.voice ? { voice: args.voice } : {}),
-                ...(args.speed !== undefined ? { speed: args.speed } : {}),
-              })
-            ).asset
-          : await assets.get(args.asset);
+          ? await actions.call("speech_generate", {
+              ...args,
+              repo: task.repo,
+              project: undefined,
+            })
+          : null;
+      const asset = speechResult?.asset || (await assets.get(args.asset));
       if (
         !(await db.one(
           "SELECT asset FROM asset_repos WHERE asset=$1 AND repo=$2",
@@ -120,7 +131,7 @@ export function agentTools({ app, db, data, assets, actions }) {
             2,
           ),
         );
-        if (process.platform !== "win32")
+        if (process.platform !== "win32" && !localMode)
           await command("chown", [
             "1000:1000",
             path.dirname(dest),
@@ -136,6 +147,13 @@ export function agentTools({ app, db, data, assets, actions }) {
           mime: asset.mime,
           bytes: Number(asset.bytes),
           source: asset.license,
+          ...(speechResult
+            ? {
+                requestId: speechResult.requestId,
+                applied: speechResult.applied,
+                warnings: speechResult.warnings,
+              }
+            : {}),
           nextAction:
             name === "speech" || asset.mime?.startsWith("audio/")
               ? "Add this URL to a file audioTrack in project.ts and measure its duration before aligning subtitles. Importing a material does not enable playback."
@@ -145,7 +163,7 @@ export function agentTools({ app, db, data, assets, actions }) {
     }
     throw problem(
       403,
-      "Allowed: assets, engines, engine_add, engine_test, use and speech",
+      "Allowed: assets, engines, speech_providers, engines_discover, speech_status, speech_cancel, engine_add, engine_test, use and speech",
     );
   });
 }

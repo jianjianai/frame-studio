@@ -1,5 +1,7 @@
 import { workerData, parentPort } from "node:worker_threads";
 import { pathToFileURL } from "node:url";
+import { synthesizeTts, discoverTts } from "./tts-adapters.mjs";
+import { ttsProviderIds } from "./tts-capabilities.mjs";
 
 export const escapeXml = (value) =>
   String(value)
@@ -37,7 +39,15 @@ async function collect(stream, max) {
   }
   return new Uint8Array(Buffer.concat(chunks));
 }
-async function execute({ action, runtime: p, text, maxBytes, locale }) {
+async function execute({
+  action,
+  runtime: p,
+  text,
+  maxBytes,
+  locale,
+  cursor,
+  search,
+}) {
   if (p.type === "custom") {
     const provider = await import(pathToFileURL(p.module).href);
     if (typeof provider.synthesize !== "function")
@@ -51,28 +61,28 @@ async function execute({ action, runtime: p, text, maxBytes, locale }) {
       }),
     };
   }
-  if (p.type === "openai") {
-    const { default: OpenAI } = await import("openai");
-    const client = new OpenAI({
-      apiKey: p.apiKey,
-      baseURL: p.baseURL,
-      maxRetries: 0,
-      timeout: p.timeoutMs,
-      fetch: (url, options) => fetch(url, { ...options, redirect: "error" }),
-    });
-    const response = await client.audio.speech.create({
+  if (ttsProviderIds.includes(p.type)) {
+    const config = {
+      provider: p.provider || p.type,
+      url: p.baseURL,
       model: p.model,
       voice: p.voice,
-      input: text,
-      response_format: "wav",
-      ...p.settings,
-    });
-    if (Number(response.headers.get("content-length")) > maxBytes) {
-      await response.body?.cancel();
-      throw new Error("AUDIO_LIMIT");
-    }
-    if (!response.body) throw new Error("EMPTY_AUDIO");
-    return { bytes: await collect(response.body, maxBytes) };
+      apiKey: p.apiKey,
+      timeoutMs: p.timeoutMs,
+    };
+    if (action === "voices") return discoverTts(config, { cursor, search });
+    const { speed, ...options } = p.settings;
+    return {
+      bytes: new Uint8Array(
+        (
+          await synthesizeTts(
+            config,
+            { text, voice: p.voice, speed, options },
+            { maxBytes },
+          )
+        ).bytes,
+      ),
+    };
   }
   if (p.type === "edge") {
     const { MsEdgeTTS, OUTPUT_FORMAT } = await import("msedge-tts");
@@ -151,13 +161,22 @@ if (parentPort && workerData) {
     const status = Number.isInteger(error?.status)
       ? ` (HTTP ${error.status})`
       : "";
-    const hint =
-      error?.message === "AUDIO_LIMIT"
+    const sharedError = error?.code?.startsWith("TTS_");
+    const hint = sharedError
+      ? error.message
+      : error?.message === "AUDIO_LIMIT"
         ? "Audio size limit exceeded"
         : "Speech request failed; check connectivity, credentials, voice and provider settings";
     parentPort.postMessage({
       error:
         hint + status + "; no automatic retry or provider fallback was made",
+      ...(sharedError
+        ? {
+            code: error.code,
+            statusCode: error.statusCode,
+            outcome: error.outcome,
+          }
+        : {}),
     });
   }
 }

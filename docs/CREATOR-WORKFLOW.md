@@ -54,7 +54,7 @@ node scripts/work-tool.mjs engine_test @projects/my-film/production/audition.jso
 node scripts/work-tool.mjs speech @projects/my-film/production/narration-request.json
 ```
 
-分页范围只限当前任务所属仓库，不能用参数切换仓库。`engines` 发现已配置的内置服务和声线，优先复用，无需在作品中重复安装语音工具。`engine_test` 只生成临时试听；`speech` 保存正式素材。导入结果包含本地路径、浏览器 URL、媒体类型、大小、来源和接入提示，但不会擅自重写场景、audioTracks 或字幕。音频应先实测时长再对齐，文件存在不代表已经接入播放。
+分页范围只限当前任务所属仓库，不能用参数切换仓库。`engines` 发现已配置的内置服务和声线，优先复用，无需在作品中重复安装语音工具。`speech_providers` 读取已核实提供商预设；`engines_discover` 用已配置引擎获取音色/模型目录。`engine_test` 只生成临时试听；`speech` 保存正式素材。二者共享 options 与能力约束，text/voice/speed 旧调用仍有效；不要把未支持的 instructions 或 emotion 硬塞给兼容服务。先选择中文音色、校正多音字、短句试听，再正式合成；控制说明见 [SPEECH.md](SPEECH.md)。传 requestId 可用 speech_status/speech_cancel 查询或取消；取消不等于远端退费，写请求不自动重试。导入结果包含本地路径、浏览器 URL、媒体类型、大小、来源和接入提示，但不会擅自重写场景、audioTracks 或字幕。音频应先实测时长再对齐，文件存在不代表已经接入播放。
 
 输入支持一个 JSON 对象、`@file` 或 stdin `-`，上限 256 KiB；带凭据的请求用私有文件或 stdin。远端调用有 180 秒超时和 2 MiB 响应上限，不跟随重定向，也不自动重试写操作。错误提供稳定 code、HTTP 状态、重试窗口（服务返回时）与 nextAction。超时或服务端异常时，语音请求可能已经产生结果：先查素材与任务状态，再决定是否重新提交，避免重复生成和计费。此行为不是服务端取消确认。
 

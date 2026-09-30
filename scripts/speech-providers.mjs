@@ -4,6 +4,12 @@ import { Worker } from "node:worker_threads";
 import { parseEnv } from "node:util";
 import { z } from "zod";
 import { safePath } from "./mcp/workspace.mjs";
+import {
+  ttsProviders,
+  ttsProviderIds,
+  ttsOptionsSchema,
+  normalizeTtsInput,
+} from "./tts-capabilities.mjs";
 
 export const SPEECH_CONFIG = "production/speech.json";
 export const MAX_SPEECH_BYTES = 32 * 1024 * 1024;
@@ -16,7 +22,12 @@ const envName = z
 const voice = z.string().min(1).max(200);
 const settings = z.record(z.string(), z.unknown());
 const profile = z.strictObject({
-  type: z.enum(["edge", "openai", "azure", "custom"]),
+  type: z.enum([
+    "edge",
+    "azure",
+    "custom",
+    ...ttsProviderIds.filter((id) => id !== "local"),
+  ]),
   voice: voice.optional(),
   model: z.string().min(1).max(200).optional(),
   apiKeyEnv: envName.optional(),
@@ -53,7 +64,9 @@ const packageNames = {
 };
 const implementation = digest(
   fs.readFileSync(import.meta.filename) +
-    fs.readFileSync(new URL("speech-worker.mjs", import.meta.url)),
+    fs.readFileSync(new URL("speech-worker.mjs", import.meta.url)) +
+    fs.readFileSync(new URL("tts-adapters.mjs", import.meta.url)) +
+    fs.readFileSync(new URL("tts-capabilities.mjs", import.meta.url)),
 );
 export const speechProviders = () => [
   {
@@ -70,7 +83,7 @@ export const speechProviders = () => [
     version: packageInfo.dependencies.openai,
     needsKey: true,
     online: true,
-    note: "Official SDK; custom compatible endpoint via baseUrlEnv, including local servers.",
+    note: "Official HTTP adapter; baseUrlEnv defaults to conservative compatible capabilities.",
   },
   {
     type: "azure",
@@ -84,6 +97,15 @@ export const speechProviders = () => [
     needsKey: false,
     note: "Trusted project-local .mjs implementing synthesize; not an OS sandbox.",
   },
+  ...ttsProviders
+    .filter((p) => p.id !== "openai")
+    .map((p) => ({
+      type: p.id,
+      note: p.note,
+      models: p.models,
+      needsKey: !["qwen3", "compatible"].includes(p.id),
+      online: p.id !== "qwen3",
+    })),
 ];
 export function speechTemplate(type = "edge", selectedVoice) {
   if (
@@ -102,7 +124,7 @@ export function speechTemplate(type = "edge", selectedVoice) {
     openai: {
       type,
       model: "gpt-4o-mini-tts",
-      voice: "coral",
+      voice: "cedar",
       apiKeyEnv: "OPENAI_API_KEY",
       settings: { speed: 1 },
     },
@@ -118,6 +140,22 @@ export function speechTemplate(type = "edge", selectedVoice) {
       voice: "default",
     },
   };
+  const preset = ttsProviders.find((p) => p.id === type);
+  const keyEnvs = {
+    minimax: "MINIMAX_API_KEY",
+    doubao: "DOUBAO_API_KEY",
+    elevenlabs: "ELEVENLABS_API_KEY",
+  };
+  if (!presets[type] && preset)
+    presets[type] = {
+      type,
+      model: preset.model || "model-id",
+      voice: preset.voice || "voice-id",
+      ...(keyEnvs[type] ? { apiKeyEnv: keyEnvs[type] } : {}),
+      ...(["qwen3", "compatible"].includes(type)
+        ? { baseUrlEnv: "TTS_BASE_URL" }
+        : {}),
+    };
   if (!presets[type]) throw new Error("Unknown speech provider type");
   return {
     version: 1,
@@ -226,11 +264,19 @@ function checkedSettings(type, value = {}) {
   )
     throw new Error("Invalid or oversized speech settings");
   if (type === "custom") return value;
+  if (ttsProviderIds.includes(type)) {
+    const { speed, ...options } = value;
+    if (
+      speed !== undefined &&
+      (!Number.isFinite(speed) || speed < 0.25 || speed > 4)
+    )
+      throw new Error("Invalid speech speed");
+    return {
+      ...ttsOptionsSchema.parse(options),
+      ...(speed !== undefined ? { speed } : {}),
+    };
+  }
   const schemas = {
-    openai: z.strictObject({
-      speed: z.number().min(0.25).max(4).optional(),
-      instructions: z.string().max(4000).optional(),
-    }),
     edge: z.strictObject({
       rate: z
         .string()
@@ -300,7 +346,13 @@ export function resolveSpeech(workspace, id, plan, sentence, config) {
     };
   } else if (selected && config && Object.hasOwn(config.providers, selected))
     p = config.providers[selected];
-  else if (["edge", "openai", "azure"].includes(selected))
+  else if (
+    [
+      "edge",
+      "azure",
+      ...ttsProviderIds.filter((id) => id !== "local"),
+    ].includes(selected)
+  )
     p = speechTemplate(selected).providers[selected];
   else
     throw new Error(
@@ -335,13 +387,27 @@ export function resolveSpeech(workspace, id, plan, sentence, config) {
     required.push({ name, configured: Boolean(env[name]) });
     return env[name];
   };
-  if (p.type === "openai") {
-    runtime.apiKey = useEnv(p.apiKeyEnv ?? "OPENAI_API_KEY");
-    runtime.model = p.model ?? "gpt-4o-mini-tts";
-    const address = p.baseUrlEnv
-      ? useEnv(p.baseUrlEnv)
-      : "https://api.openai.com/v1";
+  if (ttsProviderIds.includes(p.type)) {
+    const preset = ttsProviders.find((item) => item.id === p.type);
+    const keyEnv = {
+      openai: "OPENAI_API_KEY",
+      minimax: "MINIMAX_API_KEY",
+      doubao: "DOUBAO_API_KEY",
+      elevenlabs: "ELEVENLABS_API_KEY",
+    }[p.type];
+    if (p.apiKeyEnv || keyEnv) runtime.apiKey = useEnv(p.apiKeyEnv || keyEnv);
+    runtime.model = p.model || preset.model;
+    const address = p.baseUrlEnv ? useEnv(p.baseUrlEnv) : preset.url;
+    if (!address && !p.baseUrlEnv)
+      throw new Error("This speech adapter requires baseUrlEnv");
     runtime.baseURL = address ? endpoint(address) : undefined;
+    runtime.provider =
+      p.type === "openai" && p.baseUrlEnv ? "compatible" : p.type;
+    const { speed, ...options } = usedSettings;
+    normalizeTtsInput(
+      { provider: runtime.provider, model: runtime.model, voice: usedVoice },
+      { text: sentence.text, voice: usedVoice, speed, options },
+    );
   } else if (p.type === "azure") {
     runtime.apiKey = useEnv(p.apiKeyEnv ?? "AZURE_SPEECH_KEY");
     runtime.region = useEnv(p.regionEnv ?? "AZURE_SPEECH_REGION");
@@ -422,7 +488,14 @@ export async function runSpeechWorker(
         timeoutMs,
       );
       worker.on("message", (value) => {
-        if (value.error) finish(new Error(value.error));
+        if (value.error)
+          finish(
+            Object.assign(new Error(value.error), {
+              code: value.code,
+              statusCode: value.statusCode,
+              outcome: value.outcome,
+            }),
+          );
         else if (
           request.action === "synthesize" &&
           (!(value.bytes instanceof Uint8Array) ||

@@ -280,6 +280,13 @@ export class Workspace {
     const walk = (dir, depth = 0) => {
       if (depth > 32) fail("TOO_DEEP", "Project nesting is too deep.");
       for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
+        // Speech reads this project-owned credential file internally. It remains
+        // inaccessible to file tools and excluded from fingerprints and context.
+        if (item.name === ".env" && dir === folder) {
+          this.file(id, ".env", true); // Reject symlinks/hardlinks, as for other files.
+          if (!item.isFile()) fail("UNSAFE_FILE", "Project environment must be a regular file.");
+          continue;
+        }
         if (
           [".cache", ".history", "exports"].includes(item.name) &&
           dir === folder
