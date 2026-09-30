@@ -11,6 +11,6 @@
 - codex-model-catalog、provider-metadata、codex-account-browser：14 项通过，0 失败、0 跳过。包含原 12 项后端测试、1 项 UI 流程，以及新增 1 项真实 SQLite 三种竞争场景：读取期间配置更新、账号身份代次变化、最终 UPDATE 前配置变化，验证保存保护生效。
 - 实际 Chromium 与 React，模拟 WebSocket，覆盖自动同步、重试、参数/默认选择、账号新建与手机登录布局；查看桌面和手机截图。原生协议用独立 fixture 子进程，未读取真实账号或连接实际 Codex 服务。
 - check:platform（129 文件）、typecheck:platform、build:studio、git diff --check 通过。
-- 合并后保留 AccessSettings 与 ToolSettings、新作品库 sort 和同步操作；最终联合版本再做相关集成检查。
+- 最终联合版本保留 AccessSettings 与 ToolSettings、新作品库 sort 和同步操作。真实 PostgreSQL API/目录排序 + 两个设置页浏览器检查共 5 项通过；作品库 10 组 Chromium 流程再通过。联合版本 check:platform（130 文件）、typecheck:platform 和 build:studio 通过。
 
 检查使用隔离容器、临时 SQLite 和模拟账号，不挂载生产数据、Docker socket或账号目录。遵守轻量测试要求，不执行全量发布流程，不部署生产。
