@@ -93,6 +93,11 @@ test(
             },
           ],
         };
+      if (name === "task_retry_publish") {
+        const task = tools.flatMap((tool) => tool.updates).find((task) => task.id === args.id);
+        task.state = "publishing";
+        return task;
+      }
       if (name === "agent_notifications")
         return { items: [], unread: 0, next: null };
       if (name === "system_status") return { warnings: [] };
@@ -227,6 +232,18 @@ test(
         "1.9.0",
       );
       tools[0].updates[0].state = "succeeded";
+      broadcast();
+
+      const recovery = tools[0].updates[0];
+      recovery.state = "publish_failed";
+      recovery.error = "安装已完成，结果保存需要重试";
+      broadcast();
+      await expect(claude.getByRole("button", { name: "指定版本" })).toBeDisabled();
+      const installsBeforeRecovery = calls.filter((call) => call.name === "tools_update").length;
+      await codex.getByRole("button", { name: "重试保存结果" }).click();
+      assert.deepEqual(calls.filter((call) => call.name === "task_retry_publish").at(-1).args, { id: recovery.id });
+      assert.equal(calls.filter((call) => call.name === "tools_update").length, installsBeforeRecovery);
+      recovery.state = "succeeded";
       broadcast();
 
       tools[1].release = {

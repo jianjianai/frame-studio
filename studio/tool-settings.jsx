@@ -28,6 +28,7 @@ import "./tool-settings.css";
 const names = { codex: "Codex", claude: "Claude Code" };
 const updating = (task) =>
   ["queued", "running", "cancelling", "publishing"].includes(task?.state);
+const blocksInstall = (task) => updating(task) || task?.state === "publish_failed";
 const failed = (task) => ["failed", "publish_failed"].includes(task?.state);
 const versionOf = (tool) =>
   tool.installedVersion || tool.version?.trim() || "未安装";
@@ -156,8 +157,8 @@ export function ToolSettings({ notify }) {
   const acknowledgedTask =
     tasks.find((task) => task.id === acknowledged?.id) || acknowledged;
   const active =
-    tasks.find(updating) ||
-    (updating(acknowledgedTask) ? acknowledgedTask : null);
+    tasks.find(blocksInstall) ||
+    (blocksInstall(acknowledgedTask) ? acknowledgedTask : null);
   const installingNow = !!installing || !!active;
 
   // Re-entering the page and every 15 minutes refresh the server's bounded release cache.
@@ -180,7 +181,10 @@ export function ToolSettings({ notify }) {
       );
     else if (failed(current))
       notify(
-        names[current.input.provider] + " 更新失败，当前版本已保留。",
+        names[current.input.provider] +
+          (current.state === "publish_failed"
+            ? " 安装已完成，结果保存需要重试。"
+            : " 更新失败，当前版本已保留。"),
         "error",
       );
     setAcknowledged(null);
@@ -423,12 +427,18 @@ export function ToolSettings({ notify }) {
                       <p>{latest.error || "更新失败，当前版本已保留。"}</p>
                       {!tool.localMode && (
                         <Button
-                          disabled={busy || installingNow}
+                          disabled={busy || (installingNow && latest.state !== "publish_failed")}
                           onClick={() =>
-                            run(() => install(tool, latest.input.version))
+                            run(async () => {
+                              if (latest.state === "publish_failed") {
+                                const task = await api("task_retry_publish", { id: latest.id });
+                                setAcknowledged(task);
+                                tools.refresh();
+                              } else await install(tool, latest.input.version);
+                            })
                           }
                         >
-                          重试更新
+                          {latest.state === "publish_failed" ? "重试保存结果" : "重试更新"}
                         </Button>
                       )}
                     </div>

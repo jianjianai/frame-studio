@@ -1,5 +1,13 @@
 import { problem } from "./security.mjs";
 
+// These messages are authored here; upstream/network errors are replaced below.
+const releaseProblem = (message) =>
+  Object.assign(problem(502, message), {
+    expose: true,
+    code: "TOOL_RELEASE_UNAVAILABLE",
+    retryable: true,
+  });
+
 export const toolDefinitions = Object.freeze({
   codex: {
     name: "Codex",
@@ -96,26 +104,25 @@ export class ToolReleases {
       if (response.status === 404)
         throw problem(404, "官方包中没有这个版本，请检查版本号。");
       if (!response.ok)
-        throw problem(502, "官方版本服务暂时不可用，请稍后重试。");
+        throw releaseProblem("官方版本服务暂时不可用，请稍后重试。");
       let bytes = 0;
       const chunks = [];
       for await (const chunk of response.body) {
         bytes += chunk.byteLength;
         if (bytes > 1024 * 1024)
-          throw problem(502, "官方版本信息超过读取上限。");
+          throw releaseProblem("官方版本信息超过读取上限。");
         chunks.push(Buffer.from(chunk));
       }
       const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       if (value.name !== definition.package)
-        throw problem(502, "官方包信息不匹配。");
+        throw releaseProblem("官方包信息不匹配。");
       const resolved = normalizeToolVersion(value.version);
       if (version !== "latest" && resolved !== version)
-        throw problem(502, "官方返回的版本与请求不一致。");
+        throw releaseProblem("官方返回的版本与请求不一致。");
       return resolved;
     } catch (error) {
       if (error.statusCode) throw error;
-      throw problem(
-        502,
+      throw releaseProblem(
         controller.signal.aborted
           ? "检查版本超时，请重试；也可以输入明确版本号。"
           : "无法连接官方版本服务，请检查网络后重试。",
@@ -165,7 +172,7 @@ export class ToolReleases {
     this.definition(provider);
     if (requested.trim() === "latest") {
       const release = await this.check(provider, { force: true });
-      if (release.status !== "ready") throw problem(502, release.error);
+      if (release.status !== "ready") throw releaseProblem(release.error);
       return release.latestVersion;
     }
     const version = normalizeToolVersion(requested);

@@ -120,7 +120,7 @@ export class Tasks {
       if (
         kind === "tools-update" &&
         (await this.db.one(
-          "SELECT id FROM tasks WHERE kind='tools-update' AND state IN ('queued','running') LIMIT 1",
+          "SELECT id FROM tasks WHERE kind='tools-update' AND state IN ('queued','running','cancelling','publishing','publish_failed') LIMIT 1",
         ))
       )
         throw problem(409, "Another tool upgrade is running");

@@ -115,7 +115,7 @@ export function toolManagementOperations({
           "本地模式使用电脑上的 CLI，请通过其官方安装方式更新。",
         );
       const active = await db.one(
-        "SELECT id FROM tasks WHERE kind='tools-update' AND state IN ('queued','running') LIMIT 1",
+        "SELECT id FROM tasks WHERE kind='tools-update' AND state IN ('queued','running','cancelling','publishing','publish_failed') LIMIT 1",
       );
       if (active)
         throw problem(409, "另一项工具更新正在进行，请等待完成后再试。");

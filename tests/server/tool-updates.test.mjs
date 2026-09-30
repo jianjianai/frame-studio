@@ -11,6 +11,9 @@ import {
 } from "../../server/tool-releases.mjs";
 import { toolManagementOperations } from "../../server/tool-management.mjs";
 import { createOperationRegistry } from "../../server/operation-registry.mjs";
+import { sqliteDatabase } from "../../server/sqlite.mjs";
+import { Tasks } from "../../server/tasks.mjs";
+import { operationError } from "../../src/contracts/errors.mjs";
 const metadata = (provider, version) =>
   new Response(
     JSON.stringify({
@@ -77,7 +80,10 @@ test("automatic checks cache and coalesce; explicit refresh bypasses cache; fail
   assert.equal(failed.status, "error");
   assert.equal(failed.latestVersion, "1.3.0");
   assert.doesNotMatch(failed.error, /fixture-network-secret/);
-  await assert.rejects(releases.resolve("codex"), /无法连接/);
+  await assert.rejects(releases.resolve("codex"), (error) => {
+    assert.match(operationError(error).error, /无法连接/);
+    return true;
+  });
   broken = false;
   clock += 15 * 60_000;
   assert.equal((await releases.check("codex")).status, "ready");
@@ -199,4 +205,23 @@ test("local mode checks releases but leaves installation to the computer's CLI m
     if (prior === undefined) delete process.env.FRAME_LOCAL_MODE;
     else process.env.FRAME_LOCAL_MODE = prior;
   }
+});
+
+
+test("cancelling and unfinished publication prevent concurrent tool installers", async (t) => {
+  const data = await fixture(t), db = await sqliteDatabase(path.join(data, "frame.sqlite"));
+  const tasks = new Tasks(db, data, {}, null), registry = createOperationRegistry();
+  let resolutions = 0;
+  t.after(async () => { await tasks.close(); await db.pool.end(); });
+  toolManagementOperations({ add: registry.add, db, data, tasks,
+    releases: { resolve: async () => { resolutions++; return "1.2.3"; } },
+  });
+  const existing = await tasks.create({ kind: "tools-update", input: { provider: "claude", version: "1.2.3" } });
+  for (const state of ["cancelling", "publishing", "publish_failed"]) {
+    await db.pool.query("UPDATE tasks SET state=$2 WHERE id=$1", [existing.id, state]);
+    await assert.rejects(registry.call("tools_update", { provider: "codex", version: "latest" }), { statusCode: 409 });
+    await assert.rejects(tasks.create({ kind: "tools-update", input: { provider: "codex", version: "1.2.3" } }), { statusCode: 409 });
+  }
+  assert.equal(resolutions, 0, "Busy updates are rejected before querying external metadata");
+  assert.equal((await db.one("SELECT count(*)::int AS n FROM tasks")).n, 1);
 });
