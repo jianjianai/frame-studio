@@ -1,4 +1,4 @@
-param([string]$CacheData, [string]$BundleDirectory)
+param([string]$CacheData, [string]$CacheStore, [string]$BundleDirectory)
 $ErrorActionPreference='Stop'
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $version=(Get-Content -Raw (Join-Path $repo 'package.json') | ConvertFrom-Json).version
@@ -18,6 +18,7 @@ $reservation=$null
 New-Item -ItemType Directory -Force -Path $fixture,$data,$screens | Out-Null
 try {
   if($CacheData -and -not(Test-Path (Join-Path $data 'runtimes'))){New-Item -ItemType Junction -Path (Join-Path $data 'runtimes') -Target (Join-Path ([IO.Path]::GetFullPath($CacheData)) 'runtimes') | Out-Null}
+  if($CacheStore){New-Item -ItemType Junction -Path (Join-Path $data 'pnpm-store') -Target ([IO.Path]::GetFullPath($CacheStore)) | Out-Null}
   $setup=Start-Process -FilePath "$bundle-Setup.exe" -ArgumentList @('/S',('/D='+$application)) -WindowStyle Hidden -Wait -PassThru
   if($setup.ExitCode -ne 0){throw 'Product installation failed; see Data/installer.log.'}
   $uninstaller=Join-Path $fixture 'uninstall-source.exe'

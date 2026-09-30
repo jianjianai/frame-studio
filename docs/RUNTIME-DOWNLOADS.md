@@ -4,6 +4,8 @@ Windows Setup.exe 只嵌入原生控制中心、安装向导、程序源码、�
 
 工具组件包含 Node、Git、FFmpeg、pnpm，语音运行环境包含 Python 与语音依赖。构建时只发布不存在的版本化组件，已有组件不可覆盖。程序包中的 `desktop/runtime-manifest.json` 固定各组件的下载地址和摘要。
 
+GitHub 账号的浏览器授权需要 GitHub CLI。优先使用电脑上的可用 `gh.exe`，缺失时独立下载固定版本的官方 Windows ZIP 并验证 SHA-256，保存在数据目录的 runtimes 中。它与已有工具组件分别缓存，补齐 GitHub 授权工具不重下 Node、Git、FFmpeg 或 Python。
+
 Node 依赖由客户端 pnpm 按 `pnpm-lock.yaml` 执行 `install --frozen-lockfile --prefer-offline`，不发布或下载 node_modules 压缩包。包缓存保存在数据目录的 `pnpm-store`，安装目录根据锁文件、依赖声明、安装配置及 Node/pnpm 版本生成标识。仅修改程序代码或程序版本时直接复用安装目录；依赖变化时在新目录安装，通过共享 store 复用已有包，只下载新增或变化的包。安装失败不写完成标记，重试时交给 pnpm 修复；旧版安装目录保留。
 
 客户端需要完整的运行与开发依赖来编译作品、检查源码和导出。pnpm 使用 hoisted 布局，使多个任务通过目录联接共享同一份依赖。依赖安装遵循锁文件完整性校验和工作区已有的构建脚本许可，缓存目录与程序目录独立。安装向导会实际运行工具版本检查与 Python 导入检查；损坏组件重新下载安装，正常组件复用。不自动安装 Codex/Claude CLI，也不要求用户预装 Node、Python、Git、FFmpeg 或 pnpm。

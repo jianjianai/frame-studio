@@ -12,6 +12,22 @@ export async function startLocalSpeech(data, { port = 0, timeoutMs = 90000, sign
   const python = process.env.FRAME_SPEECH_PYTHON || path.join(root, "python", "python.exe");
   if (!fs.existsSync(python)) throw Error("语音运行环境尚未安装，请从托盘退出后重新启动以重试下载");
   const drives = [];
+  const receipt = path.join(data, "speech-drives.json");
+  const driveTarget = (drive) => execFileSync(path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "desktop", "speech-drives.ps1"), "-Drive", drive], { encoding: "utf8", windowsHide: true }).trim();
+  const release = (entry) => {
+    if (!/^[F-Z]:$/.test(entry.drive) || !path.isAbsolute(entry.directory)) return;
+    if (driveTarget(entry.drive).toLowerCase() !== entry.directory.replace(/[\\/]+$/, "").toLowerCase()) return;
+    execFileSync("subst.exe", [entry.drive, "/D"], { windowsHide: true, stdio: "ignore" });
+  };
+  if (process.platform === "win32" && fs.existsSync(receipt)) {
+    const previous = JSON.parse(fs.readFileSync(receipt, "utf8"));
+    let alive = true;
+    try { process.kill(previous.pid, 0); } catch (error) { if (error.code === "ESRCH") alive = false; }
+    if (!alive) {
+      for (const entry of previous.drives || []) release(entry);
+      fs.rmSync(receipt, { force: true });
+    } else throw Error("已有语音服务正在运行，请从 Windows 控制中心重启后再试。");
+  }
   const asciiPath = (directory) => {
     if (process.platform !== "win32" || /^[\x00-\x7f]*$/.test(directory)) return directory;
     for (let code = 90; code >= 70; code--) {
@@ -20,18 +36,22 @@ export async function startLocalSpeech(data, { port = 0, timeoutMs = 90000, sign
       try {
         execFileSync("subst.exe", [drive, directory], { windowsHide: true, stdio: "ignore" });
         if (!fs.existsSync(drive + "\\")) continue;
-        drives.push(drive);
-        return drive + "\\";
-      } catch { /* Another process may have claimed this drive. */ }
+      } catch { /* Another process may have claimed this drive. */ continue; }
+      drives.push({ drive, directory: path.resolve(directory) });
+      const temporary = receipt + ".tmp";
+      fs.writeFileSync(temporary, JSON.stringify({ pid: process.pid, drives }), { mode: 0o600 });
+      fs.renameSync(temporary, receipt);
+      return drive + "\\";
     }
     throw Error("无法为语音模型分配临时盘符，请释放一个 F: 到 Z: 的盘符后重试");
   };
   const releaseDrives = () => {
-    for (const drive of drives.reverse()) {
-      try { execFileSync("subst.exe", [drive, "/D"], { windowsHide: true, stdio: "ignore" }); }
+    for (const entry of drives.reverse()) {
+      try { release(entry); }
       catch { /* Do not mask the original shutdown failure. */ }
     }
     drives.length = 0;
+    if (process.platform === "win32") fs.rmSync(receipt, { force: true });
   };
   let mappedRoot, mappedData;
   try {

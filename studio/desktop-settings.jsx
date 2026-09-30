@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Monitor, RefreshCw, Terminal, ExternalLink, ArrowUpRight } from "lucide-react";
+import { Monitor, RefreshCw, Terminal, ExternalLink } from "lucide-react";
 import { request, useQuery, Button, ErrorNote, Loading } from "./ui";
 import { ProviderSettings } from "./model-settings";
 import "./desktop.css";
@@ -35,8 +35,4 @@ export function LocalAiSettings({ notify }) {
     <section className="desktop-card"><h3>选择创作模型</h3><p>登录成功后即可在作品中选择助手。模型目录与默认模型可按你的 CLI 账号调整。</p><Button onClick={() => setAdvanced(!advanced)}>{advanced ? "收起模型设置" : "管理模型与默认选择"}</Button></section>
     {advanced && <ProviderSettings notify={notify} localMode />}
   </section>;
-}
-
-export function LocalWelcome() {
-  return <aside className="desktop-welcome"><div className="desktop-welcome-art" aria-hidden="true"><div /><div /><div /></div><div><span className="desktop-eyebrow">FRAME / WINDOWS</span><h2>从一个想法开始</h2><p>给作品起个名字，就可以开始创作。作品会自动保存到「我的作品」。</p><div className="desktop-welcome-links"><a href="#/settings/ai">连接本机 AI <ArrowUpRight size={14} /></a><a href="#/settings/speech">选择配音与模型 <ArrowUpRight size={14} /></a></div></div></aside>;
 }

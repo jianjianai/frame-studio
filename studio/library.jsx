@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { LocalWelcome } from "./desktop-settings";
 import {
   Plus,
   FolderGit2,
@@ -312,7 +311,6 @@ export function WorkLibrary({ repo, recent = false, notify, localMode = false })
           </Button>
         </div>
       </header>
-      {localMode && !repo && !deleted && !filtered && !query.loading && !query.data?.total && <LocalWelcome />}
       <div className="library-navigation">
         <div className="library-scopes" role="group" aria-label="作品范围">
           {[

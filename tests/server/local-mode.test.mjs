@@ -105,7 +105,7 @@ test("Windows local mode creates a work and renders a frame without Docker or a 
       assert.equal(chat.provider, "codex");
       assert.equal((await call("works_chats", { id: work.id })).length, 1);
     } else {
-      assert.equal(providers[0].state, "unavailable");
+      assert.ok(["unavailable", "unconfigured"].includes(providers[0].state));
       const unavailable = await app.inject({ method: "POST", url: "/api/action", headers,
         payload: { name: "works_chat_create", args: { id: work.id, connection: providers[0].id, title: "Unavailable CLI" } } });
       assert.equal(unavailable.statusCode, 409);

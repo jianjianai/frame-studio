@@ -13,9 +13,9 @@ export function localToolBinary(tool, { env = process.env, platform = process.pl
 }
 
 /** Execute known npm CLIs through Node, preserving arguments without a command shell. */
-export function processLaunch(bin, args) {
-  if (process.platform !== "win32") return { bin, args };
-  if (["codex", "claude"].includes(bin)) bin = localToolBinary(bin);
+export function processLaunch(bin, args, { platform = process.platform, env = process.env } = {}) {
+  if (platform !== "win32") return { bin, args };
+  if (["codex", "claude"].includes(bin)) bin = localToolBinary(bin, { platform, env });
   if (!/\.cmd$/i.test(bin)) return { bin, args };
   const tool = path.basename(bin, ".cmd").toLowerCase();
   const packageName = { codex: "@openai/codex", claude: "@anthropic-ai/claude-code" }[tool];

@@ -5,6 +5,7 @@ $version = (Get-Content -Raw (Join-Path $repo 'package.json') | ConvertFrom-Json
 $fixture = Join-Path $repo '.cache\installer-smoke'
 $application = Join-Path $fixture 'Application'
 if (-not $DataRoot) { $DataRoot = Join-Path $fixture 'Data' }
+$DataRoot = [IO.Path]::GetFullPath($DataRoot)
 $bundle = if ($BundleDirectory) { [IO.Path]::GetFullPath($BundleDirectory) } else { Join-Path $repo ".cache\release\FrameStudio-v$version-win-x64" }
 $installer = "$bundle-Setup.exe"
 $registry = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudioTest'

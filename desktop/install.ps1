@@ -73,7 +73,11 @@ if (-not ($browsers | Where-Object { Test-Path -LiteralPath $_ } | Select-Object
   } finally { $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath }
 }
 Write-FrameProgress 'browser' 'done' '预览浏览器已就绪'
+$github=& (Join-Path $PSScriptRoot 'github-cli.ps1') -DataRoot $DataRoot -Node (Join-Path $runtime.tools 'node.exe')
 Write-Output '运行环境检查通过，准备安装应用'
 & (Join-Path $PSScriptRoot 'bootstrap.ps1') -AppRoot $SourceRoot -DataRoot $DataRoot -Selection (Join-Path $DataRoot 'runtime-selection.json') -LinkRoot $InstallRoot
+$selected=Get-Content -Raw (Join-Path $DataRoot 'runtime-selection.json') | ConvertFrom-Json
+$selected | Add-Member -NotePropertyName github -NotePropertyValue ([string]$github) -Force
+$selected | ConvertTo-Json | Set-Content (Join-Path $DataRoot 'runtime-selection.json') -Encoding utf8
 
 } finally { Stop-Transcript | Out-Null }
