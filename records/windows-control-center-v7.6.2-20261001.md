@@ -15,3 +15,13 @@ Unicode Shell 快捷方式回归通过。修复后的真实 Setup 安装、已�
 准备推送时发现远端 main 新增并行审查后的性能与 TTS 功能（`f9a1209`），需合入后重新执行最终 Windows 与服务端验收。后续补充正式 CI、Release 资产及镜像摘要。本次不切换生产服务，不执行备份。
 
 合入后 SQLite、语音适配、CLI 与桌面协议 7 项通过；语音界面实际浏览器 2 组通过。新增发布工作流的 Windows 语音界面与 SQLite 检查。新版边界测试在本机首次因文件符号链接权限失败，保持断言并在 Windows 无权限时使用实际目录联接；相关 IO 和缓存 14 项重新通过，0 跳过。语音测试夹具的 Windows Vite 冷启动曾超时，改为明确优化实际使用的依赖、隔离每次缓存并清理本次目录后通过，保留原导航和产品断言。
+
+### 合入后的最终本机验收
+
+`fcb1cb9d6fa89b19c5b9fe989a037abf969eb5bb` 候选真实 Setup 为 1,747,877 字节，SHA-256 `4b360b6b3766c89fccbc73791139254f2e861c2f35f3efcf0f836efd109f63f6`。安装、已安装工作台、失败修复、缓存复用、注册和中文快捷方式、保留数据卸载全部通过；浏览器创建、预览、Frame 与 Remotion 截图和 MP4、未保存输入与运行中任务保护、服务异常恢复、关闭控制中心后保持运行、端口冲突和重复启动全部通过。真实更新成功切换、旧应用保留、失败恢复、更新后启动及依赖复用通过。对应 `.cache/windows-v762-merged-{build,product,installer,update}.log`，截图在 `.cache/desktop-product-smoke-3876ba2f/screens/`，更新证据在 `.cache/desktop-update-smoke-411e9d1d/`。
+
+全量本机检查中 93 项单元测试、115 项 MCP 检查和两套前端构建通过，MCP 有 1 项既有可选 SoundFont 跳过。`pnpm verify` 在服务端阶段因本机未配置隔离 PostgreSQL 的 `FRAME_TEST_DATABASE_URL` 返回非零，完整服务端门禁由 GitHub CI 执行，不把本机结果记为全量通过。
+
+发布前远端已合入该候选并推送不可变标签 `v7.6.2`，实际源码为 `e7fcc28e1029889f412b6fe9194977dcdaef34f9`。相对本机候选仅补充部署示例版本和安装测试对中文安装目录、实际 Shell 快捷方式目标及参数的断言，没有应用源码差异。已快进同步 main，沿用 [Release 工作流 36751995846](https://github.com/jianjianai/frame-studio/actions/runs/36751995846)，不重建或移动该标签。
+
+该次 CI 完整服务端门禁通过，英文 Windows 的依赖、真实安装和 Unicode 目标及参数检查、语音界面和 SQLite 检查通过。浏览器创建、预览、Frame 与 Remotion 导出通过后，重启检查读取的进程标识仍为 `6200`，断言失败。发布与镜像作业因此跳过，未生成正式 Release。原证据上传规则没有包含隐藏目录下通配匹配的文件，补充精确范围的隐藏文件上传和失败日志输出，重新执行同一不可变源码以定位重启原因；不把该结果记为发布成功。
