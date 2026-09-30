@@ -11,6 +11,7 @@ import { GitHub } from "./github.mjs";
 import { Retention } from "./retention.mjs";
 import { seedSpeech } from "./speech.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
+import { LivePreviewSessions } from "./live-preview.mjs";
 
 /** Shared domain assembly, without HTTP listeners or a privileged scheduler. */
 export async function createServices({
@@ -36,6 +37,7 @@ export async function createServices({
   const connections = new Connections(db, data, secrets),
     github = new GitHub(db, secrets, repos, data),
     retention = new Retention(db, data);
+  const livePreview = new LivePreviewSessions({ db, data, repos });
   connections.github = github;
   tasks.connections = connections;
   const actions = operations({
@@ -48,6 +50,7 @@ export async function createServices({
     connections,
     github,
     retention,
+    livePreview,
   });
   repos.onChange = async (id, project = null) => {
     if (!project) await assets.indexRepository(id);
@@ -77,7 +80,9 @@ export async function createServices({
     github,
     retention,
     actions,
+    livePreview,
     async close() {
+      await livePreview.close();
       await tasks.close();
       await retention.close();
       await assets.close();

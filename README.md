@@ -1,5 +1,7 @@
 # FRAME · 作品管理与 AI 创作平台
 
+V8 创作页改为增量实时预览，保存源码后在同一播放器更新画面和声音，不再每次构建整片音频。内容哈希缓存、按质量媒体代理和共同缓冲覆盖高延迟与慢网络；正式导出使用冻结版本和原始素材。行为与升级说明见 [V8 实时预览](docs/V8-LIVE-PREVIEW.md)。
+
 V7 增加多轨音频文档与编辑器、Web Audio/Tone.js/PCM Worker/SoundFont 混用、轨道/总线/主输出处理链、波形与格式转换、独立音频及分轨导出。使用方法见 [V7 音频](docs/AUDIO-V7.md)。
 
 V6 增加统一混合合成、视频/图片/图像序列、Three/Pixi/Canvas/Babylon/Lottie 接入和异步目标帧渲染。新项目默认空白，不预选 2D/3D 引擎；GUI、CLI、MCP 共用 visual.json 及版本冲突保护。接口见 [混合合成](docs/COMPOSITION.md)。旧场景/音频协议 1 继续兼容，[V5](docs/V5-UPGRADE.md) 的 AI 直接执行、版本化审片、任务诊断和撤销能力继续复用。
@@ -23,13 +25,13 @@ Windows 提供 Setup.exe 安装向导，安装时自动检查并下载工具与 
 
 作品在新标签页打开，无全局侧栏。AI 对话与时间轴均可显隐，播放器始终保留进度条；左右分栏及视频/时间轴高度可拖动，细分割线仅在交互时显示。素材、版本比较、统一导出和资料在弹窗操作。服务器设置支持多个模型提供商、官方账号登录、多 GitHub 账号、CLI 独立升级及语音模型。服务器管理员密码仅通过 `FRAME_ADMIN_PASSWORD` 配置。本地模式直接使用电脑上已安装并登录的 Codex 和 Claude CLI，使用 SQLite，无工作台登录密码。
 
-AI 消息提交后在隔离工作目录执行，关闭浏览器不停止任务。服务器使用独立容器，Windows 本地模式使用原生子进程。通过结构、范围、项目测试和预览构建验证后才应用修改，自动产生 Git 版本并刷新播放器。导出文件有保留期限，与素材库分离；可发布到对应作品仓库 Releases。
+AI 消息提交后在隔离工作目录执行，关闭浏览器不停止任务。服务器使用独立容器，Windows 本地模式使用原生子进程。通过结构、范围、项目测试和类型验证后才应用修改，自动产生 Git 版本并同步实时播放器。显式不可变预览与正式导出仍运行对应构建。导出文件有保留期限，与素材库分离；可发布到对应作品仓库 Releases。
 
 外部 AI 使用带 Bearer 令牌的 `/mcp`，从 `frame_help` 发现操作；CLI 使用 `FRAME_URL`、`FRAME_TOKEN` 和 `pnpm platform help`。作品操作统一使用作品 UUID，支持参数发现、局部补丁、批量事务、任务等待、上传续传和产物下载，详见 [平台 MCP / CLI 工作流](docs/PLATFORM-TOOLS.md)。隔离任务内使用 `pnpm film` 和 `node scripts/work-tool.mjs`。
 
 远程接手先用 `frame_workspace_context`，查询参数用 `frame_tool_describe` / `pnpm --silent platform describe`。分页搜索、精确补丁、任务等待、产物下载与断点上传见 [远程 MCP 与 CLI 工具指南](docs/PLATFORM-TOOLS.md)。
 
-支持浏览器的 AI 可通过 `works_browser` 获取[专用审片页](docs/AI-BROWSER.md)，使用控制台 `FRAME_AI` 在本机浏览器查看帧、播放片段、截图和导出，减少服务器计算。
+支持浏览器的 AI 可通过 `works_browser` 默认获取实时[专用审片页](docs/AI-BROWSER.md)，使用控制台 `FRAME_AI` 在本机浏览器查看帧、播放片段、截图和导出，减少服务器计算。
 
 ## 开发与验证
 

@@ -1,2 +1,2 @@
 /** Product release version. Engine protocol and preview format have separate compatibility lifetimes. */
-export const PLATFORM_VERSION = "7.6.3";
+export const PLATFORM_VERSION = "8.0.0";

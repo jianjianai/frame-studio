@@ -1,100 +1,102 @@
 import { useEffect, useRef, useState } from "react";
-import { request } from "./ui";
+import { api, request } from "./ui";
+import { createPreviewSessionController } from "./live-preview-session.mjs";
 export {
   decodePlayerMessage,
   positionReference,
 } from "../src/contracts/player-bridge.mjs";
 
-/** One owner for the immutable build, capability renewal and reference identity currently on screen. */
-export function usePreviewSession({ workId, latest, blocked, notify }) {
-  const [preview, setPreview] = useState(null);
-  const [stage, setStage] = useState("正在获取作品…");
-  const [error, setError] = useState("");
-  const [retryGeneration, retryRequest] = useState(0);
+/** One owner for preview attachment; live source revisions update within the persistent player. */
+export function usePreviewSession({
+  workId,
+  latest,
+  blocked,
+  notify,
+  mode = "immutable",
+  taskId,
+}) {
+  const [state, setState] = useState({
+    preview: null,
+    stage: "正在获取作品…",
+    error: "",
+    status: "starting",
+  });
   const [playerGeneration, restartPlayer] = useState(0);
-  const requestedRetry = useRef(0);
-  const generation = useRef(0);
-  const current = useRef(null);
-  current.current = preview;
+  const controller = useRef(null),
+    inputs = useRef(null);
+  inputs.current = { workId, latest, blocked, mode, taskId };
   useEffect(() => {
-    generation.current++;
-    setPreview(null);
-    setStage("正在获取作品…");
-    setError("");
-  }, [workId]);
+    const owner = createPreviewSessionController({
+      loadLive: (args) => api("works_live_preview", args),
+      loadStable: (task) =>
+        request(`/api/tasks/${task.id}/preview`, { method: "POST" }),
+      publish: setState,
+    });
+    controller.current = owner;
+    owner.update(inputs.current);
+    const reconnect = () => {
+      const value = owner.getState();
+      if (
+        inputs.current.mode === "live" &&
+        (value.status === "reconnecting" ||
+          value.preview?.fallback ||
+          Date.parse(value.preview?.expires || "") - Date.now() < 120000)
+      )
+        owner.retry();
+    };
+    const connected = (event) => {
+      if (event.detail === "connected") reconnect();
+    };
+    const visible = () => {
+      if (!document.hidden) reconnect();
+    };
+    document.addEventListener("visibilitychange", visible);
+    window.addEventListener("online", reconnect);
+    window.addEventListener("focus", reconnect);
+    window.addEventListener("frame-connection", connected);
+    return () => {
+      owner.dispose();
+      if (controller.current === owner) controller.current = null;
+      document.removeEventListener("visibilitychange", visible);
+      window.removeEventListener("online", reconnect);
+      window.removeEventListener("focus", reconnect);
+      window.removeEventListener("frame-connection", connected);
+    };
+  }, []);
   useEffect(() => {
-    const forced = requestedRetry.current !== retryGeneration;
-    if (!latest || blocked || (!forced && current.current?.id === latest.id))
-      return;
-    requestedRetry.current = retryGeneration;
-    const version = ++generation.current;
-    const started = performance.now();
-    let cancelled = false;
-    request(`/api/tasks/${latest.id}/preview`, { method: "POST" })
-      .then((link) => {
-        if (cancelled || generation.current !== version) return;
-        setPreview({
-          ...link,
-          id: latest.id,
-          sourceCommit: latest.source_commit || null,
-          fingerprint: latest.fingerprint || null,
-          previewVersion: latest.result?.previewVersion || 0,
-          requestedAt: started,
-        });
-        if (
-          current.current?.id !== latest.id ||
-          current.current?.url !== link.url
-        )
-          setStage("正在下载播放器…");
-        setError("");
-      })
-      .catch((error) => {
-        if (!cancelled && generation.current === version) {
-          setError(error.message);
-          notify(error.message, "error");
+    controller.current?.update(inputs.current);
+  }, [workId, latest?.id, blocked, mode, taskId]);
+  const { preview, stage, error, status } = state;
+  const reference =
+    preview?.live && /^[a-f0-9]{64}$/.test(preview.observedRevision || "")
+      ? {
+          liveSessionId: preview.sessionId,
+          sourceRevision: preview.observedRevision,
+          ...(preview.source === "task" && preview.requestedTask
+            ? { draftTask: preview.requestedTask }
+            : {}),
         }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [workId, latest?.id, blocked, retryGeneration]);
-  useEffect(() => {
-    if (!preview || blocked) return;
-    const id = preview.id;
-    let cancelled = false;
-    const refresh = () =>
-      request(`/api/tasks/${id}/preview`, { method: "POST" })
-        .then((link) => {
-          if (!cancelled)
-            setPreview((previous) =>
-              previous?.id === id ? { ...previous, ...link } : previous,
-            );
-        })
-        .catch((error) => {
-          if (!cancelled) setError(error.message);
-        });
-    const timer = setInterval(refresh, 20 * 60000);
-    return () => {
-      cancelled = true;
-      clearInterval(timer);
-    };
-  }, [preview?.id, blocked]);
-  const reference = preview?.sourceCommit
-    ? { previewTask: preview.id, sourceCommit: preview.sourceCommit }
-    : {};
+      : preview?.sourceCommit
+        ? { previewTask: preview.id, sourceCommit: preview.sourceCommit }
+        : {};
   return {
     preview,
     stage,
-    setStage,
     error,
+    status,
     reference,
     playerGeneration,
+    setStage(value) {
+      controller.current?.setStage(value);
+    },
+    receiveLive(message) {
+      controller.current?.receive(message);
+    },
     retry() {
-      setError("");
-      retryRequest((value) => value + 1);
+      controller.current?.retry();
     },
     restart() {
-      setStage("正在重新准备播放器…");
+      setState((previous) => ({ ...previous, stage: "正在重新准备播放器…" }));
       restartPlayer((value) => value + 1);
     },
   };

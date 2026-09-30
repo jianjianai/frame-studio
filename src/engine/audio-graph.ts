@@ -5,7 +5,16 @@ import {
   type GeneratedAudioModule,
 } from "./types";
 import { preparePreviewAudio } from "./preview-audio";
-import { PreviewBuffering, LIVE_BUFFER_SECONDS, LIVE_LOOKAHEAD_SECONDS } from "./media-buffering";
+import {
+  audioTrackSourceSignature,
+  smoothAudioParam,
+  waitAudioReady,
+} from "./live-audio-update";
+import {
+  PreviewBuffering,
+  LIVE_BUFFER_SECONDS,
+  LIVE_LOOKAHEAD_SECONDS,
+} from "./media-buffering";
 import { audioSegments } from "./audio-document.mjs";
 import { AudioSourcePool } from "./audio-source-pool";
 import {
@@ -23,6 +32,56 @@ export interface PreparedAudio {
   files?: AudioSourcePool;
   document?: AudioMixDocument;
   modules?: Map<string, GeneratedAudioModule>;
+  sourceKeys?: Map<string, string>;
+  project?: AnimationProject;
+  moduleRefs?: boolean;
+  disposed?: boolean;
+  live?: boolean;
+}
+type ModuleSession = { users: number; ready: Promise<void>; settled: boolean };
+const moduleSessions = new WeakMap<
+  BaseAudioContext,
+  Map<GeneratedAudioModule, ModuleSession>
+>();
+function retainGenerator(mod: GeneratedAudioModule, context: BaseAudioContext) {
+  let sessions = moduleSessions.get(context);
+  if (!sessions) {
+    sessions = new Map();
+    moduleSessions.set(context, sessions);
+  }
+  let session = sessions.get(mod);
+  if (!session) {
+    const owned: ModuleSession = {
+      users: 0,
+      settled: false,
+      ready: Promise.resolve().then(() => mod.prepareAudio?.(context)),
+    };
+    session = owned;
+    sessions.set(mod, owned);
+    void owned.ready
+      .finally(() => {
+        owned.settled = true;
+        if (owned.users === 0 && sessions!.get(mod) === owned) {
+          sessions!.delete(mod);
+          mod.disposeAudio?.(context);
+        }
+      })
+      .catch(() => {});
+  }
+  session.users++;
+  return session.ready;
+}
+function releaseGenerator(
+  mod: GeneratedAudioModule,
+  context: BaseAudioContext,
+) {
+  const sessions = moduleSessions.get(context),
+    session = sessions?.get(mod);
+  if (!session) return;
+  if (--session.users === 0 && session.settled) {
+    sessions!.delete(mod);
+    mod.disposeAudio?.(context);
+  }
 }
 function generator(prepared: PreparedAudio, track: AudioTrack) {
   if (track.kind !== "generated") throw Error("Not a generated track");
@@ -38,25 +97,43 @@ export async function prepareAudio(
   context: BaseAudioContext,
   signal?: AbortSignal,
   progressive = false,
+  previous?: PreparedAudio,
 ): Promise<PreparedAudio> {
-  if (progressive && !project.audioDocument) {
+  if (progressive && !project.audioDocument && !project.livePreview) {
     const preview = await preparePreviewAudio(project, context, signal);
     if (preview) return preview;
   }
   const tracks = projectAudioTracks(project),
     generated = tracks.some((t) => t.kind === "generated")
-      ? await project.loadAudio?.()
+      ? previous?.generated &&
+        project.previewAudioGeneratorRevision &&
+        project.previewAudioGeneratorRevision ===
+          previous.project?.previewAudioGeneratorRevision
+        ? previous.generated
+        : await project.loadAudio?.()
       : undefined;
   const prepared: PreparedAudio = {
     tracks,
     buffers: new Map(),
     generated,
-    progressive: progressive && !project.audioDocument,
-    files: new AudioSourcePool(),
+    progressive: progressive && !project.audioDocument && !project.livePreview,
+    files: previous?.files ?? new AudioSourcePool(),
+    sourceKeys: new Map(),
+    live: progressive && project.livePreview,
+    project,
     document: project.audioDocument as AudioMixDocument | undefined,
     modules: new Map(),
+    moduleRefs: true,
   };
   try {
+    prepared.files!.setActiveSources(
+      new Set(
+        tracks
+          .filter((t) => t.kind === "file")
+          .map((t) => (t.kind === "file" ? t.src : "")),
+      ).size,
+    );
+    adaptAudioSourceRenditions(prepared);
     for (const track of tracks)
       if (track.kind === "generated") {
         const { mod } = generator(prepared, track),
@@ -64,26 +141,50 @@ export async function prepareAudio(
         if (!prepared.modules!.has(key)) {
           prepared.modules!.set(key, mod);
           signal?.throwIfAborted();
-          await mod.prepareAudio?.(context);
+          await waitAudioReady(retainGenerator(mod, context), signal);
         }
       }
     signal?.throwIfAborted();
     return prepared;
   } catch (e) {
-    disposePreparedAudio(prepared, context);
+    disposePreparedAudio(prepared, context, previous);
     throw e;
   }
+}
+/** Rebuffering can lower compressed source bandwidth without changing the
+ * frozen original media used by export or invalidating unrelated PCM windows. */
+export function adaptAudioSourceRenditions(prepared: PreparedAudio) {
+  for (const track of prepared.tracks)
+    if (track.kind === "file") {
+      const source = prepared.project?.previewAudioSources?.[track.src];
+      prepared.sourceKeys?.set(
+        track.src,
+        prepared.files!.bind(
+          track.src,
+          prepared.live
+            ? source
+            : source?.originalUrl
+              ? { revision: source.revision, url: source.originalUrl }
+              : undefined,
+        ),
+      );
+    }
 }
 export function disposePreparedAudio(
   prepared: PreparedAudio,
   context: BaseAudioContext,
+  retain?: PreparedAudio,
 ) {
-  prepared.files?.dispose();
+  if (prepared.disposed) return;
+  prepared.disposed = true;
+  if (prepared.files !== retain?.files) prepared.files?.dispose();
   for (const mod of new Set(
     prepared.modules?.values() ??
       (prepared.generated ? [prepared.generated] : []),
   ))
-    mod.disposeAudio?.(context);
+    if (prepared.moduleRefs) releaseGenerator(mod, context);
+    else if (!retain?.modules || ![...retain.modules.values()].includes(mod))
+      mod.disposeAudio?.(context);
   prepared.buffers.clear();
 }
 export function trackSegment(
@@ -120,13 +221,35 @@ export async function prepareAudioSegment(
 ) {
   signal?.throwIfAborted();
   const offline = "startRendering" in context;
+  const began = performance.now();
+  const activeSources = new Set(
+    prepared.tracks
+      .filter(
+        (t) =>
+          t.kind === "file" &&
+          !(overrides.get(t.id) ?? t).muted &&
+          (overrides.get(t.id) ?? t).gain !== 0,
+      )
+      .map((t) => (t.kind === "file" ? t.src : "")),
+  ).size;
+  prepared.files?.setActiveSources(activeSources);
+  const bufferSeconds =
+    prepared.files?.bufferSeconds(rate, true) ?? LIVE_BUFFER_SECONDS;
   if (prepared.preview && !offline) {
-    await Promise.all(prepared.tracks.map(async track => {
-      const control = overrides.get(track.id) ?? track;
-      if (control.muted || control.gain === 0) return;
-      await prepared.generated?.prepareSegment?.({ trackId: track.id, context,
-        offset: from, duration: length, rate, signal });
-    }));
+    await Promise.all(
+      prepared.tracks.map(async (track) => {
+        const control = overrides.get(track.id) ?? track;
+        if (control.muted || control.gain === 0) return;
+        await prepared.generated?.prepareSegment?.({
+          trackId: track.id,
+          context,
+          offset: from,
+          duration: length,
+          rate,
+          signal,
+        });
+      }),
+    );
     return;
   }
   if (!offline && prepared.files && !prepared.progressive) {
@@ -140,7 +263,7 @@ export async function prepareAudioSegment(
         track,
         projectDuration,
         from,
-        Math.min(length, LIVE_BUFFER_SECONDS * rate),
+        Math.min(length, bufferSeconds * rate),
       )) {
         for (
           let i = Math.floor(segment.offset * 2);
@@ -157,43 +280,51 @@ export async function prepareAudioSegment(
     }
   }
   // Only the audible interval is decoded. Source pooling deduplicates repeated clips.
-  for (const track of prepared.tracks) {
-    const control = overrides.get(track.id) ?? track;
-    if (
-      control.muted ||
-      control.gain === 0 ||
-      (track.kind === "file" && prepared.progressive)
-    )
-      continue;
-    const countLength = offline ? length : Math.min(length, LIVE_BUFFER_SECONDS * rate);
-    for (const segment of audioSegments(
-      track,
-      projectDuration,
-      from,
-      countLength,
-    )) {
-      signal?.throwIfAborted();
-      if (track.kind === "file") {
-        if (offline) continue;
-        await prepared.files!.prepare(
-          track.src,
-          segment.offset,
-          segment.duration,
-          signal,
-        );
-      } else {
-        const { mod, id } = generator(prepared, track);
-        await mod.prepareSegment?.({
-          trackId: id,
-          context,
-          offset: segment.offset,
-          duration: segment.duration,
-          rate: rate * (track.playbackRate ?? 1),
-          signal,
-        });
+  await Promise.all(
+    prepared.tracks.map(async (track) => {
+      const control = overrides.get(track.id) ?? track;
+      if (
+        control.muted ||
+        control.gain === 0 ||
+        (track.kind === "file" && prepared.progressive)
+      )
+        return;
+      const countLength = offline
+        ? length
+        : Math.min(length, bufferSeconds * rate);
+      for (const segment of audioSegments(
+        track,
+        projectDuration,
+        from,
+        countLength,
+      )) {
+        signal?.throwIfAborted();
+        if (track.kind === "file") {
+          if (offline) continue;
+          await prepared.files!.prepare(
+            prepared.sourceKeys?.get(track.src) ?? track.src,
+            segment.offset,
+            segment.duration,
+            signal,
+          );
+        } else {
+          const { mod, id } = generator(prepared, track);
+          await mod.prepareSegment?.({
+            trackId: id,
+            context,
+            offset: segment.offset,
+            duration: segment.duration,
+            rate: rate * (track.playbackRate ?? 1),
+            signal,
+          });
+        }
       }
-    }
-  }
+    }),
+  );
+  if (!offline)
+    prepared.files?.buffering.observePreparation(
+      (performance.now() - began) / 1000,
+    );
 }
 export function scheduleAudio(
   prepared: PreparedAudio,
@@ -207,11 +338,8 @@ export function scheduleAudio(
   overrides = new Map<string, { gain: number; muted: boolean }>(),
   onError?: (error: Error) => void,
 ) {
-  const pending: Promise<void>[] = [],
-    cleanups: (() => void)[] = [],
-    gains = new Map<string, GainNode>();
   const offline = "startRendering" in context;
-  const mix = buildMixGraph(
+  let mix = buildMixGraph(
     context,
     destination,
     prepared.document,
@@ -219,13 +347,34 @@ export function scheduleAudio(
     when,
     rate,
   );
-  cleanups.push(() => mix.dispose());
-  const dispose = () => {
-    for (const f of cleanups.splice(0).reverse()) f();
+  type Instance = {
+    track: AudioTrack;
+    owner: PreparedAudio;
+    gain: GainNode;
+    envelope: GainNode;
+    pan: StereoPannerNode;
+    ready: Promise<unknown>;
+    dispose(): void;
   };
-  try {
-    for (const track of prepared.tracks) {
-      if (track.kind === "file" && prepared.progressive) continue;
+  const instances = new Map<string, Instance>();
+  let closed = false;
+  const retired = new Map<
+    ReturnType<typeof buildMixGraph>,
+    ReturnType<typeof setTimeout>
+  >();
+  function createTrack(
+    track: AudioTrack,
+    owner: PreparedAudio,
+    from: number,
+    length: number,
+    when: number,
+    overrides: Map<string, { gain: number; muted: boolean }>,
+    destinationMix = mix,
+  ): Instance | undefined {
+    if (track.kind === "file" && owner.progressive) return;
+    const cleanups: (() => void)[] = [],
+      pending: Promise<void>[] = [];
+    try {
       const control = overrides.get(track.id) ?? {
         gain: track.gain ?? 1,
         muted: track.muted ?? false,
@@ -235,16 +384,16 @@ export function scheduleAudio(
         control.gain === 0 ||
         !trackSegment(track, projectDuration, from, length)
       )
-        continue;
+        return undefined;
       const gain = context.createGain(),
         envelope = context.createGain(),
         pan = context.createStereoPanner();
-      gains.set(track.id, gain);
+
       gain.gain.value = control.gain;
       pan.pan.value = track.pan ?? 0;
       gain.connect(envelope);
       envelope.connect(pan);
-      pan.connect(mix.destination(track));
+      pan.connect(destinationMix.destination(track));
       scheduleClipEnvelope(envelope.gain, track, from, length, when, rate);
       cleanups.push(() => {
         gain.disconnect();
@@ -278,9 +427,12 @@ export function scheduleAudio(
         };
         let voice: { dispose(): void; ready?: Promise<void> };
         if (track.kind === "file")
-          voice = prepared.files!.play(track.src, options);
+          voice = owner.files!.play(
+            owner.sourceKeys?.get(track.src) ?? track.src,
+            options,
+          );
         else {
-          const { mod, id } = generator(prepared, track);
+          const { mod, id } = generator(owner, track);
           voice = mod.createAudio({ ...options, trackId: id });
         }
         voices.add(voice);
@@ -295,7 +447,8 @@ export function scheduleAudio(
           const finish = () => {
             timeouts.delete(timer);
             if (disposed) return;
-            const remaining = at + segment.duration / options.rate - context.currentTime;
+            const remaining =
+              at + segment.duration / options.rate - context.currentTime;
             if (remaining > 0) {
               timer = setTimeout(finish, remaining * 1000 + 100);
               timeouts.add(timer);
@@ -304,8 +457,14 @@ export function scheduleAudio(
               voice.dispose();
             }
           };
-          let timer = setTimeout(finish, Math.max(0,
-            (at + segment.duration / options.rate - context.currentTime) * 1000) + 100);
+          let timer = setTimeout(
+            finish,
+            Math.max(
+              0,
+              (at + segment.duration / options.rate - context.currentTime) *
+                1000,
+            ) + 100,
+          );
           timeouts.add(timer);
         }
       };
@@ -315,7 +474,15 @@ export function scheduleAudio(
       const limit =
         offline || selfScheduled
           ? trackEnd
-          : Math.min(trackEnd, from + LIVE_BUFFER_SECONDS * rate);
+          : Math.min(
+              trackEnd,
+              from +
+                Math.min(
+                  LIVE_BUFFER_SECONDS,
+                  owner.files?.bufferSeconds(rate, true) ?? LIVE_BUFFER_SECONDS,
+                ) *
+                  rate,
+            );
       for (const s of audioSegments(track, projectDuration, from, limit - from))
         schedule(s, from);
       cursor = limit;
@@ -329,7 +496,10 @@ export function scheduleAudio(
         try {
           const until = Math.min(
             trackEnd,
-            from + Math.max(0, context.currentTime - when) * rate + LIVE_LOOKAHEAD_SECONDS * rate,
+            from +
+              Math.max(0, context.currentTime - when) * rate +
+              (owner.files?.bufferSeconds(rate) ?? LIVE_LOOKAHEAD_SECONDS) *
+                rate,
           );
           if (until <= cursor + 1e-7) return;
           // Fixed scheduling windows preserve loops while keeping node counts bounded.
@@ -342,14 +512,14 @@ export function scheduleAudio(
             stop - cursor,
           )) {
             if (track.kind === "file")
-              await prepared.files!.prepare(
-                track.src,
+              await owner.files!.prepare(
+                owner.sourceKeys?.get(track.src) ?? track.src,
                 s.offset,
                 s.duration,
                 abort.signal,
               );
             else {
-              const { mod, id } = generator(prepared, track);
+              const { mod, id } = generator(owner, track);
               await mod.prepareSegment?.({
                 trackId: id,
                 context,
@@ -384,24 +554,229 @@ export function scheduleAudio(
         for (const v of voices) v.dispose();
         voices.clear();
       });
+
+      return {
+        track,
+        owner,
+        gain,
+        envelope,
+        pan,
+        ready: Promise.all(pending),
+        dispose() {
+          for (const f of cleanups.splice(0).reverse()) f();
+        },
+      };
+    } catch (error) {
+      for (const f of cleanups.splice(0).reverse()) f();
+      throw error;
+    }
+  }
+  const dispose = () => {
+    if (closed) return;
+    closed = true;
+    for (const voice of instances.values()) voice.dispose();
+    instances.clear();
+    mix.dispose();
+    for (const [old, timer] of retired) {
+      clearTimeout(timer);
+      old.dispose();
+    }
+    retired.clear();
+  };
+  try {
+    for (const track of prepared.tracks) {
+      const instance = createTrack(
+        track,
+        prepared,
+        from,
+        length,
+        when,
+        overrides,
+      );
+      if (instance) instances.set(track.id, instance);
     }
     return {
       dispose,
-      ready: Promise.all(pending),
+      ready: Promise.all([...instances.values()].map((v) => v.ready)),
       setTrack(id: string, control: { gain: number; muted: boolean }) {
-        const g = gains.get(id);
-        if (g)
-          g.gain.setTargetAtTime(
+        const voice = instances.get(id);
+        if (voice)
+          smoothAudioParam(
+            voice.gain.gain,
             control.muted ? 0 : control.gain,
-            context.currentTime,
-            0.012,
+            context,
           );
-        return !!g;
+        return !!voice;
+      },
+      async update(
+        next: PreparedAudio,
+        at: number,
+        nextDuration: number,
+        anchor: number,
+        controls: Map<string, { gain: number; muted: boolean }>,
+        signal?: AbortSignal,
+        onCommit?: () => void,
+        onAccepted?: () => void,
+      ) {
+        if (closed) throw Error("Audio graph disposed");
+        signal?.throwIfAborted();
+        const replacements = new Map<string, Instance>();
+        const retained = new Set<string>();
+        const oldMix = mix;
+        // Parameter updates commit only after new voices have become ready. A
+        // topology candidate is built independently so failures preserve old DSP.
+        const canKeepMix = mix.canUpdateDocument(next.document);
+        let candidateMix = canKeepMix
+          ? mix
+          : buildMixGraph(
+              context,
+              destination,
+              next.document,
+              at,
+              anchor,
+              rate,
+            );
+        if (candidateMix !== oldMix) candidateMix.setOutput(0, true);
+        const oldConnections: { pan: StereoPannerNode; target: AudioNode }[] =
+          [];
+        try {
+          for (const track of next.tracks) {
+            const old = instances.get(track.id);
+            const sameGenerator =
+              track.kind !== "generated" ||
+              (old?.track.kind === "generated" &&
+                generator(old.owner, old.track).mod ===
+                  generator(next, track).mod);
+            if (
+              old &&
+              sameGenerator &&
+              nextDuration === projectDuration &&
+              audioTrackSourceSignature(old.track, old.owner.project) ===
+                audioTrackSourceSignature(track, next.project) &&
+              (track.kind !== "file" ||
+                (old.track.kind === "file" &&
+                  old.owner.sourceKeys?.get(old.track.src) ===
+                    next.sourceKeys?.get(track.src)))
+            ) {
+              retained.add(track.id);
+              continue;
+            }
+            const replacement = createTrack(
+              track,
+              next,
+              at,
+              nextDuration - at,
+              anchor,
+              controls,
+              candidateMix,
+            );
+            if (replacement) replacements.set(track.id, replacement);
+          }
+          await waitAudioReady(
+            Promise.all([...replacements.values()].map((v) => v.ready)),
+            signal,
+          );
+          signal?.throwIfAborted();
+          if (closed) throw Error("Audio graph disposed");
+          // Pair the prepared picture and metadata with this audio revision in
+          // one synchronous task. Callback failure precedes every DSP mutation.
+          onCommit?.();
+          if (candidateMix === oldMix) oldMix.updateDocument(next.document);
+          else if (oldMix.updateDocument(next.document)) {
+            for (const voice of replacements.values()) {
+              voice.pan.disconnect();
+              voice.pan.connect(oldMix.destination(voice.track));
+            }
+            candidateMix.dispose();
+            candidateMix = oldMix;
+          }
+          for (const [id, voice] of instances) {
+            if (!retained.has(id)) {
+              voice.dispose();
+              instances.delete(id);
+            }
+          }
+          for (const track of next.tracks) {
+            const voice = replacements.get(track.id) ?? instances.get(track.id);
+            if (!voice) continue;
+            if (retained.has(track.id)) {
+              if (candidateMix !== oldMix) {
+                oldConnections.push({
+                  pan: voice.pan,
+                  target: oldMix.destination(voice.track),
+                });
+                voice.pan.connect(candidateMix.destination(track));
+              }
+              const control = controls.get(track.id) ?? {
+                gain: track.gain ?? 1,
+                muted: track.muted ?? false,
+              };
+              smoothAudioParam(
+                voice.gain.gain,
+                control.muted ? 0 : control.gain,
+                context,
+              );
+              smoothAudioParam(voice.pan.pan, track.pan ?? 0, context);
+              // Do not reset the envelope on a plain gain/pan edit.
+              const envelope = (v: AudioTrack) =>
+                JSON.stringify([
+                  v.automation,
+                  v.fadeIn,
+                  v.fadeOut,
+                  v.fadeOffset,
+                  v.fadeDuration,
+                ]);
+              if (envelope(voice.track) !== envelope(track)) {
+                voice.envelope.gain.cancelScheduledValues(context.currentTime);
+                scheduleClipEnvelope(
+                  voice.envelope.gain,
+                  track,
+                  at,
+                  nextDuration - at,
+                  context.currentTime,
+                  rate,
+                );
+              }
+              voice.track = track;
+            }
+            instances.set(track.id, voice);
+          }
+          mix = candidateMix;
+          if (mix !== oldMix) {
+            mix.setOutput(1);
+            oldMix.setOutput(0);
+            const deadline = context.currentTime + 0.08;
+            const finish = () => {
+              if (closed) return;
+              const remaining = deadline - context.currentTime;
+              if (remaining > 0) {
+                retired.set(oldMix, setTimeout(finish, remaining * 1000 + 10));
+                return;
+              }
+              for (const connection of oldConnections)
+                try {
+                  connection.pan.disconnect(connection.target);
+                } catch {}
+              oldMix.dispose();
+              retired.delete(oldMix);
+            };
+            retired.set(oldMix, setTimeout(finish, 90));
+          }
+          prepared = next;
+          projectDuration = nextDuration;
+        } catch (error) {
+          for (const voice of replacements.values()) voice.dispose();
+          if (candidateMix !== oldMix) candidateMix.dispose();
+          throw error;
+        }
+        // Ownership has transferred. Acceptance notifications cannot roll the
+        // working graph back if a consumer callback throws.
+        onAccepted?.();
       },
     };
-  } catch (e) {
+  } catch (error) {
     dispose();
-    throw e;
+    throw error;
   }
 }
 export class OfflineAudioRenderer {

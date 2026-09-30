@@ -1,12 +1,19 @@
 import { usePreviewSession, decodePlayerMessage } from "./preview-session";
+import { activePreviewTask } from "./live-preview-session.mjs";
 import { readAgentTarget } from "./agent/agent-navigation";
 import { useBrowserExport } from "./browser-export-session";
 import { RevisionPreview } from "./revision-preview";
 import { WorkChat } from "./work-chat";
 import { WorkTools } from "./work-tools";
 import { WorkDock } from "./work-dock";
-const AudioEditor=lazy(()=>import("./audio-editor").then(m=>({default:m.AudioEditor})));
-const CompositionEditor = lazy(() => import("./composition-editor").then(m=>({default:m.CompositionEditor})));
+const AudioEditor = lazy(() =>
+  import("./audio-editor").then((m) => ({ default: m.AudioEditor })),
+);
+const CompositionEditor = lazy(() =>
+  import("./composition-editor").then((m) => ({
+    default: m.CompositionEditor,
+  })),
+);
 import { ExportProgress, exportState } from "./exports";
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
 import { previewCacheBridge } from "./preview-cache";
@@ -19,7 +26,6 @@ import {
 import { Square, Play, RefreshCw } from "lucide-react";
 import {
   api,
-  request,
   useQuery,
   useAction,
   Button,
@@ -59,7 +65,16 @@ export function Creation({ id, notify }) {
         ? "ai"
         : "";
       const saved = readPreference("frame.work-tool", fallback);
-      return ["ai", "composition", "audio", "materials", "voice", "tasks", "sync", ""].includes(saved)
+      return [
+        "ai",
+        "composition",
+        "audio",
+        "materials",
+        "voice",
+        "tasks",
+        "sync",
+        "",
+      ].includes(saved)
         ? saved
         : fallback;
     }),
@@ -91,7 +106,6 @@ export function Creation({ id, notify }) {
         return [];
       }
     }),
-    [requestingBuild, setRequestingBuild] = useState(false),
     [suggestion, setSuggestion] = useState(null),
     [run, busy] = useAction(notify);
   useEffect(() => {
@@ -122,10 +136,21 @@ export function Creation({ id, notify }) {
     setStage: setPreviewStage,
     reference: previewReference,
     error: previewError,
-    retry: retryPreview,
+    retry: renewPreview,
     restart,
     playerGeneration,
-  } = usePreviewSession({ workId: id, latest, blocked: browserBusy, notify });
+    status: liveStatus,
+    receiveLive,
+  } = usePreviewSession({
+    workId: id,
+    latest,
+    mode: "live",
+    taskId: activePreviewTask(tasks, id),
+    blocked: browserBusy,
+    notify,
+  });
+  const liveReceiver = useRef(receiveLive);
+  liveReceiver.current = receiveLive;
   restartPreview.current = restart;
   const compact = useMediaQuery("(max-width: 900px)");
   const toolbarRef = useRef(null);
@@ -182,28 +207,56 @@ export function Creation({ id, notify }) {
     return () => window.removeEventListener("keydown", shortcut);
   }, []);
   const playerPreferences = useRef(readPreference("frame.player-view", {}));
+  const playbackSnapshot = useRef(null),
+    restorePending = useRef(null),
+    attachedPlayer = useRef("");
+  useEffect(() => {
+    playbackSnapshot.current = null;
+    restorePending.current = null;
+    attachedPlayer.current = "";
+    setPosition({ time: 0 });
+  }, [id]);
+  const playerKey = preview ? preview.id + ":" + playerGeneration : "";
+  if (playerKey && attachedPlayer.current !== playerKey) {
+    attachedPlayer.current = playerKey;
+    restorePending.current = playbackSnapshot.current;
+  }
+  const restorePlayback = () => {
+    const value = restorePending.current;
+    if (!value) return;
+    restorePending.current = null;
+    sendPlayer("restore-session", {
+      state: {
+        time: value.time || 0,
+        playing: !!value.playing,
+        rate: value.rate || 1,
+        loop: !!value.loop,
+        ...(typeof value.volume === "number" ? { volume: value.volume } : {}),
+        ...(typeof value.muted === "boolean" ? { muted: value.muted } : {}),
+        ...(typeof value.subtitles === "boolean"
+          ? { subtitles: value.subtitles }
+          : {}),
+        ...(value.selection ? { selection: value.selection } : {}),
+      },
+    });
+  };
   const sendPlayer = (command, extra = {}) =>
     iframe.current?.contentWindow?.postMessage(
       { type: "frame-player-command", command, ...extra },
       "*",
     );
   const closeChat = closeTool;
-  const building = tasks.some((task) => task.kind === "build" && active(task));
-  const buildRequestPending = useRef(false);
-  const updatePreview = async () => {
-    if (buildRequestPending.current || busy || building || browserBusy) return;
-    buildRequestPending.current = true;
-    setRequestingBuild(true);
-    try {
-      await run(async () => {
-        await api("works_task", { id, kind: "build" });
-        taskQuery.refresh();
-        previewQuery.refresh();
-      });
-    } finally {
-      buildRequestPending.current = false;
-      setRequestingBuild(false);
-    }
+  const retryPreview = () => {
+    if (browserBusy) return;
+    if (preview?.live)
+      iframe.current?.contentWindow?.postMessage(
+        { type: "frame-live-retry" },
+        "*",
+      );
+    renewPreview();
+  };
+  const updatePreview = () => {
+    if (!browserBusy) retryPreview();
   };
   const updatePreviewRef = useRef(updatePreview);
   updatePreviewRef.current = updatePreview;
@@ -212,14 +265,15 @@ export function Creation({ id, notify }) {
     title: query.data?.title || "作品",
     compact,
     previewStatus:
-      building || requestingBuild
+      liveStatus === "updating" || liveStatus === "starting"
         ? "building"
-        : previewQuery.error
+        : liveStatus === "reconnecting" || liveStatus === "error"
           ? "unknown"
-          : previewQuery.data?.stale
-            ? "stale"
-            : "ready",
-    updateDisabled: busy || building || requestingBuild || browserBusy,
+          : "ready",
+    updateDisabled: browserBusy,
+    previewMode: preview?.live ? "live" : "published",
+    previewSource: preview?.source || "work",
+    liveState: liveStatus,
   };
   const workContextKey = JSON.stringify(workContext.current);
   useEffect(() => {
@@ -249,22 +303,6 @@ export function Creation({ id, notify }) {
     window.addEventListener("focus", check);
     return () => window.removeEventListener("focus", check);
   }, [id]);
-  const buildRequested = useRef(false);
-  useEffect(() => {
-    if (
-      !taskQuery.data ||
-      !previewQuery.data ||
-      latest ||
-      tasks.some((t) => t.state === "publish_failed") ||
-      tasks.some(active) ||
-      buildRequested.current
-    )
-      return;
-    buildRequested.current = true;
-    api("works_task", { id, kind: "build" })
-      .then(taskQuery.refresh)
-      .catch((e) => notify(e.message, "error"));
-  }, [taskQuery.data, previewQuery.data, latest?.id, id]);
   useEffect(() => {
     const check = () => previewQuery.refresh();
     window.addEventListener("focus", check);
@@ -282,7 +320,9 @@ export function Creation({ id, notify }) {
           preferences: playerPreferences.current,
         });
         sendPlayer("configure-work", { context: workContext.current });
+        restorePlayback();
       }
+      if (decoded.type === "frame-live-preview") liveReceiver.current(decoded);
       if (decoded.type === "frame-player-preferences") {
         playerPreferences.current = decoded.preferences;
         writePreference("frame.player-view", decoded.preferences);
@@ -291,7 +331,10 @@ export function Creation({ id, notify }) {
         void updatePreviewRef.current();
       if (decoded.type === "frame-preview-loading")
         setPreviewStage(decoded.message);
-      if (decoded.type === "frame-player-state") setPosition(decoded);
+      if (decoded.type === "frame-player-state") {
+        playbackSnapshot.current = decoded;
+        setPosition(decoded);
+      }
     };
     window.addEventListener("message", receive);
     return () => window.removeEventListener("message", receive);
@@ -343,23 +386,17 @@ export function Creation({ id, notify }) {
           className="preview-pane"
           inert={compact && dockOpen ? true : undefined}
         >
-          {previewError && (
-            <div className="preview-version-note" role="status">
-              <ErrorNote error={previewError} />
+          {(previewError || preview?.fallback) && (
+            <div
+              className="preview-version-note live-preview-note"
+              role="status"
+            >
+              {preview?.fallback && (
+                <span>实时预览暂不可用，当前显示已发布版本。</span>
+              )}
+              {previewError && <ErrorNote error={previewError} />}
               <Button disabled={browserBusy} onClick={retryPreview}>
-                重试加载预览
-              </Button>
-            </div>
-          )}
-          {preview && Number(latest?.result?.previewVersion || 0) < 9 && (
-            <div className="preview-version-note" role="status">
-              当前预览使用旧版播放器。
-              <Button
-                icon={RefreshCw}
-                disabled={busy || building || requestingBuild || browserBusy}
-                onClick={() => void updatePreview()}
-              >
-                {building || requestingBuild ? "正在更新预览" : "更新预览"}
+                重新连接实时预览
               </Button>
             </div>
           )}
@@ -369,11 +406,11 @@ export function Creation({ id, notify }) {
                 <div className="preview-loading" role="status">
                   <span>{previewStage}</span>
                   <progress aria-label="作品加载进度" />
-                  <small>首次打开需要下载画面资源，请稍候。</small>
+                  <small>首次加载后，保存修改会自动更新；声音按需准备。</small>
                 </div>
               )}
               <iframe
-                key={preview.id + ":" + playerGeneration}
+                key={playerKey}
                 ref={iframe}
                 title="作品播放器"
                 src={preview.url}
@@ -394,28 +431,15 @@ export function Creation({ id, notify }) {
             <div className="preview-placeholder">
               <Play size={44} />
               {running.length > 0 && <progress aria-label="准备作品预览" />}
-              <p>
-                {running.length ? "正在准备作品预览…" : "还没有可播放的预览"}
-              </p>
+              <p>{previewStage || "实时预览暂不可用"}</p>
               <ErrorNote error={previewQuery.error || taskQuery.error} />
               <Button
                 icon={RefreshCw}
-                disabled={busy || building || requestingBuild || browserBusy}
+                disabled={browserBusy}
                 onClick={() => void updatePreview()}
               >
-                {building || requestingBuild ? "正在更新预览" : "更新预览"}
+                重新连接实时预览
               </Button>
-              {tasks.find(
-                (t) => t.kind === "build" && t.state === "failed",
-              ) && (
-                <ErrorNote
-                  error={
-                    tasks.find(
-                      (t) => t.kind === "build" && t.state === "failed",
-                    ).error
-                  }
-                />
-              )}
             </div>
           )}
         </div>
@@ -452,7 +476,7 @@ export function Creation({ id, notify }) {
               tasks={tasks}
               reload={taskQuery.refresh}
               notify={notify}
-              position={previewStage ? { time: 0 } : position}
+              position={position}
               previewReference={previewReference}
               selectedAssets={assets}
               onAddAssets={() => openTool("materials")}
@@ -462,6 +486,17 @@ export function Creation({ id, notify }) {
               onClose={closeChat}
               compact={compact}
               onRecall={(context) => {
+                if (
+                  context.liveSessionId &&
+                  context.sourceRevision !== preview?.observedRevision
+                ) {
+                  sendPlayer("pause");
+                  notify(
+                    "这条引用对应的实时预览已变更，当前播放器不能准确回放该版本。",
+                    "error",
+                  );
+                  return;
+                }
                 if (
                   context.sourceCommit &&
                   context.sourceCommit !== preview?.sourceCommit
@@ -488,8 +523,48 @@ export function Creation({ id, notify }) {
               }
             />
           </div>
-          {visited.audio && <div className="work-tool-pane dock-content" data-dock-pane="audio" hidden={tool!=="audio"}><Suspense fallback={<Loading/>}><AudioEditor work={work} visible={tool==="audio"} position={position} disabled={browserBusy} onSeek={time=>sendPlayer("seek",{time})} onSaved={()=>{syncQuery.refresh();previewQuery.refresh();}}/></Suspense></div>}
-          {visited.composition && <div className="work-tool-pane dock-content" data-dock-pane="composition" hidden={tool!=="composition"}><Suspense fallback={<Loading/>}><CompositionEditor work={work} visible={tool==="composition"} position={position} disabled={browserBusy} onSeek={time=>sendPlayer("seek",{time})} onSaved={()=>{syncQuery.refresh();previewQuery.refresh();}}/></Suspense></div>}
+          {visited.audio && (
+            <div
+              className="work-tool-pane dock-content"
+              data-dock-pane="audio"
+              hidden={tool !== "audio"}
+            >
+              <Suspense fallback={<Loading />}>
+                <AudioEditor
+                  work={work}
+                  visible={tool === "audio"}
+                  position={position}
+                  disabled={browserBusy}
+                  onSeek={(time) => sendPlayer("seek", { time })}
+                  onSaved={() => {
+                    syncQuery.refresh();
+                    previewQuery.refresh();
+                  }}
+                />
+              </Suspense>
+            </div>
+          )}
+          {visited.composition && (
+            <div
+              className="work-tool-pane dock-content"
+              data-dock-pane="composition"
+              hidden={tool !== "composition"}
+            >
+              <Suspense fallback={<Loading />}>
+                <CompositionEditor
+                  work={work}
+                  visible={tool === "composition"}
+                  position={position}
+                  disabled={browserBusy}
+                  onSeek={(time) => sendPlayer("seek", { time })}
+                  onSaved={() => {
+                    syncQuery.refresh();
+                    previewQuery.refresh();
+                  }}
+                />
+              </Suspense>
+            </div>
+          )}
           {visited.materials && (
             <div
               className="work-tool-pane dock-content"

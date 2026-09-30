@@ -67,6 +67,7 @@ test(
     const server = await createServer({
       configFile: false,
       root: process.cwd(),
+      cacheDir: path.resolve(".cache/tests/v5-player-lifecycle-" + process.pid),
       logLevel: "error",
       appType: "custom",
       optimizeDeps: {

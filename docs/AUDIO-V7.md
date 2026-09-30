@@ -1,5 +1,7 @@
 # V7 多轨音频
 
+V8 创作页默认使用增量实时预览，保存源码后更新；音频不再先整片生成并切块。弱网播放、不可变版本与正式导出规则见 [V8 实时预览](V8-LIVE-PREVIEW.md)。
+
 V7 将音源、混音轨道、时间片段、分组总线和主输出分开。工程音频的权威文档是项目内的 `audio.json`，由 `project.ts` 的 `loadAudioDocument: () => import('./audio.json')` 声明。旧 `audio`、`audioTracks` 和 `loadAudio` 仍兼容；未启用文档的作品不会自动迁移。编辑器首次保存会用同一个原子编辑同时新增文档与入口。已声明文档时，它覆盖旧音轨定义，避免重复播放。
 
 ## 编辑与混音
@@ -113,6 +115,8 @@ export const { generators, createAudio } = createAudioRack({ synth });
 ```
 
 Tone 实例必须显式传入 `toneContext`，避免 `Tone.start()`、`setContext()` 或全局 Transport。宿主提供的上下文不能由生成器关闭。示例为短音序列；有跨切点延音的乐器应自行重建持续音符状态。适配器不承诺把任意使用全局状态的第三方音频代码自动变成可跳转生成器。
+
+V8 的 `createToneAudio` 按需导入 Tone 的类入口，准备声音时不触发公共 `tone` 入口对全局 Transport、Destination 和原生上下文的提前初始化；传给生成器的 `Tone` 是类命名空间。每个节点仍显式使用 `toneContext`，适配器只释放自己的包装器，宿主 AudioContext 由播放器管理。Tone 某些类的默认参数在首次创建节点时仍可能惰性初始化库自己的默认上下文；Frame 不改写或擅自销毁第三方全局上下文。参数和源码更新复用已有宿主上下文，不为每次修改创建新上下文。计算音高可使用 `new Tone.FrequencyClass(toneContext, 'A3')`，避免隐式全局上下文。
 
 `createWorkerPcmAudio` 在 Worker 内生成绝对时间 PCM，可封装 WASM DSP；`createSampledScoreAudio` 继续使用 SoundFont/MIDI 原采样与原乐谱。其使用与资源约束见 [AUDIO.md](AUDIO.md) 和 [AI-PRODUCTION.md](AI-PRODUCTION.md)。`module:"legacy"` 直接选择原来的 `createAudio`，便于兼容迁移。
 

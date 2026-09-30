@@ -129,7 +129,8 @@ function scopeReport(root, id) {
 export function readCreatorContext(root, options = {}, env = process.env) {
   const { id, folder, task } = creatorWorkspace(root, options, env);
   const diagnostics = [];
-  let entry = null, state = null;
+  let entry = null,
+    state = null;
   try {
     entry = readProject(projectPath(root, id, "project.ts"));
     state = authoringState(entry);
@@ -154,10 +155,18 @@ export function readCreatorContext(root, options = {}, env = process.env) {
     "assets",
     "previewTask",
     "sourceCommit",
+    "liveSessionId",
+    "sourceRevision",
+    "draftTask",
     "shotId",
   ]);
   const reference = pick(task?.reviewReference, [
     "status",
+    "mode",
+    "source",
+    "liveSessionId",
+    "sourceRevision",
+    "draftTask",
     "previewTask",
     "sourceCommit",
     "fingerprint",
@@ -185,7 +194,11 @@ export function readCreatorContext(root, options = {}, env = process.env) {
     projectInfo: meta
       ? pick(meta, ["title", "renderer", "duration", "fps", "composition"])
       : null,
-    ...(state ?? { entrypoints: { metadata: "project.ts" }, audioTracks: [], authority: { status: "needs_repair" } }),
+    ...(state ?? {
+      entrypoints: { metadata: "project.ts" },
+      audioTracks: [],
+      authority: { status: "needs_repair" },
+    }),
     timeline: {
       shotCount: beats.length,
       shots: beats.slice(0, 48),

@@ -45,6 +45,7 @@ export const authoringReferences = Object.freeze({
   production: { path: "docs/AI-PRODUCTION.md", description: "Review, jobs and delivery" },
   remotion: { path: "docs/REMOTION.md", description: "React compositions, native rendering, media, FrameScene and audio integration" },
   composition: { path: "docs/COMPOSITION.md", description: "Authoritative visual.json and clip operations" },
+  "live-preview": { path: "docs/V8-LIVE-PREVIEW.md", description: "V8 incremental live preview and weak-network media" },
   "audio-v7": { path: "docs/AUDIO-V7.md", description: "Authoritative audio.json, sources, tracks, clips and processors" },
   audio: { path: "docs/AUDIO.md", description: "Legacy and generated audio contracts" },
   "scene-types": { path: "src/engine/types.ts", description: "TypeScript scene and audio interfaces" },

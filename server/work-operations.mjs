@@ -380,9 +380,32 @@ export function workOperations({
   );
   add(
     "works_browser",
-    "Get a private AI browser URL with FRAME_AI console controls. Rendering, segment playback, screenshots and WebM exports execute in the client browser. If compilation is needed, returns a durable task; poll and call again.",
-    { id: uuid, rebuild: z.boolean().default(false) },
+    "Open a private live AI browser with FRAME_AI controls. Saved source updates incrementally without full audio builds. mode:snapshot explicitly requests an immutable compiled preview.",
+    {
+      id: uuid,
+      rebuild: z.boolean().default(false),
+      mode: z.enum(["live", "snapshot"]).default("live"),
+      task: uuid.optional(),
+    },
     async (a) => {
+      if (a.task && (a.mode === "snapshot" || a.rebuild))
+        throw problem(400, "AI draft selection requires live preview mode");
+      if (a.mode === "live" && !a.rebuild && registry.works_live_preview) {
+        const op = registry.works_live_preview;
+        const link = await op.fn(
+          op.schema.parse({ id: a.id, task: a.task, ai: true }),
+        );
+        return {
+          ...link,
+          url:
+            (process.env.FRAME_PUBLIC_URL || "http://localhost:3000") +
+            link.url,
+          work: a.id,
+          console: "await FRAME_AI.ready(); FRAME_AI.help()",
+          compute: "browser",
+          previewMode: "live",
+        };
+      }
       const w = await works.get(a.id, { active: true });
       const { latest, stale } = await readWorkPreview({ db, repos, work: w });
       if (latest && !a.rebuild && !stale) {

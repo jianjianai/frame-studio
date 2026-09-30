@@ -13,6 +13,7 @@ import { agentInteractionOperations } from "./agent-interactions.mjs";
 import { agentEventPage } from "./agent-event-page.mjs";
 import { speechOperations } from "./speech.mjs";
 import { workOperations } from "./work-operations.mjs";
+import { livePreviewOperations } from "./live-preview-routes.mjs";
 import { workbenchOperations } from "./workbench.mjs";
 import { toolManagementOperations } from "./tool-management.mjs";
 import { chatOperations } from "./chat-operations.mjs";
@@ -37,6 +38,7 @@ export function operations({
   connections,
   github,
   retention,
+  livePreview,
 }) {
   const { registry, add, call } = createOperationRegistry();
   toolManagementOperations({ add, db, data, tasks });
@@ -572,9 +574,11 @@ export function operations({
     repos,
     assets,
     tasks,
+    livePreview,
   });
+  if (livePreview) livePreviewOperations({ add, works, livePreview });
   const interactions = agentInteractionOperations({ add, db, data });
-  chatOperations({ add, db, works, repos, tasks, connections, secrets });
+  chatOperations({ add, db, works, repos, tasks, connections, secrets, livePreview, data });
   workResultOperations({ add, db, data, works, repos, tasks });
   if (connections)
     workbenchOperations({
@@ -594,6 +598,7 @@ export function operations({
   return {
     works,
     interactions,
+    livePreview,
     registry,
     call,
   };

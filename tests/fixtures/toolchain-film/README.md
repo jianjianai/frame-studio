@@ -29,7 +29,7 @@ node --test --test-reporter=tap tests/server/toolchain-real-executor.test.mjs
 
 ## 浏览器审片与浏览器导出
 
-先在平台安装同一份影片源码，调用 `works_browser`，等待构建完成后再请求一次，取得临时预览 URL。在本地创建与该远程作品相同目录 ID 的夹具；例如远程作品目录为 `work-xxxxxxxx`，本地也使用该 ID。
+先在平台安装同一份影片源码，调用 `works_browser`，取得持续更新的临时预览 URL，并在页面等待 `FRAME_AI.ready()`。在本地创建与该远程作品相同目录 ID 的夹具；例如远程作品目录为 `work-xxxxxxxx`，本地也使用该 ID。
 
 ```sh
 FRAME_PREVIEW_URL='<works_browser 返回的临时私有地址>' \

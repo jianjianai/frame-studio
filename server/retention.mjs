@@ -7,10 +7,18 @@ export class Retention {
     Object.assign(this, { db, data });
     this.readers = new ArtifactLeases(db);
   }
-  lease(id, options) { return this.readers.acquire(id, options); }
+  lease(id, options) {
+    return this.readers.acquire(id, options);
+  }
   async cleanTask(id, { manual = false } = {}) {
     return this.db.lock(`artifact:${id}`, async () => {
-      if (await this.db.one("SELECT id FROM artifact_leases WHERE task=$1 AND expires>now() LIMIT 1", [id])) return false;
+      if (
+        await this.db.one(
+          "SELECT id FROM artifact_leases WHERE task=$1 AND expires>now() LIMIT 1",
+          [id],
+        )
+      )
+        return false;
       const task = await this.db.one(
         "SELECT * FROM tasks WHERE id=$1 AND state NOT IN ('queued','running','cancelling','publishing','publish_failed') AND cleaned IS NULL",
         [id],
@@ -53,11 +61,17 @@ export class Retention {
   async tick() {
     if (this.running) return this.running;
     this.running = this.collect();
-    try { return await this.running; } finally { this.running = null; }
+    try {
+      return await this.running;
+    } finally {
+      this.running = null;
+    }
   }
   async collect() {
     try {
-      await this.db.pool.query("DELETE FROM artifact_leases WHERE expires<now()");
+      await this.db.pool.query(
+        "DELETE FROM artifact_leases WHERE expires<now()",
+      );
       await this.db.pool.query("DELETE FROM sessions WHERE expires<now()");
       await this.db.pool.query(
         "DELETE FROM agent_tokens WHERE task IN (SELECT id FROM tasks WHERE state NOT IN ('queued','running','cancelling'))",
@@ -80,6 +94,19 @@ export class Retention {
       )) {
         await this.cleanTask(task.id).catch(() => {});
       }
+      const liveReferences = path.join(this.data, "live-preview-references");
+      if (fs.existsSync(liveReferences)) {
+        const references = await this.db.all(
+          "SELECT review_reference FROM tasks WHERE cleaned IS NULL AND review_reference->>'mode'='live' AND (state IN ('queued','running','cancelling','publishing','publish_failed') OR expires>now())",
+        );
+        const protectedKeys = new Set(
+          references.map(
+            ({ review_reference: ref }) =>
+              ref.liveSessionId + "/" + ref.sourceRevision,
+          ),
+        );
+        await pruneLiveReviewReferences(this.data, { protectedKeys });
+      }
       const uploads = path.join(this.data, "uploads");
       if (fs.existsSync(uploads))
         for (const entry of fs.readdirSync(uploads, { withFileTypes: true })) {
@@ -93,7 +120,9 @@ export class Retention {
               )
               .catch(() => {});
         }
-    } finally { /* All scheduled file removals above are awaited. */ }
+    } finally {
+      /* All scheduled file removals above are awaited. */
+    }
   }
   start() {
     if (this.timer) return;
@@ -104,10 +133,78 @@ export class Retention {
     this.timer.unref();
     void this.tick().catch(console.error);
   }
-  stop() { clearInterval(this.timer); this.timer = null; }
+  stop() {
+    clearInterval(this.timer);
+    this.timer = null;
+  }
   async close() {
     this.stop();
     await this.running?.catch(() => {});
     await this.readers.close();
   }
+}
+
+// Frozen review snapshots outlive ephemeral preview sessions, but never accumulate forever.
+// Active/retained tasks pin exact revisions. New snapshots have a grace period while a
+// chat transaction creates its task; symlinks and non-canonical directory names are ignored.
+export async function pruneLiveReviewReferences(
+  data,
+  {
+    protectedKeys = new Set(),
+    now = Date.now(),
+    ttlMs = 7 * 86400000,
+    maxBytes = 4 * 1024 ** 3,
+    graceMs = 10 * 60000,
+  } = {},
+) {
+  const root = path.join(data, "live-preview-references");
+  if (!fs.existsSync(root)) return { removed: 0, bytes: 0 };
+  const records = [];
+  for (const session of await fs.promises.readdir(root, {
+    withFileTypes: true,
+  })) {
+    if (!session.isDirectory() || !/^[0-9a-f-]{36}$/.test(session.name))
+      continue;
+    const folder = path.join(root, session.name);
+    for (const revision of await fs.promises.readdir(folder, {
+      withFileTypes: true,
+    })) {
+      if (!revision.isDirectory() || !/^[0-9a-f]{64}$/.test(revision.name))
+        continue;
+      const dir = path.join(folder, revision.name);
+      const stat = await fs.promises.lstat(dir);
+      records.push({
+        dir,
+        key: session.name + "/" + revision.name,
+        used: stat.mtimeMs,
+        bytes: await snapshotBytes(dir),
+      });
+    }
+  }
+  let bytes = records.reduce((sum, record) => sum + record.bytes, 0),
+    removed = 0;
+  for (const record of records.sort((a, b) => a.used - b.used)) {
+    if (protectedKeys.has(record.key) || now - record.used < graceMs) continue;
+    if (now - record.used < ttlMs && bytes <= maxBytes) continue;
+    await fs.promises.rm(record.dir, { recursive: true, force: true });
+    bytes -= record.bytes;
+    removed++;
+    await fs.promises.rmdir(path.dirname(record.dir)).catch((error) => {
+      if (!["ENOTEMPTY", "ENOENT"].includes(error.code)) throw error;
+    });
+  }
+  return { removed, bytes };
+}
+
+async function snapshotBytes(root) {
+  let bytes = 0;
+  for (const entry of await fs.promises.readdir(root, {
+    withFileTypes: true,
+  })) {
+    if (entry.isSymbolicLink()) continue;
+    const file = path.join(root, entry.name);
+    if (entry.isDirectory()) bytes += await snapshotBytes(file);
+    else if (entry.isFile()) bytes += (await fs.promises.lstat(file)).size;
+  }
+  return bytes;
 }

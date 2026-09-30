@@ -70,7 +70,7 @@ pnpm --silent platform download 任务UUID frame-0.500000.png --out ./review/fra
 
 `frame-task.json` 是 `{"id":"作品UUID","kind":"frame","input":{"time":0.5,"width":640}}`。可用 `kind` 包括 `validate`、`frame`、`storyboard`、`render`、`build`。创建任务的 `requestKey` 是调用方生成的 UUID，只能为同一个请求重用，用于响应丢失后的去重。
 
-`works_browser --wait` 在需要时等待编译，完成后再次获取当前作品的私有预览 URL；已经就绪时直接返回 URL，不重复构建。`rebuild:true` 只作用于最初请求，后续获取链接不会不断重建。等待期间可能先有其他编辑任务完成，CLI 会继续请求最新预览，直到就绪、失败或超过总等待时间。
+V8 默认 `works_browser` 返回持续更新的实时能力链接，不创建 build 任务；打开页面后由常驻会话准备首个版本。`task` 可指定同作品的 AI 草稿。`mode:"snapshot"` 或 `rebuild:true` 使用原有不可变构建，`--wait` 再等待其任务并获取链接；`rebuild:true` 只作用于最初请求。会话、弱网与版本规则见 [V8 实时预览](V8-LIVE-PREVIEW.md)。
 
 MCP 使用 `frame_task_status`。`waitMs` 最多 10 秒；每页最多 100 条事件。默认不带完整构建清单，返回任务摘要、输出路径、下载入口和后续操作建议。把 **`nextAfter` 原样作为字符串** 带入下一次 `after`，避免大事件编号经过浮点数转换后丢失精度。即使 `done:true`，`hasMore:true` 仍表示有最后几页事件未读完。全量诊断仍可通过原 `task_get` 获取；原前端协议没有改名或更改数组形状。
 

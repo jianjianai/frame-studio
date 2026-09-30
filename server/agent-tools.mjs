@@ -3,7 +3,14 @@ import path from "node:path";
 import { confined, problem } from "./security.mjs";
 import { fileSha256 } from "./project-files.mjs";
 import { command } from "./process.mjs";
-export function agentTools({ app, db, data, assets, actions, localMode = false }) {
+export function agentTools({
+  app,
+  db,
+  data,
+  assets,
+  actions,
+  localMode = false,
+}) {
   app.post("/api/agent/action", async (req) => {
     const task = req.agentTask;
     if (!task) throw problem(403, "Task credential required");
@@ -16,6 +23,23 @@ export function agentTools({ app, db, data, assets, actions, localMode = false }
       if (typeof args.id !== "string" || !/^[0-9a-f-]{36}$/i.test(args.id))
         throw problem(400, "Invalid question id");
       return actions.interactions.poll(task.id, args.id);
+    }
+    if (name === "preview") {
+      if (Object.keys(args).length)
+        throw problem(
+          400,
+          "preview takes no arguments; work and draft are scoped to this task",
+        );
+      const work = await db.one(
+        "SELECT id FROM works WHERE repo=$1 AND project=$2 AND NOT deleted",
+        [task.repo, task.project],
+      );
+      if (!work) throw problem(404, "Current work not found");
+      return actions.call("works_live_preview", {
+        id: work.id,
+        task: task.id,
+        ai: true,
+      });
     }
     if (name === "assets") {
       const limit = args.limit ?? 60,
@@ -163,7 +187,7 @@ export function agentTools({ app, db, data, assets, actions, localMode = false }
     }
     throw problem(
       403,
-      "Allowed: assets, engines, speech_providers, engines_discover, speech_status, speech_cancel, engine_add, engine_test, use and speech",
+      "Allowed: preview, assets, engines, speech_providers, engines_discover, speech_status, speech_cancel, engine_add, engine_test, use and speech",
     );
   });
 }

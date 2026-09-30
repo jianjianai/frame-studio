@@ -29,7 +29,10 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
       let platform, task, work;
       const api = http.createServer(async (req, res) => {
         const requestPath = new URL(req.url, "http://fixture.local").pathname;
-        const allowedPaths = provider === "codex" ? ["/v1/responses"] : ["/v1/messages", "/v1/messages/count_tokens"];
+        const allowedPaths =
+          provider === "codex"
+            ? ["/v1/responses"]
+            : ["/v1/messages", "/v1/messages/count_tokens"];
         if (req.method !== "POST" || !allowedPaths.includes(requestPath)) {
           res.writeHead(404);
           res.end();
@@ -228,13 +231,19 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           apiKey: "fixture-provider-key",
           model: provider === "codex" ? "gpt-5.4" : "claude-sonnet-4-6",
         });
-        assert.equal(connection.baseUrl, `http://172.17.0.1:${modelPort}${provider === "codex" ? "/v1" : ""}`);
+        assert.equal(
+          connection.baseUrl,
+          `http://172.17.0.1:${modelPort}${provider === "codex" ? "/v1" : ""}`,
+        );
         const chat = await platform.actions.call("works_chat_create", {
           id: work.id,
           connection: connection.id,
           title: "Durable turn",
         });
-        const beforeRevision = await platform.repos.git((await platform.repos.project(work.repo, work.project)).repo.root, ["rev-parse", "HEAD"]);
+        const beforeRevision = await platform.repos.git(
+          (await platform.repos.project(work.repo, work.project)).repo.root,
+          ["rev-parse", "HEAD"],
+        );
         task = await platform.actions.call("works_chat_send", {
           id: work.id,
           chat: chat.id,
@@ -242,7 +251,10 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           requestKey: randomUUID(),
           context: { sourceCommit: beforeRevision, time: 0.5 },
         });
-        assert.equal(task.execution.model, provider === "codex" ? "gpt-5.4" : "claude-sonnet-4-6");
+        assert.equal(
+          task.execution.model,
+          provider === "codex" ? "gpt-5.4" : "claude-sonnet-4-6",
+        );
         assert.equal(task.review_reference.sourceCommit, beforeRevision);
         await platform.tasks.start(task);
         await platform.app.close();
@@ -258,7 +270,12 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
         while (Date.now() < deadline) {
           await platform.tasks.tick();
           task = await platform.tasks.get(task.id);
-          if (!["queued", "running", "cancelling", "publishing"].includes(task.state)) break;
+          if (
+            !["queued", "running", "cancelling", "publishing"].includes(
+              task.state,
+            )
+          )
+            break;
           await delay(500);
         }
         if (invalid) {
@@ -294,31 +311,68 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
         });
         assert(scene.content.includes("// Durable fixture edit"));
         assert.equal(task.base_commit, beforeRevision);
-        assert.deepEqual(task.result.validation.map(check => [check.check, check.status]), [
-          ["scope", "passed"], ["structure", "passed"], ["project-tests", "passed"], ["preview-build", "passed"],
-        ]);
+        assert.deepEqual(
+          task.result.validation.map((check) => [check.check, check.status]),
+          [
+            ["scope", "passed"],
+            ["structure", "passed"],
+            ["project-tests", "passed"],
+            ["project-types", "passed"],
+          ],
+        );
         assert(task.result.executorMetrics.agentMs >= 0);
-        assert(task.result.buildMetrics.compileMs >= 0);
+        assert.equal(task.result.previewMode, "live");
+        assert.equal(task.result.previewArtifacts, undefined);
         const events = await db.all(
           "SELECT * FROM events WHERE task=$1 ORDER BY id",
           [task.id],
         );
         const items = createAgentTimeline().update(events).items;
-        assert(items.some((item) => item.version === 1 && item.kind === "message" && item.text?.includes("作品修改完成")), "persist a public native message");
-        assert(items.some((item) => item.version === 1 && item.kind === "command" && item.phase === "completed" && item.command?.includes("Durable fixture edit")), "persist completed native command activity");
-        assert(!JSON.stringify(events).includes("fixture-provider-key"));
         assert(
-          await db.one(
-            "SELECT id FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND state='succeeded'",
-            [work.repo, work.project],
+          items.some(
+            (item) =>
+              item.version === 1 &&
+              item.kind === "message" &&
+              item.text?.includes("作品修改完成"),
           ),
+          "persist a public native message",
         );
+        assert(
+          items.some(
+            (item) =>
+              item.version === 1 &&
+              item.kind === "command" &&
+              item.phase === "completed" &&
+              item.command?.includes("Durable fixture edit"),
+          ),
+          "persist completed native command activity",
+        );
+        assert(!JSON.stringify(events).includes("fixture-provider-key"));
+        assert.equal(
+          (
+            await db.one(
+              "SELECT count(*)::int AS n FROM tasks WHERE repo=$1 AND project=$2 AND kind='build'",
+              [work.repo, work.project],
+            )
+          ).n,
+          0,
+          "V8 creation publication does not enqueue or bake a preview",
+        );
+        const live = await platform.actions.call("works_live_preview", {
+          id: work.id,
+          ai: true,
+        });
+        const session = platform.actions.livePreview.sessions.get(live.sessionId);
+        const manifest = await platform.actions.livePreview.ready(session);
+        assert.match(manifest.sourceRevision, /^[0-9a-f]{64}$/);
+        assert.equal(manifest.source, "work");
+        assert(manifest.buildMs >= 0);
         t.diagnostic(
           JSON.stringify({
             providerRequests: requests.length,
             events: events.length,
             tool: `real ${provider} CLI, deterministic fixture provider`,
-            previewPublished: true,
+            livePreviewReady: true,
             recoveredAfterRestart: true,
           }),
         );

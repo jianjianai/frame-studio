@@ -49,10 +49,11 @@ const readOnly = new Set([
 ]);
 export function toolAnnotations(name) {
   const read = readOnly.has(name);
+  const previewSession = ["works_live_preview", "works_browser"].includes(name);
   return {
     readOnlyHint: read,
-    destructiveHint: !read,
-    idempotentHint: read,
+    destructiveHint: !read && !previewSession,
+    idempotentHint: read || previewSession,
     openWorldHint:
       /sync|refresh|check|speech|engines|chat_send|use_asset|task$/.test(name),
   };
@@ -271,9 +272,13 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
               "Patch exact text using that SHA-256; dryRun previews without changing files.",
           },
           {
+            tool: "frame_works_live_preview",
+            purpose: "Open or renew a live source preview; task selects an active AI draft. Saved edits update without full builds or audio preprocessing.",
+          },
+          {
             tool: "frame_works_task",
             purpose:
-              "Create validate/frame/storyboard/render/build tasks. Reuse a requestKey UUID only for an identical retried request.",
+              "Create validate/frame/storyboard/render tasks or an explicit immutable build. Reuse a requestKey UUID only for an identical retried request.",
           },
           {
             tool: "frame_task_status",
@@ -289,7 +294,7 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
         discovery:
           "frame_tool_describe gives exact parameter schemas. CLI: pnpm --silent platform describe works_patch. For all repositories/works, use their paginated listing tools.",
         lifecycle:
-          "Files/patches do not publish a preview. Validate, inspect a frame/storyboard, then build for browser preview. Tasks persist after disconnection; timeout does not cancel a task. Preserve publish_failed results and retry publication instead of regenerating.",
+          "Open frame_works_live_preview or frame_works_browser to follow saved edits automatically, including active AI drafts. Validate and inspect relevant frames/audio before delivery. Full build freezes an immutable historical/share preview and is not required after edits. Tasks persist after disconnection; timeout does not cancel a task. Preserve publish_failed results and retry publication instead of regenerating.",
       };
     },
   );

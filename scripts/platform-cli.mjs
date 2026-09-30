@@ -10,6 +10,7 @@ const help = `FRAME · 远程 MCP / HTTP 命令行
   pnpm --silent platform <operation> [JSON | @file | -]
   pnpm --silent platform works_task @task.json --wait [--timeout-ms 120000] [--events]
   pnpm --silent platform works_browser '{"id":"作品UUID"}' --wait
+  pnpm --silent platform works_live_preview '{"id":"作品UUID"}'
   pnpm --silent platform wait <task-UUID> [--after 0] [--timeout-ms 120000] [--events]
   pnpm --silent platform download <task-UUID> <artifact-path-or-name> --out <file> [--force]
   pnpm --silent platform upload <file> --repo <UUID> --license "来源许可" [--mime image/png]

@@ -7,7 +7,7 @@ export class Clock {
   rate = 1;
   loop = false;
   constructor(
-    public readonly duration: number,
+    public duration: number,
     private readonly now: () => number,
   ) {
     if (!(duration > 0) || !Number.isFinite(duration))
@@ -34,6 +34,13 @@ export class Clock {
   seek(t: number): void {
     this.anchorTime = clamp(t, 0, this.duration);
     this.anchorNow = this.now();
+  }
+  setDuration(duration: number): void {
+    if (!(duration > 0) || !Number.isFinite(duration))
+      throw new Error("Invalid duration");
+    const time = this.time();
+    this.duration = duration;
+    this.seek(time);
   }
   setRate(rate: number): void {
     if (!Number.isFinite(rate) || rate <= 0) throw new Error("Invalid rate");

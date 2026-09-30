@@ -27,7 +27,7 @@ async function source(
 ): Promise<Source> {
   const src = clip.source;
   if (src.kind === "image") {
-    const image = await openImageSource(src.src, signal);
+    const image = await openImageSource(src.src, signal, options.width, options.height, options.quality);
     return {
       async frame() {
         return { image, width: image.width, height: image.height };
@@ -38,7 +38,7 @@ async function source(
     };
   }
   if (src.kind === "video")
-    return openVideoSource(src.src, options.width, signal);
+    return openVideoSource(src.src, options.width, signal, options.quality);
   if (src.kind === "sequence") {
     let index = -1,
       image: ImageBitmap | undefined;
@@ -48,7 +48,7 @@ async function source(
         if (next < 0 || next >= src.frames.length)
           throw new Error("图像序列超出范围：" + clip.id);
         if (next !== index) {
-          const loaded = await openImageSource(src.frames[next], signal);
+          const loaded = await openImageSource(src.frames[next], signal, options.width, options.height, options.quality);
           image?.close();
           image = loaded;
           index = next;
@@ -254,7 +254,8 @@ export function createCompositionScene(
           }
         }
       } catch (error) {
-        release();
+        // A stale seek cancels its frame, not the retained source ownership.
+        if (!signal.aborted) release();
         throw error;
       }
     },

@@ -96,6 +96,44 @@ export async function createRemotionScene(
   return {
     canvas,
     element,
+    async prepareFrame(time, { signal }) {
+      if (disposed) throw new Error("Remotion scene disposed");
+      if (failure) throw failure;
+      signal.throwIfAborted();
+      const frame = seek(time);
+      const needsSeek = !state.playing || Math.abs((ref.current?.getCurrentFrame() ?? -1) - frame) > 1;
+      if (needsSeek) {
+        lastFrame = frame;
+        flushSync(() => ref.current?.seekTo(frame));
+      } else if (!buffering) return;
+      // A connected DOM surface must commit React effects and finish media buffering before swapping/capture.
+      let stable = 0;
+      while (stable < (needsSeek ? 2 : 1)) {
+        await new Promise<void>((resolve, reject) => {
+          let handle = 0;
+          const abort = () => {
+            cancelAnimationFrame(handle);
+            signal.removeEventListener("abort", abort);
+            reject(signal.reason ?? new DOMException("Aborted frame", "AbortError"));
+          };
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) { abort(); return; }
+          handle = requestAnimationFrame(() => {
+            signal.removeEventListener("abort", abort);
+            resolve();
+          });
+        });
+        signal.throwIfAborted();
+        if (disposed) throw new Error("Remotion scene disposed");
+        if (failure) throw failure;
+        const media = [...element.querySelectorAll<HTMLMediaElement>("video,audio")];
+        const images = [...element.querySelectorAll<HTMLImageElement>("img")].filter(image => image.getAttribute("src"));
+        if (media.some(item => item.error) || images.some(image => image.complete && image.naturalWidth === 0))
+          throw new Error("Remotion media failed to load");
+        const ready = media.every(item => !item.currentSrc || item.readyState >= 2) && images.every(image => image.complete);
+        stable = ref.current && !buffering && ready ? stable + 1 : 0;
+      }
+    },
     setSubtitles(enabled) {
       if (enabled === captions) return;
       captions = enabled;

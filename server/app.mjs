@@ -29,6 +29,7 @@ import {
 } from "./security.mjs";
 import { agentTools } from "./agent-tools.mjs";
 import { browserPreview } from "./browser-preview.mjs";
+import { installLivePreview } from "./live-preview-routes.mjs";
 import { sendMedia } from "./media.mjs";
 import { createServices } from "./services.mjs";
 import { rasterCover } from "./covers.mjs";
@@ -53,7 +54,7 @@ export async function createApp({
     throw new Error("The public API role cannot start a controller");
   const services = await createServices({ db, data, masterKey });
   ({ db } = services);
-  const { repos, assets, tasks, retention, actions } = services;
+  const { repos, assets, tasks, retention, actions, livePreview } = services;
   const app = Fastify({
     logger: {
       level: "info",
@@ -100,7 +101,7 @@ export async function createApp({
       .header("X-Content-Type-Options", "nosniff")
       .header("Referrer-Policy", "no-referrer")
       .header("Cache-Control", "no-store");
-    if (req.url.startsWith("/preview/")) return;
+    if (req.url.startsWith("/preview/") || req.url.startsWith("/preview-live/")) return;
     res.header("X-Frame-Options", "DENY");
     if (!req.url.startsWith("/api/") && !req.url.startsWith("/mcp")) return;
     if (req.url === "/api/login") return;
@@ -371,6 +372,7 @@ export async function createApp({
     const t = await tasks.get(req.params.id);
     return browserPreview(db, t);
   });
+  installLivePreview(app, livePreview);
   app.get("/preview/:token/*", async (req, res) => {
     const p = await db.setting("preview:" + hash(req.params.token));
     if (!p || p.expires < Date.now()) throw problem(401, "Preview expired");

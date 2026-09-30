@@ -144,9 +144,11 @@ test(
       await player.getByRole("button", { name: "设为出点" }).click();
       await player.getByRole("button", { name: "播放选段" }).click();
       await page.waitForTimeout(650);
-      const playerFrame = page
-        .frames()
-        .find((frame) => frame.url().includes("/preview/"));
+      const playerFrame = await page
+        .locator('iframe[title="作品播放器"]')
+        .elementHandle()
+        .then((element) => element.contentFrame());
+      assert(playerFrame, "the named sandboxed player must stay attached");
       const state = await playerFrame.evaluate(() =>
         window.__FRAME_STUDIO__.getState(),
       );
@@ -275,9 +277,14 @@ test(
       await reopened.getByText("当前没有在后台运行的项目。").waitFor();
       await reopened.goto(origin + "/#/repository/" + repo.id);
       await reopened.getByLabel("MCP 测试操作").click();
-      await reopened.getByRole("menuitem", { name: "移入回收站", exact: true }).click();
+      await reopened
+        .getByRole("menuitem", { name: "移入回收站", exact: true })
+        .click();
       const confirm = reopened.getByRole("dialog", { name: "移入回收站" });
-      const trash = confirm.getByRole("button", { name: "移入回收站", exact: true });
+      const trash = confirm.getByRole("button", {
+        name: "移入回收站",
+        exact: true,
+      });
       await confirm.getByLabel("输入作品名称确认").fill("wrong");
       assert.equal(await trash.isDisabled(), true);
       await confirm.getByLabel("输入作品名称确认").fill(work.title);

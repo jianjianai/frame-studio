@@ -7,7 +7,7 @@ import { freezeReviewReference } from "./review-reference.mjs";
 
 const uuid = z.string().uuid();
 /** Legacy project identifiers are adapters, not a second conversation implementation. */
-export function chatOperations({ add, db, works, repos, tasks, connections, secrets }) {
+export function chatOperations({ add, db, works, repos, tasks, connections, secrets, livePreview, data }) {
   const create = async ({ repo, project, connection, provider, title }) => {
     await repos.project(repo, project);
     if (Boolean(connection) === Boolean(provider))
@@ -46,7 +46,7 @@ export function chatOperations({ add, db, works, repos, tasks, connections, secr
       input: { provider: chat.provider, connection: chat.connection || undefined, prompt, context, ...(model !== undefined ? { model } : {}) },
       prepareInput: async (input) => {
         const execution = await freezeExecution({ db, connections, secrets, input });
-        const reviewReference = await freezeReviewReference({ db, repos, repo: chat.repo, project: chat.project, context });
+        const reviewReference = await freezeReviewReference({ db, repos, repo: chat.repo, project: chat.project, context, livePreview, data });
         const assetNames = {};
         for (const asset of context?.assets || []) {
           const row = await db.one("SELECT a.name FROM assets a JOIN asset_repos r ON r.asset=a.id WHERE a.id=$1 AND r.repo=$2 AND NOT a.deleted", [asset, chat.repo]);
