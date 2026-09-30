@@ -6,7 +6,7 @@ import { runAgentTurn } from "./agent-runtime.mjs";
 import { createAgentFileInspector } from "./agent-file-changes.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
-import { browserOptions } from "../scripts/browser.mjs";
+import { browserVersion } from "../scripts/browser.mjs";
 import { installToolVersion } from "./tool-installation.mjs";
 import { creatorTaskIgnores, creatorPrompt } from "./creator-workspace.mjs";
 const work = process.env.FRAME_EXECUTOR_WORK || "/workspace",
@@ -168,7 +168,7 @@ try {
     await run("git", ["commit", "-qm", "Initialize isolated task workspace"]);
     const baselineCommit = (await run("git", ["rev-parse", "HEAD"])).trim();
     actualRuntime.ffmpeg = (await run(process.env.FFMPEG_PATH || "ffmpeg", ["-version"])).split("\n")[0];
-    actualRuntime.browser = (await run(browserOptions().executablePath, ["--version"])).trim();
+    actualRuntime.browser = await browserVersion();
     let value = { status: "passed" };
     if (task.kind === "agent") {
       const p = task.input.provider;

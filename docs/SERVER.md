@@ -4,7 +4,7 @@
 
 `deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio:<版本>` 与 `ghcr.io/jianjianai/frame-speech:<版本>`。服务器需要 Linux x86_64、Docker、HTTPS 反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
 
-在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`，以及宿主机 `stat -c %g /var/run/docker.sock` 得到的 `FRAME_DOCKER_GID`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像；7.3.0 的按需下载功能要求工作台与语音服务同时升级到 7.3.0，旧版语音服务不提供下载接口。主密钥丢失后无法恢复加密凭据，应妥善保管。
+在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`，以及宿主机 `stat -c %g /var/run/docker.sock` 得到的 `FRAME_DOCKER_GID`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像；按需下载功能要求工作台与语音服务同时升级到 7.3.1，旧版语音服务不提供下载接口。主密钥丢失后无法恢复加密凭据，应妥善保管。
 
 模板使用已有 `caddy_caddy` 网络和域名 `frame.nerviloom.com`，部署到其他主机时修改域名、外部网络和 `FRAME_HOST_DATA`。后者必须是 Docker 宿主机上 `./data` 的绝对路径。数据库与语音服务不发布公网端口。
 
