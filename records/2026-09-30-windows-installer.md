@@ -30,4 +30,19 @@
 
 7.4.1 的安装/卸载/启动依赖准备脚本显式使用当前 PowerShell 自带模块目录；本地人为清空调用者模块路径后，5.1 实际依赖准备与 SHA-256 命令通过。安装器回归测试也加入错误调用者模块路径，保证该环境差异持续覆盖。
 
-待记录本次标签触发的 GitHub Actions、实际 Release 资产摘要及两个镜像摘要。当前记录不能作为远端发布成功或生产切换证明。
+`v7.4.1` 源码为 `bd4cad88dec032cdf500fc5aae2e936fc863581d`，自动触发 [36710498466](https://github.com/jianjianai/frame-studio/actions/runs/36710498466)。Windows 作业 `109870901600` 已通过：空缓存下载工具/Python、客户端 pnpm 安装、实际 EXE 安装及工作台渲染、失败修复、无重复下载修复与保留数据卸载。
+
+从该作业下载的安装器为 1,514,507 字节，SHA-256 `9b388687c7ed5445bfe8cdc4b958fb0ebfb4d0be67b99375867ba7f886ed23e8`，本地重新计算与附带摘要一致。它使用既有不可变工具组件和语音运行环境，不重新上传重型依赖组件。
+
+完整工作流最终成功：source、windows、verify、两个镜像作业、publish 均通过。服务端作业 `109870901769` 的 `verify:release` 门禁完成，核心 83/83、MCP 85 通过/0 失败/1 可选音色跳过、服务端 190 通过/0 失败/2 跳过（Linux 上的 Windows 专用用例由 Windows 作业覆盖，另一项为可选 GeneralUser 资源）。
+
+正式 [v7.4.1 Release](https://github.com/jianjianai/frame-studio/releases/tag/v7.4.1) 于 2026-09-30 12:00:42 UTC 自动发布，latest 指向该版本，仅附 Setup.exe 与 .sha256。重新从正式 Release 下载 EXE 后，文件摘要与前述经过测试的 Actions 产物一致。
+
+| 镜像 | 注册表确认的版本摘要 |
+| --- | --- |
+| `ghcr.io/jianjianai/frame-studio/app:7.4.1` | `sha256:bf59f684abf91dbeb55b7dff9f0382aaa666e10a00bf208a6038ea8e7e3249f2` |
+| `ghcr.io/jianjianai/frame-studio/speech:7.4.1` | `sha256:776abd47bc221eeb28f859f83c5f57e0a356fb574082227d08bac36cf45fbcb5` |
+
+通过 GHCR manifest 和 config blob 再次核对，两者均为 Linux amd64，revision 均为 `bd4cad88dec032cdf500fc5aae2e936fc863581d`，source 均为本仓库。GitHub Packages API 确认两个新包均为 public 且关联 `jianjianai/frame-studio`。此次没有使用个人令牌发布镜像，仓库 GITHUB_TOKEN 的自动构建推送已实际成功。
+
+本次只发布软件；未修改或重启生产服务。提交前合并保留了另一任务的 7.3.2 生产部署记录，不将其当作 7.4.1 部署证明。本次未使用 WSL 构建；评估时安装的临时 Inno 编译器已通过其卸载器移除，实际交付使用 NSIS。
