@@ -181,6 +181,32 @@ for (const backend of ["sqlite", "postgres"]) {
               call("works_purge", { id: a.id, confirm: a.title }),
               { statusCode: 502 },
             );
+            const headers = {
+              origin: "http://127.0.0.1:3900",
+              host: "127.0.0.1:3900",
+            };
+            if (backend === "postgres") {
+              const login = await app.inject({
+                method: "POST",
+                url: "/api/login",
+                headers,
+                payload: { password: "test-password-at-least-14" },
+              });
+              assert.equal(login.statusCode, 200);
+              headers.cookie = login.headers["set-cookie"].split(";")[0];
+            }
+            const remoteFailure = await app.inject({
+              method: "POST",
+              url: "/api/action",
+              headers,
+              payload: {
+                name: "works_purge",
+                args: { id: a.id, confirm: a.title },
+              },
+            });
+            assert.equal(remoteFailure.statusCode, 502);
+            assert.match(remoteFailure.json().error, /远端作品分支删除失败/);
+            assert.doesNotMatch(remoteFailure.json().error, /remote rejected/);
             assert.equal((await actions.works.get(a.id)).deleted, true);
             assert.equal(fs.existsSync(source), true);
             assert.equal(await db.setting("work-purge:" + a.id), undefined);
@@ -193,6 +219,13 @@ for (const backend of ["sqlite", "postgres"]) {
               call("works_purge", { id: a.id, confirm: a.title }),
               /interrupted/,
             );
+            const partial = await call("works_empty_trash", {
+              repo: repo.id,
+              confirm: "清空回收站",
+            });
+            assert.equal(partial.failed.length, 1);
+            assert.equal(partial.failed[0].id, a.id);
+            assert.doesNotMatch(partial.failed[0].error, /interrupted|frame-purge/);
             assert.equal(
               await git(remote, [
                 "for-each-ref",

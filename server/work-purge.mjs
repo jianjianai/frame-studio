@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { confined, problem } from "./security.mjs";
 import { validProjectId } from "../scripts/project-metadata.mjs";
+import { operationError } from "../src/contracts/errors.mjs";
 
 const purgeKey = (id) => "work-purge:" + id;
 export const purgedWorkKey = (repo, project) =>
@@ -98,9 +99,12 @@ export async function purgeWork(works, id, confirm) {
             );
           }
         } catch {
-          throw problem(
-            502,
-            "远端作品分支删除失败，请检查网络、GitHub 登录或分支保护后重试；作品仍在回收站",
+          throw Object.assign(
+            problem(
+              502,
+              "远端作品分支删除失败，请检查网络、GitHub 登录或分支保护后重试；作品仍在回收站",
+            ),
+            { expose: true, code: "WORK_REMOTE_DELETE_FAILED", recovery: "retry-purge", retryable: true },
           );
         }
       }
@@ -213,7 +217,7 @@ export async function purgeTrash(works, repo, confirm) {
     try {
       purged.push(await purgeWork(works, work.id, work.title));
     } catch (error) {
-      failed.push({ id: work.id, title: work.title, error: error.message });
+      failed.push({ id: work.id, title: work.title, error: operationError(error).error });
     }
   }
   return { ok: failed.length === 0, total: rows.length, purged, failed };
