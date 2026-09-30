@@ -5,10 +5,10 @@ Windows 本地包提供完整 FRAME 工作台：作品仓库、素材、预览�
 ## 安装与使用
 
 1. 从平台仓库的 [GitHub Releases](https://github.com/jianjianai/frame-studio/releases) 下载与版本号匹配的 `FrameStudio-v<版本>-win-x64.zip` 及 `.sha256`，校验 SHA-256 后完整解压到普通文件夹。
-2. 双击 `FrameStudio.exe`。程序启动 SQLite、语音服务和工作台后常驻托盘；左键单击托盘图标在默认浏览器打开工作台，右键选择“退出”会停止本次启动的服务与任务。
+2. 双击 `FrameStudio.exe`。首次启动下载并校验运行环境，进度显示在托盘提示与 desktop.log；成功后启动 SQLite、语音服务和工作台。左键单击托盘图标在默认浏览器打开工作台，右键选择“退出”会停止本次启动的服务与任务。
 3. 第一次使用时，工作台数据自动保存在 `%LOCALAPPDATA%\FRAME Studio`。更新版本时先从托盘退出，然后将新版解压到新文件夹运行。数据目录独立于程序目录。
 
-工作台仅监听 `127.0.0.1:43173`，语音服务使用临时分配的本机回环端口。如果端口被占用或包内文件缺失，托盘会显示启动失败，详细原因保存在 `%LOCALAPPDATA%\FRAME Studio\desktop.log` 或 `speech.log`。客户端包自带 Node.js、pnpm、Git、FFmpeg、Python 语音依赖及内置模型；浏览器预览使用电脑上的 Microsoft Edge 或兼容 Chromium。
+工作台仅监听 `127.0.0.1:43173`，语音服务使用临时分配的本机回环端口。工具与 Python 运行环境下载到数据目录的 runtimes 中；Node 依赖由 pnpm 根据锁文件安装，共享数据目录中的 pnpm-store。更新程序时复用已有运行环境和依赖，依赖变化时 pnpm 只下载缺少的包。下载失败可退出并重新启动重试。浏览器预览使用电脑上的 Microsoft Edge 或兼容 Chromium。详细原因保存在 desktop.log 或 speech.log。
 
 ## 本机 AI CLI
 
@@ -18,12 +18,12 @@ Windows 本地包提供完整 FRAME 工作台：作品仓库、素材、预览�
 
 ## 数据与功能
 
-`frame.sqlite` 保存工作台状态、会话、任务与事件；SQLite WAL 文件与主密钥也在本地数据目录。作品 Git 仓库、素材、语音自定义模型和任务产物位于同一数据目录。内置语音模型随程序包提供，自定义语音模型写在数据目录中。工作台关闭时停止它启动的原生任务与语音服务；任务记录保留，重新启动后可查看并重试中断的任务。
+`frame.sqlite` 保存工作台状态、会话、任务与事件；SQLite WAL 文件与主密钥也在本地数据目录。作品 Git 仓库、素材、模型和任务产物位于同一数据目录。程序包不携带语音权重，在设置的语音引擎列表中点击“下载模型”，安装后才可试听；也可以上传自定义 Kokoro 模型。模型保存在 models 中，升级后保留。工作台关闭时停止它启动的原生任务与语音服务；任务记录保留，重新启动后可查看并重试中断的任务。
 
 本地模式的 API 限定回环地址与同源请求；没有工作台登录密码。请按普通本机应用保护 Windows 账号和数据目录。GitHub 仓库同步与向作品仓库发布导出仍需要对应的 GitHub 授权和网络连接。
 
 ## 发布规则
 
-平台版本由 `package.json` 与 `src/contracts/version.mjs` 定义。推送同版本 `v<版本>` 标签后，独立的 Windows [发布工作流](../.github/workflows/release.yml)先在 Windows 验证 SQLite 和原生帧导出，再构建包含语音模型的 ZIP 与 SHA-256，最后创建或更新同标签的 GitHub Release。失败的构建不会发布客户端文件。服务器镜像发布流程独立。
+平台版本由 `package.json` 与 `src/contracts/version.mjs` 定义。推送同版本 `v<版本>` 标签后，Windows [发布工作流](../.github/workflows/release.yml)验证原生运行模式，将缺失的版本化运行环境发布到 windows-runtimes Release，再创建轻量 ZIP 与 SHA-256，上传至同版本 Release。语音权重不进入任何发布包或服务器镜像。服务器镜像发布流程独立。
 
-本地开发可运行 `node --test tests/server/local-mode.test.mjs` 验证 SQLite 和原生导出；`desktop/package.ps1` 构建无语音模型的包用于代码与依赖检查，正式发布必须使用 `-IncludeSpeech` 并完成语音服务验证。
+本地开发运行 `node --test tests/server/local-mode.test.mjs tests/server/model-downloads.test.mjs tests/desktop/dependencies.test.mjs`；`tests/desktop/bootstrap.test.ps1` 检查工具安装、缓存复用与摘要失败。pnpm 测试使用本机临时下载源验证真实安装、失败重试、更新复用和增量下载。正式发布使用 `desktop/package.ps1 -PublishRuntimes`。组件缓存和发布规则见 [安装依赖与可选模型](RUNTIME-DOWNLOADS.md)。

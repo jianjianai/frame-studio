@@ -1,4 +1,4 @@
-"""Offline CPU speech engines. Only custom Kokoro models are writable."""
+"""CPU speech engines with explicitly downloaded or uploaded persistent models."""
 import gc
 import io
 import json
@@ -6,6 +6,8 @@ import os
 import re
 import shutil
 import threading
+import tempfile
+import time
 from pathlib import Path
 import numpy as np
 import soundfile as sf
@@ -14,27 +16,101 @@ import sherpa_onnx
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from kokoro import KModel, KPipeline
+from download import install
 
 ROOT = Path(os.environ.get('FRAME_SPEECH_MODELS', '/models'))
 ROOT.mkdir(parents=True, exist_ok=True)
-BUILTIN = Path(os.environ.get('FRAME_SPEECH_BUILTIN', '/opt/builtin'))
 CATALOG = {m['model']: m for m in json.loads(Path(__file__).with_name('catalog.json').read_text(encoding='utf-8'))}
-ONNX_ROOT = Path(os.environ.get('FRAME_SPEECH_ONNX', '/opt/builtin-onnx'))
-ONNX = {'melo': ONNX_ROOT/'vits-melo-tts-zh_en',
-        'piper': ONNX_ROOT/'vits-piper-en_US-libritts_r-medium'}
+ONNX = {'melo', 'piper'}
 ONNX_FILES = {'melo': 'model.onnx', 'piper': 'en_US-libritts_r-medium.onnx'}
 LOCK = threading.RLock()
 CACHE = {}
+DOWNLOADS = ROOT / '.downloads'
+DOWNLOADS.mkdir(exist_ok=True)
+JOBS = {}
+for abandoned in DOWNLOADS.iterdir():
+    marker = abandoned / 'FRAME-INSTALLING.json'
+    if abandoned.is_dir() and not abandoned.is_symlink() and marker.is_file():
+        try:
+            if json.loads(marker.read_text(encoding='utf-8')).get('model') in CATALOG and abandoned.resolve().parent == DOWNLOADS.resolve():
+                shutil.rmtree(abandoned)
+        except (ValueError, OSError):
+            pass
+for state_file in DOWNLOADS.glob('*.json'):
+    try:
+        state = json.loads(state_file.read_text(encoding='utf-8'))
+        if state.get('state') in ('downloading', 'extracting'):
+            state.update(state='failed', error='下载被中断，请重试')
+        JOBS[state_file.stem] = state
+    except (ValueError, OSError):
+        pass
 torch.set_num_threads(2)
 app = FastAPI(docs_url=None, redoc_url=None)
 
 def directory(model):
     if not re.fullmatch(r'[a-z][a-z0-9-]{0,63}', model):
         raise HTTPException(400, 'Invalid model id')
-    folder = BUILTIN if model == 'builtin' else ONNX.get(model, ROOT / model)
+    folder = ROOT / model
     if folder.is_symlink():
         raise HTTPException(400, 'Symbolic model directories are not supported')
     return folder
+
+
+def ready(model, folder):
+    if model in ONNX:
+        return (folder / ONNX_FILES[model]).is_file() and (folder / 'tokens.txt').is_file()
+    return (folder / 'config.json').is_file() and (folder / 'model.pth').is_file() and any((folder / 'voices').glob('*.pt'))
+
+
+def download_model(model):
+    stage = None
+    last_saved = 0
+    def progress(received, total, phase):
+        nonlocal last_saved
+        with LOCK:
+            JOBS[model] = {'state': phase, 'receivedBytes': received, 'totalBytes': total}
+            if time.monotonic() - last_saved >= 0.5:
+                (DOWNLOADS / (model + '.json')).write_text(json.dumps(JOBS[model]), encoding='utf-8')
+                last_saved = time.monotonic()
+    try:
+        stage = Path(tempfile.mkdtemp(prefix=model + '-', dir=DOWNLOADS))
+        (stage / 'FRAME-INSTALLING.json').write_text(json.dumps({'model': model}), encoding='utf-8')
+        install(model, stage, progress)
+        if not ready(model, stage):
+            raise ValueError('下载的模型文件不完整')
+        (stage / 'FRAME-INSTALLING.json').unlink()
+        with LOCK:
+            stage.rename(directory(model))
+            JOBS[model] = {'state': 'installed'}
+    except Exception as error:
+        with LOCK:
+            JOBS[model] = {'state': 'failed', 'error': str(error)[:500]}
+    finally:
+        if stage is not None:
+            shutil.rmtree(stage, ignore_errors=True)
+        with LOCK:
+            (DOWNLOADS / (model + '.json')).write_text(json.dumps(JOBS[model]), encoding='utf-8')
+
+
+@app.post('/models/{model}/download')
+def download(model: str):
+    if model not in CATALOG:
+        raise HTTPException(400, '请选择推荐模型；自定义模型通过文件上传安装')
+    with LOCK:
+        if ready(model, directory(model)):
+            return {'state': 'installed'}
+        if JOBS.get(model, {}).get('state') in ('downloading', 'extracting'):
+            return JOBS[model]
+        if directory(model).exists():
+            raise HTTPException(409, '请先移除不完整的模型再重试')
+        JOBS[model] = {'state': 'downloading', 'receivedBytes': 0, 'totalBytes': 0}
+        try:
+            (DOWNLOADS / (model + '.json')).write_text(json.dumps(JOBS[model]), encoding='utf-8')
+        except OSError as error:
+            JOBS[model] = {'state': 'failed', 'error': str(error)[:500]}
+            raise HTTPException(503, '无法写入模型目录，请检查磁盘空间与权限') from error
+        threading.Thread(target=download_model, args=(model,), daemon=True).start()
+        return JOBS[model]
 
 @app.get('/healthz')
 def health():
@@ -43,16 +119,16 @@ def health():
 @app.get('/models')
 def models():
     result = []
-    for model in list(CATALOG) + sorted(p.name for p in ROOT.iterdir() if p.is_dir() and not p.is_symlink() and p.name not in CATALOG):
+    for model in list(CATALOG) + sorted(p.name for p in ROOT.iterdir() if p.is_dir() and not p.is_symlink() and not p.name.startswith('.') and p.name not in CATALOG):
         folder = directory(model)
         if model in ONNX:
             weights = folder/ONNX_FILES[model]
-            ready = weights.is_file() and weights.stat().st_size > 1024*1024 and (folder/'tokens.txt').is_file()
             voices = [v['id'] for v in CATALOG[model]['voices']]
         else:
             voices = sorted(p.stem for p in (folder/'voices').glob('*.pt') if not p.is_symlink())
-            ready = (folder/'config.json').is_file() and (folder/'model.pth').is_file() and bool(voices)
-        result.append({'id': model, 'builtin': model in CATALOG, 'ready': bool(ready), 'voices': voices})
+        installed = bool(ready(model, folder))
+        result.append({'id': model, 'builtin': model in CATALOG, 'ready': installed, 'voices': voices,
+                       'download': {'state': 'installed'} if installed else JOBS.get(model, {'state': 'missing'})})
     return result
 
 @app.post('/models/{model}')
@@ -67,14 +143,16 @@ def create(model: str):
 
 @app.delete('/models/{model}')
 def delete(model: str):
-    if model in CATALOG:
-        raise HTTPException(409, 'Built-in model is immutable')
     with LOCK:
+        if JOBS.get(model, {}).get('state') in ('downloading', 'extracting'):
+            raise HTTPException(409, '请等待下载完成后再移除')
         folder = directory(model)
         if not folder.exists():
             raise HTTPException(404, 'Model not found')
         CACHE.pop(model, None)
         shutil.rmtree(folder)
+        JOBS.pop(model, None)
+        (DOWNLOADS / (model + '.json')).unlink(missing_ok=True)
     return {'ok': True}
 
 @app.put('/models/{model}/file')
@@ -119,6 +197,8 @@ def speak(body: Speech):
     if body.response_format != 'wav':
         raise HTTPException(400, 'This engine produces WAV')
     folder = directory(body.model)
+    if not ready(body.model, folder):
+        raise HTTPException(409, '请先在语音模型列表下载或上传完整模型')
     if body.model in ONNX:
         if not body.voice.isdecimal() or not 0 <= int(body.voice) < CATALOG[body.model].get('speakerCount', 1):
             raise HTTPException(400, 'Invalid speaker ID')
@@ -126,6 +206,8 @@ def speak(body: Speech):
             if body.model not in CACHE:
                 CACHE.clear()
                 gc.collect()
+                if body.model == 'piper':
+                    os.environ['ESPEAK_DATA_PATH'] = str(folder / 'espeak-ng-data')
                 config = sherpa_onnx.OfflineTtsConfig(
                     model=sherpa_onnx.OfflineTtsModelConfig(
                         vits=sherpa_onnx.OfflineTtsVitsModelConfig(

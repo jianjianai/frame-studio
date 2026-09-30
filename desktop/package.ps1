@@ -1,74 +1,119 @@
-param(
-  [string]$OutputDirectory,
-  [switch]$IncludeSpeech,
-  [string]$SpeechBundle
-)
+param([string]$OutputDirectory, [string]$RuntimeBundle, [switch]$PublishRuntimes)
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
-$manifest = Get-Content -Raw -LiteralPath (Join-Path $repo 'package.json') | ConvertFrom-Json
+$manifest = Get-Content -Raw (Join-Path $repo 'package.json') | ConvertFrom-Json
+$versions = Get-Content -Raw (Join-Path $PSScriptRoot 'runtime-versions.json') | ConvertFrom-Json
 $version = $manifest.version
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo ".cache\release\FrameStudio-v$version-win-x64" }
 $bundle = [IO.Path]::GetFullPath($OutputDirectory)
-if (-not $bundle.StartsWith($repo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-  throw 'The release bundle must be created inside this checkout.'
+if (-not $bundle.StartsWith($repo + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { throw 'The bundle must be created inside this checkout.' }
+if (Test-Path -LiteralPath $bundle) { throw "Bundle already exists: $bundle" }
+$assetDirectory = Join-Path $repo '.cache\runtime-assets'
+New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
+$dependencies = (& node (Join-Path $PSScriptRoot 'dependencies.mjs') fingerprint $repo) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'Dependency fingerprint failed.' }
+$speechDigest = (Get-FileHash (Join-Path $repo 'speech\requirements-win.txt') -Algorithm SHA256).Hash.ToLowerInvariant().Substring(0,12)
+$ids = @{tools=$versions.tools;speech="$($versions.speech)-$speechDigest"}
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$components = @{}
+foreach ($kind in @('tools','speech')) {
+  $id = $ids[$kind]
+  $descriptor = Join-Path $assetDirectory "$id.json"
+  # Existing published components are immutable and are reused across app versions.
+  if (-not (Test-Path -LiteralPath $descriptor)) {
+    & gh release download windows-runtimes --repo jianjianai/frame-studio --pattern "$id.json" --dir $assetDirectory 2>$null
+    if (-not (Test-Path -LiteralPath $descriptor)) {
+      $publishedText = & gh release view windows-runtimes --repo jianjianai/frame-studio --json assets 2>$null
+      if ($LASTEXITCODE -eq 0) {
+        $published = ($publishedText | ConvertFrom-Json).assets | Where-Object { $_.name -eq "$id.zip" -and $_.state -eq 'uploaded' } | Select-Object -First 1
+        if ($published) {
+          if ($published.digest -notmatch '^sha256:([a-f0-9]{64})$') { throw 'Published runtime lacks a verifiable digest.' }
+          @{id=$id;url="https://github.com/jianjianai/frame-studio/releases/download/windows-runtimes/$id.zip";sha256=$Matches[1];bytes=$published.size} | ConvertTo-Json | Set-Content -LiteralPath $descriptor -Encoding utf8
+        }
+      }
+    }
+  }
+  if (Test-Path -LiteralPath $descriptor) {
+    $entry = Get-Content -Raw $descriptor | ConvertFrom-Json
+    if ($entry.id -ne $id -or $entry.sha256 -notmatch '^[a-f0-9]{64}$') { throw "Invalid runtime descriptor: $descriptor" }
+    $components[$kind] = $entry
+    continue
+  }
+  $stage = Join-Path $repo ".cache\runtime-build\$id"
+  if (Test-Path -LiteralPath $stage) { throw "Runtime staging exists: $stage" }
+  New-Item -ItemType Directory -Path $stage -Force | Out-Null
+  if ($kind -eq 'tools') {
+    $node = (Get-Command node.exe).Source
+    if ((& $node --version) -ne "v$($versions.node)") { throw 'Node version differs from runtime-versions.json; update the component version intentionally.' }
+    $gitSource = (Get-Command git.exe).Source
+    $gitRoot = Split-Path -Parent (Split-Path -Parent $gitSource)
+    if (-not (Test-Path (Join-Path $gitRoot 'mingw64\bin\git.exe'))) { throw 'Unsupported Git layout.' }
+    $ffmpegSource = (Get-Command ffmpeg.exe).Source
+    $ffmpegRoot = Split-Path -Parent (Split-Path -Parent $ffmpegSource)
+    if ((Split-Path -Leaf $ffmpegRoot) -eq 'chocolatey') {
+      $real = Get-ChildItem (Join-Path $ffmpegRoot 'lib\ffmpeg') -Recurse -Filter ffmpeg.exe -File | Where-Object { Test-Path (Join-Path $_.DirectoryName 'ffprobe.exe') } | Select-Object -First 1
+      if (-not $real) { throw 'FFmpeg shim target not found.' }
+      $ffmpegRoot = Split-Path -Parent $real.DirectoryName
+    }
+    $pnpmRoot = Join-Path (& npm root -g) 'pnpm'
+    Copy-Item -LiteralPath $node -Destination (Join-Path $stage 'node.exe')
+    Copy-Item -LiteralPath $gitRoot -Destination (Join-Path $stage 'git') -Recurse
+    New-Item -ItemType Directory -Path (Join-Path $stage 'ffmpeg\bin'),(Join-Path $stage 'tools\pnpm') -Force | Out-Null
+    foreach ($exe in @('ffmpeg.exe','ffprobe.exe')) { Copy-Item -LiteralPath (Join-Path $ffmpegRoot "bin\$exe") -Destination (Join-Path $stage "ffmpeg\bin\$exe") }
+    foreach ($license in @('LICENSE','README.txt')) { if (Test-Path (Join-Path $ffmpegRoot $license)) { Copy-Item (Join-Path $ffmpegRoot $license) (Join-Path $stage 'ffmpeg') } }
+    Copy-Item (Join-Path $pnpmRoot 'pnpm.exe') (Join-Path $stage 'tools\pnpm\pnpm.exe')
+    foreach ($exe in @('node.exe','git\cmd\git.exe','ffmpeg\bin\ffmpeg.exe','ffmpeg\bin\ffprobe.exe','tools\pnpm\pnpm.exe')) {
+      $argument = if ($exe.StartsWith('ffmpeg')) { '-version' } else { '--version' }
+      & (Join-Path $stage $exe) $argument *> $null
+      if ($LASTEXITCODE -ne 0) { throw "Runtime tool failed: $exe" }
+    }
+  } else {
+    if ($RuntimeBundle) { Copy-Item -LiteralPath (Join-Path ([IO.Path]::GetFullPath($RuntimeBundle)) 'python') -Destination (Join-Path $stage 'python') -Recurse }
+    else { & (Join-Path $PSScriptRoot 'build-speech.ps1') -Bundle $stage }
+    & (Join-Path $stage 'python\python.exe') -c 'import kokoro, misaki.zh, sherpa_onnx, fastapi, soundfile; print("Speech runtime OK")'
+    if ($LASTEXITCODE -ne 0) { throw 'Speech runtime check failed.' }
+  }
+  $archive = Join-Path $assetDirectory "$id.zip"
+  [IO.Compression.ZipFile]::CreateFromDirectory($stage,$archive,[IO.Compression.CompressionLevel]::Optimal,$false)
+  $entry = @{id=$id;url="https://github.com/jianjianai/frame-studio/releases/download/windows-runtimes/$id.zip";sha256=(Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant();bytes=(Get-Item $archive).Length}
+  $entry | ConvertTo-Json | Set-Content -LiteralPath $descriptor -Encoding utf8
+  $components[$kind] = $entry
 }
-if (Test-Path -LiteralPath $bundle) { throw "Release bundle already exists: $bundle" }
-$node = (Get-Command node.exe -ErrorAction Stop).Source
-$gitSource = (Get-Command git.exe -ErrorAction Stop).Source
-$gitRoot = Split-Path -Parent (Split-Path -Parent $gitSource)
-if (-not (Test-Path -LiteralPath (Join-Path $gitRoot 'mingw64\bin\git.exe'))) { throw "Unsupported Git layout: $gitSource" }
-$ffmpegSource = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
-$ffmpegRoot = Split-Path -Parent (Split-Path -Parent $ffmpegSource)
-if ((Split-Path -Leaf $ffmpegRoot) -eq 'chocolatey') {
-  $real = Get-ChildItem -LiteralPath (Join-Path $ffmpegRoot 'lib\ffmpeg') -Recurse -Filter ffmpeg.exe -File |
-    Where-Object { Test-Path -LiteralPath (Join-Path $_.DirectoryName 'ffprobe.exe') } | Select-Object -First 1
-  if (-not $real) { throw 'Could not find the FFmpeg files behind the Chocolatey shim.' }
-  $ffmpegRoot = Split-Path -Parent $real.DirectoryName
+if ($PublishRuntimes) {
+  & gh release view windows-runtimes --repo jianjianai/frame-studio *> $null
+  if ($LASTEXITCODE -ne 0) {
+    & gh release create windows-runtimes --repo jianjianai/frame-studio --title 'Windows runtime components' --notes 'Immutable cached dependencies used by the Windows installer. Models are downloaded separately on demand.' --latest=false
+    if ($LASTEXITCODE -ne 0) { throw 'Runtime release creation failed.' }
+  }
+  $remoteNames = & gh release view windows-runtimes --repo jianjianai/frame-studio --json assets --jq '.assets[].name'
+  $remoteAssets = (& gh release view windows-runtimes --repo jianjianai/frame-studio --json assets | ConvertFrom-Json).assets
+  foreach ($entry in $components.Values) {
+    $existing = $remoteAssets | Where-Object { $_.name -eq "$($entry.id).zip" } | Select-Object -First 1
+    if ($existing -and $existing.digest -ne "sha256:$($entry.sha256)") { throw 'An immutable runtime archive differs from its descriptor.' }
+    foreach ($suffix in @('zip','json')) {
+      $name = "$($entry.id).$suffix"
+      if ($remoteNames -contains $name) { continue }
+      & gh release upload windows-runtimes (Join-Path $assetDirectory $name) --repo jianjianai/frame-studio
+      if ($LASTEXITCODE -ne 0) { throw "Runtime asset upload failed: $name" }
+    }
+  }
 }
-if (-not (Test-Path -LiteralPath (Join-Path $ffmpegRoot 'bin\ffprobe.exe'))) { throw 'FFmpeg and FFprobe are both required.' }
-$pnpmRoot = Join-Path (& npm root -g) 'pnpm'
-if (-not (Test-Path -LiteralPath (Join-Path $pnpmRoot 'pnpm.exe'))) { throw 'Global pnpm installation is required for packaging.' }
 & pnpm build:studio
 if ($LASTEXITCODE -ne 0) { throw 'Studio build failed.' }
 & (Join-Path $PSScriptRoot 'build.ps1')
-if ($LASTEXITCODE -ne 0) { throw 'Tray build failed.' }
-& pnpm deploy $bundle --node-linker=hoisted --trust-lockfile
-if ($LASTEXITCODE -ne 0) { throw 'Standalone dependency deployment failed.' }
+$pack = (& pnpm pack --dry-run --json --skip-manifest-obfuscation) | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'Application file listing failed.' }
+foreach ($name in (@($pack.files.path) + @('pnpm-lock.yaml','pnpm-workspace.yaml','.npmrc') | Sort-Object -Unique)) {
+  $target = [IO.Path]::GetFullPath((Join-Path $bundle $name))
+  if (-not $target.StartsWith($bundle + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid application file path.' }
+  New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
+  Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $target
+}
 Copy-Item -LiteralPath (Join-Path $repo 'studio-dist') -Destination (Join-Path $bundle 'studio-dist') -Recurse
 Copy-Item -LiteralPath (Join-Path $repo '.cache\desktop\FrameStudio.exe') -Destination (Join-Path $bundle 'FrameStudio.exe')
-Copy-Item -LiteralPath $node -Destination (Join-Path $bundle 'node.exe')
-Copy-Item -LiteralPath $gitRoot -Destination (Join-Path $bundle 'git') -Recurse
-Copy-Item -LiteralPath $ffmpegRoot -Destination (Join-Path $bundle 'ffmpeg') -Recurse
-New-Item -ItemType Directory -Path (Join-Path $bundle 'tools') | Out-Null
-Copy-Item -LiteralPath $pnpmRoot -Destination (Join-Path $bundle 'tools\pnpm') -Recurse
-if ($IncludeSpeech -and $SpeechBundle) { throw 'Choose IncludeSpeech or SpeechBundle.' }
-if ($IncludeSpeech) { & (Join-Path $PSScriptRoot 'build-speech.ps1') -Bundle $bundle }
-if ($SpeechBundle) {
-  $speechSource = [IO.Path]::GetFullPath($SpeechBundle)
-  foreach ($directory in @('python', 'speech-models')) {
-    $source = Join-Path $speechSource $directory
-    if (-not (Test-Path -LiteralPath $source)) { throw "Missing reusable speech directory: $source" }
-    Copy-Item -LiteralPath $source -Destination (Join-Path $bundle $directory) -Recurse
-  }
-  & node (Join-Path $repo 'desktop\smoke-speech.mjs') $bundle
-  if ($LASTEXITCODE -ne 0) { throw 'Reusable speech bundle failed its synthesis check.' }
-}
-Push-Location $bundle
-try {
-  & '.\node.exe' --input-type=module -e 'await import("./server/local-app.mjs"); console.log("Desktop imports OK")'
-  if ($LASTEXITCODE -ne 0) { throw 'Bundled application import failed.' }
-  & '.\git\cmd\git.exe' --version
-  if ($LASTEXITCODE -ne 0) { throw 'Bundled Git failed.' }
-  & '.\ffmpeg\bin\ffmpeg.exe' -version | Select-Object -First 1
-  if ($LASTEXITCODE -ne 0) { throw 'Bundled FFmpeg failed.' }
-  & '.\tools\pnpm\pnpm.exe' --version
-  if ($LASTEXITCODE -ne 0) { throw 'Bundled pnpm failed.' }
-} finally { Pop-Location }
+@{schema=2;components=$components;dependencies=$dependencies} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $bundle 'desktop\runtime-manifest.json') -Encoding utf8
 $zip = "$bundle.zip"
-if (Test-Path -LiteralPath $zip) { throw "Release archive already exists: $zip" }
-Add-Type -AssemblyName System.IO.Compression.FileSystem
-[IO.Compression.ZipFile]::CreateFromDirectory($bundle, $zip, [IO.Compression.CompressionLevel]::Optimal, $false)
-$digest = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+[IO.Compression.ZipFile]::CreateFromDirectory($bundle,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
+$digest=(Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 Set-Content -LiteralPath "$zip.sha256" -Value "$digest  $(Split-Path -Leaf $zip)" -Encoding ascii
-Write-Output $zip
-Write-Output $digest
+Write-Output "$zip ($((Get-Item $zip).Length) bytes)"

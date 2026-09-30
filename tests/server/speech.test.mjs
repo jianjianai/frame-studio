@@ -57,7 +57,7 @@ async function fixture(origin = "http://frame.test") {
     if (route.pathname === "/models")
       return res.end(
         JSON.stringify([
-          { id: "builtin", builtin: true, ready: true, voices: ["zf_xiaobei"] },
+          ...["builtin", "melo", "piper"].map((id) => ({ id, builtin: true, ready: true, voices: id === "builtin" ? ["zf_xiaobei"] : ["0"] })),
           ...models.values(),
         ]),
       );
@@ -161,10 +161,7 @@ test(
           }),
           /无需添加/,
         );
-        await assert.rejects(
-          call("models_delete", { id: e.config.model }),
-          /不能删除/,
-        );
+        assert.equal((await call("models_delete", { id: e.config.model })).ok, true);
         await assert.rejects(
           call("engines_save", {
             name: "copy",
@@ -460,7 +457,7 @@ test(
         .click();
       await dialog.waitFor({ state: "hidden" });
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.getByRole("button", { name: /内置引擎 ·/ }).click();
+      await page.getByRole("button", { name: /推荐模型 ·/ }).click();
       assert(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,

@@ -1,41 +1,71 @@
-from pathlib import Path
-from huggingface_hub import hf_hub_download
-
-import os
-import shutil
+"""Explicit, checksum-pinned model installation; importing never downloads."""
 import hashlib
 import json
+import shutil
 import tarfile
-import tempfile
+import time
 import urllib.request
-REVISION = 'f3ff3571791e39611d31c381e3a41a3af07b4987'
-root = Path(os.environ.get('FRAME_SPEECH_BUILTIN', '/opt/builtin'))
-(root/'voices').mkdir(parents=True, exist_ok=True)
-catalog = json.loads(Path(__file__).with_name('catalog.json').read_text(encoding='utf-8'))
-files = [('config.json','config.json'), ('kokoro-v1_0.pth','model.pth')]
-files += [(f"voices/{v['id']}.pt", f"voices/{v['id']}.pt") for v in catalog[0]['voices']]
-for source, target in files:
-    shutil.copyfile(hf_hub_download('hexgrad/Kokoro-82M', source, revision=REVISION), root/target)
-shutil.copyfile(hf_hub_download('hexgrad/Kokoro-82M', 'README.md', revision=REVISION), root/'MODEL-CARD.md')
-shutil.copyfile(Path(__file__).with_name('LICENSE.kokoro'), root/'LICENSE')
-# Materialize Mandarin dictionaries during image build, not first user request.
-from kokoro import KPipeline
-pipeline = KPipeline(lang_code='z', repo_id='hexgrad/Kokoro-82M', model=False)
-pipeline.g2p('你好，欢迎来到动画工作台。')
+from pathlib import Path
 
-# Checksum-pinned conversion artifacts; retain the distributed model cards/licenses.
-for name, digest in [
-    ('vits-melo-tts-zh_en', 'e58351ed7149f290a54534538badd4077cdbe6fddc964b24d0bee870415d1514'),
-    ('vits-piper-en_US-libritts_r-medium', '10dc268f3e371696d721486123e2705a9fc1faa113491979fde4d88dba1f1b1c'),
-]:
-    with tempfile.TemporaryDirectory() as temporary:
-        archive = Path(temporary)/'model.tar.bz2'
-        urllib.request.urlretrieve(f'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/{name}.tar.bz2', archive)
-        assert hashlib.file_digest(archive.open('rb'), 'sha256').hexdigest() == digest, name
-        onnx_root = Path(os.environ.get('FRAME_SPEECH_ONNX', '/opt/builtin-onnx'))
-        onnx_root.mkdir(parents=True, exist_ok=True)
+SOURCES = json.loads(Path(__file__).with_name('model-sources.json').read_text(encoding='utf-8-sig'))
+
+
+def fetch(url, target, digest, progress, offset=0, total=0):
+    for attempt in range(3):
+        try:
+            request = urllib.request.Request(url, headers={'User-Agent': 'FRAME-Studio-model-installer'})
+            with urllib.request.urlopen(request, timeout=60) as response, target.open('wb') as output:
+                length = int(response.headers.get('Content-Length', 0))
+                received = 0
+                checksum = hashlib.sha256()
+                while chunk := response.read(1024 * 1024):
+                    output.write(chunk)
+                    checksum.update(chunk)
+                    received += len(chunk)
+                    progress(offset + received, total or length, 'downloading')
+            if checksum.hexdigest() != digest:
+                raise ValueError('Model SHA-256 mismatch: ' + target.name)
+            return received
+        except Exception:
+            target.unlink(missing_ok=True)
+            if attempt == 2:
+                raise
+            time.sleep(attempt + 1)
+
+
+def install(model, stage, progress):
+    spec = SOURCES[model]
+    if model == 'builtin':
+        (stage / 'voices').mkdir(parents=True)
+        total = sum(f['bytes'] for f in spec['files'])
+        done = 0
+        for item in spec['files']:
+            url = f"https://huggingface.co/{spec['repository']}/resolve/{spec['revision']}/{item['source']}"
+            done += fetch(url, stage / item['target'], item['sha256'], progress, done, total)
+        shutil.copyfile(Path(__file__).with_name('LICENSE.kokoro'), stage / 'LICENSE')
+    else:
+        name = spec['archive']
+        archive = stage / 'model.tar.bz2'
+        fetch(f'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/{name}.tar.bz2',
+              archive, spec['sha256'], progress)
+        progress(0, 0, 'extracting')
         with tarfile.open(archive) as tar:
-            tar.extractall(onnx_root, filter='data')
-        (onnx_root/name/'FRAME-SOURCE.json').write_text(json.dumps({'archive': name, 'sha256': digest}), encoding='utf-8')
-        if name.startswith('vits-piper-'):
-            shutil.copyfile(Path(__file__).with_name('LICENSE.piper'), onnx_root/name/'LICENSE')
+            tar.extractall(stage, filter='data')
+        archive.unlink()
+        extracted = stage / name
+        for item in list(extracted.iterdir()):
+            item.rename(stage / item.name)
+        extracted.rmdir()
+        if model == 'piper':
+            shutil.copyfile(Path(__file__).with_name('LICENSE.piper'), stage / 'LICENSE')
+    (stage / 'FRAME-SOURCE.json').write_text(json.dumps(spec), encoding='utf-8')
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('model', choices=list(SOURCES))
+    parser.add_argument('destination', type=Path)
+    args = parser.parse_args()
+    args.destination.mkdir(parents=True, exist_ok=False)
+    install(args.model, args.destination, lambda done, total, phase: print(phase, done, total, flush=True))

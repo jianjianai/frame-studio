@@ -4,9 +4,7 @@ RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/wh
 RUN pip install --no-cache-dir 'kokoro==0.9.4' 'misaki[zh]==0.9.4' fastapi uvicorn soundfile numpy
 RUN pip install --no-cache-dir 'sherpa-onnx==1.13.8'
 WORKDIR /opt/speech
-COPY speech/download.py speech/catalog.json speech/LICENSE.kokoro speech/LICENSE.piper ./
-RUN python download.py
-COPY speech/server.py ./
+COPY speech/download.py speech/model-sources.json speech/catalog.json speech/LICENSE.kokoro speech/LICENSE.piper speech/server.py ./
 ENV HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 ARG REVISION=development
 LABEL org.opencontainers.image.source="https://github.com/jianjianai/frame-studio" org.opencontainers.image.revision=$REVISION

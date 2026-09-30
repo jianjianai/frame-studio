@@ -29,6 +29,7 @@ id_ed25519
 .cache/
 .pnpm-store/
 coverage/
+**/__pycache__/
 *.log
 
 # Each film owns its generated files

@@ -6,6 +6,9 @@ using System.Net;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
+using System.Collections.Generic;
+using System.Web.Script.Serialization;
+using System.Text;
 
 namespace FrameStudioDesktop {
   static class Program {
@@ -31,6 +34,7 @@ namespace FrameStudioDesktop {
     readonly string root;
     readonly object logLock = new object();
     Process server;
+    Process installer;
     bool ready;
     bool exiting;
 
@@ -66,7 +70,29 @@ namespace FrameStudioDesktop {
 
     void StartServer() {
       try {
-        var node = Path.Combine(root, "node.exe");
+        var selection = Path.Combine(data, "runtime-selection.json");
+        var setup = Path.Combine(root, "desktop", "bootstrap.ps1");
+        if (!File.Exists(setup)) throw new Exception("安装包缺少运行环境安装器，请重新下载并完整解压。");
+        var setupInfo = new ProcessStartInfo(
+          Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
+          "-NoProfile -ExecutionPolicy Bypass -File \"" + setup + "\" -AppRoot \"" + root.TrimEnd('\\') +
+          "\" -DataRoot \"" + data.TrimEnd('\\') + "\" -Selection \"" + selection + "\"") {
+          UseShellExecute = false, CreateNoWindow = true,
+          RedirectStandardOutput = true, RedirectStandardError = true,
+          StandardOutputEncoding = Encoding.UTF8, StandardErrorEncoding = Encoding.UTF8,
+        };
+        installer = new Process { StartInfo = setupInfo };
+        installer.OutputDataReceived += (sender, args) => { WriteLog(args.Data); Status(args.Data); };
+        installer.ErrorDataReceived += (sender, args) => WriteLog(args.Data);
+        if (!installer.Start()) throw new Exception("无法启动运行环境安装器。");
+        installer.BeginOutputReadLine();
+        installer.BeginErrorReadLine();
+        installer.WaitForExit();
+        if (exiting) return;
+        if (installer.ExitCode != 0) throw new Exception("运行环境安装失败，请查看 desktop.log；重新启动会重试下载。");
+        var runtime = new JavaScriptSerializer().Deserialize<Dictionary<string,string>>(File.ReadAllText(selection));
+        var tools = runtime["tools"];
+        var node = Path.Combine(tools, "node.exe");
         var entry = Path.Combine(root, "server", "local-app.mjs");
         if (!File.Exists(node) || !File.Exists(entry) || !File.Exists(Path.Combine(root, "studio-dist", "index.html")))
           throw new Exception("安装包缺少本地运行文件，请重新下载完整的 Windows 压缩包并解压。");
@@ -79,16 +105,17 @@ namespace FrameStudioDesktop {
           RedirectStandardError = true,
         };
         info.EnvironmentVariables["PATH"] = String.Join(";", new[] {
-          root,
-          Path.Combine(root, "tools", "pnpm"),
-          Path.Combine(root, "git", "cmd"),
-          Path.Combine(root, "git", "mingw64", "bin"),
-          Path.Combine(root, "git", "usr", "bin"),
-          Path.Combine(root, "ffmpeg", "bin"),
+          tools,
+          Path.Combine(tools, "tools", "pnpm"),
+          Path.Combine(tools, "git", "cmd"),
+          Path.Combine(tools, "git", "mingw64", "bin"),
+          Path.Combine(tools, "git", "usr", "bin"),
+          Path.Combine(tools, "ffmpeg", "bin"),
           info.EnvironmentVariables["PATH"],
         });
         info.EnvironmentVariables["FRAME_LOCAL_MODE"] = "1";
         info.EnvironmentVariables["FRAME_LOCAL_DATA"] = data;
+        info.EnvironmentVariables["FRAME_SPEECH_PYTHON"] = Path.Combine(runtime["speech"], "python", "python.exe");
         info.EnvironmentVariables["PORT"] = "43173";
         var edge = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
         if (File.Exists(edge)) info.EnvironmentVariables["FRAME_BROWSER"] = edge;
@@ -123,6 +150,14 @@ namespace FrameStudioDesktop {
       }
     }
 
+    void Status(string message) {
+      if (String.IsNullOrEmpty(message) || exiting) return;
+      try {
+        if (ui.InvokeRequired) ui.BeginInvoke((Action)(() => Status(message)));
+        else tray.Text = message.Length > 60 ? message.Substring(0, 60) : message;
+      } catch { }
+    }
+
     void Show(string message, ToolTipIcon kind) {
       if (exiting) return;
       var text = message.Length > 60 ? message.Substring(0, 60) : message;
@@ -151,6 +186,11 @@ namespace FrameStudioDesktop {
       tray.Visible = false;
       await Task.Run(() => {
         try {
+          if (installer != null && !installer.HasExited) {
+            var stop = new ProcessStartInfo(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "taskkill.exe"),
+              "/PID " + installer.Id + " /T /F") { UseShellExecute = false, CreateNoWindow = true };
+            using (var killer = Process.Start(stop)) { if (killer != null) killer.WaitForExit(10000); }
+          }
           if (server != null && !server.HasExited) {
             server.StandardInput.WriteLine("exit");
             server.StandardInput.Flush();

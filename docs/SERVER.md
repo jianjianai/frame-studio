@@ -4,7 +4,7 @@
 
 `deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio:<版本>` 与 `ghcr.io/jianjianai/frame-speech:<版本>`。服务器需要 Linux x86_64、Docker、HTTPS 反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
 
-在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`，以及宿主机 `stat -c %g /var/run/docker.sock` 得到的 `FRAME_DOCKER_GID`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像，4.2 起默认 4.2.0，升级时同步切换才能使用新增内置引擎。主密钥必须与数据库、文件一起备份，丢失后无法恢复加密凭据。
+在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`，以及宿主机 `stat -c %g /var/run/docker.sock` 得到的 `FRAME_DOCKER_GID`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像；7.3.0 的按需下载功能要求工作台与语音服务同时升级到 7.3.0，旧版语音服务不提供下载接口。主密钥丢失后无法恢复加密凭据，应妥善保管。
 
 模板使用已有 `caddy_caddy` 网络和域名 `frame.nerviloom.com`，部署到其他主机时修改域名、外部网络和 `FRAME_HOST_DATA`。后者必须是 Docker 宿主机上 `./data` 的绝对路径。数据库与语音服务不发布公网端口。
 
@@ -61,11 +61,11 @@ HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `con
 
 ## 语音
 
-内置 Kokoro 中文（8 条声线）、MeloTTS 中英混合、Piper 英文多声线（界面提供 8 条精选声线，API 可用 0–903 speaker ID）。模型与字典随语音镜像构建下载，运行无需联网、密钥或手工添加，CPU 上同时仅保留一个模型。内置引擎由平台维护，网页和 API 均不能新增副本、修改、停用或删除。
+推荐 Kokoro 中文（8 条声线）、MeloTTS 中英混合、Piper 英文多声线（界面提供 8 条精选声线，API 可用 0–903 speaker ID）。语音镜像不包含权重，在设置的语音引擎列表中按需下载。模型安装到持久化的 /models，下载完成后可离线运行，升级镜像会保留。推荐引擎配置由平台维护，已下载的模型文件可以移除后重新安装；CPU 上同时仅保留一个模型。
 
-Kokoro 来自 [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)，固定 revision `f3ff3571791e39611d31c381e3a41a3af07b4987`，Apache-2.0。MeloTTS 来自 [MyShell 中文模型](https://huggingface.co/myshell-ai/MeloTTS-Chinese)，MIT；通过 sherpa-onnx 推理，英文读音受词典覆盖限制。Piper 使用 [LibriTTS-R 模型](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/libritts_r/medium/MODEL_CARD)，MIT / 训练数据 CC BY 4.0。ONNX 下载归档固定 SHA-256，来源与模型卡随镜像保留。
+Kokoro 来自 [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)，固定 revision `f3ff3571791e39611d31c381e3a41a3af07b4987`，Apache-2.0。MeloTTS 来自 [MyShell 中文模型](https://huggingface.co/myshell-ai/MeloTTS-Chinese)，MIT；通过 sherpa-onnx 推理，英文读音受词典覆盖限制。Piper 使用 [LibriTTS-R 模型](https://huggingface.co/rhasspy/piper-voices/blob/main/en/en_US/libritts_r/medium/MODEL_CARD)，MIT / 训练数据 CC BY 4.0。模型文件或下载归档固定 SHA-256，来源、模型卡与许可随下载文件保留在模型目录。
 
-设置页分内置与自定义两类，每个引擎通过“试听”弹窗选声线、语速、文字。“添加自定义引擎”可接入兼容 OpenAI Speech 的 API，或上传 Kokoro 的 `config.json`、`model.pth`、`voices/<名称>.pt`。上传可分批继续，完整文件就绪后保存为引擎；不接受任意脚本或压缩包，PyTorch 文件使用 `weights_only=True` 加载。未完成的模型可以继续上传或删除；已被引擎引用的模型需先删除对应自定义引擎。模型文件就绪不代表合成成功，应先试听。
+设置页分推荐模型与自定义引擎两类；推荐模型提供下载进度、失败重试和移除文件。“添加自定义引擎”可接入兼容 OpenAI Speech 的 API，或上传 Kokoro 的 `config.json`、`model.pth`、`voices/<名称>.pt`。上传可分批继续，完整文件就绪后保存为引擎；不接受任意脚本或压缩包，PyTorch 文件使用 `weights_only=True` 加载。已被自定义引擎引用的模型需先删除对应引擎。模型文件就绪不代表合成成功，应先试听。
 
 `speech_test` 只接受引擎、文字、声线和语速，始终生成 24 小时临时文件，不进入素材库，不修改作品；传入仓库参数会被拒绝。`works_speech` 才将正式配音保存到作品和对应仓库素材库。外部服务可返回 WAV 或 MP3，文件类型经内容验证。原 `speech_test` 附带 repo/project 的旧调用应改用 `works_speech`（平台内部为 `speech_generate`）。
 
@@ -120,7 +120,7 @@ ChatGPT 添加远程 MCP `https://frame.nerviloom.com/mcp`，认证选择 OAuth�
 
 新预览使用构建期生成的压缩音频片段，构建可能比以前耗时，但只在修改后准备一次。生成进度由执行器写入独占工作目录，再持久化为任务状态并经 WebSocket 推送。已有作品升级后需要重新构建预览（运行时版本 6），源码及原始音频不变。开发时可设 `FRAME_PREVIEW_AUDIO=0` 验证原始生成器；线上默认开启。
 
-语音引擎可单独删除配置；模型文件、已生成配音不随之删除。内置配置仅首次初始化，删除后重启不会重新创建，可在模型列表再次「添加为引擎」。GitHub 设备登录兼容镜像自带的 gh，待授权进程保持运行至完成或 15 分钟超时。
+自定义语音引擎可单独删除配置；模型文件、已生成配音不随之删除。推荐引擎由平台维护，模型文件可按需下载或移除。GitHub 设备登录兼容镜像自带的 gh，待授权进程保持运行至完成或 15 分钟超时。
 
 Dockge 的持久目录均在项目内：`./data` 为作品与运行目录，`./postgres` 为 PostgreSQL 18 数据，`./models` 为语音模型。升级旧部署需停止写入后完整复制原 named volume，保留所有权与权限，校验复制内容再切换挂载；不要用空目录直接替换现有数据库。
 

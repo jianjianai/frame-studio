@@ -23,6 +23,7 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
   const key = "frame.voice-draft:" + work.id,
     initial = load(key);
   const engines = useQuery("engines_list"),
+    models = useQuery("models_list"),
     [run, busy] = useAction(notify);
   const [selected, setSelected] = useState(initial.engine || ""),
     [voice, setVoice] = useState(initial.voice || ""),
@@ -36,6 +37,7 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
     engines.data?.find((e) => e.id === selected && e.enabled) ||
     engines.data?.find((e) => e.enabled);
   const chosenVoice = voice || engine?.config?.voice || "";
+  const installed = engine?.kind === "external" || models.data?.some((m) => m.id === engine?.config?.model && m.ready);
   const settings = { engine: engine?.id, voice: chosenVoice, speed, text };
   const signature = JSON.stringify(settings),
     stale = result && result.signature !== signature;
@@ -70,7 +72,7 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
         <>
           <Form
             busy={busy}
-            disabled={!text.trim() || !chosenVoice}
+            disabled={!text.trim() || !chosenVoice || !installed}
             submit="生成试听（不加入作品）"
             onSubmit={() =>
               run(async () => {
@@ -81,6 +83,7 @@ export function Voice({ work, notify, position = {}, onAdopt }) {
               })
             }
           >
+            {!installed && <p>此模型尚未安装，请在<a href="#/settings" target="_blank" rel="noopener">语音引擎列表</a>下载或上传模型后重新打开配音。</p>}
             <Field label="语音引擎">
               <select
                 name="engine"

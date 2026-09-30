@@ -7,15 +7,10 @@ import { fileURLToPath } from "node:url";
 
 const root = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-/** The Windows release carries its own Python runtime, dependencies and models. */
+/** Runtime dependencies are cached independently; models are installed explicitly. */
 export async function startLocalSpeech(data, { port = 0, timeoutMs = 90000 } = {}) {
   const python = process.env.FRAME_SPEECH_PYTHON || path.join(root, "python", "python.exe");
-  const builtin = path.join(root, "speech-models", "builtin");
-  const onnx = path.join(root, "speech-models", "builtin-onnx");
-  if (!fs.existsSync(python) || !fs.existsSync(path.join(builtin, "model.pth")) ||
-      !fs.existsSync(path.join(onnx, "vits-melo-tts-zh_en", "model.onnx")) ||
-      !fs.existsSync(path.join(onnx, "vits-piper-en_US-libritts_r-medium", "en_US-libritts_r-medium.onnx")))
-    throw Error("Windows 安装包缺少 Python 语音运行时或内置模型，请重新下载完整发布包");
+  if (!fs.existsSync(python)) throw Error("语音运行环境尚未安装，请从托盘退出后重新启动以重试下载");
   const drives = [];
   const asciiPath = (directory) => {
     if (process.platform !== "win32" || /^[\x00-\x7f]*$/.test(directory)) return directory;
@@ -57,9 +52,6 @@ export async function startLocalSpeech(data, { port = 0, timeoutMs = 90000 } = {
     cwd: path.join(mappedRoot, "speech"), windowsHide: true,
     env: { ...process.env,
       FRAME_SPEECH_MODELS: path.join(mappedData, "models"),
-      FRAME_SPEECH_BUILTIN: path.join(mappedRoot, "speech-models", "builtin"),
-      FRAME_SPEECH_ONNX: path.join(mappedRoot, "speech-models", "builtin-onnx"),
-      ESPEAK_DATA_PATH: path.join(mappedRoot, "speech-models", "builtin-onnx", "vits-piper-en_US-libritts_r-medium", "espeak-ng-data"),
       HF_HUB_OFFLINE: "1", TRANSFORMERS_OFFLINE: "1" },
     stdio: ["ignore", "pipe", "pipe"],
   });

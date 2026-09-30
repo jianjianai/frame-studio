@@ -1,0 +1,7 @@
+{
+  "tools": "tools-win-x64-1",
+  "speech": "speech-py311-cpu-win-x64-1",
+  "node": "26.8.2",
+  "pnpm": "12.4.2",
+  "torch": "2.14.0+cpu"
+}

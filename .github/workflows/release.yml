@@ -12,7 +12,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "26"
+          node-version: "26.8.2"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -30,12 +30,17 @@ jobs:
         shell: pwsh
         run: |
           $env:FRAME_BROWSER = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-          node --test tests/server/local-mode.test.mjs
+          node --test tests/server/local-mode.test.mjs tests/server/model-downloads.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Windows local mode failed' }
-      - name: Build complete desktop archive
+          ./tests/desktop/bootstrap.test.ps1
+          node --test tests/desktop/dependencies.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'pnpm installation and cache reuse failed' }
+      - name: Build lightweight installer and reusable runtime components
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          ./desktop/package.ps1 -IncludeSpeech
+          ./desktop/package.ps1 -PublishRuntimes
           if ($LASTEXITCODE -ne 0) { throw 'Windows package failed' }
       - name: Publish GitHub Release with the matching tag
         shell: pwsh

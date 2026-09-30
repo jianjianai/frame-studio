@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   Plus,
   Play,
@@ -8,6 +8,7 @@ import {
   Trash2,
   Check,
   ArrowLeft,
+  Download,
 } from "lucide-react";
 import {
   api,
@@ -267,7 +268,7 @@ function LocalEditor({ draft, models, refresh, onSaved }) {
   return (
     <div>
       <p>
-        上传自有 Kokoro 模型，再将它保存为一个自定义引擎。内置模型无需上传。
+        上传自有 Kokoro 模型，再将它保存为一个自定义引擎。
       </p>
       <Field label="引擎名称">
         <input
@@ -417,6 +418,12 @@ export function SpeechSettings({ notify }) {
     [error, setError] = useState("");
   const builtins = engines.data?.filter((e) => e.builtin) || [],
     custom = engines.data?.filter((e) => !e.builtin) || [];
+  const downloading = models.data?.some((m) => ["downloading", "extracting"].includes(m.download?.state));
+  useEffect(() => {
+    if (!downloading) return;
+    const timer = setInterval(models.refresh, 1500);
+    return () => clearInterval(timer);
+  }, [downloading]);
   const drafts =
     models.data?.filter(
       (m) =>
@@ -437,7 +444,7 @@ export function SpeechSettings({ notify }) {
       <div className="section-head">
         <div>
           <h2>语音引擎</h2>
-          <p>选择一种声音，先试听，再用于作品。</p>
+          <p>按需下载推荐模型，或添加自定义模型与语音服务。</p>
         </div>
         <Button
           icon={Plus}
@@ -454,7 +461,7 @@ export function SpeechSettings({ notify }) {
           aria-pressed={tab === "builtin"}
           onClick={() => setTab("builtin")}
         >
-          内置引擎 · {builtins.length}
+          推荐模型 · {builtins.length}
         </Button>
         <Button
           aria-pressed={tab === "custom"}
@@ -467,18 +474,23 @@ export function SpeechSettings({ notify }) {
       {engines.loading && !engines.data && <Loading />}
       <p className="speech-hint">
         {tab === "builtin"
-          ? "内置引擎已随平台安装，无需密钥、下载或添加，可直接试听。"
+          ? "模型首次使用前需要下载，安装后离线运行；更新平台会保留已下载模型。"
           : "连接外部服务或上传自有模型。AI 也可以通过 MCP / CLI 添加和测试自定义引擎。"}
       </p>
       <div className="speech-grid">
-        {(tab === "builtin" ? builtins : custom).map((e) => (
+        {(tab === "builtin" ? builtins : custom).map((e) => {
+          const model = models.data?.find((m) => m.id === e.config.model);
+          const job = model?.download;
+          const active = ["downloading", "extracting"].includes(job?.state);
+          const installed = e.kind === "external" || model?.ready;
+          return (
           <article className="speech-card" key={e.id}>
             <div className="section-head">
               <span className="speech-icon">
                 <Mic size={22} />
               </span>
               <span className="speech-badge">
-                {e.builtin ? "已内置" : e.enabled ? "已启用" : "已停用"}
+                {e.builtin ? installed ? "已安装" : active ? "下载中" : "未安装" : e.enabled ? "已启用" : "已停用"}
               </span>
             </div>
             <h3>{e.name}</h3>
@@ -507,15 +519,27 @@ export function SpeechSettings({ notify }) {
                 模型来源与许可 ↗
               </a>
             )}
+            {active && <div role="status">
+              <progress max={job.totalBytes || undefined} value={job.totalBytes ? job.receivedBytes : undefined} />
+              <small>{job.state === "extracting" ? "正在解压并校验模型" : `已下载 ${(job.receivedBytes / 1048576).toFixed(1)} MiB${job.totalBytes ? ` / ${(job.totalBytes / 1048576).toFixed(1)} MiB` : ""}`}</small>
+            </div>}
+            {job?.error && <ErrorNote error={job.error} />}
             <div className="speech-card-actions">
+              {e.builtin && !installed && <Button icon={Download} className="primary" disabled={busy || active || !!models.error} onClick={async () => {
+                setBusy(true);
+                try { await api("models_download", { id: e.config.model }); models.refresh(); }
+                catch (error) { notify(error.message); }
+                finally { setBusy(false); }
+              }}>{active ? "下载中…" : job?.state === "failed" ? "重试下载" : "下载模型"}</Button>}
               <Button
                 icon={Play}
                 className="primary"
-                disabled={!e.enabled}
+                disabled={!e.enabled || !installed}
                 onClick={() => setAudition(e)}
               >
                 试听
               </Button>
+              {e.builtin && installed && <Button icon={Trash2} aria-label={`移除 ${e.name} 模型`} onClick={() => { setError(""); setRemove({ model }); }} />}
               {!e.builtin && (
                 <>
                   <Button
@@ -539,16 +563,16 @@ export function SpeechSettings({ notify }) {
               )}
             </div>
           </article>
-        ))}
+        ); })}
       </div>
       {tab === "custom" && !custom.length && (
         <div className="speech-empty">
           <Mic size={28} />
           <h3>还没有自定义引擎</h3>
-          <p>内置引擎已可直接使用。需要更多服务或自有模型时，在这里添加。</p>
+          <p>需要更多服务或自有模型时，在这里添加。</p>
         </div>
       )}
-      {tab === "custom" && <ErrorNote error={models.error} />}
+      <ErrorNote error={models.error} />
       {tab === "custom" && drafts.length > 0 && (
         <div className="speech-drafts">
           <h3>尚未完成的本地模型</h3>
@@ -595,7 +619,7 @@ export function SpeechSettings({ notify }) {
               <Button onClick={() => setMethod("local")}>
                 <Upload />
                 <strong>上传本地模型</strong>
-                <span>上传 Kokoro 权重，在服务器运行</span>
+                <span>上传 Kokoro 权重，在当前工作台运行</span>
               </Button>
             </div>
           ) : (
@@ -630,14 +654,14 @@ export function SpeechSettings({ notify }) {
       )}
       {remove && (
         <Modal
-          title={remove.engine ? "删除自定义引擎" : "删除未完成模型"}
+          title={remove.engine ? "删除自定义引擎" : "移除模型文件"}
           onClose={() => setRemove(null)}
         >
           <p>
             确认删除“{remove.engine?.name || remove.model.id}”？
             {remove.engine
               ? "已经生成的配音和模型文件会保留。"
-              : "这会移除已上传的模型文件。"}
+              : "这会移除模型文件；已生成的配音会保留，推荐模型可以重新下载。"}
           </p>
           <ErrorNote error={error} />
           <Button

@@ -11,20 +11,14 @@ const { startLocalSpeech } = await import(pathToFileURL(path.join(bundle, "serve
 let speech;
 try {
   speech = await startLocalSpeech(data);
-  for (const [model, input, voice] of [
-    ["builtin", "你好", "zf_xiaobei"],
-    ["melo", "你好", "0"],
-    ["piper", "Hello", "0"],
-  ]) {
-    const response = await fetch(speech.url + "/v1/audio/speech", {
-      method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model, input, voice }), signal: AbortSignal.timeout(90000),
-    });
-    const wave = Buffer.from(await response.arrayBuffer());
-    if (!response.ok || wave.toString("ascii", 0, 4) !== "RIFF" || wave.length < 1000)
-      throw Error(`${model} speech check failed: ${response.status} ${wave.toString("utf8", 0, 400)}`);
-    console.log(`${model} speech OK: ${wave.length} bytes`);
-  }
+  const models = await (await fetch(speech.url + "/models")).json();
+  if (models.length !== 3 || models.some((model) => model.ready)) throw Error("Fresh installations must not contain model weights");
+  const response = await fetch(speech.url + "/v1/audio/speech", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ input: "你好", model: "builtin", voice: "zf_xiaobei" }),
+  });
+  if (response.status !== 409) throw Error("Missing models must require explicit installation");
+  console.log("Speech starts without weights; missing models require explicit download");
 } finally {
   await speech?.close();
   fs.rmSync(data, { recursive: true, force: true });

@@ -84,6 +84,10 @@ export function speechOperations({ add, db, data, secrets, assets }) {
     const { row, builtin, config: c } = await resolve(a.engine),
       start = Date.now(),
       voice = a.voice || c.voice;
+    if (builtin || normalize(c.url) === normalize(localUrl() + "/v1")) {
+      const installed = (await local("/models")).find((m) => m.id === c.model);
+      if (!installed?.ready) throw problem(409, "请先在语音模型列表下载或上传该模型");
+    }
     if (
       builtin &&
       !builtin.voices.some((v) => v.id === voice) &&
@@ -374,9 +378,15 @@ export function speechOperations({ add, db, data, secrets, assets }) {
   );
   add(
     "models_list",
-    "List installed local models, immutable built-ins and upload readiness",
+    "List optional recommended and custom local models, installation state and download progress",
     {},
     () => local("/models"),
+  );
+  add(
+    "models_download",
+    "Download a recommended speech model into persistent storage; returns immediately, inspect models_list for progress",
+    { id: modelId },
+    (a) => local("/models/" + a.id + "/download", { method: "POST" }),
   );
   add(
     "models_create",
@@ -386,11 +396,9 @@ export function speechOperations({ add, db, data, secrets, assets }) {
   );
   add(
     "models_delete",
-    "Delete a custom model after removing every referencing engine; built-ins are immutable",
+    "Remove downloaded model files; custom models require removing every referencing custom engine",
     { id: modelId },
     async (a) => {
-      if (builtinSpeech.some((b) => b.model === a.id))
-        throw problem(409, "内置模型不能删除");
       for (const row of await db.all(
         "SELECT config FROM engines WHERE builtin IS NULL",
       )) {
