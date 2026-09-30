@@ -23,11 +23,11 @@ export async function workQueueStatus({
     [work.id],
   );
   const runtime = await db.setting("controller-runtime");
-  const controllerReady =
+  const controllerReady = db.kind === "sqlite" || (
     !!runtime?.leader &&
     !!runtime?.docker?.ok &&
     now - Number(runtime.checked) >= 0 &&
-    now - Number(runtime.checked) < 45000;
+    now - Number(runtime.checked) < 45000);
   const concurrency = Math.max(
     1,
     Math.min(
@@ -64,7 +64,7 @@ export async function workQueueStatus({
       } else if (!controllerReady) {
         code = "controller-unavailable";
         reason = "调度器心跳尚未就绪；请求已保存，不需要重复发送";
-      } else if (runtime.queueBlocked) {
+      } else if (runtime?.queueBlocked) {
         code = "resource-blocked";
         reason = String(runtime.queueBlocked).slice(0, 1000);
       } else if (running >= concurrency) {

@@ -354,7 +354,7 @@ const currentSettingsTab = () => {
   const tab = location.hash.split("/")[2];
   return settingsSections.some((section) => section.id === tab) ? tab : "ai";
 };
-export function Settings({ notify }) {
+export function Settings({ notify, localMode = false }) {
   const [tab, setTab] = useState(currentSettingsTab),
     [search, setSearch] = useState("");
   useEffect(() => {
@@ -423,7 +423,7 @@ export function Settings({ notify }) {
               )}
             </section>
           ) : tab === "ai" ? (
-            <ModelConnections notify={notify} />
+            <ModelConnections notify={notify} localMode={localMode} />
           ) : tab === "general" ? (
             <GeneralAiSettings />
           ) : tab === "github" ? (

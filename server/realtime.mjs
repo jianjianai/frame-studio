@@ -21,7 +21,7 @@ const watched = {
   works_sync_status: ["work_sync"],
   works_scm_status: ["works", "work_sync", "tasks", "work_undos"],
 };
-export async function installRealtime(app, db, actions, origin) {
+export async function installRealtime(app, db, actions, origin, { localMode = false } = {}) {
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: 2 * 1024 * 1024,
@@ -52,13 +52,14 @@ export async function installRealtime(app, db, actions, origin) {
       if (!closed) reconnect = setTimeout(listen, 2000);
     }
   };
-  await listen();
+  if (!localMode) await listen();
+  else reconnect = setInterval(() => changed(null), 1000);
   const authorized = async (session) =>
-    !!session &&
+    localMode || (!!session &&
     !!(await db.one(
       "SELECT hash FROM sessions WHERE hash=$1 AND expires>now()",
       [session],
-    ));
+    )));
   const upgrade = async (req, socket, head) => {
     if (req.url !== "/api/ws") {
       socket.destroy();
@@ -75,7 +76,7 @@ export async function installRealtime(app, db, actions, origin) {
         return;
       }
       wss.handleUpgrade(req, socket, head, (ws) => {
-        ws.session = hash(session);
+        ws.session = session ? hash(session) : null;
         wss.emit("connection", ws);
       });
     } catch {

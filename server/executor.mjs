@@ -6,10 +6,11 @@ import { runAgentTurn } from "./agent-runtime.mjs";
 import { createAgentFileInspector } from "./agent-file-changes.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
+import { browserOptions } from "../scripts/browser.mjs";
 import { installToolVersion } from "./tool-installation.mjs";
 import { creatorTaskIgnores, creatorPrompt } from "./creator-workspace.mjs";
-const work = "/workspace",
-  core = "/opt/frame";
+const work = process.env.FRAME_EXECUTOR_WORK || "/workspace",
+  core = process.env.FRAME_EXECUTOR_CORE || "/opt/frame";
 const task = JSON.parse(fs.readFileSync(work + "/task.json", "utf8"));
 const redact = (value) => {
   let text = String(value);
@@ -138,7 +139,7 @@ try {
     ])
       if (fs.existsSync(core + "/" + name))
         fs.cpSync(core + "/" + name, work + "/" + name, { recursive: true });
-    fs.symlinkSync(core + "/node_modules", work + "/node_modules", "dir");
+    fs.symlinkSync(core + "/node_modules", work + "/node_modules", process.platform === "win32" ? "junction" : "dir");
     await run("git", ["init", "-b", "frame-task"]);
     await run("git", ["config", "user.name", "FRAME"]);
     await run("git", ["config", "user.email", "frame@localhost"]);
@@ -167,7 +168,7 @@ try {
     await run("git", ["commit", "-qm", "Initialize isolated task workspace"]);
     const baselineCommit = (await run("git", ["rev-parse", "HEAD"])).trim();
     actualRuntime.ffmpeg = (await run(process.env.FFMPEG_PATH || "ffmpeg", ["-version"])).split("\n")[0];
-    actualRuntime.browser = (await run(process.env.FRAME_BROWSER || "/usr/bin/chromium", ["--version"])).trim();
+    actualRuntime.browser = (await run(browserOptions().executablePath, ["--version"])).trim();
     let value = { status: "passed" };
     if (task.kind === "agent") {
       const p = task.input.provider;

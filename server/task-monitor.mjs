@@ -5,8 +5,8 @@ import { confined } from "./security.mjs";
 
 /** Observability failures do not imply execution failures; cursors are persisted in SQL. */
 export class TaskMonitor {
-  constructor({ db, data, command, get, complete, failTask }) {
-    Object.assign(this, { db, data, command, get, complete, failTask });
+  constructor({ db, data, command, get, complete, failTask, localProcesses = null }) {
+    Object.assign(this, { db, data, command, get, complete, failTask, localProcesses });
     this.logs = new Map();
     this.monitorWarnings = new Map();
     this.missingContainers = new Map();
@@ -41,19 +41,24 @@ export class TaskMonitor {
     }
     let state;
     try {
-      state = JSON.parse(await this.command("docker", ["inspect", "--format", "{{json .State}}", t.container], { timeout: 10000, max: 65536 }));
+      state = this.localProcesses
+        ? this.localProcesses.inspect(t.id, t.container)
+        : JSON.parse(await this.command("docker", ["inspect", "--format", "{{json .State}}", t.container], { timeout: 10000, max: 65536 }));
       if (typeof state?.Running !== "boolean" || (!state.Running && !Number.isInteger(state.ExitCode)))
         throw Error("Docker returned an incomplete task state");
       this.missingContainers.delete(t.id);
     } catch (e) {
-      const missing = /No such (?:object|container)/i.test(e.message);
+      const missing = this.localProcesses || /No such (?:object|container)/i.test(e.message);
       const count = missing ? (this.missingContainers.get(t.id) || 0) + 1 : 0;
       this.missingContainers.set(t.id, count);
-      await this.monitorWarning(t, "docker", e);
+      await this.monitorWarning(t, this.localProcesses ? "local-worker" : "docker", e);
       // Confirm repeated absence against a healthy daemon, not a broken connection.
       if (count >= 3 && Date.now() - new Date(t.started).getTime() > 120000) {
-        await this.command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 10000 });
-        await this.failTask(t, "执行容器连续多次确认不存在；工作副本已保留，请检查后重试。");
+        if (!this.localProcesses)
+          await this.command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 10000 });
+        await this.failTask(t, this.localProcesses
+          ? "本机执行进程连续多次确认不存在；工作副本已保留，请检查后重试。"
+          : "执行容器连续多次确认不存在；工作副本已保留，请检查后重试。");
       }
       return;
     }
@@ -63,7 +68,8 @@ export class TaskMonitor {
     if (state.Running && (t.state === "cancelling" || timedOut)) {
       // Successful stop is followed by a fresh inspect on the next tick. A failed
       // stop is a monitoring problem, not permission to force-remove the container.
-      await this.command("docker", ["stop", "-t", "5", t.container], { timeout: 20000 });
+      if (this.localProcesses) await this.localProcesses.stop(t.id, t.container);
+      else await this.command("docker", ["stop", "-t", "5", t.container], { timeout: 20000 });
       return;
     }
     if (timedOut && !state.Running) {
@@ -73,7 +79,8 @@ export class TaskMonitor {
         if (t.kind === "agent") {
           do { if (!(await this.collectEvents(t))) break; } while (!state.Running);
         } else {
-          const log = await this.command("docker", ["logs", "--tail", "1500", t.container], { timeout: 10000, max: 1024 * 1024, combined: true });
+          const log = this.localProcesses ? this.localProcesses.logs(t.id)
+            : await this.command("docker", ["logs", "--tail", "1500", t.container], { timeout: 10000, max: 1024 * 1024, combined: true });
           if (log !== this.logs.get(t.id)) {
             const old = this.logs.get(t.id) || "";
             const delta = log.startsWith(old) ? log.slice(old.length) : log;
@@ -98,7 +105,8 @@ export class TaskMonitor {
       this.monitorWarnings.delete(t.id);
     }
     if (!state.Running && ["succeeded", "failed", "cancelled"].includes((await this.get(t.id)).state)) {
-      await this.command("docker", ["rm", t.container], { timeout: 10000 }).catch(() => {});
+      if (!this.localProcesses)
+        await this.command("docker", ["rm", t.container], { timeout: 10000 }).catch(() => {});
       this.logs.delete(t.id);
       this.missingContainers.delete(t.id);
     }

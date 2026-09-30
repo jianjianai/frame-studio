@@ -264,7 +264,7 @@ function App() {
             >
               <span>{collapsed ? "展开" : "收起导航"}</span>
             </Button>
-            <Button
+            {!me.localMode && <Button
               icon={LogOut}
               aria-label="退出登录"
               onClick={async () => {
@@ -273,7 +273,7 @@ function App() {
               }}
             >
               <span>退出登录</span>
-            </Button>
+            </Button>}
           </footer>
         </aside>
       )}
@@ -293,7 +293,7 @@ function App() {
         ) : section === "materials" ? (
           <Materials notify={notify} />
         ) : section === "settings" ? (
-          <Settings notify={notify} />
+          <Settings notify={notify} localMode={!!me.localMode} />
         ) : (
           <WorkLibrary recent notify={notify} />
         )}

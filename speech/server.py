@@ -2,6 +2,7 @@
 import gc
 import io
 import json
+import os
 import re
 import shutil
 import threading
@@ -14,12 +15,13 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from kokoro import KModel, KPipeline
 
-ROOT = Path('/models')
-ROOT.mkdir(exist_ok=True)
-BUILTIN = Path('/opt/builtin')
-CATALOG = {m['model']: m for m in json.loads(Path(__file__).with_name('catalog.json').read_text())}
-ONNX = {'melo': Path('/opt/builtin-onnx/vits-melo-tts-zh_en'),
-        'piper': Path('/opt/builtin-onnx/vits-piper-en_US-libritts_r-medium')}
+ROOT = Path(os.environ.get('FRAME_SPEECH_MODELS', '/models'))
+ROOT.mkdir(parents=True, exist_ok=True)
+BUILTIN = Path(os.environ.get('FRAME_SPEECH_BUILTIN', '/opt/builtin'))
+CATALOG = {m['model']: m for m in json.loads(Path(__file__).with_name('catalog.json').read_text(encoding='utf-8'))}
+ONNX_ROOT = Path(os.environ.get('FRAME_SPEECH_ONNX', '/opt/builtin-onnx'))
+ONNX = {'melo': ONNX_ROOT/'vits-melo-tts-zh_en',
+        'piper': ONNX_ROOT/'vits-piper-en_US-libritts_r-medium'}
 ONNX_FILES = {'melo': 'model.onnx', 'piper': 'en_US-libritts_r-medium.onnx'}
 LOCK = threading.RLock()
 CACHE = {}
@@ -95,7 +97,7 @@ async def upload(model: str, path: str, request: Request):
         if path == 'config.json':
             if size > 1024 * 1024:
                 raise HTTPException(413, 'Configuration too large')
-            json.loads(temporary.read_text())
+            json.loads(temporary.read_text(encoding='utf-8'))
         else:
             torch.load(str(temporary), map_location='cpu', weights_only=True)
         with LOCK:

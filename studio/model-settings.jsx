@@ -45,6 +45,8 @@ import "./provider-settings.css";
 const providerLabel = (provider) =>
   provider.enabled === false
     ? "已停用"
+    : provider.state === "unavailable"
+      ? "CLI 不可用"
     : providerAvailable(provider)
       ? provider.mode !== "official" &&
         !provider.models?.some((m) => m.enabled !== false)
@@ -52,7 +54,7 @@ const providerLabel = (provider) =>
         : "已配置"
       : "待连接";
 
-export function ProviderSettings({ notify, LoginDialog }) {
+export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
   const connections = useQuery("connections_list", {}, 1),
     [selectedId, setSelectedId] = useState(""),
     [search, setSearch] = useState(""),
@@ -104,15 +106,15 @@ export function ProviderSettings({ notify, LoginDialog }) {
       <div className="settings-section-heading">
         <div>
           <h2>提供商与模型</h2>
-          <p>连接 API，自动发现模型与规格。手动配置仅作兜底。</p>
+          <p>{localMode ? "使用本机 Codex 和 Claude CLI；未安装时显示不可用。请在终端登录官方账号。" : "连接 API，自动发现模型与规格。手动配置仅作兜底。"}</p>
         </div>
-        <Button
+        {!localMode && <Button
           className="primary"
           icon={Plus}
           onClick={() => setEdit({ tool: "codex", mode: "api" })}
         >
           添加提供商
-        </Button>
+        </Button>}
       </div>
       <ErrorNote error={connections.error} />
       {connections.error && (
@@ -123,7 +125,7 @@ export function ProviderSettings({ notify, LoginDialog }) {
       ) : !providers.length ? (
         <Empty
           action={
-            <Button onClick={() => setEdit({ tool: "codex", mode: "api" })}>
+            <Button disabled={localMode} onClick={() => setEdit({ tool: "codex", mode: "api" })}>
               连接第一个提供商
             </Button>
           }
@@ -219,7 +221,7 @@ export function ProviderSettings({ notify, LoginDialog }) {
                 >
                   {selected.mode === "official" ? "检查登录" : "测试默认模型"}
                 </Button>
-                {selected.mode === "official" && (
+                {selected.mode === "official" && !localMode && (
                   <Button
                     icon={Link}
                     disabled={busy}
@@ -421,7 +423,7 @@ export function ProviderSettings({ notify, LoginDialog }) {
               <p className="settings-help">
                 发现模型也可更新已有规格，不覆盖手动值。停用或移除模型不会删除历史消息；任务不会暗中改用其他模型。
               </p>
-              <div className="provider-danger-zone">
+              {!localMode && <div className="provider-danger-zone">
                 <div>
                   <strong>删除此提供商</strong>
                   <p>清除连接凭据与模型目录，保留作品及历史对话。</p>
@@ -434,7 +436,7 @@ export function ProviderSettings({ notify, LoginDialog }) {
                 >
                   删除提供商
                 </Button>
-              </div>
+              </div>}
             </div>
           )}
         </div>
@@ -627,7 +629,8 @@ export function ToolSettings({ notify }) {
         <div className="settings-row" key={tool.tool}>
           <div>
             <h3>{tool.tool === "codex" ? "Codex" : "Claude Code"}</h3>
-            <p>{tool.version}</p>
+            <p>{tool.available ? tool.version : "未安装或不可用"}</p>
+            {tool.localMode && <p>使用这台电脑上已安装并登录的 CLI。</p>}
             {tool.updates?.[0] && (
               <p>
                 最近更新：{tool.updates[0].state}
@@ -635,7 +638,7 @@ export function ToolSettings({ notify }) {
               </p>
             )}
           </div>
-          <Button onClick={() => setUpgrade(tool.tool)}>更新版本</Button>
+          {!tool.localMode && <Button onClick={() => setUpgrade(tool.tool)}>更新版本</Button>}
         </div>
       ))}
       {upgrade && (

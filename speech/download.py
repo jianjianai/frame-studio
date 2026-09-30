@@ -1,5 +1,7 @@
 from pathlib import Path
 from huggingface_hub import hf_hub_download
+
+import os
 import shutil
 import hashlib
 import json
@@ -7,15 +9,15 @@ import tarfile
 import tempfile
 import urllib.request
 REVISION = 'f3ff3571791e39611d31c381e3a41a3af07b4987'
-root = Path('/opt/builtin')
+root = Path(os.environ.get('FRAME_SPEECH_BUILTIN', '/opt/builtin'))
 (root/'voices').mkdir(parents=True, exist_ok=True)
-catalog = json.loads(Path('/opt/speech/catalog.json').read_text())
+catalog = json.loads(Path(__file__).with_name('catalog.json').read_text(encoding='utf-8'))
 files = [('config.json','config.json'), ('kokoro-v1_0.pth','model.pth')]
 files += [(f"voices/{v['id']}.pt", f"voices/{v['id']}.pt") for v in catalog[0]['voices']]
 for source, target in files:
     shutil.copyfile(hf_hub_download('hexgrad/Kokoro-82M', source, revision=REVISION), root/target)
 shutil.copyfile(hf_hub_download('hexgrad/Kokoro-82M', 'README.md', revision=REVISION), root/'MODEL-CARD.md')
-shutil.copyfile('/opt/speech/LICENSE.kokoro', root/'LICENSE')
+shutil.copyfile(Path(__file__).with_name('LICENSE.kokoro'), root/'LICENSE')
 # Materialize Mandarin dictionaries during image build, not first user request.
 from kokoro import KPipeline
 pipeline = KPipeline(lang_code='z', repo_id='hexgrad/Kokoro-82M', model=False)
@@ -30,8 +32,10 @@ for name, digest in [
         archive = Path(temporary)/'model.tar.bz2'
         urllib.request.urlretrieve(f'https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/{name}.tar.bz2', archive)
         assert hashlib.file_digest(archive.open('rb'), 'sha256').hexdigest() == digest, name
+        onnx_root = Path(os.environ.get('FRAME_SPEECH_ONNX', '/opt/builtin-onnx'))
+        onnx_root.mkdir(parents=True, exist_ok=True)
         with tarfile.open(archive) as tar:
-            tar.extractall('/opt/builtin-onnx', filter='data')
-        (Path('/opt/builtin-onnx')/name/'FRAME-SOURCE.json').write_text(json.dumps({'archive': name, 'sha256': digest}))
+            tar.extractall(onnx_root, filter='data')
+        (onnx_root/name/'FRAME-SOURCE.json').write_text(json.dumps({'archive': name, 'sha256': digest}), encoding='utf-8')
         if name.startswith('vits-piper-'):
-            shutil.copyfile('/opt/speech/LICENSE.piper', Path('/opt/builtin-onnx')/name/'LICENSE')
+            shutil.copyfile(Path(__file__).with_name('LICENSE.piper'), onnx_root/name/'LICENSE')

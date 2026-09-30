@@ -41,7 +41,10 @@ export async function createApp({
   masterKey = process.env.FRAME_MASTER_KEY,
   origin = process.env.FRAME_PUBLIC_URL || "http://localhost:3000",
   scheduler = process.env.FRAME_ROLE !== "api",
+  localMode = process.env.FRAME_LOCAL_MODE === "1",
 } = {}) {
+  if (localMode && !/^http:\/\/127\.0\.0\.1:\d+$/.test(origin))
+    throw new Error("Local mode requires an exact 127.0.0.1 HTTP origin");
   if (process.env.FRAME_ROLE === "controller")
     throw new Error("The controller role must not expose the HTTP application");
   if (process.env.FRAME_ROLE === "api" && scheduler)
@@ -67,8 +70,9 @@ export async function createApp({
     limits: { fileSize: 1024 * 1024 * 1024, files: 1, fields: 8 },
   });
   await app.register(rateLimit, { global: false });
-  await installRealtime(app, db, actions, origin);
-  const oauth = await installOAuth(app, db, actions, origin);
+  await installRealtime(app, db, actions, origin, { localMode });
+  const oauth = localMode ? { verify: async () => false, challenge: "" }
+    : await installOAuth(app, db, actions, origin);
   app.setErrorHandler((err, req, res) => {
     const failure = operationError(err, req.id),
       status = failure.status;
@@ -88,6 +92,8 @@ export async function createApp({
     maxAge: 7 * 86400,
   };
   app.addHook("onRequest", async (req, res) => {
+    if (localMode && req.headers.host !== new URL(origin).host)
+      throw problem(403, "Local mode only accepts its loopback address");
     res
       .header("X-Content-Type-Options", "nosniff")
       .header("Referrer-Policy", "no-referrer")
@@ -107,6 +113,11 @@ export async function createApp({
           [hash(bearer)],
         );
       if (!req.agentTask) throw problem(401, "Active task credential required");
+      return;
+    }
+    if (localMode) {
+      if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.headers.origin !== origin)
+        throw problem(403, "Invalid request origin");
       return;
     }
     if (bearer)
@@ -151,6 +162,7 @@ export async function createApp({
     "/api/login",
     { config: { rateLimit: { max: 8, timeWindow: "1 minute" } } },
     async (req, res) => {
+      if (localMode) throw problem(404, "Password login is unavailable in local mode");
       if (req.headers.origin !== origin)
         throw problem(403, "Invalid request origin");
       const admin = await db.setting("admin");
@@ -165,8 +177,9 @@ export async function createApp({
       return { ok: true };
     },
   );
-  app.get("/api/me", async () => ({ user: "admin", origin }));
+  app.get("/api/me", async () => ({ user: "admin", origin, localMode }));
   app.post("/api/logout", async (req, res) => {
+    if (localMode) return { ok: true };
     if (req.cookies.frame_session)
       await db.pool.query("DELETE FROM sessions WHERE hash=$1", [
         hash(req.cookies.frame_session),
@@ -493,7 +506,7 @@ if (
   path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   const { app } = await createApp();
-  await app.listen({ host: "0.0.0.0", port: Number(process.env.PORT || 3000) });
+  await app.listen({ host: process.env.FRAME_LOCAL_MODE === "1" ? "127.0.0.1" : "0.0.0.0", port: Number(process.env.PORT || 3000) });
   for (const signal of ["SIGINT", "SIGTERM"])
     process.once(signal, () => app.close().then(() => process.exit(0)));
 }

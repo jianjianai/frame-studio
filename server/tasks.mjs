@@ -18,6 +18,7 @@ import { executionRuntime } from "./execution-runtime.mjs";
 import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { executableTaskKindSchema } from "../src/contracts/platform.mjs";
 import { ControllerLease } from "./controller-lease.mjs";
+import { LocalProcesses } from "./local-processes.mjs";
 import { resolveExecution, continuationContext } from "./execution-selection.mjs";
 import { prepareReviewReference } from "./review-reference.mjs";
 // Pre-V5 chat tasks stored server-enriched input. Recover their original acknowledgement
@@ -45,11 +46,12 @@ export class Tasks {
     this.data = data;
     this.repos = repos;
     this.secrets = secrets;
+    this.localProcesses = process.env.FRAME_LOCAL_MODE === "1" ? new LocalProcesses(data) : null;
     this.publication = new TaskPublication({
       db, data, repos, get: id => this.get(id), finishCancellation: id => this.finishCancellation(id),
     });
     this.monitor = new TaskMonitor({
-      db, data, command: (...args) => this.command(...args), get: id => this.get(id),
+      db, data, command: (...args) => this.command(...args), get: id => this.get(id), localProcesses: this.localProcesses,
       complete: (task, exit) => this.complete(task, exit), failTask: (task, message) => this.failTask(task, message),
     });
     this.ticking = false;
@@ -168,8 +170,8 @@ export class Tasks {
     return lock(async () => {
       const container = "frame-task-" + t.id;
       const claimed = await this.db.one(
-        "UPDATE tasks SET state='running',started=now(),container=$2,controller_id=$3,progress=$4,metrics=metrics||jsonb_build_object('queueMs',GREATEST(0,EXTRACT(EPOCH FROM (now()-created))*1000)) WHERE id=$1 AND state='queued' RETURNING id",
-        [t.id, container, this.controllerId, { stage: "准备隔离工作副本" }],
+        "UPDATE tasks SET state='running',started=now(),container=$2,controller_id=$3,progress=$4,metrics=metrics||$5::jsonb WHERE id=$1 AND state='queued' RETURNING id",
+        [t.id, container, this.controllerId, { stage: "准备隔离工作副本" }, { queueMs: Math.max(0, Date.now() - new Date(t.created).getTime()) }],
       );
       if (!claimed) return;
       try {
@@ -260,14 +262,14 @@ export class Tasks {
       authMode: config.mode || "api",
     };
     fs.writeFileSync(path.join(run, "task.json"), JSON.stringify(payload));
-    await this.command("chown", ["-R", "1000:1000", run]);
+    if (!this.localProcesses) await this.command("chown", ["-R", "1000:1000", run]);
     const session = t.chat || t.id,
       sessionDir = path.join(this.data, "sessions", session);
     fs.mkdirSync(path.join(sessionDir, ".codex"), { recursive: true });
-    await this.command("chown", ["-R", "1000:1000", sessionDir]);
+    if (!this.localProcesses) await this.command("chown", ["-R", "1000:1000", sessionDir]);
     const env = { FRAME_RUNTIME_IMAGE: runtime.image };
     const flags = ["-e", "FRAME_RUNTIME_IMAGE"];
-    if (t.kind === "agent" && config.mode === "official") {
+    if (!this.localProcesses && t.kind === "agent" && config.mode === "official") {
       const auth = path.join(this.data, "auth", config.id);
       if (!fs.existsSync(auth))
         throw problem(409, "官方登录凭据不存在，请重新登录");
@@ -314,6 +316,18 @@ export class Tasks {
     if (!prepared) {
       if ((await this.get(t.id)).state === "cancelling") await this.finishCancellation(t.id);
       await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
+      return;
+    }
+    if (this.localProcesses) {
+      if ((await this.get(t.id)).state !== "running") { await this.finishCancellation(t.id); return; }
+      const claim = await this.db.one(
+        "UPDATE tasks SET launch_attempted_at=now() WHERE id=$1 AND state='running' AND controller_id=$2 AND launch_attempted_at IS NULL RETURNING id",
+        [t.id, this.controllerId],
+      );
+      if (!claim) return;
+      const pid = this.localProcesses.launch(t.id, { ...process.env, ...env, FRAME_LOCAL_MODE: "1" });
+      await this.db.pool.query("UPDATE tasks SET container=$2 WHERE id=$1", [t.id, String(pid)]);
+      await this.db.event(t.id, "state", { state: "running" });
       return;
     }
     const args = [
@@ -404,7 +418,7 @@ export class Tasks {
         try {
           if (t.state === "publishing") {
             await this.complete(t, 0);
-            if ((await this.get(t.id)).state === "succeeded" && t.container)
+            if (!this.localProcesses && (await this.get(t.id)).state === "succeeded" && t.container)
               await this.command("docker", ["rm", t.container], { timeout: 10000 }).catch(() => {});
           } else await this.observeTask(t);
         }
@@ -444,7 +458,9 @@ export class Tasks {
   startLoop({ onLeadership = () => {}, onCycle = () => {} } = {}) {
     if (this.loopStarted) return;
     this.loopStarted = true;
-    this.lease = new ControllerLease(this.db.pool);
+    this.lease = this.localProcesses
+      ? { id: this.controllerId, held: true, acquire: async () => true, assert: async () => {}, close() { this.held = false; } }
+      : new ControllerLease(this.db.pool);
     this.controllerId = this.lease.id;
     const cycle = async () => {
       if (this.closed || this.loopPromise) return;
@@ -471,6 +487,7 @@ export class Tasks {
     this.closed = true;
     clearInterval(this.timer);
     await this.loopPromise?.catch(() => {});
+    await this.localProcesses?.close();
     this.lease?.close();
   }
 }

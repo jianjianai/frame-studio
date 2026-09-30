@@ -294,17 +294,21 @@ export function workbenchOperations({
   );
   add("tools_info", "Installed and selected CLI versions", {}, async () => {
     const rows = [];
-    for (const tool of ["codex", "claude"])
+    for (const tool of ["codex", "claude"]) {
+      const version = await command(toolBinary(data, tool), ["--version"], {
+        timeout: 15000,
+      }).catch(() => "不可用");
       rows.push({
         tool,
-        version: await command(toolBinary(data, tool), ["--version"], {
-          timeout: 15000,
-        }).catch(() => "不可用"),
+        version,
+        available: version !== "不可用",
+        localMode: process.env.FRAME_LOCAL_MODE === "1",
         updates: await db.all(
           "SELECT id,state,input,result,error FROM tasks WHERE kind='tools-update' AND input->>'provider'=$1 ORDER BY created DESC LIMIT 3",
           [tool],
         ),
       });
+    }
     return rows;
   });
   add(

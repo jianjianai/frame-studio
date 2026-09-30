@@ -15,13 +15,13 @@ V6 增加统一混合合成、视频/图片/图像序列、Three/Pixi/Canvas/Bab
 
 ## 使用
 
-部署与首次配置见 [Docker / Dockge 部署](docs/SERVER.md)，产品与数据边界见 [作品平台设计](docs/WORKS-PLATFORM.md)。
+Windows 客户端见 [Windows 本地模式](docs/WINDOWS-LOCAL.md)；服务器部署见 [Docker / Dockge 部署](docs/SERVER.md)。产品与数据边界见 [作品平台设计](docs/WORKS-PLATFORM.md)。
 
 首页显示最近打开。通过仓库进入作品列表，新建只填名称。每个作品使用同仓库内独立的 `works/<id>` 分支，素材库独立使用 `frame/materials`；作品历史和拉取/推送互不干扰。具体产品契约见 [AI 工作台](docs/AI-WORKBENCH.md)。
 
-作品在新标签页打开，无全局侧栏。AI 对话与时间轴均可显隐，播放器始终保留进度条；左右分栏及视频/时间轴高度可拖动，细分割线仅在交互时显示。素材、版本比较、统一导出和资料在弹窗操作。设置支持多个模型提供商、官方账号登录、多 GitHub 账号、CLI 独立升级及语音模型。管理员密码仅通过 `FRAME_ADMIN_PASSWORD` 配置。内置 CPU 中文 Kokoro 模型。
+作品在新标签页打开，无全局侧栏。AI 对话与时间轴均可显隐，播放器始终保留进度条；左右分栏及视频/时间轴高度可拖动，细分割线仅在交互时显示。素材、版本比较、统一导出和资料在弹窗操作。服务器设置支持多个模型提供商、官方账号登录、多 GitHub 账号、CLI 独立升级及语音模型。服务器管理员密码仅通过 `FRAME_ADMIN_PASSWORD` 配置。本地模式直接使用电脑上已安装并登录的 Codex 和 Claude CLI，使用 SQLite，无工作台登录密码。
 
-AI 消息提交后在独立容器执行，关闭浏览器不停止任务。通过结构、范围、项目测试和预览构建验证后才应用修改，自动产生 Git 版本并刷新播放器。导出文件有保留期限，与素材库分离；可发布到对应作品仓库 Releases。
+AI 消息提交后在隔离工作目录执行，关闭浏览器不停止任务。服务器使用独立容器，Windows 本地模式使用原生子进程。通过结构、范围、项目测试和预览构建验证后才应用修改，自动产生 Git 版本并刷新播放器。导出文件有保留期限，与素材库分离；可发布到对应作品仓库 Releases。
 
 外部 AI 使用带 Bearer 令牌的 `/mcp`，从 `frame_help` 发现操作；CLI 使用 `FRAME_URL`、`FRAME_TOKEN` 和 `pnpm platform help`。作品操作统一使用作品 UUID，支持参数发现、局部补丁、批量事务、任务等待、上传续传和产物下载，详见 [平台 MCP / CLI 工作流](docs/PLATFORM-TOOLS.md)。隔离任务内使用 `pnpm film` 和 `node scripts/work-tool.mjs`。
 

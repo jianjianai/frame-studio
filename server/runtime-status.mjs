@@ -53,15 +53,17 @@ export class RuntimeStatus {
     return this.pending;
   }
   async collect() {
+    const localMode = this.db.kind === "sqlite";
     const probe = async (fn) => {
       try { return { ok: true, ...(await fn()) }; }
       catch { return { ok: false }; }
     };
-    const controller = process.env.FRAME_ROLE === "api" ? await this.db.setting("controller-runtime") : null;
-    const currentRuntime = process.env.FRAME_ROLE === "api" ? await runtimeIdentity() : null;
+    const controller = !localMode && process.env.FRAME_ROLE === "api" ? await this.db.setting("controller-runtime") : null;
+    const currentRuntime = !localMode && process.env.FRAME_ROLE === "api" ? await runtimeIdentity() : null;
     const controllerReady = !!controller?.leader && Date.now() - controller.checked < 40000 && controller.runtimeFingerprint === currentRuntime?.fingerprint;
     const [docker, speech, disk, queue] = await Promise.all([
-      process.env.FRAME_ROLE === "api"
+      localMode ? Promise.resolve({ ok: true, mode: "windows-native", version: process.version })
+      : process.env.FRAME_ROLE === "api"
         ? Promise.resolve(controllerReady ? controller.docker : { ok: false, error: "控制器未连接、心跳过期或运行时版本不一致" })
         : probe(async () => ({ version: (await command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 3000, max: 65536 })).trim() })),
       probe(async () => {
@@ -70,7 +72,9 @@ export class RuntimeStatus {
         return {};
       }),
       probe(() => diskCapacity(this.data)),
-      this.db.one("SELECT count(*) FILTER (WHERE state='queued')::int AS queued,count(*) FILTER (WHERE state IN ('running','cancelling'))::int AS running,count(*) FILTER (WHERE state='publishing')::int AS publishing,count(*) FILTER (WHERE state='publish_failed')::int AS needs_recovery,COALESCE(EXTRACT(epoch FROM now()-(min(created) FILTER (WHERE state='queued'))),0)::float8 AS oldest_wait_seconds FROM tasks"),
+      this.db.one(localMode
+        ? "SELECT count(*) FILTER (WHERE state='queued') AS queued,count(*) FILTER (WHERE state IN ('running','cancelling')) AS running,count(*) FILTER (WHERE state='publishing') AS publishing,count(*) FILTER (WHERE state='publish_failed') AS needs_recovery,COALESCE((julianday(frame_now())-julianday(min(created) FILTER (WHERE state='queued')))*86400,0) AS oldest_wait_seconds FROM tasks"
+        : "SELECT count(*) FILTER (WHERE state='queued')::int AS queued,count(*) FILTER (WHERE state IN ('running','cancelling'))::int AS running,count(*) FILTER (WHERE state='publishing')::int AS publishing,count(*) FILTER (WHERE state='publish_failed')::int AS needs_recovery,COALESCE(EXTRACT(epoch FROM now()-(min(created) FILTER (WHERE state='queued'))),0)::float8 AS oldest_wait_seconds FROM tasks"),
     ]);
     const sizes = {}, deadline = Date.now() + 2000;
     for (const name of ["works", "repos", "libraries", "blobs", "runs", "sessions", "tools"])
@@ -79,7 +83,7 @@ export class RuntimeStatus {
     const limits = controllerReady ? controller.limits : this.tasks.limits;
     return {
       checked: Date.now(), docker, speech, disk, queue, schema, sizes, limits,
-      controller: process.env.FRAME_ROLE === "api" ? { connected: controllerReady, checked: controller?.checked || null } : { embedded: true },
+      controller: !localMode && process.env.FRAME_ROLE === "api" ? { connected: controllerReady, checked: controller?.checked || null } : { embedded: true },
       queueBlocked: controllerReady ? controller.queueBlocked : this.tasks.queueBlocked || null,
       ready: docker.ok && speech.ok && disk.ok && disk.freeBytes >= limits.minFreeBytes,
     };

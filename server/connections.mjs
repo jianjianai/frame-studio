@@ -17,12 +17,22 @@ import { problem, hash } from "./security.mjs";
 
 export function toolBinary(data, tool) {
   const bin = tool === "codex" ? "codex" : "claude";
+  if (process.env.FRAME_LOCAL_MODE === "1") return bin;
   const marker = path.join(data, "tools", tool, "current");
   if (!fs.existsSync(marker)) return bin;
   const version = fs.readFileSync(marker, "utf8").trim();
   if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version))
     throw problem(500, "Invalid tool version marker");
   return path.join(data, "tools", tool, version, "node_modules", ".bin", bin);
+}
+const localToolCache = new Map();
+async function localToolAvailable(data, tool) {
+  const old = localToolCache.get(tool);
+  if (old && Date.now() - old.checked < 15000) return old.available;
+  const available = await command(toolBinary(data, tool), ["--version"], { timeout: 10000 })
+    .then(() => true, () => false);
+  localToolCache.set(tool, { checked: Date.now(), available });
+  return available;
 }
 
 export class Connections {
@@ -31,11 +41,13 @@ export class Connections {
     this.children = new Map();
   }
   async list() {
-    return (
-      await this.db.all(
+    const rows = await this.db.all(
         "SELECT * FROM connections WHERE state<>'deleted' ORDER BY created",
-      )
-    ).map((row) => {
+      );
+    const available = process.env.FRAME_LOCAL_MODE === "1"
+      ? Object.fromEntries(await Promise.all(["codex", "claude"].map(async (tool) => [tool, await localToolAvailable(this.data, tool)])))
+      : null;
+    return rows.map((row) => {
       const c = this.secrets.decrypt(row.config);
       return {
         ...row,
@@ -52,7 +64,9 @@ export class Connections {
         enabled: c.enabled !== false,
         lastTest: c.lastTest || null,
         configured:
-          row.mode === "official" ? row.state === "ready" : !!c.apiKey,
+          available && row.mode === "official" ? available[row.tool] && row.state === "ready"
+            : row.mode === "official" ? row.state === "ready" : !!c.apiKey,
+        ...(available && row.mode === "official" && !available[row.tool] ? { state: "unavailable", error: "本机未找到 CLI" } : {}),
       };
     });
   }
@@ -69,6 +83,9 @@ export class Connections {
     expectedRevision,
     publicCatalog,
   }) {
+    if (process.env.FRAME_LOCAL_MODE === "1" &&
+      (mode !== "official" || !["00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002"].includes(id) || apiKey))
+      throw problem(400, "本地模式只使用电脑上已安装的 Codex 和 Claude CLI");
     baseUrl = normalizeProviderUrl(baseUrl, tool);
     const old = await this.db.one("SELECT * FROM connections WHERE id=$1", [
       id,
@@ -144,6 +161,8 @@ export class Connections {
       throw problem(404, "提供商已删除或不存在");
     if (row.state !== "ready")
       throw problem(409, "请先连接或重新登录这个模型提供商");
+    if (process.env.FRAME_LOCAL_MODE === "1" && row.mode === "official" && !(await localToolAvailable(this.data, row.tool)))
+      throw problem(409, `${row.tool === "codex" ? "Codex" : "Claude"} CLI 未安装或不可用`);
     const config = this.secrets.decrypt(row.config);
     if (config.enabled === false)
       throw problem(409, "此提供商已停用，请在设置中启用");
@@ -192,6 +211,8 @@ export class Connections {
     return providerUsage(this.db, id);
   }
   async delete(args) {
+    if (process.env.FRAME_LOCAL_MODE === "1")
+      throw problem(400, "本地模式的 CLI 连接不能删除");
     return deleteProvider(this, args);
   }
   async test(id, model) {
@@ -226,7 +247,7 @@ export class Connections {
           toolBinary(this.data, row.tool),
           row.tool === "codex" ? ["login", "status"] : ["auth", "status"],
           {
-            env: {
+            env: process.env.FRAME_LOCAL_MODE === "1" ? process.env : {
               HOME: root,
               CODEX_HOME: path.join(root, "codex"),
               CLAUDE_CONFIG_DIR: path.join(root, "claude"),
@@ -318,7 +339,7 @@ export class Connections {
           ? "官方登录检查失败，请重新登录"
           : "模型连接失败或超时，请检查服务地址与网络";
       await saveTest(false, message);
-      if (row.mode === "official")
+      if (row.mode === "official" && process.env.FRAME_LOCAL_MODE !== "1")
         await this.db.pool.query(
           "UPDATE connections SET state='expired',error=$2 WHERE id=$1 AND state<>'deleted'",
           [id, message],
@@ -327,6 +348,14 @@ export class Connections {
     }
   }
   async migrate() {
+    if (process.env.FRAME_LOCAL_MODE === "1") {
+      for (const [tool, id] of [["codex", "00000000-0000-4000-8000-000000000001"], ["claude", "00000000-0000-4000-8000-000000000002"]]) {
+        if (await this.db.one("SELECT id FROM connections WHERE id=$1", [id])) continue;
+        await this.save({ id, name: tool === "codex" ? "本机 Codex CLI" : "本机 Claude CLI", tool, mode: "official" });
+        await this.db.pool.query("UPDATE connections SET state='ready' WHERE id=$1", [id]);
+      }
+      return;
+    }
     if (!(await this.db.one("SELECT id FROM connections LIMIT 1"))) {
       for (const tool of ["codex", "claude"]) {
         const old = await this.db.setting(tool);
@@ -350,6 +379,8 @@ export class Connections {
     );
   }
   async begin(kind, target) {
+    if (process.env.FRAME_LOCAL_MODE === "1" && kind !== "github")
+      throw problem(400, `请在电脑终端运行 ${kind === "codex" ? "codex login" : "claude auth login"}，然后返回工作台检查登录`);
     const begin = () => this.beginLocked(kind, target);
     return kind === "github" ? begin() : this.db.lock(`connection:${target}`, begin);
   }

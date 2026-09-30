@@ -535,7 +535,11 @@ export function operations({
     "tools_update",
     "Install a specific Codex or Claude CLI version independently",
     { provider: z.enum(["codex", "claude"]), version: z.string().max(80) },
-    (a) => tasks.create({ kind: "tools-update", input: a }),
+    (a) => {
+      if (process.env.FRAME_LOCAL_MODE === "1")
+        throw problem(400, "本地模式使用电脑上的 CLI，请通过其官方安装方式更新");
+      return tasks.create({ kind: "tools-update", input: a });
+    },
   );
   add(
     "tokens_list",
