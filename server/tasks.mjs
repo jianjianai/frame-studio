@@ -104,6 +104,13 @@ export class Tasks {
       }
       // Recover an existing acknowledgement before validating mutable provider state.
       // New admissions still run under the provider lock shared with deletion.
+      if (repo) {
+        // Recheck inside the work lock: a purge may have completed after the first lookup.
+        await this.repos.project(repo, project, { exists: kind !== "new" });
+        const work = await this.db.one("SELECT id,deleted FROM works WHERE repo=$1 AND project=$2", [repo, project]);
+        if (work?.deleted || await this.db.setting(`purged-work:${repo}:${project}`))
+          throw problem(409, "作品已删除，请先恢复作品或创建新作品");
+      }
       if (input.connection) {
         const provider = await this.db.one("SELECT state FROM connections WHERE id=$1", [input.connection]);
         if (!provider || provider.state === "deleted")
