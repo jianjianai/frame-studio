@@ -1,8 +1,9 @@
 import fs from "node:fs/promises";
-import { constants } from "node:fs";
+import { constants, openSync, fstatSync, closeSync } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
+import { DatabaseSync } from "node:sqlite";
 import { projectPath } from "./project-paths.mjs";
 
 // Only derived, frozen bundles live here. Readers hold a lease until their renderer closes.
@@ -77,42 +78,75 @@ async function live(file) {
     throw error;
   }
 }
+async function lockFiles(file) {
+  for (const suffix of ["", "-journal", "-wal", "-shm"]) {
+    const stat = await fs
+      .lstat(file + suffix)
+      .catch((error) =>
+        error.code === "ENOENT" ? null : Promise.reject(error),
+      );
+    if (stat && (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1))
+      throw Error("Invalid Remotion cache lock file");
+  }
+}
 async function lock(base, signal) {
-  const directory = path.join(base, ".control");
-  const token = randomUUID(),
+  // A stale directory cannot be removed with a filesystem compare-and-swap:
+  // another contender can publish its new lock between the check and unlink.
+  // SQLite's OS-managed transaction lock survives awaits and releases on process
+  // death, without deleting/replacing the shared lock inode or reaping owners.
+  const file = path.join(base, ".control.sqlite"),
     began = Date.now();
+  // Do not open/close an existing lock outside SQLite: closing another file
+  // descriptor can release this process's POSIX record locks. Synchronous
+  // exclusive creation has no await where another local connection can lock it.
+  let handle;
+  try {
+    handle = openSync(
+      file,
+      constants.O_RDWR |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        (constants.O_NOFOLLOW ?? 0),
+      0o600,
+    );
+    const stat = fstatSync(handle);
+    if (!stat.isFile() || stat.nlink !== 1)
+      throw Error("Invalid Remotion cache lock file");
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  } finally {
+    if (handle !== undefined) closeSync(handle);
+  }
   for (;;) {
     signal?.throwIfAborted();
+    await lockFiles(file);
+    let database;
     try {
-      await fs.mkdir(directory);
-      const releaseOwner = await owner(directory, token);
+      database = new DatabaseSync(file);
+      // Never block the API/event loop waiting for another renderer's transaction.
+      database.exec(
+        "PRAGMA busy_timeout=0; PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE",
+      );
+      await lockFiles(file);
+      database.exec(
+        "CREATE TABLE IF NOT EXISTS mutex (id INTEGER PRIMARY KEY)",
+      );
+      signal?.throwIfAborted();
+      let released = false;
       return async () => {
-        await releaseOwner();
-        await fs.rmdir(directory);
+        if (released) return;
+        released = true;
+        try {
+          database.exec("COMMIT");
+        } finally {
+          database.close();
+        }
       };
     } catch (error) {
-      if (error.code !== "EEXIST") throw error;
-      const files = await fs
-        .readdir(directory)
-        .catch((e) => (e.code === "ENOENT" ? [] : Promise.reject(e)));
-      // mkdir and writing the owner record are separate operations; allow the winner to publish it.
-      const stat = await fs
-        .lstat(directory)
-        .catch((e) => (e.code === "ENOENT" ? null : Promise.reject(e)));
-      if (stat?.isSymbolicLink() || (stat && !stat.isDirectory()))
-        throw Error("Invalid Remotion cache lock");
-      if (
-        stat &&
-        Date.now() - stat.mtimeMs > leaseLifetime &&
-        !(
-          await Promise.all(
-            files.map((name) => live(path.join(directory, name))),
-          )
-        ).some(Boolean)
-      ) {
-        await fs.rm(directory, { recursive: true, force: true });
-        continue;
-      }
+      // Closing rolls back an interrupted initialization and always releases the OS lock.
+      database?.close();
+      if (error.code !== "ERR_SQLITE_ERROR" || ![5, 6].includes(error.errcode))
+        throw error;
       if (Date.now() - began > 600000)
         throw Error("Timed out waiting for Remotion bundle cache");
       await delay(50, undefined, { signal });
