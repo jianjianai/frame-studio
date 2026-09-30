@@ -58,7 +58,9 @@ async function bytes(chunk: Chunk, signal: AbortSignal): Promise<ArrayBuffer> {
           } else
             done(data?.bytes instanceof ArrayBuffer ? data.bytes : undefined);
         };
-        timer = setTimeout(() => done(), 150);
+        // This is a local message handshake, but startup/hydration can keep the
+        // host main thread busy. A 150 ms fallback races its acknowledged fetch.
+        timer = setTimeout(() => done(), 2000);
         parent.postMessage(
           {
             type: "frame-preview-audio",

@@ -97,7 +97,12 @@ test(
         res
           .type("text/javascript")
           .send(
-            fs.readFileSync(path.join(repo, "studio/preview-cache.js"), "utf8"),
+            fs
+              .readFileSync(path.join(repo, "studio/preview-cache.js"), "utf8")
+              .replace(
+                "port.postMessage({ ack: true });",
+                "await new Promise(resolve => setTimeout(resolve, 350)); port.postMessage({ ack: true });",
+              ),
           ),
       );
       app.get("/film/*", async (req, res) => {
