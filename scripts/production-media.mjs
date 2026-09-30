@@ -263,7 +263,7 @@ export async function reviewSegment(root, id, options = {}) {
         "--out",
         temporaryVideo,
       ],
-      { root: snapshot.root, onLog: options.onLog },
+      { root: snapshot.root, onLog: options.onLog, env: { ...process.env, FRAME_RENDER_CACHE_ROOT: root } },
     );
     fs.copyFileSync(temporaryVideo, path.join(directory, "clip.mp4"));
     const render = JSON.parse(
@@ -272,8 +272,8 @@ export async function reviewSegment(root, id, options = {}) {
     render.input = snapshot.manifest;
     render.output = path.join(directory, "clip.mp4");
     json(path.join(directory, "clip.mp4.render.json"), render);
-    session = await createRenderSession({ root: snapshot.root, width });
-    const page = await session.page(id);
+    session = await createRenderSession({ root: snapshot.root, cacheRoot: root, width });
+    const page = await session.page(id, { purpose: "media" });
     const count = Math.min(24, Math.max(2, Math.ceil((end - start) * 2)));
     const images = [],
       frames = [];

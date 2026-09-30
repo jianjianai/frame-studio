@@ -2,7 +2,6 @@ import { operationDescription } from "./tool-catalog.mjs";
 import {
   describeTool,
   isMcpOperation,
-  toolAnnotations,
   textToolResult,
   structuredValue,
 } from "./agent-toolkit.mjs";
@@ -17,7 +16,10 @@ import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
 import staticPlugin from "@fastify/static";
-import { McpServer, createMcpHandler } from "@modelcontextprotocol/server";
+import { publicStaticHeaders } from "./static-cache.mjs";
+import { createPreparedMcpHandler } from "./mcp-catalog.mjs";
+import { withTaskStatusSignal } from "./task-status-wait.mjs";
+import { requestAbortSignal } from "./request-abort.mjs";
 import {
   hash,
   token,
@@ -187,8 +189,10 @@ export async function createApp({
     res.clearCookie("frame_session", { path: "/" });
     return { ok: true };
   });
-  app.post("/api/action", async (req) =>
-    actions.call(req.body?.name, req.body?.args),
+  app.post("/api/action", async (req, res) =>
+    withTaskStatusSignal(requestAbortSignal(req, res), () =>
+      actions.call(req.body?.name, req.body?.args),
+    ),
   );
   app.get("/api/works/:id/cover", async (req, res) => {
     const w = await actions.works.get(req.params.id);
@@ -390,90 +394,72 @@ export async function createApp({
       compress: /\.(js|css|json|svg|sf2)$/.test(file),
     });
   });
-  const mcp = createMcpHandler(
-    () => {
-      const server = new McpServer({
-        name: "frame-studio",
-        version: PLATFORM_VERSION,
-      });
-      for (const [name, op] of Object.entries(actions.registry)) {
-        if (!isMcpOperation(name)) continue;
-        server.registerTool(
-          "frame_" + name,
-          {
-            description: op.description,
-            inputSchema: op.schema,
-            annotations: toolAnnotations(name),
-            _meta: {
-              securitySchemes: [
-                { type: "oauth2", scopes: ["frame:workbench"] },
+  const mcp = createPreparedMcpHandler({
+    serverInfo: { name: "frame-studio", version: PLATFORM_VERSION },
+    registry: actions.registry,
+    options: { maxRequestBodySize: 2 * 1024 * 1024 },
+    execute: (name, args, ctx) =>
+      withTaskStatusSignal(ctx.mcpReq.signal, async () => {
+        try {
+          const value = await actions.call(name, args);
+          if (name === "speech_test" && value.bytes <= 8 * 1024 * 1024) {
+            const audio = confined(
+              path.join(data, "runs", value.task),
+              value.path,
+            );
+            return {
+              structuredContent: structuredValue(value),
+              content: [
+                { type: "text", text: JSON.stringify(value) },
+                {
+                  type: "audio",
+                  mimeType: value.mime,
+                  data: fs.readFileSync(audio).toString("base64"),
+                },
               ],
-            },
-          },
-          async (args) => {
-            try {
-              const value = await actions.call(name, args);
-              if (name === "speech_test" && value.bytes <= 8 * 1024 * 1024) {
-                const audio = confined(
-                  path.join(data, "runs", value.task),
-                  value.path,
-                );
-                return {
-                  structuredContent: structuredValue(value),
-                  content: [
-                    { type: "text", text: JSON.stringify(value) },
-                    {
-                      type: "audio",
-                      mimeType: value.mime,
-                      data: fs.readFileSync(audio).toString("base64"),
-                    },
-                  ],
-                };
-              }
-              if (name === "artifact_read" && value.dataBase64)
-                return {
-                  structuredContent: {
-                    id: args.id,
-                    path: args.path,
-                    mimeType: value.mimeType,
-                    bytes: value.bytes,
-                    downloadPath: value.downloadPath,
-                  },
-                  content: [
-                    {
-                      type: "image",
-                      mimeType: value.mimeType,
-                      data: value.dataBase64,
-                    },
-                  ],
-                };
-              return textToolResult(value);
-            } catch (e) {
-              return {
-                isError: true,
-                ...textToolResult(operationError(e)),
-              };
-            }
-          },
-        );
-      }
-      return server;
-    },
-    { maxRequestBodySize: 2 * 1024 * 1024 },
-  );
+            };
+          }
+          if (name === "artifact_read" && value.dataBase64)
+            return {
+              structuredContent: {
+                id: args.id,
+                path: args.path,
+                mimeType: value.mimeType,
+                bytes: value.bytes,
+                downloadPath: value.downloadPath,
+              },
+              content: [
+                {
+                  type: "image",
+                  mimeType: value.mimeType,
+                  data: value.dataBase64,
+                },
+              ],
+            };
+          return textToolResult(value);
+        } catch (e) {
+          return {
+            isError: true,
+            ...textToolResult(operationError(e)),
+          };
+        }
+      }),
+  });
   app.route({
     method: ["GET", "POST", "DELETE"],
     url: "/mcp",
     handler: async (req, res) => {
+      const signal = requestAbortSignal(req, res);
       const headers = new Headers();
       for (const [k, v] of Object.entries(req.headers))
         if (v) headers.set(k, Array.isArray(v) ? v.join(",") : v);
       const request = new Request(origin + "/mcp", {
         method: req.method,
         headers,
+        signal,
         ...(req.method === "POST" ? { body: JSON.stringify(req.body) } : {}),
       });
-      const response = await mcp.fetch(request);
+      const response = await mcp.fetch(request, { parsedBody: req.body });
       res.code(response.status);
       for (const [k, v] of response.headers) res.header(k, v);
       return response.body
@@ -487,6 +473,7 @@ export async function createApp({
       root: web,
       prefix: "/",
       index: "index.html",
+      setHeaders: (response, file) => publicStaticHeaders(response, file, web),
     });
     app.setNotFoundHandler((req, res) => res.sendFile("index.html"));
   }

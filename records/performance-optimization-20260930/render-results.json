@@ -1,0 +1,118 @@
+{
+  "baseline": "cea568b + performance optimizations",
+  "node": "v24.21.0",
+  "time": "2026-09-30T14:56:46.734Z",
+  "limits": {
+    "cpus": 2,
+    "memoryGiB": 3
+  },
+  "render": [
+    {
+      "renderer": "canvas",
+      "pass": 1,
+      "initializeMs": 2490.45,
+      "firstFrameMs": 4.74,
+      "nextFrameMs": 3.49,
+      "pngBytes": [
+        2696,
+        2670
+      ]
+    },
+    {
+      "renderer": "canvas",
+      "pass": 2,
+      "initializeMs": 1972.89,
+      "firstFrameMs": 3.98,
+      "nextFrameMs": 2.78,
+      "pngBytes": [
+        2696,
+        2670
+      ]
+    },
+    {
+      "renderer": "remotion",
+      "pass": 1,
+      "initializeMs": 13538.87,
+      "firstFrameMs": 541.02,
+      "nextFrameMs": 471.68,
+      "pngBytes": [
+        1595,
+        3217
+      ]
+    },
+    {
+      "renderer": "remotion",
+      "pass": 2,
+      "initializeMs": 1447.72,
+      "firstFrameMs": 556.08,
+      "nextFrameMs": 507.19,
+      "pngBytes": [
+        1595,
+        3217
+      ]
+    }
+  ],
+  "frontend": {
+    "buildMs": 872.06,
+    "entry": {
+      "file": "assets/index-CwFLcT3F.js",
+      "name": "index",
+      "src": "index.html",
+      "isEntry": true,
+      "imports": [
+        "_ui-BFXolxHQ.js"
+      ],
+      "dynamicImports": [
+        "_work-panels-B6bjUBK6.js",
+        "creation.jsx",
+        "_accounts-DQvhLhHq.js"
+      ],
+      "css": [
+        "assets/index-OMyDY8l3.css"
+      ]
+    },
+    "largest": [
+      {
+        "name": "creation-LYXCE7hI.js",
+        "bytes": 419086,
+        "gzipBytes": 130812
+      },
+      {
+        "name": "index-CwFLcT3F.js",
+        "bytes": 229020,
+        "gzipBytes": 72378
+      },
+      {
+        "name": "ui-BFXolxHQ.js",
+        "bytes": 130931,
+        "gzipBytes": 39445
+      },
+      {
+        "name": "accounts-DQvhLhHq.js",
+        "bytes": 89913,
+        "gzipBytes": 27972
+      },
+      {
+        "name": "work-panels-B6bjUBK6.js",
+        "bytes": 58988,
+        "gzipBytes": 18506
+      },
+      {
+        "name": "accounts-DfMjCRlQ.css",
+        "bytes": 36595,
+        "gzipBytes": 7243
+      },
+      {
+        "name": "index-OMyDY8l3.css",
+        "bytes": 35968,
+        "gzipBytes": 8078
+      },
+      {
+        "name": "source-control-CwkSUBoj.js",
+        "bytes": 34335,
+        "gzipBytes": 11892
+      }
+    ],
+    "totalBytes": 1136777
+  }
+}

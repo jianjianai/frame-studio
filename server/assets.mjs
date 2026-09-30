@@ -3,6 +3,28 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { problem, confined } from "./security.mjs";
 import { fileSha256, confinedAsync, exists } from "./project-files.mjs";
+const MAX_DIGESTS = 8192;
+const digestSignature = (stat) =>
+  [
+    stat.dev,
+    stat.ino,
+    stat.size,
+    stat.mtimeNs,
+    stat.ctimeNs,
+    stat.nlink,
+    stat.mode,
+  ].join(":");
+async function assetStat(file) {
+  const stat = await fs.promises.lstat(file, { bigint: true });
+  if (
+    stat.isSymbolicLink() ||
+    (stat.isFile() && stat.nlink !== 1n) ||
+    (!stat.isFile() && !stat.isDirectory())
+  )
+    throw problem(400, "Links and special files are not allowed");
+  return stat;
+}
+
 export class Assets {
   constructor(db, data, repos) {
     this.db = db;
@@ -10,6 +32,24 @@ export class Assets {
     this.repos = repos;
     fs.mkdirSync(path.join(data, "blobs"), { recursive: true });
     this.digests = new Map();
+  }
+  async digestFile(file, before = null) {
+    before ||= await assetStat(file);
+    if (!before.isFile()) throw problem(400, "Expected a regular asset file");
+    const signature = digestSignature(before);
+    let cache = this.digests.get(file);
+    if (cache?.signature !== signature)
+      cache = { signature, sha: await fileSha256(file) };
+    // The bounded async hasher checks the opened inode and file after hashing; this
+    // nanosecond check also guards cache hits, permissions, links and replacements.
+    const after = await assetStat(file);
+    if (!after.isFile() || digestSignature(after) !== signature)
+      throw problem(409, "Asset changed while verifying references");
+    this.digests.delete(file);
+    this.digests.set(file, cache);
+    while (this.digests.size > MAX_DIGESTS)
+      this.digests.delete(this.digests.keys().next().value);
+    return cache.sha;
   }
   async migrate() {
     if (await this.db.setting("asset-repositories-v4")) return;
@@ -57,11 +97,20 @@ export class Assets {
       if (!(await exists(dest))) {
         const temporary = dest + ".tmp-" + randomUUID();
         try {
-          await fs.promises.copyFile(file, temporary, fs.constants.COPYFILE_EXCL);
-          if (await fileSha256(temporary) !== sha || (await fs.promises.stat(temporary)).size !== bytes)
+          await fs.promises.copyFile(
+            file,
+            temporary,
+            fs.constants.COPYFILE_EXCL,
+          );
+          if (
+            (await fileSha256(temporary)) !== sha ||
+            (await fs.promises.stat(temporary)).size !== bytes
+          )
             throw problem(409, "Asset changed during import");
           await fs.promises.rename(temporary, dest);
-        } finally { await fs.promises.rm(temporary, { force: true }); }
+        } finally {
+          await fs.promises.rm(temporary, { force: true });
+        }
       }
       const id = randomUUID();
       return this.db.one(
@@ -80,8 +129,10 @@ export class Assets {
     project = null,
     limit = 60,
     offset = 0,
+    refresh = true,
   } = {}) {
-    await this.reconcile(repo, false);
+    if (unused) await this.reconcile(repo, true);
+    else if (refresh) await this.reconcile(repo, false);
     return this.db.all(
       `SELECT a.*, COALESCE(jsonb_agg(jsonb_build_object('repo',r.repo,'project',r.project,'path',r.path,'work',w.id,'title',COALESCE(w.title,r.project),'deleted',COALESCE(w.deleted,false))) FILTER(WHERE r.asset IS NOT NULL),'[]') AS refs FROM assets a LEFT JOIN asset_refs r ON r.asset=a.id LEFT JOIN works w ON w.repo=r.repo AND w.project=r.project WHERE a.deleted=$1 AND (a.name ILIKE $2 OR a.tags ILIKE $2) AND ($3::uuid IS NULL OR EXISTS(SELECT 1 FROM asset_repos ar WHERE ar.asset=a.id AND ar.repo=$3)) AND ($6::text IS NULL OR EXISTS(SELECT 1 FROM asset_refs ar WHERE ar.asset=a.id AND ar.repo=$3 AND ar.project=$6)) GROUP BY a.id ${unused ? "HAVING count(r.asset)=0" : ""} ORDER BY a.created DESC,a.id LIMIT $4 OFFSET $5`,
       [
@@ -94,24 +145,96 @@ export class Assets {
       ],
     );
   }
-  async reconcile(repo = null, force = true) {
-    // File presence is authoritative, including dynamically referenced materials and recycled works.
-    // Cache only unchanged files. Reopening, Git pulls, AI edits and snapshot restores are reflected.
-    this.scans ||= new Map();
-    const key = repo || "all",
-      previous = this.scans.get(key);
-    if (previous?.promise) return previous.promise;
-    if (!force && previous?.at > Date.now() - 30000) return;
-    const promise = this.scanReferences(repo);
-    this.scans.set(key, { promise });
-    try {
-      await promise;
-      this.scans.set(key, { at: Date.now() });
-    } finally {
-      if (this.scans.get(key)?.promise) this.scans.delete(key);
+  referenceStatus(repo, project = null) {
+    const state = this.scans?.get(this.referenceKey(repo, project));
+    return {
+      status: state?.promise
+        ? "refreshing"
+        : state?.error
+          ? "refresh-failed"
+          : state?.at
+            ? "indexed"
+            : "unindexed",
+      indexedAt: state?.at ? new Date(state.at).toISOString() : null,
+      authoritative: false,
+    };
+  }
+  referenceKey(repo, project) {
+    return JSON.stringify([repo, project]);
+  }
+  invalidateReferences(repo, project = null) {
+    const states = new Set([
+      ...(this.scans?.values() || []),
+      ...(this.runningScans || []),
+    ]);
+    for (const state of states) {
+      if (
+        (!state.repo || state.repo === repo) &&
+        (!project || !state.project || state.project === project)
+      ) {
+        state.invalidated = true;
+        state.at = 0;
+      }
     }
   }
-  async scanReferences(repository = null) {
+  refreshContext(repo, project) {
+    // Context reads do not wait for media scans; callers receive explicit freshness metadata.
+    if (!this.closed) void this.reconcile(repo, false, project).catch(() => {});
+    return this.referenceStatus(repo, project);
+  }
+  async reconcile(repo = null, force = true, project = null) {
+    // Destructive operations always scan after older overlapping scans finish. They must never
+    // accept the result of a context refresh that began before the operation.
+    if (this.closed) throw problem(503, "Asset indexing is closing");
+    this.scans ||= new Map();
+    this.runningScans ||= new Set();
+    const key = this.referenceKey(repo, project);
+    const overlaps = (state) =>
+      (!repo || !state.repo || state.repo === repo) &&
+      (!project || !state.project || state.project === project);
+    for (;;) {
+      const running = [...this.runningScans].filter(overlaps);
+      if (!running.length) break;
+      if (force)
+        await Promise.allSettled(running.map((state) => state.promise));
+      else {
+        await Promise.all(running.map((state) => state.promise));
+        const covered = running.some(
+          (state) =>
+            (!state.repo || (repo && state.repo === repo)) &&
+            (!state.project || (project && state.project === project)),
+        );
+        if (covered) return;
+      }
+    }
+    if (this.closed) throw problem(503, "Asset indexing is closing");
+    const previous = this.scans.get(key);
+    if (!force && previous?.at > Date.now() - 30000) return;
+    const state = { repo, project, at: previous?.at || 0, invalidated: false };
+    const promise = this.scanReferences(repo, project);
+    state.promise = promise;
+    this.scans.set(key, state);
+    this.runningScans.add(state);
+    try {
+      await promise;
+      state.at = state.invalidated ? 0 : Date.now();
+      delete state.error;
+    } catch (error) {
+      state.error = true;
+      state.at = 0;
+      throw error;
+    } finally {
+      delete state.promise;
+      this.runningScans.delete(state);
+    }
+  }
+  async close() {
+    this.closed = true;
+    await Promise.allSettled(
+      [...(this.runningScans || [])].map((state) => state.promise),
+    );
+  }
+  async scanReferences(repository = null, project = null) {
     const rows = await this.db.all(
       "SELECT a.id,a.sha,a.bytes,ar.repo FROM assets a JOIN asset_repos ar ON ar.asset=a.id WHERE ($1::uuid IS NULL OR ar.repo=$1)",
       [repository],
@@ -124,26 +247,26 @@ export class Assets {
         a.id,
       ]);
     const seen = new Map();
-    for (const r of await this.repos.list(repository))
+    for (const r of await this.repos.list(repository, project))
       for (const p of r.projects) {
+        if ((project && p.id !== project) || !sizes.size) continue;
         const { dir } = await this.repos.project(r.id, p.id);
         const walk = async (folder) => {
+          if (this.closed) throw problem(503, "Asset indexing is closing");
           if (!(await exists(folder))) return;
-          for (const entry of await fs.promises.readdir(folder, { withFileTypes: true })) {
+          for (const entry of await fs.promises.readdir(folder, {
+            withFileTypes: true,
+          })) {
+            if (this.closed) throw problem(503, "Asset indexing is closing");
             const relative = path
               .relative(dir, path.join(folder, entry.name))
               .replaceAll("\\", "/");
             const file = await confinedAsync(dir, relative),
-              st = await fs.promises.stat(file);
+              st = await assetStat(file);
             if (st.isDirectory()) await walk(file);
-            else if (sizes.has(st.size)) {
-              const signature = `${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
-              let cache = this.digests.get(file);
-              if (cache?.signature !== signature) {
-                cache = { signature, sha: await fileSha256(file) };
-                this.digests.set(file, cache);
-              }
-              for (const asset of byHash.get(r.id + ":" + cache.sha) || [])
+            else if (sizes.has(Number(st.size))) {
+              const sha = await this.digestFile(file, st);
+              for (const asset of byHash.get(r.id + ":" + sha) || [])
                 seen.set(`${asset}:${r.id}:${p.id}`, {
                   asset,
                   repo: r.id,
@@ -155,9 +278,10 @@ export class Assets {
         };
         await walk(confined(dir, "public"));
       }
+    if (this.closed) throw problem(503, "Asset indexing is closing");
     for (const ref of await this.db.all(
-      "SELECT * FROM asset_refs WHERE ($1::uuid IS NULL OR repo=$1)",
-      [repository],
+      "SELECT * FROM asset_refs WHERE ($1::uuid IS NULL OR repo=$1) AND ($2::text IS NULL OR project=$2)",
+      [repository, project],
     )) {
       if (!seen.has(`${ref.asset}:${ref.repo}:${ref.project}`))
         await this.db.pool.query(
@@ -224,6 +348,7 @@ export class Assets {
         [id, repo],
       );
       await this.saveCatalog(repo);
+      this.invalidateReferences(repo);
     };
     return locked ? write() : this.db.lock(repo + ":materials", write);
   }
@@ -263,7 +388,7 @@ export class Assets {
         const source = confined(r.root, `materials/${row.sha}/${row.name}`);
         if (!fs.existsSync(source))
           throw problem(409, "Material catalog file missing");
-        if (await fileSha256(source) !== row.sha)
+        if ((await fileSha256(source)) !== row.sha)
           throw problem(409, "Material checksum mismatch");
         if (existing && existing.sha !== row.sha)
           throw problem(
@@ -303,7 +428,7 @@ export class Assets {
         "DELETE FROM asset_repos WHERE repo=$1 AND NOT (asset=ANY($2::uuid[]))",
         [repo, [...present]],
       );
-      this.scans?.delete(repo);
+      this.invalidateReferences(repo);
     });
   }
   async importProject(repo, project) {
@@ -340,7 +465,9 @@ export class Assets {
     };
     const walk = async (folder) => {
       if (!(await exists(folder))) return;
-      for (const entry of await fs.promises.readdir(folder, { withFileTypes: true })) {
+      for (const entry of await fs.promises.readdir(folder, {
+        withFileTypes: true,
+      })) {
         const file = confined(
           dir,
           path
@@ -349,14 +476,8 @@ export class Assets {
         );
         if (entry.isDirectory()) await walk(file);
         else if (types[path.extname(entry.name).toLowerCase()]) {
-          const st = fs.statSync(file),
-            signature = `${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
-          let cache = this.digests.get(file);
-          if (cache?.signature !== signature) {
-            cache = { signature, sha: await fileSha256(file) };
-            this.digests.set(file, cache);
-          }
-          if (known.has(cache.sha)) continue;
+          const sha = await this.digestFile(file);
+          if (known.has(sha)) continue;
           const url = `films/${project}/${path.relative(path.join(dir, "public"), file).replaceAll("\\", "/")}`;
           const meta = catalog.find((a) => a.url === url);
           await this.register(file, {
@@ -367,7 +488,7 @@ export class Assets {
             tags: "作品导入",
             repo,
           });
-          known.add(cache.sha);
+          known.add(sha);
         }
       }
     };
@@ -389,7 +510,7 @@ export class Assets {
           dest = confined(dir, relative);
         await this.repos.revisions?.invalidate(repo, project);
         fs.mkdirSync(path.dirname(dest), { recursive: true });
-        if (fs.existsSync(dest) && await fileSha256(dest) !== a.sha)
+        if (fs.existsSync(dest) && (await fileSha256(dest)) !== a.sha)
           throw problem(409, "Project asset path has different contents");
         await fs.promises.copyFile(path.join(this.data, "blobs", a.sha), dest);
         const manifest = confined(dir, "production/materials.json");
@@ -421,6 +542,7 @@ export class Assets {
           [id, repo, project, relative],
         );
         await this.repos.revisions?.invalidate(repo, project);
+        this.invalidateReferences(repo, project);
         return { path: relative, url: `films/${project}/${relative.slice(7)}` };
       }),
     );
@@ -479,8 +601,8 @@ export class Assets {
         "DELETE FROM asset_refs WHERE asset=$1 AND repo=$2 AND project=$3",
         [id, repo, project],
       );
-      this.scans?.delete(repo);
-      this.scans?.delete("all");
+      this.invalidateReferences(repo, project);
+
       return {
         ok: true,
         note: "Project file retained to preserve possible dynamic code references",

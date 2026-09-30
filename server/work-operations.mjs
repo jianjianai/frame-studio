@@ -1,6 +1,10 @@
 import { workSourceTools } from "./work-source-tools.mjs";
-import { compactTask, TASK_SUMMARY_COLUMNS } from "./agent-toolkit.mjs";
-import { projectCreationShape, projectCreationOptions } from "../src/contracts/authoring.mjs";
+import { compactTask } from "./agent-toolkit.mjs";
+import { taskSummaryColumns } from "./task-summary.mjs";
+import {
+  projectCreationShape,
+  projectCreationOptions,
+} from "../src/contracts/authoring.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
 import {
@@ -123,26 +127,51 @@ export function workOperations({
       const context = await invoke("project_context", args);
       const taskRows = a.taskLimit
         ? await db.all(
-            `SELECT ${TASK_SUMMARY_COLUMNS} FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC,id DESC LIMIT $3`,
+            `SELECT ${taskSummaryColumns(db)} FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC,id DESC LIMIT $3`,
             [work.repo, work.project, a.taskLimit],
           )
         : [];
       return {
         work,
         ...context,
-        composition: context.authority?.status === "needs_repair" ? { status: "needs_repair", editable: false } :
-          await invoke("works_composition", { id: a.id }).then(value => a.detail ? value : ({
-            editable: value.editable, path: value.path, sha256: value.sha256, duration: value.duration, fps: value.fps,
-            clips: value.document?.clips.length ?? 0, adapters: value.adapters,
-            tools: ["frame_works_composition", "frame_works_composition_edit"],
-          })),
-        audio: context.authority?.status === "needs_repair" ? { status: "needs_repair" } : await invoke("works_audio", {id:a.id}).then(value=>({declared:value.declared,path:value.path,sha256:value.sha256,tracks:value.document.tracks.length,clips:value.document.clips.length,tools:["frame_works_audio","frame_works_audio_edit"]})),
+        composition:
+          context.authority?.status === "needs_repair"
+            ? { status: "needs_repair", editable: false }
+            : await invoke("works_composition", { id: a.id }).then((value) =>
+                a.detail
+                  ? value
+                  : {
+                      editable: value.editable,
+                      path: value.path,
+                      sha256: value.sha256,
+                      duration: value.duration,
+                      fps: value.fps,
+                      clips: value.document?.clips.length ?? 0,
+                      adapters: value.adapters,
+                      tools: [
+                        "frame_works_composition",
+                        "frame_works_composition_edit",
+                      ],
+                    },
+              ),
+        audio:
+          context.authority?.status === "needs_repair"
+            ? { status: "needs_repair" }
+            : await invoke("works_audio", { id: a.id }).then((value) => ({
+                declared: value.declared,
+                path: value.path,
+                sha256: value.sha256,
+                tracks: value.document.tracks.length,
+                clips: value.document.clips.length,
+                tools: ["frame_works_audio", "frame_works_audio_edit"],
+              })),
         authoring: a.detail
           ? context.authoring
           : "createScene({width,height,quality}) returns {canvas,render(time),dispose()} or a Promise; prepareFrame(time,{signal}) and render may be async. Default works use editable visual.json composition; all media share absolute seconds, with no independent clock. Keep all source/media under this work. Use detail:true for the complete scene/audio/export reference.",
         instructions:
           "Use frame_works_files_page, frame_works_search and frame_works_read. Paths are work-relative; id is the work UUID. A partial read is NOT a replacement file. Prefer frame_works_patch with the whole-file expectedSha256. Validate and render with frame_works_task; wait with frame_task_status, then inspect artifacts. Tasks survive MCP disconnection.",
-        assets: await assets.list({ ...args, limit: 20 }),
+        assetIndex: assets.refreshContext(work.repo, work.project),
+        assets: await assets.list({ ...args, limit: 20, refresh: false }),
         tasks: taskRows.map((task) => compactTask(task, { artifactLimit: 3 })),
         nextActions: [
           { tool: "frame_works_files_page", arguments: { id: a.id } },

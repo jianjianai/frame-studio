@@ -1,3 +1,4 @@
+import { acquireDatabaseClient } from "./scoped-pool.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { confined, problem } from "./security.mjs";
@@ -104,7 +105,12 @@ export async function purgeWork(works, id, confirm) {
               502,
               "远端作品分支删除失败，请检查网络、GitHub 登录或分支保护后重试；作品仍在回收站",
             ),
-            { expose: true, code: "WORK_REMOTE_DELETE_FAILED", recovery: "retry-purge", retryable: true },
+            {
+              expose: true,
+              code: "WORK_REMOTE_DELETE_FAILED",
+              recovery: "retry-purge",
+              retryable: true,
+            },
           );
         }
       }
@@ -146,7 +152,8 @@ export async function purgeWork(works, id, confirm) {
         force: true,
       });
 
-      const client = await db.pool.connect();
+      const client = await acquireDatabaseClient(db);
+      let broken = false;
       try {
         await client.query("BEGIN");
         await client.query("DELETE FROM work_undos WHERE work=$1", [id]);
@@ -187,14 +194,15 @@ export async function purgeWork(works, id, confirm) {
         await client.query("DELETE FROM settings WHERE key=$1", [purgeKey(id)]);
         await client.query("COMMIT");
       } catch (error) {
-        await client.query("ROLLBACK").catch(() => {});
+        await client.query("ROLLBACK").catch(() => {
+          broken = true;
+        });
         throw error;
       } finally {
-        client.release();
+        client.release(broken);
       }
     });
-    assets.scans?.delete(work.repo);
-    assets.scans?.delete("all");
+    assets.invalidateReferences(work.repo, work.project);
     return {
       ok: true,
       id,
@@ -217,7 +225,11 @@ export async function purgeTrash(works, repo, confirm) {
     try {
       purged.push(await purgeWork(works, work.id, work.title));
     } catch (error) {
-      failed.push({ id: work.id, title: work.title, error: operationError(error).error });
+      failed.push({
+        id: work.id,
+        title: work.title,
+        error: operationError(error).error,
+      });
     }
   }
   return { ok: failed.length === 0, total: rows.length, purged, failed };

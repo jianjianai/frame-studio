@@ -14,12 +14,13 @@ import { buildPreviewAudio, previewProgress } from "./preview-audio.mjs";
 export function runProcess(
   command,
   args,
-  { root, timeoutMs = 600000, signal, onLog } = {},
+  { root, timeoutMs = 600000, signal, onLog, env } = {},
 ) {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, {
       cwd: root,
+      env,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     });
