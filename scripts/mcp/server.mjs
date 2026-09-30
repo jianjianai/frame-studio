@@ -2,18 +2,23 @@ import {exportAudio} from "../audio-export.mjs";
 import {inspectAudio} from "../audio-inspect.mjs";
 import {transcodeAudio} from "../audio-media.mjs";
 import {audioContext,audioEdit} from "../audio-service.mjs";
-import {audioOperationSchema,audioEngines,audioProcessors} from "../../src/engine/audio-document.mjs";
+import {audioEngines,audioProcessors} from "../../src/engine/audio-document.mjs";
 import fs from "node:fs";
+import { projectCreationShape, creationArguments, projectDefaults, authoringReferences, authoringModes } from "../../src/contracts/authoring.mjs";
+import { PLATFORM_VERSION } from "../../src/contracts/version.mjs";
+import { audioEditRequestSchema, visualEditRequestSchema } from "../../src/engine/document-edit.mjs";
+import { sourceEditRequestSchema, sourcePatchRequestSchema } from "../../src/contracts/source-edit.mjs";
+import { readAuthoringReference, referenceCatalog } from "../authoring-reference.mjs";
+import { errorRecovery } from "../tool-errors.mjs";
 import { rendererIds, adapters } from "../../src/engine/adapters.mjs";
 import { probeMedia,transcodeMedia } from "../media-probe.mjs";
 import { visualContext, visualEdit } from "../visual-service.mjs";
-import { visualOperationSchema } from "../../src/engine/visual-document.mjs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { validProjectId } from "../project-metadata.mjs";
-import { FrameError, fail, safePath } from "./workspace.mjs";
+import { fail, safePath } from "./workspace.mjs";
 import { ProjectService as Workspace } from "../project-service.mjs";
 import { Jobs } from "./jobs.mjs";
 import { compareReviews, recordReview } from "../production-media.mjs";
@@ -36,24 +41,13 @@ import {
 const project = z.string().refine(validProjectId, "Invalid project id");
 const filePath = z.string().min(1).max(512);
 const jobId = z.string().uuid();
-const width = z.number().int().min(320).max(3840).multipleOf(2);
+const width = z.number().int().min(2).max(3840).multipleOf(2);
 const seconds = z.number().finite().nonnegative();
 const imageOptions = {
   presentation: z.enum(["native", "image-only", "metadata"]).default("native"),
   maxWidth: z.number().int().min(320).max(2048).default(1600),
 };
-const refs = {
-  rules: "AGENTS.md",
-  standard: "docs/NEW-PROJECT-STANDARD.md",
-  authoring: "docs/AUTHORING.md",
-  workflow: "docs/AI-WORKFLOW.md",
-  production: "docs/AI-PRODUCTION.md",
-  audio: "docs/AUDIO.md",
-  "scene-types": "src/engine/types.ts",
-  mcp: "docs/MCP.md",
-  assets: "docs/ASSET-TRANSFER.md",
-  speech: "docs/SPEECH.md",
-};
+const refs = Object.fromEntries(Object.entries(authoringReferences).map(([name, value]) => [name, value.path]));
 export const jsonResult = (value, isError = false) => ({
   content: [{ type: "text", text: JSON.stringify(value) }],
   structuredContent: value,
@@ -77,19 +71,10 @@ export function createFrameServer({
   const jobs = jobManager ?? new Jobs(workspace, { timeoutMs });
   const assets = assetManager ?? new AssetTransfers(workspace);
   const writeTools = new Set();
-  const reference = (name) => {
-    const file = safePath(workspace.root, refs[name]);
-    if (fs.statSync(file).size > 1024 * 1024)
-      fail("TOO_LARGE", "Reference exceeds 1 MiB.");
-    return {
-      name,
-      uri: "frame://reference/" + name,
-      path: refs[name],
-      content: fs.readFileSync(file, "utf8"),
-    };
-  };
+  const reference = (name) => readAuthoringReference(workspace.root, name);
+  const catalog = new Map();
   const server = new McpServer(
-    { name: "frame-animation", version: "1.0.0" },
+    { name: "frame-animation", version: PLATFORM_VERSION },
     {
       instructions:
         "Edit one FRAME animation project at a time. Begin with frame_project_context and its references. Read files for SHA-256 before editing. Changes stay in projects/<id>/. Serialize writes and render/validation jobs in one project; different projects can run concurrently. PROJECT_BUSY includes the active job and available actions: query it, wait, or cancel only your own job. A completed check with passed=false is a report, not a malformed tool call. External workspace changes have unknown authors and do not invalidate a passing structural check. Inspect native PNG images; retry presentation=image-only if the client omits the image. Never claim visual/audio review from a file path or metadata. Rendering executes trusted local project code. Authenticated in-scope operations execute without an additional server approval step; the client controls its own approval policy.",
@@ -104,11 +89,16 @@ export function createFrameServer({
   ) => {
     if (write) writeTools.add(name);
     if (readOnly && write) return;
+    const schema = z.strictObject(shape);
+    catalog.set(name, {
+      name, description, inputSchema: schema,
+      annotations: { readOnlyHint: !write, destructiveHint: destructive, idempotentHint: !write, openWorldHint: openWorld },
+    });
     server.registerTool(
       name,
       {
         description,
-        inputSchema: z.strictObject(shape),
+        inputSchema: schema,
         annotations: {
           readOnlyHint: !write,
           destructiveHint: destructive,
@@ -130,12 +120,7 @@ export function createFrameServer({
           }
           return jsonResult(
             {
-              error: {
-                code:
-                  error instanceof FrameError ? error.code : "OPERATION_FAILED",
-                message: error.message,
-                ...(error.details ? { details: error.details } : {}),
-              },
+              error: errorRecovery(error),
             },
             true,
           );
@@ -151,9 +136,9 @@ export function createFrameServer({
   register("frame_audio_transcode","Convert a project audio source to a separate WAV FLAC MP3 Ogg or M4A copy",{project,src:z.string(),out:z.string()},async({project:id,...request})=>{workspace.writable();workspace.project(id);const release=workspace.lock(id,"audio-transcode");try{return jsonResult(await transcodeAudio(workspace.root,id,request));}finally{release();}},{write:true});
   register("frame_audio_engines","List audio source frameworks and processor capabilities",{},()=>jsonResult({engines:audioEngines,processors:audioProcessors}));
   register("frame_audio","Read audio document and revision, or an editable legacy migration",{project},({project:id})=>jsonResult(audioContext(workspace,id)));
-  register("frame_audio_edit","Edit audio sources tracks clips buses and processors atomically",{project,expectedSha256:z.string().length(64).nullable(),projectSha256:z.string().length(64).optional(),operations:z.array(audioOperationSchema).min(1).max(100),dryRun:z.boolean().default(false)},({project:id,...request})=>jsonResult(audioEdit(workspace,id,request)),{write:true});
+  register("frame_audio_edit","Edit audio sources tracks clips buses and processors atomically",{project,...audioEditRequestSchema.shape},({project:id,...request})=>jsonResult(audioEdit(workspace,id,request)),{write:true});
   register("frame_composition", "Read authoritative visual.json clips and edit revision", {project}, ({project:id}) => jsonResult(visualContext(workspace,id)));
-  register("frame_composition_edit", "Add, trim, split, move, reorder, replace or keyframe visual clips atomically", {project,expectedSha256:z.string().length(64),operations:z.array(visualOperationSchema).min(1).max(100),dryRun:z.boolean().default(false)}, ({project:id,...request}) => jsonResult(visualEdit(workspace,id,request)), {write:true});
+  register("frame_composition_edit", "Add, trim, split, move, reorder, replace or keyframe visual clips atomically", {project,...visualEditRequestSchema.shape}, ({project:id,...request}) => jsonResult(visualEdit(workspace,id,request)), {write:true});
   register(
     "frame_list_projects",
     "Discover allowed projects using static metadata without executing scene code. Broken projects are reported individually.",
@@ -169,10 +154,10 @@ export function createFrameServer({
   register(
     "frame_project_context",
     "Read this project's metadata, audio tracks, instructions, README, boundaries and Git baseline before editing.",
-    { project },
-    ({ project: id }) =>
+    { project, detail: z.boolean().default(false) },
+    ({ project: id, detail }) =>
       jsonResult({
-        ...workspace.context(id),
+        ...workspace.context(id, { detail }),
         activeOperation: jobs.operation(id),
         assetTransfers: assets.capabilities(),
       }),
@@ -229,29 +214,7 @@ export function createFrameServer({
   register(
     "frame_patch_files",
     "Apply exact text replacements to hashed files. Match count must agree. Creates a checkpoint; strict validation failure rolls back.",
-    {
-      project,
-      changes: z
-        .array(
-          z.strictObject({
-            path: filePath,
-            expectedSha256: z.string().regex(/^[a-f0-9]{64}$/),
-            replacements: z
-              .array(
-                z.strictObject({
-                  find: z.string().min(1),
-                  replace: z.string(),
-                  count: z.number().int().min(1).max(1000).optional(),
-                }),
-              )
-              .min(1)
-              .max(50),
-          }),
-        )
-        .min(1)
-        .max(20),
-      dryRun: z.boolean().default(false),
-    },
+    { project, ...sourcePatchRequestSchema.shape },
     ({ project: id, changes, dryRun }) =>
       jsonResult(workspace.patch(id, changes, { dryRun })),
     { write: true, destructive: true },
@@ -287,23 +250,7 @@ export function createFrameServer({
   register(
     "frame_edit_files",
     "Batch create/replace/delete text files inside one project. Pass the last full-file SHA-256; null means new file. content:null deletes. Strict validation failure rolls back the batch. dryRun checks paths/hashes only.",
-    {
-      project,
-      changes: z
-        .array(
-          z.strictObject({
-            path: filePath,
-            expectedSha256: z
-              .string()
-              .regex(/^[a-f0-9]{64}$/)
-              .nullable(),
-            content: z.string().max(1048576).nullable(),
-          }),
-        )
-        .min(1)
-        .max(20),
-      dryRun: z.boolean().default(false),
-    },
+    { project, ...sourceEditRequestSchema.shape },
     ({ project: id, changes, dryRun }) =>
       jsonResult(workspace.edit(id, changes, { dryRun })),
     { write: true, destructive: true },
@@ -313,13 +260,10 @@ export function createFrameServer({
     "Create a complete animation with the existing scaffold; never overwrite. Read the returned project context before editing.",
     {
       project,
-      title: z.string().trim().min(1).max(200),
-      renderer: z.enum(rendererIds).default("composition"),
-      duration: z.number().finite().positive().max(3600).default(12),
-      fps: z.number().int().min(12).max(60).default(30),
-      audio: z.enum(["silent", "generated"]).default("silent"),
+      ...projectCreationShape,
     },
-    ({ project: id, title, renderer, duration, fps, audio }) => {
+    ({ project: id, ...request }) => {
+      const arguments_ = creationArguments(request);
       workspace.writable();
       workspace.project(id, { exists: false });
       safePath(workspace.root, "projects/.cache/new-project-locks", {
@@ -330,15 +274,8 @@ export function createFrameServer({
         [
           fileURLToPath(new URL("../new-animation.mjs", import.meta.url)),
           id,
-          title,
-          "--renderer",
-          renderer,
-          "--duration",
-          String(duration),
-          "--fps",
-          String(fps),
-          "--audio",
-          audio,
+          request.title,
+          ...arguments_,
         ],
         {
           cwd: workspace.root,
@@ -903,6 +840,29 @@ export function createFrameServer({
       };
     },
   );
+  register("frame_help", "Discover available tools with bounded pagination; schemas are read separately with frame_tool_describe.", {
+    query: z.string().max(100).default(""), offset: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(100).default(30),
+  }, ({ query, offset, limit }) => {
+    const entries = [...catalog.values()].filter(tool => (tool.name + " " + tool.description).toLowerCase().includes(query.toLowerCase()));
+    const tools = entries.slice(offset, offset + limit).map(({ inputSchema, ...tool }) => tool);
+    return jsonResult({ schemaVersion: 1, tools, total: entries.length, nextOffset: offset + tools.length < entries.length ? offset + tools.length : null });
+  });
+  register("frame_tool_describe", "Read the exact input schema and side-effect annotations of an available tool.", { name: z.string().min(1).max(100) }, ({ name }) => {
+    const tool = catalog.get(name.startsWith("frame_") ? name : "frame_" + name);
+    if (!tool) fail("UNKNOWN_TOOL", "Use frame_help to discover available tools.");
+    return jsonResult({ ...tool, inputSchema: z.toJSONSchema(tool.inputSchema, { unrepresentable: "any" }) });
+  });
+  register("frame_workspace_context", "Start here: local project identities, boundaries, creation defaults, references and tool discovery.", {}, () => {
+    const listing = workspace.listProjects();
+    return jsonResult({
+      schemaVersion: 1, platformVersion: PLATFORM_VERSION, mode: "local", readOnly,
+      projects: listing.projects.slice(0, 30), errors: listing.errors.slice(0, 30), total: listing.projects.length,
+      moreProjects: listing.projects.length > 30, moreErrors: listing.errors.length > 30,
+      allowedProjects: projects, defaults: projectDefaults, interfaces: authoringModes, references: referenceCatalog(),
+      workflow: ["frame_project_context", "frame_read_file", "frame_edit_files / frame_patch_files", "frame_check_project", "frame_storyboard / frame_frame", "frame_job"],
+      discovery: "frame_help lists available tools; frame_tool_describe returns one exact schema.",
+    });
+  });
   server.registerPrompt(
     "frame_edit_animation",
     {

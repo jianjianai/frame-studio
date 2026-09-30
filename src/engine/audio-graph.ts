@@ -278,20 +278,24 @@ export function scheduleAudio(
           pending.push(voice.ready);
           void voice.ready.catch(() => {});
         }
-        // Dispose finite voices after their requested interval; no film-length node accumulation.
+        // Wall timers may fire while the owned context is suspended for preparation.
+        // Recheck audio time before disposing a voice so a slow ready promise cannot
+        // consume its playback interval before the transport actually starts.
         if (!offline) {
-          const timer = setTimeout(
-            () => {
-              timeouts.delete(timer);
+          const finish = () => {
+            timeouts.delete(timer);
+            if (disposed) return;
+            const remaining = at + segment.duration / options.rate - context.currentTime;
+            if (remaining > 0) {
+              timer = setTimeout(finish, remaining * 1000 + 100);
+              timeouts.add(timer);
+            } else {
               voices.delete(voice);
               voice.dispose();
-            },
-            Math.max(
-              0,
-              (at + segment.duration / options.rate - context.currentTime) *
-                1000,
-            ) + 100,
-          );
+            }
+          };
+          let timer = setTimeout(finish, Math.max(0,
+            (at + segment.duration / options.rate - context.currentTime) * 1000) + 100);
           timeouts.add(timer);
         }
       };

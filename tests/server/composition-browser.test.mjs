@@ -49,6 +49,18 @@ test(
         .items[0];
       const initial = await actions.call("works_composition", { id: work.id });
       assert.equal(initial.document.clips.length, 0);
+      const handoff = await actions.call("works_context", { id: work.id });
+      assert.equal(handoff.authority.visual.mode, "document");
+      assert.equal(handoff.composition.clips, 0);
+      assert.equal(handoff.composition.document, undefined);
+      assert.equal((await actions.call("works_context", { id: work.id, detail: true })).composition.document.clips.length, 0);
+      const preview = await actions.call("works_composition_edit", {
+        id: work.id, expectedSha256: initial.sha256, dryRun: true,
+        operations: [{ op: "add", clip: { id: "proposed", source: { kind: "color", color: "#112233" }, start: 0, duration: 1 } }],
+      });
+      assert.equal(preview.dryRun, true);
+      assert.equal(preview.document.clips.length, 1);
+      assert.equal((await actions.call("works_composition", { id: work.id })).sha256, initial.sha256);
       assert.equal(
         (await actions.call("works_context", { id: work.id })).composition
           .sha256,

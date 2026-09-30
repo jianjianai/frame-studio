@@ -1,13 +1,13 @@
 import fs from "node:fs/promises";
-import { rendererIds } from "../src/engine/adapters.mjs";
+import { projectCreationOptions } from "../src/contracts/authoring.mjs";
 import { projectPath } from "./project-paths.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { validProjectId } from "./project-metadata.mjs";
 import { ENGINE_PROTOCOL_VERSION } from "../src/engine/protocol.mjs";
-import { compositionSchema } from "../src/engine/dimensions.mjs";
 
-const [id, title, ...rest] = process.argv.slice(2);
+
+const [id, rawTitle, ...rest] = process.argv.slice(2);
 const options = new Map();
 for (let i = 0; i < rest.length; i += 2) {
   if (
@@ -18,30 +18,16 @@ for (let i = 0; i < rest.length; i += 2) {
     throw new Error("Unknown, duplicate or incomplete option: " + rest[i]);
   options.set(rest[i], rest[i + 1]);
 }
-const renderer = options.get("--renderer") ?? "composition";
-const duration = Number(options.get("--duration") ?? 24);
-const fps = Number(options.get("--fps") ?? 30);
-const audio = options.get("--audio") ?? "silent";
-const composition = options.has("--width") || options.has("--height")
-  ? compositionSchema.parse({ width: Number(options.get("--width")), height: Number(options.get("--height")) }) : undefined;
-if (
-  !validProjectId(id) ||
-  typeof title !== "string" ||
-  !title.trim() ||
-  !rendererIds.includes(renderer) ||
-  !Number.isFinite(duration) ||
-  duration <= 0 ||
-  duration > 3600 ||
-  !Number.isInteger(fps) ||
-  fps < 12 ||
-  fps > 60 ||
-  !["silent", "generated"].includes(audio)
-) {
-  console.error(
-    'Usage: pnpm film new my-film "我的动画" [--renderer composition|pixi|three|canvas|babylon] [--duration 24] [--fps 30] [--audio silent|generated] [--width 1080 --height 1920]',
-  );
-  process.exit(1);
-}
+if (!validProjectId(id)) throw new Error("Invalid project id");
+const { title, renderer, duration, fps, audio, composition } = projectCreationOptions({
+  title: rawTitle,
+  renderer: options.get("--renderer"),
+  duration: options.has("--duration") ? Number(options.get("--duration")) : undefined,
+  fps: options.has("--fps") ? Number(options.get("--fps")) : undefined,
+  audio: options.get("--audio"),
+  width: options.has("--width") ? Number(options.get("--width")) : undefined,
+  height: options.has("--height") ? Number(options.get("--height")) : undefined,
+});
 const root = process.cwd();
 const project = projectPath(root, id);
 const destinations = [project];

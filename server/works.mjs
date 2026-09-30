@@ -1,6 +1,7 @@
 import { versionTree } from "./version-review.mjs";
 import { assertSourceRevision } from "./source-control.mjs";
 import fs from "node:fs";
+import { projectDefaults } from "../src/contracts/authoring.mjs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -144,7 +145,7 @@ export class Works {
     title,
     repo,
     renderer = "composition",
-    duration = 12,
+    duration = projectDefaults.duration,
     fps = 30,
     audio = "silent",
     composition,

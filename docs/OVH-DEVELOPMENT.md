@@ -23,6 +23,9 @@ ssh host 'sudo -n docker exec frame-development pnpm build:studio'
 
 工具容器固定使用现有 FRAME 工具镜像 `sha256:43b5807e9a4db3f1265512f3f95df171091b774641acc1df495dc4cd42148470`，包含 Node 24.21.0、pnpm 12.4.2、Chromium、Git LFS 和 FFmpeg。实际代码和依赖来自 `/workspace`，不会调用镜像中的旧平台实现。常规开发容器用户 UID/GID 10001，与 AgentDock 一致。完整服务端测试的语音用例会将临时执行器文件 chown 为 UID 1000，因此完整 verify 或 test:server 需在这个无 Docker socket 的专用容器中使用 `docker exec -u 0`；执行后按上面的命令恢复生成文件的所有者。普通构建、工作台浏览器测试和编辑仍使用 UID 10001。
 
+
+依赖安装使用显式的 `pnpm install --frozen-lockfile`。`pnpm-workspace.yaml` 设置 `verifyDepsBeforeRun: false`，避免 pnpm 在运行 film、构建或测试前自动重写共享的只读 node_modules；依赖变更后必须重新安装，`film doctor --json` 可检查实际可用性。生产镜像在构建时安装并锁定依赖，任务工作区复用同一份依赖。
+
 `FRAME_TEST_DATABASE_URL` 已在开发容器环境配置，仅连接独立的 `frame-development-postgres` / `frame_test_development`。测试会清空这个测试库；它不保存业务数据，使用 tmpfs，容器重启后重新初始化。独立网络为 `frame-development`，没有公布数据库端口。容器环境文件位于忽略的 `.cache/ovh-dev/`，权限 600。
 
 开发与测试容器均设置 `restart=unless-stopped`。开发容器只保活，按需通过 docker exec 运行命令，没有挂载 Docker socket，不启动生产调度器。`pnpm verify:release` 的真实执行器仍需要单独搭建隔离候选镜像及容器控制环境，普通 verify 通过不代表发布验收。

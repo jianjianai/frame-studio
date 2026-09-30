@@ -26,6 +26,7 @@ export class AudioTransport {
   private requestedPlay = false;
   private abort = new AbortController();
   private preparation?: AbortController;
+  private scheduling: Promise<void> = Promise.resolve();
   private preloadEnabled = false;
   readonly controls = new Map<string, { gain: number; muted: boolean }>();
   buffering = false;
@@ -284,85 +285,70 @@ export class AudioTransport {
       this.report(error, generation);
     }
   }
-  private startSource(generation: number): void | Promise<void> {
+  private async startSource(generation: number): Promise<void> {
     if (!this.context || !this.prepared || !this.gain) return;
     const request = (this.preparation = new AbortController());
-    const offset = this.clock.time(),
-      length = this.clock.duration - offset;
-    const pending = Promise.all([
-      this.media?.prepare(
-        offset,
-        this.clock.rate,
-        this.controls,
-        request.signal,
-      ),
-      prepareAudioSegment(
-        this.prepared,
-        this.context,
-        this.clock.duration,
-        offset,
-        length,
-        this.clock.rate,
-        this.controls,
-        request.signal,
-      ),
+    const context = this.context, prepared = this.prepared, gain = this.gain;
+    const current = () => !this.closed && generation === this.generation &&
+      this.requestedPlay && !request.signal.aborted;
+    const offset = this.clock.time(), length = this.clock.duration - offset;
+    this.buffering = true;
+    await Promise.all([
+      this.media?.prepare(offset, this.clock.rate, this.controls, request.signal),
+      prepareAudioSegment(prepared, context, this.clock.duration, offset, length,
+        this.clock.rate, this.controls, request.signal),
     ]);
-    const start = () => {
-      if (this.closed || generation !== this.generation || !this.requestedPlay)
-        return;
-      this.buffering = false;
-      // Give native sources a small common scheduling lead; picture uses the same anchor.
-      const lead = this.prepared!.generated?.prepareSegment ? 0.04 : 0;
-      const when = this.context!.currentTime + lead;
-      this.clock.play(lead);
-      this.graph = scheduleAudio(
-        this.prepared!,
-        this.context!,
-        this.gain!,
-        this.clock.duration,
-        offset,
-        length,
-        when,
-        this.clock.rate,
-        this.controls,
-        (error) => this.report(error, generation),
-      );
-      this.media?.start(
-        () => this.clock.time(),
-        this.clock.rate,
-        this.controls,
-        when,
-      );
-      const boundary = this.context!.createBufferSource();
-      boundary.buffer = this.context!.createBuffer(
-        1,
-        1,
-        this.context!.sampleRate,
-      );
-      boundary.loop = true;
-      boundary.connect(this.gain!);
-      boundary.onended = () => {
-        if (
-          this.closed ||
-          generation !== this.generation ||
-          !this.requestedPlay
-        )
-          return;
-        if (this.clock.loop) this.restart();
-        else {
-          this.pause();
-          this.clock.seek(this.clock.duration);
+    // Serialize context transitions across seeks/rate changes. A stale request never
+    // resumes or replaces a newer graph, and pause aborts an unfinished ready promise.
+    const scheduled = this.scheduling.catch(() => {}).then(async () => {
+      if (!current()) return;
+      await context.suspend();
+      if (!current()) return;
+      // Freeze the shared audio clock while synchronous generators create buffers.
+      // Every track and the picture receive the same future anchor after readiness.
+      const lead = 0.04, when = context.currentTime + lead;
+      const graph = scheduleAudio(prepared, context, gain, this.clock.duration,
+        offset, length, when, this.clock.rate, this.controls,
+        (error) => this.report(error, generation));
+      this.graph = graph;
+      let cancel: (() => void) | undefined;
+      try {
+        const aborted = new Promise<never>((_, reject) => {
+          cancel = () => reject(request.signal.reason ?? new DOMException("Aborted", "AbortError"));
+          request.signal.addEventListener("abort", cancel, { once: true });
+          if (request.signal.aborted) cancel();
+        });
+        await Promise.race([graph.ready, aborted]);
+        if (!current()) return;
+        const boundary = context.createBufferSource();
+        boundary.buffer = context.createBuffer(1, 1, context.sampleRate);
+        boundary.loop = true;
+        boundary.connect(gain);
+        boundary.onended = () => {
+          if (!current()) return;
+          if (this.clock.loop) this.restart();
+          else {
+            this.pause();
+            this.clock.seek(this.clock.duration);
+          }
+        };
+        boundary.start(when);
+        boundary.stop(when + length / this.clock.rate);
+        this.boundary = boundary;
+        this.clock.play(lead);
+        this.media?.start(() => this.clock.time(), this.clock.rate, this.controls, when);
+        await context.resume();
+        if (current()) this.buffering = false;
+      } finally {
+        if (cancel) request.signal.removeEventListener("abort", cancel);
+        if (!current()) {
+          graph.dispose();
+          if (this.graph === graph) this.graph = undefined;
         }
-      };
-      boundary.start(when);
-      boundary.stop(when + length / this.clock.rate);
-      this.boundary = boundary;
-    };
-    if (pending) {
-      this.buffering = true;
-      return pending.then(start);
-    }
-    start();
+      }
+    });
+    this.scheduling = scheduled;
+    await scheduled;
   }
   async dispose(): Promise<void> {
     this.closed = true;

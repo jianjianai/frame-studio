@@ -15,6 +15,7 @@ export const workToolHelp = {
     "JSON object, @file, or - for stdin. Credentials belong in @file or stdin, never command arguments.",
   local: {
     context: { project: "optional outside a task; inferred inside a task" },
+    reference: { name: "optional fixed reference name; omit to list the catalog" },
     check: {
       project: "optional",
       runtime:

@@ -1,16 +1,10 @@
 import { inspectAudio } from "./audio-inspect.mjs";
-import { parseArgs } from "node:util";
+import { parseCommandArgs } from "./film-command-catalog.mjs";
+import { errorRecovery } from "./tool-errors.mjs";
 import { transcodeAudio } from "./audio-media.mjs";
 import { probeMedia } from "./media-probe.mjs";
 try {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      src: { type: "string" },
-      out: { type: "string" },
-      json: { type: "boolean" },
-    },
-  });
+  const { values, positionals } = parseCommandArgs("audio-media");
   const [id, action = "probe"] = positionals;
   if (
     !id ||
@@ -33,6 +27,6 @@ try {
     ),
   );
 } catch (e) {
-  console.error(JSON.stringify({ error: e.message }));
+  console.log(JSON.stringify({ schemaVersion: 1, status: "failed", error: errorRecovery(e) }));
   process.exitCode = 1;
 }

@@ -1,17 +1,12 @@
-import fs from "node:fs";
-import { parseArgs } from "node:util";
+import { readJsonInput } from "./cli-input.mjs";
+import { visualEditRequestSchema } from "../src/engine/document-edit.mjs";
+import { parseCommandArgs } from "./film-command-catalog.mjs";
+import { errorRecovery } from "./tool-errors.mjs";
 import { ProjectService } from "./project-service.mjs";
 import { visualContext, visualEdit } from "./visual-service.mjs";
 import { adapters } from "../src/engine/adapters.mjs";
 try {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      json: { type: "boolean" },
-      input: { type: "string" },
-      "dry-run": { type: "boolean" },
-    },
-  });
+  const { values, positionals } = parseCommandArgs("composition");
   const [id, action = "get"] = positionals;
   if (id === "engines") {
     console.log(JSON.stringify({ adapters }, null, 2));
@@ -23,23 +18,15 @@ try {
     const service = new ProjectService(process.cwd());
     const request =
       action === "edit"
-        ? JSON.parse(
-            fs.readFileSync(values.input === "-" ? 0 : values.input, "utf8"),
-          )
+        ? await readJsonInput(values.input)
         : null;
     const result =
       action === "get"
         ? visualContext(service, id)
-        : visualEdit(service, id, { ...request, dryRun: !!values["dry-run"] });
+        : visualEdit(service, id, visualEditRequestSchema.parse({ ...request, ...(values["dry-run"] === undefined ? {} : { dryRun: values["dry-run"] }) }));
     console.log(JSON.stringify(result, null, values.json ? 0 : 2));
   }
 } catch (error) {
-  console.error(
-    JSON.stringify({
-      status: "failed",
-      code: error.code,
-      error: error.message,
-    }),
-  );
+  console.log(JSON.stringify({ schemaVersion: 1, status: "failed", error: errorRecovery(error) }));
   process.exitCode = 1;
 }

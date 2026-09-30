@@ -150,7 +150,11 @@ export interface GeneratedAudioModule {
   prepareAudio?(context: BaseAudioContext): void | Promise<void>;
   /** Prepare the initial live buffer or the entire requested offline segment. */
   prepareSegment?(options: GeneratedAudioSegmentOptions): void | Promise<void>;
-  createAudio(options: GeneratedAudioOptions): { dispose(): void };
+  createAudio(options: GeneratedAudioOptions): {
+    dispose(): void;
+    /** Initial buffers ready for the shared anchor; must not wait for playback time to advance. */
+    ready?: Promise<void>;
+  };
   /** Optional project-local registry; ids in audio.json select modules without global state. */
   generators?: Record<string, GeneratedAudioModule>;
   /** Release resources held for this playback/export session. */

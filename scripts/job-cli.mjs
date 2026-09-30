@@ -1,25 +1,18 @@
 import fs from "node:fs";
 import path from "node:path";
-import { parseArgs } from "node:util";
+import { parseCommandArgs } from "./film-command-catalog.mjs";
+import { errorRecovery } from "./tool-errors.mjs";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { readJsonInput } from "./cli-input.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 import { ProjectService } from "./project-service.mjs";
 import { Jobs } from "./mcp/jobs.mjs";
 
 try {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      kind: { type: "string" },
-      input: { type: "string" },
-      id: { type: "string" },
-      json: { type: "boolean" },
-      launch: { type: "string" },
-      timeout: { type: "string" },
-    },
-  });
+  const { values, positionals } = parseCommandArgs("job");
   const [project, command] = positionals;
+  if (positionals.length !== 2) throw new Error("Expected project and job action.");
   const workspace = new ProjectService(process.cwd(), { projects: [project] });
   const jobs = new Jobs(workspace, {
     persistent: true,
@@ -63,11 +56,7 @@ try {
       "playback",
     ];
     if (!allowed.includes(values.kind)) throw new Error("Unknown job kind");
-    const options = values.input
-      ? JSON.parse(
-          fs.readFileSync(values.input === "-" ? 0 : values.input, "utf8"),
-        )
-      : {};
+    const options = values.input ? await readJsonInput(values.input) : {};
     const launchId = randomUUID(),
       launch = workspace.file(
         project,
@@ -113,8 +102,15 @@ try {
       throw new Error("Worker startup did not confirm; inspect " + launch);
     fs.unlinkSync(launch);
     console.log(JSON.stringify(jobs.status(project, result.jobId)));
-  } else if (command === "status" || command === "cancel") {
-    const state = jobs.status(project, values.id);
+  } else if (["status", "wait", "cancel"].includes(command)) {
+    let state = jobs.status(project, values.id);
+    const active = () => ["running", "cancelling"].includes(state.status);
+    const waitMs = command === "wait" ? Number(values["deadline-seconds"] ?? 20) * 1000 : Number(values["wait-ms"] ?? 0);
+    const deadline = Date.now() + waitMs;
+    while (command !== "cancel" && active() && Date.now() < deadline) {
+      await delay(Math.min(200, deadline - Date.now()));
+      state = jobs.status(project, values.id);
+    }
     if (
       command === "cancel" &&
       ["running", "cancelling"].includes(state.status)
@@ -131,14 +127,17 @@ try {
     console.log(
       JSON.stringify({
         ...state,
-        ...(command === "cancel" ? { cancellationRequested: true } : {}),
+        ...(command === "cancel" ? { cancellationRequested: active() } : {}),
+        ...(command === "wait" && active() ? { timedOut: true, nextAction: "pnpm --silent film job " + project + " wait --id " + state.id + " --json" } : {}),
       }),
     );
+    if (["failed", "cancelled", "timed_out", "unobserved"].includes(state.status)) process.exitCode = 1;
+    else if (command === "wait" && active()) process.exitCode = 2;
   } else
     throw new Error(
       "Use film job <id> start --kind <kind> [--input JSON] | status --id UUID | cancel --id UUID",
     );
 } catch (error) {
-  console.log(JSON.stringify({ status: "failed", error: error.message }));
+  console.log(JSON.stringify({ schemaVersion: 1, status: "failed", error: errorRecovery(error) }));
   process.exitCode = 1;
 }

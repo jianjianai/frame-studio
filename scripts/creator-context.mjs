@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { authoringState } from "./authoring-state.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { readProject, validProjectId } from "./project-metadata.mjs";
@@ -128,9 +129,10 @@ function scopeReport(root, id) {
 export function readCreatorContext(root, options = {}, env = process.env) {
   const { id, folder, task } = creatorWorkspace(root, options, env);
   const diagnostics = [];
-  let entry = null;
+  let entry = null, state = null;
   try {
     entry = readProject(projectPath(root, id, "project.ts"));
+    state = authoringState(entry);
   } catch (error) {
     diagnostics.push({
       code: "STATIC_METADATA",
@@ -183,18 +185,7 @@ export function readCreatorContext(root, options = {}, env = process.env) {
     projectInfo: meta
       ? pick(meta, ["title", "renderer", "duration", "fps", "composition"])
       : null,
-    entrypoints: entry
-      ? {
-          metadata: "project.ts",
-          scene: entry.loadPath,
-          audio: entry.audioLoadPath ?? null,
-        }
-      : { metadata: "project.ts" },
-    audioTracks: Array.isArray(meta?.audioTracks)
-      ? meta.audioTracks
-      : meta?.audio
-        ? [{ id: "main", kind: "file", src: meta.audio }]
-        : [],
+    ...(state ?? { entrypoints: { metadata: "project.ts" }, audioTracks: [], authority: { status: "needs_repair" } }),
     timeline: {
       shotCount: beats.length,
       shots: beats.slice(0, 48),

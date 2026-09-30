@@ -1,4 +1,5 @@
-import { parseArgs } from "node:util";
+import { parseCommandArgs } from "./film-command-catalog.mjs";
+import { errorRecovery } from "./tool-errors.mjs";
 import { ProjectService } from "./project-service.mjs";
 import {
   initSpeech,
@@ -9,19 +10,7 @@ import {
 import { produceNarration } from "./narration.mjs";
 
 try {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      provider: { type: "string" },
-      voice: { type: "string" },
-      speaker: { type: "string" },
-      text: { type: "string" },
-      locale: { type: "string" },
-      limit: { type: "string" },
-      offset: { type: "string" },
-      json: { type: "boolean" },
-    },
-  });
+  const { values, positionals } = parseCommandArgs("speech");
   const [id, action] = positionals;
   if (positionals.length !== 2)
     throw new Error(
@@ -56,6 +45,6 @@ try {
     process.removeListener("SIGTERM", cancel);
   }
 } catch (error) {
-  console.error(error.message);
+  console.log(JSON.stringify({ schemaVersion: 1, status: "failed", error: errorRecovery(error) }));
   process.exitCode = 1;
 }

@@ -1,6 +1,8 @@
 import { exportAudio } from "./audio-export.mjs";
-import fs from "node:fs";
-import { parseArgs } from "node:util";
+import { readJsonInput } from "./cli-input.mjs";
+import { audioEditRequestSchema } from "../src/engine/document-edit.mjs";
+import { parseCommandArgs } from "./film-command-catalog.mjs";
+import { errorRecovery } from "./tool-errors.mjs";
 import { ProjectService } from "./project-service.mjs";
 import { audioContext, audioEdit } from "./audio-service.mjs";
 import {
@@ -8,18 +10,7 @@ import {
   audioProcessors,
 } from "../src/engine/audio-document.mjs";
 try {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      json: { type: "boolean" },
-      input: { type: "string" },
-      "dry-run": { type: "boolean" },
-      format: { type: "string" },
-      stems: { type: "boolean" },
-      start: { type: "string" },
-      end: { type: "string" },
-    },
-  });
+  const { values, positionals } = parseCommandArgs("audio");
   const [id, action = "get"] = positionals;
   if (id === "engines")
     console.log(
@@ -61,23 +52,19 @@ try {
     }
     const request =
       action === "edit"
-        ? JSON.parse(
-            fs.readFileSync(values.input === "-" ? 0 : values.input, "utf8"),
-          )
+        ? await readJsonInput(values.input)
         : null;
     console.log(
       JSON.stringify(
         action === "get"
           ? audioContext(service, id)
-          : audioEdit(service, id, { ...request, dryRun: !!values["dry-run"] }),
+          : audioEdit(service, id, audioEditRequestSchema.parse({ ...request, ...(values["dry-run"] === undefined ? {} : { dryRun: values["dry-run"] }) })),
         null,
         values.json ? 0 : 2,
       ),
     );
   }
 } catch (e) {
-  console.error(
-    JSON.stringify({ status: "failed", code: e.code, error: e.message }),
-  );
+  console.log(JSON.stringify({ schemaVersion: 1, status: "failed", error: errorRecovery(e) }));
   process.exitCode = 1;
 }

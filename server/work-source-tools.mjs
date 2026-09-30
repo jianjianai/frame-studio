@@ -2,8 +2,11 @@ import {inspectAudio} from "../scripts/audio-inspect.mjs";
 import {transcodeAudio} from "../scripts/audio-media.mjs";
 import {probeMedia} from "../scripts/media-probe.mjs";
 import {audioContext,audioEdit} from "../scripts/audio-service.mjs";
-import {audioOperationSchema} from "../src/engine/audio-document.mjs";
+import {audioEditRequestSchema,visualEditRequestSchema} from "../src/engine/document-edit.mjs";
+import {visualContext,visualEdit} from "../scripts/visual-service.mjs";
+import {setTimeout as sleep} from "node:timers/promises";
 import { z } from "zod";
+import { sourceEditRequestSchema, sourcePatchRequestSchema } from "../src/contracts/source-edit.mjs";
 import { fileURLToPath } from "node:url";
 import { checkProjects } from "../scripts/check-projects.mjs";
 import { ProjectService } from "../scripts/project-service.mjs";
@@ -26,41 +29,8 @@ class WorkSource extends ProjectService {
 }
 const filePath = z.string().min(1).max(512);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
-const changes = z
-  .array(
-    z.strictObject({
-      path: filePath,
-      expectedSha256: digest.nullable(),
-      content: z
-        .string()
-        .max(1024 * 1024)
-        .nullable(),
-    }),
-  )
-  .min(1)
-  .max(20);
-const patches = z
-  .array(
-    z.strictObject({
-      path: filePath,
-      expectedSha256: digest,
-      replacements: z
-        .array(
-          z.strictObject({
-            find: z
-              .string()
-              .min(1)
-              .max(1024 * 1024),
-            replace: z.string().max(1024 * 1024),
-            count: z.number().int().min(1).max(1000).default(1),
-          }),
-        )
-        .min(1)
-        .max(50),
-    }),
-  )
-  .min(1)
-  .max(20);
+const changes = sourceEditRequestSchema.shape.changes;
+const patches = sourcePatchRequestSchema.shape.changes;
 
 /** Reuse the local CLI/MCP domain; the database lock additionally serializes platform tasks. */
 export function workSourceTools({ add, works, repos, db, registry }) {
@@ -116,14 +86,26 @@ export function workSourceTools({ add, works, repos, db, registry }) {
           await repos.revisions?.invalidate(work.repo, work.project);
       }
     };
-    return db.lock(`${work.repo}:${work.project}`, run);
+    // Readers briefly wait for a coherent committed document. Writes keep the
+    // existing fail-fast conflict contract and are never replayed automatically.
+    const deadline = Date.now() + 3000;
+    for (;;) {
+      try { return await db.lock(`${work.repo}:${work.project}`, run); }
+      catch (error) {
+        if (write || error.statusCode !== 409 || error.message !== "Repository is busy" || Date.now() >= deadline) throw error;
+        await sleep(50);
+      }
+    }
   };
   const id = z.string().uuid();
+  add("works_media_probe","Read dimensions, duration and codecs of a project-owned media source",{id,src:z.string()},({id,src})=>source(id,(workspace,project)=>probeMedia(workspace.root,project,src)));
+  add("works_composition","Read authoritative visual clips and renderer capabilities with an edit revision",{id},({id})=>source(id,(workspace,project)=>visualContext(workspace,project)));
+  add("works_composition_edit","Atomically edit visual clips with revision protection and optional dry run",{id,...visualEditRequestSchema.shape},({id,...request})=>source(id,(workspace,project)=>visualEdit(workspace,project,request),{write:true,dryRun:request.dryRun}));
   add("works_audio_inspect","Read streamed source waveform and peak/RMS levels",{id,src:z.string()},({id,src})=>source(id,(workspace,project)=>inspectAudio(workspace.root,project,src)));
   add("works_audio_media_probe","Inspect audio streams and codecs",{id,src:z.string()},({id,src})=>source(id,(workspace,project)=>probeMedia(workspace.root,project,src)));
   add("works_audio_transcode","Create a compatible audio copy without replacing source or destination",{id,src:z.string(),out:z.string()},({id,src,out})=>source(id,(workspace,project)=>transcodeAudio(workspace.root,project,{src,out}),{write:true}));
   add("works_audio","Read authoritative audio document and capabilities",{id},({id})=>source(id,(workspace,project)=>audioContext(workspace,project)));
-  add("works_audio_edit","Atomically edit multitrack audio with revision protection",{id,expectedSha256:digest.nullable(),projectSha256:digest.optional(),operations:z.array(audioOperationSchema).min(1).max(100),dryRun:z.boolean().default(false)},({id,...request})=>source(id,(workspace,project)=>audioEdit(workspace,project,request),{write:true,dryRun:request.dryRun}));
+  add("works_audio_edit","Atomically edit multitrack audio with revision protection",{id,...audioEditRequestSchema.shape},({id,...request})=>source(id,(workspace,project)=>audioEdit(workspace,project,request),{write:true,dryRun:request.dryRun}));
   add(
     "works_read_lines",
     "Read a UTF-8 line slice; sha256 covers the ENTIRE file, not just the slice. Follow nextLine until null.",

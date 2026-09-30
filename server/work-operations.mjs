@@ -1,7 +1,6 @@
 import { workSourceTools } from "./work-source-tools.mjs";
 import { compactTask, TASK_SUMMARY_COLUMNS } from "./agent-toolkit.mjs";
-import { visualOperations } from "./visual-operations.mjs";
-import { rendererIds } from "../src/engine/adapters.mjs";
+import { projectCreationShape, projectCreationOptions } from "../src/contracts/authoring.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { z } from "zod";
 import {
@@ -14,7 +13,7 @@ import {
 } from "../src/contracts/platform.mjs";
 import { Works } from "./works.mjs";
 import { sourceControlOperations } from "./source-control.mjs";
-import { compositionSchema } from "../src/engine/dimensions.mjs";
+
 import { browserPreview } from "./browser-preview.mjs";
 import { readWorkPreview } from "./preview-state.mjs";
 import { PREVIEW_VERSION } from "./preview-version.mjs";
@@ -30,7 +29,6 @@ export function workOperations({
 }) {
   const works = new Works(db, data, repos, assets, tasks),
     uuid = z.string().uuid();
-  visualOperations({add,db,repos,works,registry});
   const invoke = (name, args) =>
     registry[name].fn(registry[name].schema.parse(args));
   const resolve = async (id) => {
@@ -56,16 +54,11 @@ export function workOperations({
     "works_create",
     "Create a work in its own branch of the selected content repository",
     {
-      title: z.string().trim().min(1).max(150),
+      ...projectCreationShape,
       repo: uuid,
-      renderer: z.enum(rendererIds).default("composition"),
-      duration: z.number().positive().max(3600).default(12),
-      fps: z.number().int().min(12).max(60).default(30),
-      audio: z.enum(["silent", "generated"]).default("silent"),
-      composition: compositionSchema.optional(),
       category: z.string().max(80).default(""),
     },
-    (a) => works.create(a),
+    (a) => works.create({ ...a, ...projectCreationOptions(a) }),
   );
   add(
     "works_update",
@@ -125,8 +118,13 @@ export function workOperations({
       return {
         work,
         ...context,
-        composition: await invoke("works_composition", { id: a.id }),
-        audio: await invoke("works_audio", {id:a.id}).then(value=>({declared:value.declared,path:value.path,sha256:value.sha256,tracks:value.document.tracks.length,clips:value.document.clips.length,tools:["frame_works_audio","frame_works_audio_edit"]})),
+        composition: context.authority?.status === "needs_repair" ? { status: "needs_repair", editable: false } :
+          await invoke("works_composition", { id: a.id }).then(value => a.detail ? value : ({
+            editable: value.editable, path: value.path, sha256: value.sha256, duration: value.duration, fps: value.fps,
+            clips: value.document?.clips.length ?? 0, adapters: value.adapters,
+            tools: ["frame_works_composition", "frame_works_composition_edit"],
+          })),
+        audio: context.authority?.status === "needs_repair" ? { status: "needs_repair" } : await invoke("works_audio", {id:a.id}).then(value=>({declared:value.declared,path:value.path,sha256:value.sha256,tracks:value.document.tracks.length,clips:value.document.clips.length,tools:["frame_works_audio","frame_works_audio_edit"]})),
         authoring: a.detail
           ? context.authoring
           : "createScene({width,height,quality}) returns {canvas,render(time),dispose()} or a Promise; prepareFrame(time,{signal}) and render may be async. Default works use editable visual.json composition; all media share absolute seconds, with no independent clock. Keep all source/media under this work. Use detail:true for the complete scene/audio/export reference.",

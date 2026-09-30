@@ -1,4 +1,8 @@
 import fs from "node:fs";
+import { authoringState } from "./authoring-state.mjs";
+import { referenceCatalog, readAuthoringReference } from "./authoring-reference.mjs";
+import { errorRecovery } from "./tool-errors.mjs";
+import { commandCatalog, describeFilmCommand } from "./film-command-catalog.mjs";
 import { adapters } from "../src/engine/adapters.mjs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -8,6 +12,8 @@ import { projectPath } from "./project-paths.mjs";
 
 export const commandHelp = `FRAME · 视频制作工具
   pnpm film platform help                   远程平台 CLI（作品 UUID），任务等待/上传/下载
+  pnpm film describe <command> [action] --json  精确参数、请求结构和默认值
+  pnpm film reference [name] --json             参考文档目录或正文
   pnpm film list [--json]                     列出项目
   pnpm film inspect <id> [--json]             元数据、素材、音轨和时间标记
   pnpm film context <id> [--json]             AI 接手上下文与修改边界（只读）
@@ -57,13 +63,14 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film workspace <id> [--json]          建立可编辑的独立工作副本与 Git 基线
   pnpm film job <id> start --kind export --input options.json [--json]
   pnpm film job <id> status|cancel --id <job-id> [--json]
+  pnpm film job <id> wait --id <job-id> [--deadline-seconds 20] [--json]
 局部补丁与旁白 JSON 示例见 docs/AI-PRODUCTION.md；--input - 从 stdin 读取 JSON。
 输出默认在 projects/<id>/exports/；--out 只能指定本项目内路径。
 --force 明确覆盖已有输出。new 拒绝覆盖；poster 明确更新封面。
 机器读取使用 pnpm --silent film ... --json；错误退出码非零。
 `;
 
-export function inspectProject(root, id) {
+export function inspectProject(root, id, { detail = true } = {}) {
   if (!validProjectId(id)) throw new Error("Invalid project id");
   const folder = projectPath(root, id);
   const metadataFile = projectPath(root, id, "project.ts");
@@ -74,18 +81,18 @@ export function inspectProject(root, id) {
     return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
   };
   const meta = entry.meta;
+  const { visual, audioDocument, ...compactMetadata } = meta;
+  if (audioDocument) { delete compactMetadata.audioTracks; delete compactMetadata.audio; }
   return {
     schemaVersion: 1,
     id,
     folder,
-    metadata: meta,
-    entrypoints: { scene: entry.loadPath, audio: entry.audioLoadPath ?? null, audioDocument:entry.audioDocumentLoadPath??null, visual:entry.visualLoadPath??null },
+    metadata: detail ? meta : compactMetadata,
+    detail,
+    ...authoringState(entry),
     adapters,
-    visual:meta.visual??null,
-    audioDocument:meta.audioDocument??null,
-    audioTracks:
-      meta.audioTracks ??
-      (meta.audio ? [{ id: "main", kind: "file", src: meta.audio }] : []),
+    ...(detail ? { visual: visual ?? null, audioDocument: audioDocument ?? null } : {}),
+
     assets: JSON.parse(read("public/assets.json") ?? "[]"),
     writeBoundary: `projects/${id}/`,
     outputDirectory: projectPath(root, id, "exports"),
@@ -122,6 +129,19 @@ export function inspectProject(root, id) {
 
 export function runFilm(args, root = process.cwd()) {
   const [command = "help", ...rest] = args;
+  if (["help", "describe", "--help", "-h"].includes(command) || (command !== "platform" && (rest.includes("--help") || rest.includes("-h")))) {
+    const isRoot = ["help", "describe", "--help", "-h"].includes(command);
+    const positional = rest.filter(arg => !["--json", "--help", "-h"].includes(arg));
+    const target = isRoot ? positional[0] : command;
+    const action = isRoot ? positional[1] : (positional[0] === "engines" ? "engines" : positional[1]);
+    if (isRoot && positional.length > 2) throw new Error("Use film describe <command> [action] --json");
+    const descriptor = target ? describeFilmCommand(target, action) : { schemaVersion: 1, help: commandHelp, commands: commandCatalog(), guide: "docs/AI-PRODUCTION.md" };
+    console.log(rest.includes("--json") || command === "describe" ? JSON.stringify(descriptor) :
+      target ? descriptor.usage + "\n" + descriptor.description + "\n" +
+        Object.entries(descriptor.options).map(([name, option]) => "--" + name + "  " + option.description).join("\n") : commandHelp);
+    return 0;
+  }
+
   if (command === "platform") {
     process.argv = [
       process.execPath,
@@ -159,21 +179,15 @@ export function runFilm(args, root = process.cwd()) {
     });
     return 0;
   }
-  if (["help", "--help", "-h"].includes(command)) {
-    console.log(
-      rest.includes("--json")
-        ? JSON.stringify({
-            schemaVersion: 1,
-            help: commandHelp,
-            guide: "docs/AI-PRODUCTION.md",
-          })
-        : commandHelp,
-    );
+  if (command === "reference") {
+    const names = rest.filter(arg => arg !== "--json");
+    if (names.length > 1) throw new Error("Use film reference [name] --json");
+    console.log(JSON.stringify(names.length ? readAuthoringReference(root, names[0]) : { schemaVersion: 1, references: referenceCatalog() }));
     return 0;
   }
   if (["list", "inspect", "context"].includes(command)) {
     const json = rest.includes("--json");
-    const positional = rest.filter((arg) => arg !== "--json");
+    const positional = rest.filter((arg) => arg !== "--json" && !(command !== "list" && arg === "--detail"));
     if (
       (command === "list" && positional.length) ||
       (command !== "list" && positional.length !== 1)
@@ -218,7 +232,7 @@ export function runFilm(args, root = process.cwd()) {
               .join("\n"),
       );
     } else {
-      const report = inspectProject(root, positional[0]);
+      const report = inspectProject(root, positional[0], { detail: command === "inspect" || rest.includes("--detail") });
       if (command === "context") {
         report.workflow = [
           "Read AGENTS.md, docs/NEW-PROJECT-STANDARD.md, docs/AUTHORING.md and docs/AI-WORKFLOW.md",
@@ -324,7 +338,9 @@ export function runFilm(args, root = process.cwd()) {
       /Verified output: (.+)|Exported frame at .+? -> (.+)|Storyboard: (.+)/.exec(
         log,
       );
-    const file = output?.slice(1).find(Boolean)?.trim();
+    const file = command === "new" && result.status === 0
+      ? projectPath(root, cleanRest[0])
+      : output?.slice(1).find(Boolean)?.trim();
     console.log(
       JSON.stringify({
         schemaVersion: 1,
@@ -332,6 +348,12 @@ export function runFilm(args, root = process.cwd()) {
         status: result.status === 0 ? "passed" : "failed",
         exitCode: result.status,
         output: file ?? null,
+        ...(command === "new" && result.status === 0 ? {
+          project: cleanRest[0],
+          context: inspectProject(root, cleanRest[0]),
+          nextAction: "pnpm --silent film context " + cleanRest[0] + " --json",
+        } : {}),
+        ...(result.status !== 0 ? { error: errorRecovery(Object.assign(new Error((result.stderr || log).trim()), { code: "COMMAND_FAILED" })) } : {}),
         log,
         diagnostics: result.stderr ?? "",
       }),
@@ -348,7 +370,7 @@ if (
     process.exitCode = runFilm(process.argv.slice(2));
   } catch (error) {
     if (process.argv.includes("--json"))
-      console.log(JSON.stringify({ schemaVersion: 1, error: error.message }));
+      console.log(JSON.stringify({ schemaVersion: 1, status: "failed", error: errorRecovery(error) }));
     else console.error(error.message);
     process.exitCode = 1;
   }

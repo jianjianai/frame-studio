@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { referenceCatalog } from "../authoring-reference.mjs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
@@ -118,8 +119,7 @@ export class Workspace {
     const directory = safePath(this.root, "projects");
     const projects = [],
       errors = [];
-    for (const item of fs
-      .readdirSync(directory, { withFileTypes: true })
+    for (const item of (fs.existsSync(directory) ? fs.readdirSync(directory, { withFileTypes: true }) : [])
       .sort((a, b) => a.name.localeCompare(b.name))) {
       if (
         !validProjectId(item.name) ||
@@ -156,7 +156,7 @@ export class Workspace {
       error: result.error?.message ?? result.stderr?.trim() ?? "",
     };
   }
-  context(id) {
+  context(id, { detail = false } = {}) {
     this.project(id);
     // Inspect's known text inputs must pass the stronger MCP path policy too.
     for (const file of [
@@ -171,19 +171,13 @@ export class Workspace {
         fail("TOO_LARGE", "Context file exceeds 1 MiB: " + file);
     }
     return {
-      ...inspectProject(this.root, id),
+      ...inspectProject(this.root, id, { detail }),
       git: {
         head: this.git(["rev-parse", "HEAD"]),
         status: this.git(["status", "--short", "--untracked-files=normal"]),
       },
-      references: [
-        "rules",
-        "standard",
-        "authoring",
-        "workflow",
-        "audio",
-        "scene-types",
-      ].map((name) => "frame://reference/" + name),
+      references: referenceCatalog().map(ref => ref.uri),
+      referenceCatalog: referenceCatalog(),
       workflow:
         "Read context and references; read files for SHA-256; batch related edits; check structure and scope; inspect preview images; test related behavior; render a short clip before full export.",
       readOnly: this.readOnly,

@@ -76,6 +76,8 @@ export function createAudio(options: GeneratedAudioOptions) {
 }
 ```
 
+createAudio 可返回可选的 ready: Promise<void>，表示本次调用的初始缓冲已就绪；播放器等待它完成后才启动共同声画时钟。准备期间所拥有的 AudioContext 暂停，ready 不能等待播放时间推进。暂停、跳转和变速会撤销旧等待，dispose 仍须停止该调用的节点与后台调度。
+
 可选导出 `prepareAudio(context): void | Promise<void>`，在播放时钟启动前加载素材并初始化生成器；此阶段不得启动声音节点或独立时钟。
 
 分段生成器还可导出 `prepareSegment({trackId, context, offset, duration, rate, signal})`：实时播放只需准备首段缓冲，后续在 `createAudio` 中根据公共音频时间按需补充；OfflineAudioContext 必须先准备完整的请求片段再返回。播放器在播放、跳转和变速后等待准备完成才推进公共时钟；暂停状态下也可预先准备所选位置，但不能启动声音。可选 `signal` 用于撤销过期位置的请求，生成器取消本请求即可，不得销毁其他会话仍需的资源。异步生成失败通过 `createAudio` 参数中的 `onError(error)` 通知播放器，不能让画面继续走而音频缺失。导出 `disposeAudio(context)` 释放所属播放/导出会话的后台线程和缓存；每次 `createAudio` 的 `dispose()` 仍须立即停止本次声音节点及后续调度。

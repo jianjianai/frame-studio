@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { fileURLToPath } from "node:url";
+import { authoringReferences, authoringModes, projectDefaults } from "../src/contracts/authoring.mjs";
+import { referenceCatalog, readAuthoringReference } from "../scripts/authoring-reference.mjs";
 import { setTimeout as sleep } from "node:timers/promises";
 import { PLATFORM_VERSION } from "../src/contracts/version.mjs";
 import { isActiveTask } from "../src/contracts/platform.mjs";
@@ -6,7 +9,7 @@ import { problem } from "./security.mjs";
 
 // This allowlist is shared by discovery and MCP registration, never by authorization.
 export const isMcpOperation = (name) =>
-  /^(help$|works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$|workspace_context$|tool_describe$)/.test(
+  /^(help$|works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$|workspace_context$|tool_describe$|authoring_reference$)/.test(
     name,
   );
 const readOnly = new Set([
@@ -14,10 +17,13 @@ const readOnly = new Set([
   "works_read_lines",
   "workspace_context",
   "tool_describe",
+  "authoring_reference",
   "upload_status",
   "works_list",
   "works_context",
   "works_audio",
+  "works_composition",
+  "works_media_probe",
   "works_audio_inspect",
   "works_audio_media_probe",
   "works_files",
@@ -200,6 +206,8 @@ const nextTaskActions = (task, after) =>
 
 export function agentToolkitOperations({ add, registry, db, works, tasks }) {
   const uuid = z.string().uuid();
+  add("authoring_reference", "Read a fixed authoring reference or list the current catalog.", { name: z.enum(Object.keys(authoringReferences)).optional() }, ({ name }) =>
+    name ? readAuthoringReference(fileURLToPath(new URL("..", import.meta.url)), name) : { schemaVersion: 1, references: referenceCatalog() });
   add(
     "workspace_context",
     "Start here: compact workspace overview, work UUIDs, tool recipes and safe editing boundaries. No project mutation.",
@@ -223,6 +231,7 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
       return {
         schemaVersion: 1,
         platformVersion: PLATFORM_VERSION,
+        defaults: projectDefaults, interfaces: authoringModes, references: referenceCatalog(),
         repositories,
         works: latestWorks.map((w) =>
           choose(w, [
@@ -257,7 +266,7 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
               "Read line ranges and the whole-file SHA-256; nextLine means partial content.",
           },
           {
-            tool: "frame_works_patch",
+            tool: "frame_works_patch_batch",
             purpose:
               "Patch exact text using that SHA-256; dryRun previews without changing files.",
           },

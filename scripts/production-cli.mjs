@@ -1,5 +1,8 @@
-import fs from "node:fs";
-import { parseArgs } from "node:util";
+import { parseCommandArgs } from "./film-command-catalog.mjs";
+import { readJsonInput } from "./cli-input.mjs";
+import { sourceEditRequestSchema, sourcePatchRequestSchema } from "../src/contracts/source-edit.mjs";
+import { commandReport } from "./command-report.mjs";
+import { errorRecovery } from "./tool-errors.mjs";
 import { ProjectService } from "./project-service.mjs";
 import { executeProject } from "./project-execution.mjs";
 import {
@@ -14,49 +17,16 @@ import { createProjectWorkspace } from "./project-workspace.mjs";
 import { checkPlayback } from "./playback-check.mjs";
 
 try {
-  const { values, positionals } = parseArgs({
-    allowPositionals: true,
-    options: {
-      json: { type: "boolean" },
-      input: { type: "string" },
-      query: { type: "string" },
-      path: { type: "string" },
-      directory: { type: "string" },
-      limit: { type: "string" },
-      line: { type: "string" },
-      lines: { type: "string" },
-      label: { type: "string" },
-      checkpoint: { type: "string" },
-      expected: { type: "string" },
-      apply: { type: "boolean" },
-      "dry-run": { type: "boolean" },
-      review: { type: "string" },
-      resume: { type: "string" },
-      "segment-seconds": { type: "string" },
-      start: { type: "string" },
-      end: { type: "string" },
-      duration: { type: "string" },
-      width: { type: "string" },
-      fps: { type: "string" },
-      file: { type: "string" },
-      a: { type: "string" },
-      b: { type: "string" },
-    },
-  });
-  const [command, id] = positionals;
+  const [command, ...args] = process.argv.slice(2);
+  const { values, positionals } = parseCommandArgs(command, args);
+  const [id] = positionals;
   const root = process.cwd();
   const workspace = new ProjectService(root, { projects: [id] });
   const number = (key) =>
     values[key] === undefined ? undefined : Number(values[key]);
-  const payload = () => {
-    if (!values.input)
-      throw new Error("Use --input <JSON file> or --input - for stdin");
-    return JSON.parse(
-      fs.readFileSync(values.input === "-" ? 0 : values.input, "utf8"),
-    );
-  };
-  if (positionals.length !== 2)
-    throw new Error("Expected command and project id; run pnpm film help");
+  const payload = () => readJsonInput(values.input);
+  if (positionals.length !== 1)
+    throw new Error("Expected one project id; run pnpm film help");
   let result;
   if (command === "search")
     result = workspace.search(id, {
@@ -69,14 +39,11 @@ try {
       startLine: number("line") ?? 1,
       lineCount: number("lines") ?? 400,
     });
-  else if (command === "edit")
-    result = workspace.edit(id, payload().changes, {
-      dryRun: values["dry-run"],
-    });
-  else if (command === "patch")
-    result = workspace.patch(id, payload().changes, {
-      dryRun: values["dry-run"],
-    });
+  else if (["edit", "patch"].includes(command)) {
+    const schema = command === "edit" ? sourceEditRequestSchema : sourcePatchRequestSchema;
+    const request = schema.parse({ ...await payload(), ...(values["dry-run"] === undefined ? {} : { dryRun: values["dry-run"] }) });
+    result = workspace[command](id, request.changes, { dryRun: request.dryRun });
+  }
   else if (command === "checkpoint")
     result = workspace.checkpoint(id, values.label);
   else if (command === "history") result = workspace.history(id);
@@ -106,7 +73,7 @@ try {
   else if (command === "compare")
     result = compareReviews(root, id, values.a, values.b);
   else if (command === "review-note")
-    result = recordReview(root, id, values.review, payload());
+    result = recordReview(root, id, values.review, await payload());
   else if (command === "narrate") {
     const controller = new AbortController();
     const cancel = () => controller.abort();
@@ -142,7 +109,7 @@ try {
     });
   else throw new Error("Unknown production command");
   console.log(
-    JSON.stringify({ schemaVersion: 1, ...result }, null, values.json ? 0 : 2),
+    JSON.stringify({ schemaVersion: 1, ...commandReport(root, id, command, result, { detail: values.detail }) }, null, values.json ? 0 : 2),
   );
   if (result.status === "failed") process.exitCode = 1;
   if (result.close) {
@@ -158,11 +125,7 @@ try {
     JSON.stringify({
       schemaVersion: 1,
       status: "failed",
-      error: {
-        code: error.code ?? "COMMAND_FAILED",
-        message: error.message,
-        details: error.details,
-      },
+      error: errorRecovery(error),
     }),
   );
   process.exitCode = 1;

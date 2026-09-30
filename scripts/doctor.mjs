@@ -51,8 +51,7 @@ check("Asset index", () => {
   return a.length + " files";
 });
 check("Project folders", () =>
-  fs
-    .readdirSync("projects", { withFileTypes: true })
+  (fs.existsSync("projects") ? fs.readdirSync("projects", { withFileTypes: true }) : [])
     .filter((d) => d.isDirectory() && !d.name.startsWith("."))
     .map((d) => d.name)
     .join(", "),
