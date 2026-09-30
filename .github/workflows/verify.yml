@@ -1,6 +1,11 @@
 name: Release verification
 on:
   workflow_call:
+    inputs:
+      source_ref:
+        description: Exact source ref to verify
+        required: false
+        type: string
   workflow_dispatch:
 permissions:
   contents: read
@@ -21,6 +26,8 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
@@ -32,7 +39,7 @@ jobs:
           sudo apt-get install -y ffmpeg git-lfs fonts-noto-cjk
           pnpm exec playwright install --with-deps chromium
       - name: Build candidate executor without publishing
-        run: docker build -f deploy/Dockerfile -t frame-studio:verification --build-arg REVISION="$GITHUB_SHA" .
+        run: docker build -f deploy/Dockerfile -t frame-studio:verification --build-arg REVISION="$(git rev-parse HEAD)" .
       - name: Run the same release gate used for local releases
         env:
           FRAME_TEST_DATABASE_URL: postgres://frame:frame-test-only@127.0.0.1:5432/frame_test_release
@@ -41,8 +48,12 @@ jobs:
           FRAME_EXECUTOR_IMAGE: frame-studio:verification
         run: |
           BROWSER=$(node --input-type=module -e "import {chromium} from '@playwright/test'; console.log(chromium.executablePath())")
+          # Hosted runners have no GPU. Exercise real WebGL using Chromium's CPU driver.
+          BROWSER_WRAPPER="$RUNNER_TEMP/frame-chromium"
+          printf '#!/bin/sh\nexec "%s" --use-gl=angle --use-angle=swiftshader "$@"\n' "$BROWSER" > "$BROWSER_WRAPPER"
+          chmod +x "$BROWSER_WRAPPER"
           sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          sudo env PATH="$PATH" FRAME_BROWSER="$BROWSER" \
+          sudo env PATH="$PATH" FRAME_BROWSER="$BROWSER_WRAPPER" \
             FRAME_TEST_DATABASE_URL="$FRAME_TEST_DATABASE_URL" \
             FRAME_TEST_EXECUTOR="$FRAME_TEST_EXECUTOR" \
             FRAME_TEST_HOST_ROOT="$FRAME_TEST_HOST_ROOT" \

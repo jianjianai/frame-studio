@@ -30,3 +30,11 @@
 ## 独立 Windows 环境发现的问题
 
 7.3.0 标签的 GitHub Windows 检查发现原生执行器停在 Edge 版本探测：Windows GUI 浏览器的 `--version` 可能启动并保持浏览器进程，导致首次渲染卡住。本机已有浏览器进程时未复现该问题。7.3.1 改为读取 Windows 可执行文件的 ProductVersion，不启动浏览器，并为探测设置 15 秒上限。保留失败标签，使用新的修订版本发布。
+
+## 发布环境与验证补充
+
+- [Windows 自动发布](https://github.com/jianjianai/frame-studio/actions/runs/36699200079)通过：原生工作台测试 3/3、安装器与 pnpm 增量安装检查均成功；已自动上传 v7.3.1 ZIP 和校验文件。实际下载复核 SHA-256 为 `028f19297ad9c040dc4549588634eeae2387a0bd6f9ba698467c3d99961f7bfc`，大小 2,272,920 字节。
+- 首次 Linux 发布检查：核心单测 83 通过，MCP 85 通过、0 失败；服务器 186 通过、1 失败、5 跳过。唯一失败为无 GPU runner 的 Three.js WebGL 上下文创建，日志 `.cache/ci-server-7.3.1.log`。模型下载与 PostgreSQL 语音检查已通过。
+- CI 使用 [Chromium 官方支持的 SwiftShader CPU 驱动](https://chromium.googlesource.com/chromium/src/+/e102d7cb9bd8a6b610ca361cd9f07a7d434e9af6/docs/gpu/swiftshader.md)重新运行相同图形检查，参数仅进入 CI 浏览器启动脚本。
+- 手工重跑镜像发布时，验证与构建均检出请求版本对应的标签，校验 package.json 版本，并使用该标签实际提交的 revision 标注镜像；CI 配置修复不会把新 main 代码错误标为已有版本。
+- 旧测试缓存的批量清理被自动审批策略拦截，仅返回 blocked by policy，未提供具体理由；缓存已保留。
