@@ -26,4 +26,4 @@ Unicode Shell 快捷方式回归通过。修复后的真实 Setup 安装、已�
 
 该次 CI 完整服务端门禁通过，英文 Windows 的依赖、真实安装和 Unicode 目标及参数检查、语音界面和 SQLite 检查通过。浏览器创建、预览、Frame 与 Remotion 导出通过后，重启检查读取的进程标识仍为 `6200`，断言失败。发布与镜像作业因此跳过，未生成正式 Release。原证据上传规则没有包含隐藏目录下通配匹配的文件，补充精确范围的隐藏文件上传和失败日志输出，重新执行同一不可变源码以定位重启原因；不把该结果记为发布成功。
 
-同一源码的本机再次验收及 [CI 36753826247](https://github.com/jianjianai/frame-studio/actions/runs/36753826247) 完整 Windows 和服务端门禁通过，证据已下载到 `.cache/release-v762-ci-product/`。复查仍发现旧进程退出与新实例启动可能竞争共享完成状态，需要 [v7.6.3 后续修复](windows-control-center-v7.6.3-20261001.md)。请求取消本任务发布运行时已处于发布完成边界；运行总体显示 cancelled，GitHub 的正式 v7.6.2 Release 和安装资产已实际生成。保留既有资产和标签，继续发布新的修复版本。
+同一源码的本机再次验收及 [CI 36753826247](https://github.com/jianjianai/frame-studio/actions/runs/36753826247) 完整 Windows 和服务端门禁通过，证据已下载到 `.cache/release-v762-ci-product/`。复查仍发现旧进程退出与新实例启动可能竞争共享完成状态，需要 [v7.6.3 后续修复](windows-control-center-v7.6.3-20261001.md)。本任务取消该复现运行，镜像与发布作业显示 cancelled。与此同时，原标签运行 `36751995846` 的第 2 次重试全部成功，已在 18:00:29 UTC 生成正式 v7.6.2 Release 和安装资产；这不是取消运行发布成功的证据。保留既有资产和标签，继续发布新的修复版本。
