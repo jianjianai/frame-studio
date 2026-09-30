@@ -26,6 +26,7 @@ const works = Array.from({ length: 27 }, (_, index) => ({
     index === 0
       ? "用镜头、声音与节奏，讲述 AI 如何让想法成为作品。"
       : "持续创作，记录新的灵感。",
+  metadataRevision: "revision-0",
   status: ["draft", "review", "finished"][index % 3],
   storage_name: repo.name,
   created: new Date(now - index * 86400000).toISOString(),
@@ -44,7 +45,7 @@ works.push({
   title: "回收站里的旧想法",
   deleted: true,
 });
-const state = { fail: false, failSave: false, calls: [] };
+const state = { fail: false, failSave: false, purgeBusy: null, calls: [] };
 const errors = [],
   results = [];
 let browser, server;
@@ -99,7 +100,13 @@ const action = (name, args) => {
   const work = works.find((work) => work.id === args.id);
   if (name === "works_update") {
     if (state.failSave) throw Error("测试：保存失败");
-    Object.assign(work, args);
+    if (args.expectedRevision !== work.metadataRevision)
+      throw Object.assign(Error("作品资料已更新，请重新打开资料后再保存"), {
+        statusCode: 409,
+      });
+    Object.assign(work, args, {
+      metadataRevision: work.metadataRevision + "-saved",
+    });
     return work;
   }
   if (name === "works_trash") {
@@ -111,6 +118,33 @@ const action = (name, args) => {
     const copy = { ...work, id: randomUUID(), title: args.title, opened: null };
     works.push(copy);
     return copy;
+  }
+  if (name === "works_purge") {
+    if (!work?.deleted || args.confirm !== work.title)
+      throw Object.assign(Error("请输入完整作品名称确认"), { statusCode: 400 });
+    works.splice(works.indexOf(work), 1);
+    return { id: work.id };
+  }
+  if (name === "works_empty_trash") {
+    assert.equal(args.confirm, "清空回收站");
+    const selected = works.filter(
+      (work) => work.deleted && (!args.repo || work.repo === args.repo),
+    );
+    const failed = [],
+      purged = [];
+    for (const item of selected) {
+      if (item.id === state.purgeBusy)
+        failed.push({
+          id: item.id,
+          title: item.title,
+          error: "作品任务尚未结束，请稍后重试",
+        });
+      else {
+        works.splice(works.indexOf(item), 1);
+        purged.push({ id: item.id });
+      }
+    }
+    return { failed, purged };
   }
   throw Error("Unexpected API: " + name);
 };
@@ -153,6 +187,7 @@ try {
             type: value.type === "subscribe" ? "update" : "result",
             id: value.id,
             error: error.message,
+            status: error.statusCode || 400,
           }),
         );
       }
@@ -261,6 +296,30 @@ try {
       await page.getByRole("button", { name: "关闭通知" }).click();
     },
   );
+  await check("并发资料保存拒绝旧版本并保留输入", async () => {
+    const work = works.find((item) => item.title === "已保存的新作品名");
+    const revision = work.metadataRevision;
+    await cards.first().getByRole("button", { name: /操作$/ }).click();
+    await library.getByRole("menuitem", { name: "编辑作品信息" }).click();
+    const dialog = page.getByRole("dialog", { name: "作品信息", exact: true });
+    work.description = "另一窗口刚保存的简介";
+    work.metadataRevision = "concurrent-revision";
+    await dialog.getByLabel("作品名称").fill("不应覆盖其他窗口");
+    await dialog.getByRole("button", { name: "保存作品信息" }).click();
+    await expect(dialog.getByRole("alert").first()).toContainText("资料已更新");
+    await expect(dialog.getByLabel("作品名称")).toHaveValue("不应覆盖其他窗口");
+    assert.equal(work.description, "另一窗口刚保存的简介");
+    assert.equal(
+      state.calls.filter((call) => call.name === "works_update").at(-1).args
+        .expectedRevision,
+      revision,
+    );
+    await page.reload();
+    await library
+      .getByLabel("搜索作品", { exact: true })
+      .fill("已保存的新作品名");
+    await expect(cards).toHaveCount(1);
+  });
   await check("创建副本与浏览器拦截新窗口后的打开入口", async () => {
     await cards.first().getByRole("button", { name: /操作$/ }).click();
     await library.getByRole("menuitem", { name: "创建副本" }).click();
@@ -337,6 +396,110 @@ try {
     ).toBeVisible();
     await library.getByRole("button", { name: "回收站", exact: true }).click();
     await expect(cards).toHaveCount(1);
+  });
+  await check("永久删除、筛选外跨页总数、批量部分失败与重试", async () => {
+    const original = works.find((work) => work.deleted);
+    for (let index = 0; index < 31; index++)
+      works.push({
+        ...original,
+        id: randomUUID(),
+        title: "待清理 " + index,
+        project: "trash-" + index,
+      });
+    await library
+      .getByRole("button", { name: "刷新作品", exact: true })
+      .click();
+    await expect(cards).toHaveCount(24);
+    await expect(
+      library.getByRole("button", { name: "清空回收站（32）" }),
+    ).toBeEnabled();
+    await library.getByLabel("搜索作品", { exact: true }).fill(original.title);
+    await expect(cards).toHaveCount(1);
+    await expect(
+      library.getByRole("button", { name: "清空回收站（32）" }),
+    ).toBeEnabled();
+    await cards.first().getByRole("button", { name: /操作$/ }).click();
+    await library
+      .getByRole("menuitem", { name: "永久删除", exact: true })
+      .click();
+    const single = page.getByRole("dialog", {
+      name: "永久删除作品",
+      exact: true,
+    });
+    await single.getByRole("textbox").fill("错误的名称");
+    await single.getByRole("button", { name: "确认永久删除" }).click();
+    await expect(single.getByRole("alert").first()).toContainText(
+      "完整作品名称",
+    );
+    assert(works.some((work) => work.id === original.id));
+    await single.getByRole("textbox").fill(original.title);
+    await single.getByRole("button", { name: "确认永久删除" }).click();
+    await expect(single).toHaveCount(0);
+    await expect(
+      library.getByRole("button", { name: "清空回收站（31）" }),
+    ).toBeEnabled();
+    const blocked = works.find((work) => work.deleted);
+    state.purgeBusy = blocked.id;
+    await library.getByRole("button", { name: "清空回收站（31）" }).click();
+    const bulk = page.getByRole("dialog", { name: "清空回收站", exact: true });
+    await expect(bulk).toContainText("包含所有分页和筛选之外");
+    await bulk.getByRole("textbox").fill("清空回收站");
+    await bulk.getByRole("button", { name: "确认永久删除" }).click();
+    await expect(bulk).toContainText("任务尚未结束");
+    assert.equal(works.filter((work) => work.deleted).length, 1);
+    assert.equal(
+      state.calls.filter((call) => call.name === "works_empty_trash").at(-1)
+        .args.repo,
+      repo.id,
+    );
+    state.purgeBusy = null;
+    await bulk.getByRole("button", { name: "重试清空" }).click();
+    await expect(bulk).toHaveCount(0);
+    assert.equal(works.filter((work) => work.deleted).length, 0);
+  });
+  await check("最后页移除后页码回退及窄屏回收站", async () => {
+    await library
+      .getByRole("button", { name: "全部作品", exact: true })
+      .click();
+    const active = works.filter((work) => !work.deleted);
+    for (const work of active.slice(25)) work.deleted = true;
+    await library
+      .getByRole("button", { name: "刷新作品", exact: true })
+      .click();
+    await library.getByRole("button", { name: "下一页" }).click();
+    await expect(cards).toHaveCount(1);
+    const title = await cards.first().getByRole("heading").innerText();
+    await cards.first().getByRole("button", { name: /操作$/ }).click();
+    await library.getByRole("menuitem", { name: "移入回收站" }).click();
+    const dialog = page.getByRole("dialog", {
+      name: "移入回收站",
+      exact: true,
+    });
+    await dialog.getByLabel("输入作品名称确认").fill(title);
+    await dialog
+      .getByRole("button", { name: "移入回收站", exact: true })
+      .click();
+    await expect(cards).toHaveCount(24);
+    assert.equal(
+      state.calls
+        .filter((call) => call.name === "works_page" && !call.args.deleted)
+        .at(-1).args.offset,
+      0,
+    );
+    await library.getByRole("button", { name: "回收站", exact: true }).click();
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const label of ["列表视图", "卡片视图"]) {
+      await library.getByRole("button", { name: label }).click();
+      assert(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= innerWidth,
+        ),
+      );
+    }
+    await page.screenshot({
+      path: path.join(output, "trash-mobile.png"),
+      fullPage: true,
+    });
   });
   await check("窄屏卡片和列表布局无横向溢出", async () => {
     await page.goto("http://127.0.0.1:" + port + "/#/library");

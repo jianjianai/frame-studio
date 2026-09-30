@@ -6,11 +6,19 @@ export class ArtifactLeases {
   constructor(db) { this.db = db; this.active = new Map(); }
   async acquire(task, { onLost = () => {} } = {}) {
     const id = randomUUID();
-    await this.db.lock("artifact:" + task, async () => {
+    const context = await this.db.one("SELECT repo,project FROM tasks WHERE id=$1", [task]);
+    const acquire = () => this.db.lock("artifact:" + task, async () => {
       const current = await this.db.one("SELECT id FROM tasks WHERE id=$1 AND cleaned IS NULL AND state IN ('succeeded','failed','cancelled')", [task]);
       if (!current) throw problem(410, "Artifact is unavailable or being cleaned");
+      if (await this.db.one(
+        "SELECT w.id FROM works w JOIN settings s ON s.key='work-purge:'||w.id::text WHERE w.repo=$1 AND w.project=$2",
+        [context?.repo || null, context?.project || null],
+      )) throw problem(410, "Artifact is being permanently deleted");
       await this.db.pool.query("INSERT INTO artifact_leases(id,task,expires) VALUES($1,$2,now()+interval '120 seconds')", [id, task]);
     });
+    if (context?.repo && context.project)
+      await this.db.lock(`${context.repo}:${context.project}`, acquire);
+    else await acquire();
     let released = false, renewing = false, watchdog;
     const release = async () => {
       if (released) return;

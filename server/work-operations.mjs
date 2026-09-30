@@ -92,6 +92,18 @@ export function workOperations({
     },
   );
   add(
+    "works_purge",
+    "Permanently delete a recycled work, its local history and its remote work branch; confirm must equal its title. Shared library materials are retained.",
+    { id: uuid, confirm: z.string().min(1).max(150) },
+    (a) => works.purge(a.id, a.confirm),
+  );
+  add(
+    "works_empty_trash",
+    "Permanently delete all recycled works across every page, optionally within one repository, including their remote branches. confirm must be 清空回收站; failures stay in the recycle bin and are returned individually.",
+    { repo: uuid.optional(), confirm: z.literal("清空回收站") },
+    (a) => works.emptyTrash(a.repo, a.confirm),
+  );
+  add(
     "works_duplicate",
     "Duplicate work content and referenced materials into a new work",
     { id: uuid, title: z.string().trim().min(1).max(150) },

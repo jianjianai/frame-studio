@@ -104,6 +104,13 @@ export class Tasks {
       }
       // Recover an existing acknowledgement before validating mutable provider state.
       // New admissions still run under the provider lock shared with deletion.
+      if (repo) {
+        // Recheck inside the work lock: a purge may have completed after the first lookup.
+        await this.repos.project(repo, project, { exists: kind !== "new" });
+        const work = await this.db.one("SELECT id,deleted FROM works WHERE repo=$1 AND project=$2", [repo, project]);
+        if (work?.deleted || await this.db.setting(`purged-work:${repo}:${project}`))
+          throw problem(409, "作品已删除，请先恢复作品或创建新作品");
+      }
       if (input.connection) {
         const provider = await this.db.one("SELECT state FROM connections WHERE id=$1", [input.connection]);
         if (!provider || provider.state === "deleted")
@@ -113,7 +120,7 @@ export class Tasks {
       if (
         kind === "tools-update" &&
         (await this.db.one(
-          "SELECT id FROM tasks WHERE kind='tools-update' AND state IN ('queued','running') LIMIT 1",
+          "SELECT id FROM tasks WHERE kind='tools-update' AND state IN ('queued','running','cancelling','publishing','publish_failed') LIMIT 1",
         ))
       )
         throw problem(409, "Another tool upgrade is running");
@@ -341,8 +348,9 @@ export class Tasks {
       "4g",
       "--cpus",
       "2",
+      // Remotion uses native Chromium alongside the Frame audio/preview browser.
       "--pids-limit",
-      "256",
+      "512",
       "--cap-drop",
       "ALL",
       "--security-opt",

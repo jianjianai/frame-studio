@@ -35,6 +35,7 @@ import {
 import "./ai-workbench.css";
 import { SpeechSettings } from "./speech";
 import { SystemStatus } from "./system-status";
+import { AccessSettings } from "./access-settings";
 
 export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
   const [flow, setFlow] = useState(null),
@@ -215,97 +216,6 @@ export function ModelConnections(props) {
   return <ProviderSettings {...props} LoginDialog={LoginFlow} />;
 }
 
-function AccessTokens({ notify }) {
-  const tokens = useQuery("tokens_list"),
-    grants = useQuery("oauth_grants"),
-    [newToken, setNewToken] = useState(""),
-    [run, busy] = useAction(notify);
-  return (
-    <>
-      <h2>MCP 与 CLI</h2>
-      <p>
-        远程 MCP 地址：<code>{location.origin}/mcp</code>。ChatGPT
-        添加此地址并选择 OAuth， 在 FRAME 登录后授权即可，客户端 ID
-        与密钥留空。其他 CLI 客户端也可以使用下方的 Bearer 令牌。
-      </p>
-      <h3>OAuth 连接</h3>
-      <ErrorNote error={grants.error} />
-      {grants.data?.map((g) => (
-        <div className="settings-row" key={g.id}>
-          <span>
-            {g.name} ·{" "}
-            {g.revoked
-              ? "已撤销"
-              : new Date(g.refresh_expires) < new Date()
-                ? "已过期"
-                : "已授权"}
-          </span>
-          <Button
-            disabled={busy || g.revoked}
-            onClick={() =>
-              run(async () => {
-                await api("oauth_revoke", { id: g.id });
-                grants.refresh();
-                notify("OAuth 连接已撤销");
-              })
-            }
-          >
-            撤销授权
-          </Button>
-        </div>
-      ))}
-      <Form
-        busy={busy}
-        submit="创建令牌"
-        onSubmit={(a) =>
-          run(async () => {
-            const token = await api("tokens_create", a);
-            setNewToken(token.token);
-            tokens.refresh();
-          })
-        }
-      >
-        <Field label="令牌名称">
-          <input name="name" required placeholder="例如：桌面 AI" />
-        </Field>
-      </Form>
-      {newToken && (
-        <div className="secret-once">
-          <p>请立即保存，仅本次显示。</p>
-          <code>{newToken}</code>
-          <Button
-            onClick={() =>
-              navigator.clipboard
-                .writeText(newToken)
-                .then(() => notify("令牌已复制"))
-            }
-          >
-            复制
-          </Button>
-        </div>
-      )}
-      {tokens.data?.map((t) => (
-        <div className="settings-row" key={t.id}>
-          <strong>{t.name}</strong>
-          <Button
-            onClick={() =>
-              run(async () => {
-                await api("tokens_revoke", { id: t.id });
-                tokens.refresh();
-              })
-            }
-          >
-            撤销
-          </Button>
-        </div>
-      ))}
-      <div className="panel">
-        <h3>工作台登录密码</h3>
-        <p>仅由服务器环境变量 FRAME_ADMIN_PASSWORD 配置。网页不能修改密码。</p>
-      </div>
-    </>
-  );
-}
 const settingsSections = [
   {
     id: "ai",
@@ -435,7 +345,7 @@ export function Settings({ notify, localMode = false }) {
           ) : tab === "system" ? (
             <SystemStatus />
           ) : (
-            <AccessTokens notify={notify} />
+            <AccessSettings notify={notify} />
           )}
         </main>
       </div>

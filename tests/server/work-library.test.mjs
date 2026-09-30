@@ -5,6 +5,7 @@ import pg from "pg";
 import { z } from "zod";
 import { Works } from "../../server/works.mjs";
 import { workbenchOperations } from "../../server/workbench.mjs";
+import { hash } from "../../server/security.mjs";
 
 test("works_page accepts known catalog ordering and rejects arbitrary SQL", () => {
   let shape;
@@ -73,6 +74,11 @@ test(
       works.discovered = true;
       const titles = async (args) =>
         (await works.list(args)).map((work) => work.title);
+      const listed = await works.list({ sort: "title" });
+      assert.equal(
+        listed[0].metadataRevision,
+        hash(JSON.stringify(works.info(listed[0]))),
+      );
       assert.deepEqual(await titles({ sort: "updated" }), [
         "Alpha",
         "Bravo",

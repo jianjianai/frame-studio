@@ -216,6 +216,8 @@ export function WorkLibrary({ repo, recent = false, notify }) {
     [duplicate, setDuplicate] = useState(null);
   const [remove, setRemove] = useState(null),
     [confirmation, setConfirmation] = useState("");
+  const [purge, setPurge] = useState(null),
+    [purgeFailures, setPurgeFailures] = useState([]);
   const [run, busy] = useAction(notify);
   const deleted = scope === "trash",
     pageSize = 24;
@@ -230,8 +232,20 @@ export function WorkLibrary({ repo, recent = false, notify }) {
     limit: pageSize,
     offset: page * pageSize,
   });
+  const trash = useQuery(deleted ? "works_page" : null, {
+    ...(repo ? { repo: repo.id } : {}),
+    deleted: true,
+    limit: 1,
+  });
+  const refresh = () => {
+    query.refresh();
+    trash.refresh();
+  };
+  const refreshTrash = () => {
+    setPage(0);
+    refresh();
+  };
   useEffect(() => {
-    const refresh = () => query.refresh();
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, []);
@@ -256,7 +270,6 @@ export function WorkLibrary({ repo, recent = false, notify }) {
     setView(value);
     saveLibraryView(value);
   };
-  const refresh = () => query.refresh();
   const items = query.data?.items || [],
     total = query.data?.total || 0;
   const filtered = !!(search.trim() || status);
@@ -327,6 +340,22 @@ export function WorkLibrary({ repo, recent = false, notify }) {
           <p>
             这里的作品已移入回收站，内容和素材仍然保留。恢复后即可继续创作。
           </p>
+          <Button
+            className="danger-text"
+            disabled={
+              busy || trash.loading || !!trash.error || !trash.data?.total
+            }
+            onClick={() => {
+              setPurgeFailures([]);
+              setPurge({ all: true, count: trash.data.total });
+            }}
+          >
+            清空回收站（{trash.data?.total || 0}）
+          </Button>
+          <ErrorNote error={trash.error} />
+          {trash.error && (
+            <Button onClick={trash.refresh}>重试读取回收站</Button>
+          )}
         </div>
       )}
       <div className="library-toolbar">
@@ -542,22 +571,39 @@ export function WorkLibrary({ repo, recent = false, notify }) {
                   </div>
                   <div className="library-work-actions">
                     {deleted ? (
-                      <Button
-                        icon={RotateCcw}
-                        disabled={busy}
-                        onClick={() =>
-                          run(async () => {
-                            await api("works_trash", {
-                              id: work.id,
-                              deleted: false,
-                            });
-                            notify("已恢复「" + work.title + "」");
-                            refresh();
-                          })
-                        }
-                      >
-                        恢复作品
-                      </Button>
+                      <>
+                        <Button
+                          icon={RotateCcw}
+                          disabled={busy}
+                          onClick={() =>
+                            run(async () => {
+                              await api("works_trash", {
+                                id: work.id,
+                                deleted: false,
+                              });
+                              notify("已恢复「" + work.title + "」");
+                              refresh();
+                            })
+                          }
+                        >
+                          恢复作品
+                        </Button>
+                        <LibraryMenu
+                          label={work.title + "操作"}
+                          disabled={busy}
+                          items={[
+                            {
+                              label: "永久删除",
+                              icon: Trash2,
+                              danger: true,
+                              action: () => {
+                                setPurgeFailures([]);
+                                setPurge(work);
+                              },
+                            },
+                          ]}
+                        />
+                      </>
                     ) : (
                       <>
                         <a
@@ -687,6 +733,7 @@ export function WorkLibrary({ repo, recent = false, notify }) {
               run(async () => {
                 await api("works_update", {
                   id: edit.id,
+                  expectedRevision: edit.metadataRevision,
                   title: values.title.trim(),
                   description: values.description.trim(),
                   status: values.status,
@@ -830,6 +877,78 @@ export function WorkLibrary({ repo, recent = false, notify }) {
                 value={confirmation}
                 onChange={(event) => setConfirmation(event.target.value)}
                 placeholder={remove.title}
+              />
+            </Field>
+          </Form>
+        </Modal>
+      )}
+      {purge && (
+        <Modal
+          title={purge.all ? "清空回收站" : "永久删除作品"}
+          onClose={() => {
+            if (!busy) setPurge(null);
+          }}
+        >
+          <p>
+            {purge.all
+              ? `将永久删除${repo ? `仓库“${repo.name}”` : "全部仓库"}回收站中的 ${trash.data?.total || 0} 个作品，包含所有分页和筛选之外的作品。`
+              : `将永久删除作品“${purge.title}”。`}
+            作品文件、历史版本、聊天和导出记录将被清除，对应远端作品分支也会删除。
+            素材库中的共享素材保留。此操作无法恢复。
+          </p>
+          {!!purgeFailures.length && (
+            <div role="alert">
+              <p>以下作品未能删除，仍在回收站中。处理原因后可重试。</p>
+              <ul>
+                {purgeFailures.map((failure) => (
+                  <li key={failure.id}>
+                    <strong>{failure.title}</strong>：{failure.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <Form
+            busy={busy}
+            submit={purgeFailures.length ? "重试清空" : "确认永久删除"}
+            onSubmit={(a) =>
+              run(async () => {
+                if (purge.all) {
+                  const result = await api("works_empty_trash", {
+                    ...(repo ? { repo: repo.id } : {}),
+                    confirm: a.confirm,
+                  });
+                  setPurgeFailures(result.failed);
+                  notify(
+                    `已永久删除 ${result.purged.length} 个作品${result.failed.length ? `，${result.failed.length} 个未能删除` : ""}`,
+                    result.failed.length ? "error" : "success",
+                  );
+                  if (!result.failed.length) setPurge(null);
+                } else {
+                  await api("works_purge", {
+                    id: purge.id,
+                    confirm: a.confirm,
+                  });
+                  notify("作品和对应远端分支已永久删除");
+                  setPurge(null);
+                }
+                refreshTrash();
+              })
+            }
+          >
+            <Field
+              label={
+                purge.all
+                  ? "输入“清空回收站”确认"
+                  : `输入完整作品名称“${purge.title}”确认`
+              }
+            >
+              <input
+                name="confirm"
+                required
+                autoFocus
+                autoComplete="off"
+                disabled={busy}
               />
             </Field>
           </Form>

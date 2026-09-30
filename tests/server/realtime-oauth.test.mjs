@@ -138,6 +138,10 @@ test(
       const issued = (await post("/oauth/token", tokenArgs)).json();
       assert(issued.access_token);
       assert(issued.refresh_token);
+      const grant = (await actions.call("oauth_grants")).find(
+        (row) => row.name === "ChatGPT fixture",
+      );
+      assert(grant && !grant.revoked, "Active OAuth connection is listed");
       assert.equal(
         (await post("/oauth/token", tokenArgs)).json().error,
         "invalid_grant",
@@ -201,8 +205,21 @@ test(
         401,
         "refresh reuse revokes token family",
       );
-      const grant = (await actions.call("oauth_grants"))[0];
+      assert(
+        !(await actions.call("oauth_grants")).some(
+          (row) => row.id === grant.id,
+        ),
+        "Revoked OAuth connection is omitted from the connection list",
+      );
       await actions.call("oauth_revoke", { id: grant.id });
+      assert(
+        (
+          await db.one("SELECT revoked FROM oauth_grants WHERE id=$1", [
+            grant.id,
+          ])
+        ).revoked,
+        "Revocation remains recorded for token-family protection",
+      );
       assert(
         !JSON.stringify(await actions.call("oauth_grants")).includes(
           issued.access_token,
