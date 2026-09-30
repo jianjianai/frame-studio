@@ -100,7 +100,8 @@ try {
   const before = read(path.join(data, "desktop-test-ready.json"));
   assert.equal((await native("restart")).disposed, false);
   const after = read(path.join(data, "desktop-test-ready.json"));
-  assert.notEqual(before.server, after.server);
+  assert.match(after.instance, /^[a-f0-9]{32}$/);
+  assert.notEqual(before.instance, after.instance);
   assert.equal(before.origin, after.origin);
   await page.reload();
   await page.locator(".workbench").waitFor();
@@ -112,6 +113,16 @@ try {
   await wait(async () => (await get("/api/desktop/status")).speech.state === "ready", "speech crash recovery");
   await page.reload(); await page.locator(".workbench").waitFor();
   pass("owned server failure recovers with speech mount cleanup and preserved browser works");
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const previous = read(path.join(data, "desktop-test-ready.json"));
+    assert.equal((await native("fault-restart")).disposed, false);
+    const recovered = read(path.join(data, "desktop-test-ready.json"));
+    assert.notEqual(previous.instance, recovered.instance);
+    assert.equal(previous.origin, recovered.origin);
+    await wait(async () => (await get("/api/desktop/status")).speech.state === "ready", "immediate speech recovery");
+    assert.equal((await action("works_page", {})).total, 2);
+  }
+  pass("three immediate restarts after forced owned service termination preserve works and speech");
   assert.equal((await native("hide")).visible, false);
   assert.ok((await get("/api/me")).localMode);
   await native("show");

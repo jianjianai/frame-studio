@@ -20,6 +20,6 @@
 
 ## 验收
 
-`tests/desktop/product.test.ps1` 执行实际安装向导与原生控制中心，另用 Playwright 打开真实浏览器工作台，验证首次创作、本机 CLI 状态、预览、截图、MP4 导出、Remotion 原生执行、编辑与任务保护、窗口收起、重复启动、端口占用、重启后数据保留及异常退出后的语音恢复，保存各页面图像。
+`tests/desktop/product.test.ps1` 执行实际安装向导与原生控制中心，另用 Playwright 打开真实浏览器工作台，验证首次创作、本机 CLI 状态、预览、截图、MP4 导出、Remotion 原生执行、编辑与任务保护、窗口收起、重复启动、端口占用、重启后数据保留及异常退出后的语音恢复。额外连续三次强制结束自有服务后立即重启，确认每次新服务就绪、地址保持、作品保留和语音恢复，保存各页面图像。
 
 `tests/desktop/download.test.ps1` 验证依赖与更新续传、重试、摘要和发布来源；`tests/desktop/github-cli.test.ps1` 在 PowerShell 5 中验证缺失时的实际下载安装、可用 PATH 和跨更新缓存复用；`tests/desktop/shortcut.test.ps1` 验证中文与 emoji 快捷方式的文件名、目标和参数；`tests/desktop/update-install.test.ps1` 验证已校验安装程序的成功更新与失败恢复；`tests/desktop/installer.test.ps1` 验证真实 EXE、安装失败、修复、缓存复用、快捷方式和保留数据卸载。测试使用隔离的注册表及快捷方式名称，已有测试安装时拒绝覆盖。

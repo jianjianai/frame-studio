@@ -38,7 +38,6 @@ namespace FrameStudioDesktop {
     readonly System.Windows.Forms.Timer ipc=new System.Windows.Forms.Timer {Interval=300},statusTimer=new System.Windows.Forms.Timer {Interval=5000},updateTimer=new System.Windows.Forms.Timer {Interval=3600000};
     readonly object logLock=new object();
     OwnedProcess server,preparing;
-    TaskCompletionSource<string> startup;
     string origin="",launchToken="";
     bool starting,ready,exiting,closing,repairCancelled,statusPolling,shownTrayNotice,updateBinding,showCenter;
     public MainWindow(string[] args) {
@@ -91,15 +90,15 @@ namespace FrameStudioDesktop {
         if(server!=null){server.Dispose();server=null;}var manifest=DesktopFiles.Read(Path.Combine(root,"desktop","runtime-manifest.json"));var components=(Dictionary<string,object>)manifest["components"];var tools=Runtime((Dictionary<string,object>)components["tools"]);var speech=Runtime((Dictionary<string,object>)components["speech"]);var deps=Runtime((Dictionary<string,object>)manifest["dependencies"]);
         var github=DesktopFiles.String(DesktopFiles.Read(Path.Combine(data,"runtime-selection.json")),"github");
         var node=Path.Combine(tools,"node.exe");if(!File.Exists(node)||!File.Exists(Path.Combine(deps,"node_modules",".modules.yaml"))||!File.Exists(Path.Combine(root,"node_modules",".modules.yaml")))throw new Exception("已安装环境缺失。运行环境页面可以补齐并复用下载缓存。");
-        int port=ChoosePort();launchToken=Guid.NewGuid().ToString("N");startup=new TaskCompletionSource<string>();var info=new ProcessStartInfo(node,DesktopFiles.Quote(Path.Combine(root,"server","local-app.mjs"))){WorkingDirectory=root,RedirectStandardInput=true};
+        int port=ChoosePort();var token=Guid.NewGuid().ToString("N");launchToken=token;var startup=new TaskCompletionSource<string>();var info=new ProcessStartInfo(node,DesktopFiles.Quote(Path.Combine(root,"server","local-app.mjs"))){WorkingDirectory=root,RedirectStandardInput=true};
         info.EnvironmentVariables["PATH"]=String.Join(";",new[]{tools,Path.Combine(tools,"tools","pnpm"),Path.Combine(tools,"git","cmd"),Path.Combine(tools,"git","mingw64","bin"),Path.Combine(tools,"ffmpeg","bin"),github,Environment.GetEnvironmentVariable("PATH",EnvironmentVariableTarget.User),Environment.GetEnvironmentVariable("PATH",EnvironmentVariableTarget.Machine),info.EnvironmentVariables["PATH"]});info.EnvironmentVariables["FRAME_LOCAL_MODE"]="1";info.EnvironmentVariables["FRAME_LOCAL_DATA"]=data;info.EnvironmentVariables["FRAME_LOCAL_PORT"]=port.ToString();info.EnvironmentVariables["FRAME_LAUNCH_TOKEN"]=launchToken;info.EnvironmentVariables["FRAME_SPEECH_PYTHON"]=Path.Combine(speech,"python","python.exe");info.EnvironmentVariables["PLAYWRIGHT_BROWSERS_PATH"]=Path.Combine(data,"browsers");
         foreach(var edge in new[]{Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86),@"Microsoft\Edge\Application\msedge.exe"),Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),@"Microsoft\Edge\Application\msedge.exe"),Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),@"Google\Chrome\Application\chrome.exe")})if(File.Exists(edge)){info.EnvironmentVariables["FRAME_BROWSER"]=edge;break;}
         var owned=new OwnedProcess(info,line=>{
-          if(line.StartsWith("FRAME_LOCAL_READY ")){try{var value=DesktopFiles.Json.Deserialize<Dictionary<string,object>>(line.Substring(18));if(DesktopFiles.String(value,"token")==launchToken&&DesktopFiles.String(value,"origin")=="http://127.0.0.1:"+port)startup.TrySetResult(DesktopFiles.String(value,"origin"));}catch(Exception error){Log(error.Message);}return;}
-          if(line.StartsWith("FRAME_DESKTOP_ACTION ")){try{var value=DesktopFiles.Json.Deserialize<Dictionary<string,object>>(line.Substring(21));if(DesktopFiles.String(value,"token")==launchToken)Ui(()=>NativeAction(value));}catch(Exception error){Log(error.Message);}return;}Log(line);
+          if(line.StartsWith("FRAME_LOCAL_READY ")){try{var value=DesktopFiles.Json.Deserialize<Dictionary<string,object>>(line.Substring(18));if(DesktopFiles.String(value,"token")==token&&DesktopFiles.String(value,"origin")=="http://127.0.0.1:"+port)startup.TrySetResult(DesktopFiles.String(value,"origin"));}catch(Exception error){Log(error.Message);}return;}
+          if(line.StartsWith("FRAME_DESKTOP_ACTION ")){try{var value=DesktopFiles.Json.Deserialize<Dictionary<string,object>>(line.Substring(21));if(DesktopFiles.String(value,"token")==token)Ui(()=>{if(launchToken==token)NativeAction(value);});}catch(Exception error){Log(error.Message);}return;}Log(line);
         });server=owned;owned.Process.Exited+=(s,e)=>{startup.TrySetException(new Exception("工作台服务未能继续运行。请重试或查看日志。"));Ui(()=>{if(!exiting&&!closing&&!starting&&server==owned){ready=false;ShowFailure("工作台服务已停止，作品仍保存在数据目录。点击重试启动。 ");}});};if(owned.Process.HasExited)throw new Exception("工作台未能启动，请查看运行日志。");
         if(await Task.WhenAny(startup.Task,Task.Delay(90000))!=startup.Task)throw new Exception("打开工作台超时，请重试或修复运行环境。");origin=await startup.Task;ready=true;status.Text="工作台已就绪";description.Text="在浏览器中创作，在这里管理 Windows 运行环境。";stage.Text="运行中 · "+origin;open.Enabled=restart.Enabled=true;environmentStatus.Text="已安装环境检查通过";environmentDetail.Text="程序更新会继续复用这些依赖。";tray.Text="FRAME Studio · 正在运行";starting=false;await PollStatus();
-        if(DesktopNames.Test)DesktopFiles.Write(Path.Combine(data,"desktop-test-ready.json"),new{origin=origin,pid=Process.GetCurrentProcess().Id,server=owned.Process.Id});else if(!showCenter){OpenBrowser();Hide();}
+        if(DesktopNames.Test)DesktopFiles.Write(Path.Combine(data,"desktop-test-ready.json"),new{origin=origin,pid=Process.GetCurrentProcess().Id,server=owned.Process.Id,instance=token});else if(!showCenter){OpenBrowser();Hide();}
         if(!DesktopNames.Test||Environment.GetEnvironmentVariable("FRAME_TEST_UPDATE_URL")!=null)await updates.Check();
       }catch(Exception error){Log(error.ToString());if(server!=null){server.Dispose();server=null;}ShowFailure(error.Message);}finally{starting=false;}
     }
@@ -109,7 +108,16 @@ namespace FrameStudioDesktop {
     async Task<Dictionary<string,object>> LocalRequest(string route,bool post=false){var request=(HttpWebRequest)WebRequest.Create(origin+route);request.Timeout=5000;request.ReadWriteTimeout=5000;if(post){request.Method="POST";request.ContentLength=0;request.Headers["Origin"]=origin;request.Headers["X-Frame-Desktop"]=launchToken;}using(var response=(HttpWebResponse)await request.GetResponseAsync())using(var reader=new StreamReader(response.GetResponseStream()))return DesktopFiles.Json.Deserialize<Dictionary<string,object>>(await reader.ReadToEndAsync());}
     async Task PollStatus(){if(!ready||statusPolling||exiting)return;statusPolling=true;try{var value=await LocalRequest("/api/desktop/status");taskStatus.Text="后台任务："+value["active"]+" 个";if(value.ContainsKey("pending")&&Convert.ToInt32(value["pending"])>0)taskStatus.Text+="；结果待恢复："+value["pending"]+" 个";var speech=(Dictionary<string,object>)value["speech"];speechStatus.Text=DesktopFiles.String(speech,"message");retrySpeech.Visible=DesktopFiles.String(speech,"state")=="failed";if(DesktopNames.Test)DesktopFiles.Write(Path.Combine(data,"desktop-test-status.json"),value);}catch(Exception error){Log(error.Message);}finally{statusPolling=false;}}
     async Task<bool> CanStop(){if(!ready)return true;try{var value=await LocalRequest("/api/desktop/status");if(Convert.ToInt32(value["active"])>0||Convert.ToInt32(value["unsaved"])>0){ShowCenter("overview");description.Text="请先完成或停止后台任务，并在浏览器保存未保存的编辑，再重启、更新或退出。";return false;}await LocalRequest("/api/desktop/prepare-exit",true);return true;}catch(Exception error){Log(error.Message);if(server==null||server.Process.HasExited)return true;description.Text="暂时无法确认任务状态，请稍后重试。";ShowCenter("overview");return false;}}
-    async Task StopServer(){ready=false;if(server==null)return;try{server.Process.StandardInput.WriteLine("exit");await Task.WhenAny(server.WaitAsync(),Task.Delay(10000));}catch(Exception error){Log(error.Message);}server.Dispose();server=null;}
+    async Task StopServer(){
+      ready=false;var stopping=server;if(stopping==null)return;
+      try{
+        var stopped=stopping.WaitAsync();
+        try{stopping.Process.StandardInput.WriteLine("exit");}catch(Exception error){Log(error.Message);}
+        if(await Task.WhenAny(stopped,Task.Delay(10000))!=stopped){stopping.Stop();if(await Task.WhenAny(stopped,Task.Delay(5000))!=stopped)Log("Owned service did not finish stopping within the timeout.");}
+        if(stopped.IsCompleted)await stopped;
+      }catch(Exception error){Log(error.Message);}
+      finally{stopping.Dispose();if(server==stopping)server=null;}
+    }
     async Task Restart(){if(closing||starting||exiting)return;closing=true;try{if(!await CanStop())return;await StopServer();bool openedByStart=!showCenter;await Start();if(ready&&!openedByStart)OpenBrowser();}finally{closing=false;}}
     async Task RequestExit(bool restartAfter,bool explicitUpdate){
       if(closing||starting||exiting)return;

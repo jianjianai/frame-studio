@@ -14,7 +14,7 @@ namespace FrameStudioDesktop {
         string last="";
         for(int attempt=0;attempt<720;attempt++){
           var command=DesktopFiles.Read(Path.Combine(output,"native-command.json"));var id=DesktopFiles.String(command,"id");
-          if(id!=""&&id!=last){last=id;var action=DesktopFiles.String(command,"action");if(action=="exit")await exit();else if(action=="restart")await restart();else if(action=="browser")browser();else if(action=="fault-service"){fault();await Task.Delay(300);}else if(action=="hide"){form.Close();}else if(action=="show"){form.Show();}else throw new Exception("Unknown acceptance command");DesktopFiles.Write(Path.Combine(output,"native-result.json"),new{id=id,disposed=form.IsDisposed,visible=form.Visible});}
+          if(id!=""&&id!=last){last=id;var action=DesktopFiles.String(command,"action");if(action=="exit")await exit();else if(action=="restart")await restart();else if(action=="browser")browser();else if(action=="fault-service"){fault();await Task.Delay(300);}else if(action=="fault-restart"){fault();await restart();}else if(action=="hide"){form.Close();}else if(action=="show"){form.Show();}else throw new Exception("Unknown acceptance command");DesktopFiles.Write(Path.Combine(output,"native-result.json"),new{id=id,disposed=form.IsDisposed,visible=form.Visible});}
           if(File.Exists(Path.Combine(output,"browser-done.json"))){await exit();if(!form.IsDisposed)throw new Exception("Idle exit was blocked");DesktopFiles.Write(Path.Combine(output,"control-center-result.json"),new{state="done"});return;}await Task.Delay(500);
         }
         throw new Exception("Browser acceptance did not complete");
