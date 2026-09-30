@@ -1,0 +1,220 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-30",
+  "status": "passed_with_explicit_environment_skips",
+  "auditBaseline": "5a9d970",
+  "benchmarkMainBaseline": "cea568b",
+  "latestMain": "29ac22e3f6069c4256ee62002eef22f95a796c86",
+  "finalSourceCommit": "e1eb50f2c6966dcda8e03df7db1e9613abf5ec9a",
+  "productVersion": "7.6.0",
+  "mainSyncChanges": [
+    "package version",
+    "contract version",
+    "deployment image defaults",
+    "production acceptance record"
+  ],
+  "environment": {
+    "node": "24.21.0",
+    "pnpm": "12.4.2",
+    "postgres": "18-alpine",
+    "benchmarkCpus": 2,
+    "benchmarkMemoryGiB": 3,
+    "fullServerMemoryGiB": 8,
+    "dependencyMount": "read-only",
+    "database": "isolated temporary test database",
+    "productionMutated": false
+  },
+  "phases": [
+    {
+      "name": "verify core",
+      "command": "pnpm verify (verify:core stage)",
+      "status": "passed",
+      "checks": [
+        "project:check",
+        "check:platform",
+        "typecheck",
+        "typecheck:platform",
+        "build",
+        "build:studio"
+      ],
+      "vitest": {
+        "passed": 83,
+        "failed": 0
+      },
+      "mcp": {
+        "total": 98,
+        "passed": 97,
+        "failed": 0,
+        "skipped": 1,
+        "durationMs": 309278.203401
+      }
+    },
+    {
+      "name": "initial server",
+      "command": "pnpm verify (test:server stage)",
+      "status": "failed_then_corrected",
+      "total": 263,
+      "passed": 254,
+      "failed": 3,
+      "skipped": 6,
+      "memoryGiB": 3,
+      "issues": [
+        {
+          "issue": "binary search byte budget regression",
+          "resolution": "preserve byte charging and resume cursor; test passed in complete server rerun"
+        },
+        {
+          "issue": "same-key nested database lock regression",
+          "resolution": "restore busy/409 and balance recursive advisory acquisition; test passed in complete server rerun"
+        },
+        {
+          "issue": "mixed composition child SIGKILL with cgroup OOM kill",
+          "resolution": "same unoptimized main fixture also failed under 3 GiB; complete server gate passed at 8 GiB; not a low-memory deployment guarantee"
+        }
+      ]
+    },
+    {
+      "name": "complete server after fixes",
+      "command": "pnpm check:platform && pnpm typecheck:platform && pnpm test:server",
+      "status": "passed",
+      "total": 265,
+      "passed": 259,
+      "failed": 0,
+      "skipped": 6,
+      "durationMs": 560230.192152,
+      "cpus": 2,
+      "memoryGiB": 8
+    },
+    {
+      "name": "latest main sync",
+      "command": "pnpm check:platform && pnpm typecheck:platform && pnpm build && pnpm build:studio && node --test --test-concurrency=1 tests/server/db-locks.test.mjs tests/server/mcp-performance.test.mjs tests/server/static-cache.test.mjs",
+      "status": "passed",
+      "tests": {
+        "total": 18,
+        "passed": 18,
+        "failed": 0,
+        "skipped": 0,
+        "durationMs": 4235.66164
+      }
+    },
+    {
+      "name": "final IO and native bundle cache",
+      "command": "node --test --test-concurrency=1 tests/mcp/project-io.test.mjs tests/mcp/remotion-cache.test.mjs",
+      "status": "passed",
+      "tests": {
+        "total": 11,
+        "passed": 11,
+        "failed": 0,
+        "skipped": 0,
+        "durationMs": 5009.573436
+      }
+    },
+    {
+      "name": "performance reproduction",
+      "command": "bash records/performance-optimization-20260930/reproduce.sh",
+      "status": "passed",
+      "resultFiles": [
+        "results.json",
+        "protocol-results.json",
+        "lock-results.json",
+        "render-results.json",
+        "asset-memory-results.json"
+      ],
+      "integrity": "512 MiB and 1 GiB complete output size and SHA-256 match; reusable media buffer 1 MiB",
+      "subsequentRecipeChange": "record actual checkout commit using FRAME_PERF_BASELINE; bash -n and node --check passed; measured result JSON retained unchanged"
+    },
+    {
+      "name": "final read-only review",
+      "status": "passed",
+      "scope": [
+        "lock reference counting and same-key conflicts",
+        "worker construction/postMessage failures and owned-lock cleanup",
+        "HTTP cancellation cleanup",
+        "report numbers and limitations"
+      ]
+    }
+  ],
+  "uniqueSuiteTotals": {
+    "passed": 439,
+    "skipped": 7,
+    "unresolvedFailures": 0,
+    "note": "The 18+11 targeted post-sync tests repeat tests in the unique suite total."
+  },
+  "skips": [
+    "MCP licensed sampled-SF2 preview fixture unavailable",
+    "real codex CLI durable execution unavailable",
+    "real claude CLI durable execution unavailable",
+    "real codex-invalid CLI fixture unavailable",
+    "Windows local mode test on Linux",
+    "GeneralUser licensed soundfont unavailable",
+    "real MCP to Docker to CLI executor integration not configured"
+  ],
+  "measurementLimits": [
+    "Fastify app.inject timings omit TCP/TLS/WAN/client latency",
+    "small synthetic samples on warm filesystem; not production P95/P99",
+    "audit and final benchmark main baselines differ; main added two tools",
+    "cold edit, index and history migration reported separately",
+    "Remotion native still latency is not video encoding FPS",
+    "asset memory is a standalone plugin-phase increment, not full Vite peak",
+    "PostgreSQL lock and ordinary pools allow up to 24 sessions per process",
+    "write:false media output and SF2 input parsing remain proportional to input size"
+  ],
+  "publication": {
+    "merged": false,
+    "pushed": false,
+    "deployed": false
+  },
+  "logs": [
+    {
+      "path": ".cache/optimization-verify.log",
+      "bytes": 313535,
+      "sha256": "7371307d902d393600424966ea492933942ffd0126343b00f9b705c4d5282116",
+      "tracked": false
+    },
+    {
+      "path": ".cache/optimization-server-final.log",
+      "bytes": 292937,
+      "sha256": "d10e6623747b835447f6641780e0ba75a07274067f81a492b77157f7d1f06815",
+      "tracked": false
+    },
+    {
+      "path": ".cache/optimization-main-sync.log",
+      "bytes": 9503,
+      "sha256": "de5b31565238f13281445fb7199f2a95d26c3c2bd2fac609e089d6ea3afee1ef",
+      "tracked": false
+    },
+    {
+      "path": ".cache/optimization-final-io.log",
+      "bytes": 1261,
+      "sha256": "4b9668e94f0197f3a644a8c4770bbe7517f3f0db19550c3616ee35a3e71218ff",
+      "tracked": false
+    }
+  ],
+  "results": [
+    {
+      "path": "asset-memory-results.json",
+      "bytes": 1254,
+      "sha256": "04da8c6da8d3eaa84f49c2cd4ea35d0880d1b27ec270d4527d10d5a118aabef4"
+    },
+    {
+      "path": "lock-results.json",
+      "bytes": 1131,
+      "sha256": "2a8ae304e21eb126d72f112cd0aa23dbaee181c11659e982cbf29ce3fe7bd2b0"
+    },
+    {
+      "path": "protocol-results.json",
+      "bytes": 1269,
+      "sha256": "33feb8c2acee89b35886d4617c4aac63885a284b16044cd6a67f22459272313d"
+    },
+    {
+      "path": "render-results.json",
+      "bytes": 2331,
+      "sha256": "254a64f11dc62cd5ffb86188264d6becc61fc343e947ed0487729287994c79bf"
+    },
+    {
+      "path": "results.json",
+      "bytes": 8290,
+      "sha256": "2d9b3a31244f5f65b01d5d3a0f86ab983226018b19c1196e370940ce79888c33"
+    }
+  ]
+}
