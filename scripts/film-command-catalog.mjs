@@ -3,9 +3,12 @@ import { rendererIds } from "../src/engine/adapters.mjs";
 import { z } from "zod";
 import { sourceEditRequestSchema, sourcePatchRequestSchema } from "../src/contracts/source-edit.mjs";
 import { projectCreationShape, projectDefaults, authoringModes } from "../src/contracts/authoring.mjs";
+import { capabilityFilterShape } from "../src/contracts/capabilities.mjs";
 
 import { audioEditRequestSchema, visualEditRequestSchema } from "../src/engine/document-edit.mjs";
 
+const capabilityRequestSchema = () => z.toJSONSchema(z.strictObject(capabilityFilterShape));
+const capabilityOption = (name, description) => ({ ...capabilityRequestSchema().properties[name], description });
 const text = (description, more = {}) => ({ type: "string", description, ...more });
 const number = (description, min, max) => text(description, {number:true, minimum:min, maximum:max});
 const flag = (description) => ({ type: "boolean", description });
@@ -20,6 +23,15 @@ const fps = integer("Output frame rate.", 12, 60);
 const range = { start: seconds("Start in absolute project seconds."), end: seconds("Exclusive end in absolute project seconds.") };
 const production = (description, options = {}) => ({ description, usage: "<project>", options: { ...options, json, detail: flag("Include complete input manifests; default prints fingerprints and a report path.") }, validate: true });
 const commands = {
+  capabilities: {
+    description: "Discover supported visual, media, animation and audio capabilities with entrypoints and mixing requirements; no preferred framework.",
+    usage: "", options: {
+      category: capabilityOption("category", "Filter one capability category."),
+      query: capabilityOption("query", "Case-insensitive capability search."),
+      id: capabilityOption("id", "Read one exact capability id."), json,
+    }, noPositionals: true, rejectDuplicates: true, validate: true,
+    requestSchema: capabilityRequestSchema,
+  },
   list: { description: "List local projects without executing scene code.", usage: "", options: { json } },
   context: { description: "Read authoritative documents, revisions, instructions and write boundaries.", usage: "<project>", options: { json, detail: flag("Include the complete declared visual/audio documents; default is a compact handoff.") } },
   inspect: { description: "Read static project facts.", usage: "<project>", options: { json } },
@@ -91,6 +103,8 @@ export function describeFilmCommand(name, action) {
 export function validateCommandOptions(name, values, positionals) {
   const command = commands[name];
   if (!command?.validate) return;
+  if (command.noPositionals && positionals.length)
+    throw Object.assign(new Error(name + " does not accept positional arguments; use its named filters."), { code: "INVALID_ARGUMENTS" });
   if (positionals.length > 2) throw Object.assign(new Error("Unexpected positional arguments."), { code: "INVALID_ARGUMENTS" });
   if (positionals[0] === "engines" && positionals.length !== 1)
     throw Object.assign(new Error("engines does not accept extra arguments."), { code: "INVALID_ARGUMENTS" });
@@ -112,7 +126,16 @@ export function validateCommandOptions(name, values, positionals) {
   }
 }
 export function parseCommandArgs(name, args = process.argv.slice(2)) {
-  const parsed = parseArgs({ args, allowPositionals: true, options: commandOptions(name) });
+  const parsed = parseArgs({ args, allowPositionals: true, options: commandOptions(name), tokens: Boolean(commands[name]?.rejectDuplicates) });
+  if (commands[name]?.rejectDuplicates) {
+    const seen = new Set();
+    for (const token of parsed.tokens) {
+      if (token.kind !== "option") continue;
+      if (seen.has(token.name))
+        throw Object.assign(new Error("Duplicate --" + token.name + " option."), { code: "INVALID_ARGUMENTS" });
+      seen.add(token.name);
+    }
+  }
   validateCommandOptions(name, parsed.values, parsed.positionals);
   return parsed;
 }

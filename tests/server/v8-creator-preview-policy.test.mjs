@@ -6,6 +6,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { TaskPublication } from "../../server/task-publication.mjs";
 import { agentTools } from "../../server/agent-tools.mjs";
+import { workOperations } from "../../server/work-operations.mjs";
+import { z } from "zod";
 
 async function publicationFixture(result, inspect) {
   const data = fs.mkdtempSync(
@@ -177,4 +179,73 @@ test("agent preview requires task credentials and refuses missing or deleted bou
     { statusCode: 404 },
   );
   assert.equal(missing.calls.length, 0);
+});
+
+test("browser draft requests reject snapshot combinations and unavailable live service without reading or building a work", async () => {
+  let operation;
+  const calls = [],
+    registry = {};
+  for (const name of [
+    "files",
+    "files_page",
+    "read",
+    "write",
+    "patch",
+    "search",
+    "delete_file",
+  ])
+    registry["project_" + name] = {
+      description: "Fixture source operation",
+      schema: z.object({}),
+      fn: assert.fail,
+    };
+  workOperations({
+    add(name, _description, shape, fn) {
+      if (name === "works_browser") operation = { schema: z.object(shape), fn };
+    },
+    registry,
+    data: "/fixture",
+    repos: {},
+    assets: {},
+    tasks: {},
+    db: {
+      one() {
+        assert.fail(
+          "an invalid draft must not fall through to work or build lookup",
+        );
+      },
+    },
+  });
+  const id = randomUUID(),
+    task = randomUUID();
+  const invoke = (value) => operation.fn(operation.schema.parse(value));
+  for (const value of [
+    { id, task, mode: "snapshot" },
+    { id, task, rebuild: true },
+  ])
+    await assert.rejects(invoke(value), (error) => error.statusCode === 400);
+  await assert.rejects(
+    invoke({ id, task }),
+    (error) => error.statusCode === 503,
+  );
+  registry.works_live_preview = {
+    schema: z.object({
+      id: z.string().uuid(),
+      task: z.string().uuid().optional(),
+      ai: z.boolean(),
+    }),
+    fn(value) {
+      calls.push(value);
+      return {
+        sessionId: randomUUID(),
+        url: "/preview-live/fixture/index.html",
+        source: "task",
+      };
+    },
+  };
+  const result = await invoke({ id, task });
+  assert.deepEqual(calls, [{ id, task, ai: true }]);
+  assert.equal(result.previewMode, "live");
+  assert.equal(result.source, "task");
+  assert.match(result.url, /\/preview-live\//);
 });

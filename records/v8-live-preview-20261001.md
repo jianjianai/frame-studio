@@ -35,6 +35,14 @@
 
 - 最终依赖与 Worker 收尾 18/18：预加载仅包含声明的画面/音频加载入口；所有 7 类 vendor 哈希在更新间稳定，画面编辑 gzip 增量 762 B，暖编译 1.185–1.525 秒。真实 Canvas 网络没有下载未使用的 Babylon/Pixi/Lottie/Remotion/Tone/Spessasynth；磁盘预算在主/嵌套 worker 写盘前合计孤儿输出并拒绝超额，IPC 等 ACK 只保留首个与最新动作。
 
+## 并行上游整合
+
+结束前发现另一项并行开发已把 AI 能力发现更新合入 main（d81ca39，功能提交 8182053）。V8 初始实现先保存为 1782d3d，再在本工作树合并这一更新；能力目录、权威音频/Remotion 引导与 V8 实时入口同时保留，三处内容冲突逐项解决并审查。原 main 工作目录不受本次合并影响。
+
+第一轮全服务端 324 项中有 5 项旧测试夹具/新增断言不适配 V8：Studio sessionStorage 注入应仅作用顶层，默认引用改为实际已显示 live 哈希，播放器定位按命名 iframe，执行器无构建以 count=0 验证并使用 actions.livePreview。交互/历史像素/撤销三项和真实 Codex、Claude、无效修改三项复测全部通过。原断言的历史隔离、错误检查和实际执行证据保留，没有跳过失败。第二轮在发现上游更新后主动停止；整合后重新运行完整发布门禁，不将被停止的输出作为验收。
+
+合并审查还发现 works_browser 的错误分支缺少 problem 导入，以及无实时服务时草稿可能落到旧快照；已修复并增加 400/503 与准确草稿传递回归。
+
 ## 完整门禁
 
 核心门禁 `pnpm verify:core` 已完成：127 项单元、117 项 MCP（116 通过，1 项可选授权 GeneralUser 音色跳过），工程/平台/类型检查与播放器、Studio 构建全部通过；耗时 349 秒。候选 Docker 镜像已构建并通过 8.0.0、依赖导入与无凭据/缓存内容检查。正在执行 `pnpm test:server:release`，完成后补记服务端结果与提交。这两步合计覆盖 `pnpm verify:release`，没有重复已通过的核心门禁。隔离测试数据库仅为 frame-live-v8-postgres/frame_test_live_v8；候选容器带 Docker socket 只为运行真实 executor 夹具，不发布生产。

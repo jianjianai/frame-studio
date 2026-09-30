@@ -22,12 +22,15 @@ V8 创作页默认使用增量实时预览，保存源码后更新；音频不�
 
 ```powershell
 pnpm film help
+pnpm --silent film capabilities --json
 pnpm --silent film list --json
 pnpm --silent film context tiny-seed --json
 pnpm --silent film inspect tiny-seed --json
 ```
 
 `list` 给出实际注册项目；`inspect` 给出静态元数据、场景/声音入口、素材清单、音轨、说明、输出目录与独立记录目录；`context` 再附上接口和工具使用提示。它们只读，不导入或执行项目代码。JSON 包含 `schemaVersion`；使用 `pnpm --silent` 保持标准输出可被机器直接解析。未知项目或命令退出非零，JSON 模式返回 error。
+
+能力发现无需已有项目。先按内容查询 `film capabilities --category visual --json`、`--category media`、`--category animation` 或 `--category audio`，再用 `--query <关键词>` 缩小范围、`--id remotion` 等读取精确接入信息。本地及平台 MCP 使用 `frame_capabilities`；平台内 Agent 使用 `node scripts/work-tool.mjs capabilities '{"category":"visual"}'`。它们共享能力目录，参考指南为 [CAPABILITIES.md](CAPABILITIES.md)，不因目录顺序、示例框架或默认容器而预选技术。
 
 读根 AGENTS.md、NEW-PROJECT-STANDARD.md、AUTHORING.md 和项目 README，记录开始时的 HEAD 与 Git 状态。只修改 `projects/<id>/`，公共代码可只读使用。公共引擎、依赖和其他工程的修改属于单独授权的工作台维护。
 
@@ -38,7 +41,7 @@ pnpm film new my-film "我的动画" --duration 12 --fps 24
 pnpm film check my-film --strict --json
 ```
 
-默认创建不预选引擎的空白合成（composition）。显式模板可选 canvas、pixi、three、babylon；视频、图片、图像序列和 Lottie 可作为合成素材。通过 `pnpm film composition engines --json` 查询能力，通过 `pnpm film composition <id> --json` 读取可编辑片段，接口见 [COMPOSITION.md](COMPOSITION.md)。默认 24 秒、30 fps、静音。`--audio generated` 自动连接模板生成器，也可保留默认 silent 后自行添加多音轨。创建会同时准备代码、封面、说明、私有测试和独立记录目录，再一次性注册；不会覆盖已有项目。原 `pnpm animation:new` 保持兼容。
+默认创建不预选引擎的空白合成（composition），只是基础容器。显式模板可选 canvas、pixi、three、babylon、remotion；视频、图片、图像序列和 Lottie 可作为合成素材，GSAP/Flubber 等动画库和各类音频能力通过完整目录发现。通过 `pnpm --silent film capabilities --json` 查询能力，通过 `pnpm film composition <id> --json` 读取可编辑片段，接口见 [COMPOSITION.md](COMPOSITION.md)。Remotion 以 React/DOM 为根，`FrameScene` 可嵌入其他兼容场景；不能把 DOM 当作 Canvas 合成图层，见 [REMOTION.md](REMOTION.md)。默认 24 秒、30 fps、静音。`--audio generated` 自动连接模板生成器，也可保留默认 silent 后自行添加多音轨。创建会同时准备代码、封面、说明、私有测试和独立记录目录，再一次性注册；不会覆盖已有项目。原 `pnpm animation:new` 保持兼容。
 
 `project.ts` 保存可静态读取的元数据和时间标记；`scene.ts` 是绘制入口。复杂项目可在本目录拆分 shots、characters、motion 等模块，无需修改公共注册表。素材在 public，原始材料与许可在 production，项目脚本与测试在 scripts、tests。新增脚本在 README 声明输入、输出和覆盖行为。
 

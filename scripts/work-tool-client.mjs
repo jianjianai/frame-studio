@@ -19,6 +19,12 @@ export const workToolHelp = {
   input:
     "JSON object, @file, or - for stdin. Credentials belong in @file or stdin, never command arguments.",
   local: {
+    capabilities: {
+      category: "optional visual|media|animation|audio",
+      query: "optional case-insensitive text, at most 200 characters",
+      id: "optional exact capability id; omit all filters for the complete catalog",
+      note: "Visual/audio frameworks and animation helpers; engines below lists configured speech services.",
+    },
     context: { project: "optional outside a task; inferred inside a task" },
     reference: {
       name: "optional fixed reference name; omit to list the catalog",
@@ -92,7 +98,7 @@ export const workToolHelp = {
     },
   },
   notes: [
-    "Local context/check do not need platform credentials. Remote actions require an active platform task.",
+    "Local capabilities/context/reference/check do not need platform credentials. Remote actions require an active platform task.",
     "engines lists real model capabilities. Discover configured voice catalogs before auditioning. Chinese pronunciation/pauses are provider-specific; unsupported controls are rejected, never fabricated. Built-ins cannot be replaced.",
     "engine_test creates temporary audition audio; speech creates a material. Neither automatically edits audioTracks or subtitles.",
     "Remote writes are never retried automatically; after a timeout their outcome may be unknown. Inspect assets before repeating speech.",

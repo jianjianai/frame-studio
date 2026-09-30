@@ -2,24 +2,38 @@
 
 V8 创作页默认使用增量实时预览，保存源码后更新；音频不再先整片生成并切块。弱网播放、不可变版本与正式导出规则见 [V8 实时预览](V8-LIVE-PREVIEW.md)。
 
-本地 CLI、MCP、远程作品工具与 Codex／Claude 任务使用同一套创建及编辑契约。默认创建空白 composition、24 秒、30 fps、静音；画幅可用 width／height 成对传入，或通过 MCP 的 composition 对象传入。不能同时传两种画幅形式，脚手架拒绝覆盖已有项目。
+本地 CLI、MCP、远程作品工具与 Codex／Claude 任务使用同一套创建及编辑契约和能力目录。默认创建空白 composition、24 秒、30 fps、静音；composition 只是基础容器，框架、素材和动画/音频能力由 AI 按任务自主选择，模板和目录顺序不表示推荐。画幅可用 width／height 成对传入，或通过 MCP 的 composition 对象传入。不能同时传两种画幅形式，脚手架拒绝覆盖已有项目。
 
 ## 接手与发现
 
-| 入口 | 身份 | 先读上下文 | 参数发现 |
-| --- | --- | --- | --- |
-| 本地 CLI | 工程 slug | film context <project> --json | film describe <command> [action] --json |
-| 本地 MCP | 工程 slug | frame_workspace_context → frame_project_context | frame_help → frame_tool_describe |
-| 远程 CLI／MCP | 作品 UUID id | frame_workspace_context → frame_works_context | platform describe <operation> 或 frame_tool_describe |
-| Codex／Claude 任务 | 当前任务绑定的工程 | node scripts/work-tool.mjs context | work-tool help --json 与 film describe |
+| 入口               | 身份               | 先读上下文                                            | 能力发现                 | 参数发现                                |
+| ------------------ | ------------------ | ----------------------------------------------------- | ------------------------ | --------------------------------------- |
+| 本地 CLI           | 工程 slug          | film context <project> --json                         | film capabilities --json | film describe <command> [action] --json |
+| 本地 MCP           | 工程 slug          | frame_workspace_context → frame_project_context       | frame_capabilities       | frame_help → frame_tool_describe        |
+| 平台 CLI           | 作品 UUID id       | platform workspace_context → platform works_context - | platform capabilities -  | platform describe <operation>           |
+| 平台 MCP           | 作品 UUID id       | frame_workspace_context → frame_works_context         | frame_capabilities       | frame_tool_describe                     |
+| Codex／Claude 任务 | 当前任务绑定的工程 | node scripts/work-tool.mjs context                    | work-tool capabilities   | work-tool help --json 与 film describe  |
+
+能力查询只读，无需先创建工程。本地与平台 MCP 的 `frame_capabilities`、CLI 的 `film capabilities` 和 Agent 的 `work-tool capabilities` 共用目录，包含 visual、media、animation、audio 四类；可以用 category/query/id 筛选并直接取得接入与限制信息，完整指南见 [CAPABILITIES.md](CAPABILITIES.md)。
+
+```sh
+pnpm --silent film capabilities --json
+pnpm --silent film capabilities --category visual --json
+pnpm --silent film capabilities --category audio --json
+pnpm --silent film capabilities --query "morph" --json
+pnpm --silent film capabilities --id remotion --json
+node scripts/work-tool.mjs capabilities '{"category":"animation","query":"morph"}'
+```
+
+MCP 同样传入 `{"category":"animation","query":"morph"}` 或 `{"id":"remotion"}`。category 每次传一个分类；query 不区分大小写；id 读取精确能力详情。平台 CLI 的 `-` 从 stdin 读取 JSON；作品请求包含 id，能力请求可传上述筛选或 `{}`。按候选能力的参考入口读取指南，无需每次加载全部文档。旧 `film composition engines` / `frame_renderers` 只覆盖原有视觉适配器目录，不含动画辅助库与音频；Agent `work-tool engines` 发现已配置的语音服务与声线，不能用它推断视觉框架是否可用。
 
 CLI 命令前加 pnpm --silent，避免 pnpm 日志混入 JSON。film help --json 返回命令目录；film composition <project> edit --help --json 等逐命令帮助会返回对应选项和请求 schema，无需已有工程。远程 platform describe 查询正在运行的服务器，应同时核对 workspace_context 的 platformVersion 和健康接口的 revision。
 
-film reference --json、work-tool reference、frame_read_reference 和远程 frame_authoring_reference 使用同一文档目录，包含 composition、audio-v7 和 creator-workflow。省略远程参考名称返回目录；本地 MCP 可通过 workspace_context 的 references 查看名称。
+film reference --json、work-tool reference、frame_read_reference 和远程 frame_authoring_reference 使用同一文档目录，包含 capabilities、composition、remotion、audio-v7 和 creator-workflow。省略远程参考名称返回目录；本地 MCP 可通过 workspace_context 的 references 查看名称。
 
 film context 与 frame_project_context 默认返回精简接手信息，完整可编辑文档用 audio／composition get 读取；context --detail 或 MCP detail:true 可显式包含整份文档，film inspect 保留完整静态数据。
 
-上下文的 entrypoints 和 authority 指明权威文件及完整 SHA-256。声明 loadAudioDocument 的工程以 audio.json 为准，audioTracks 返回当前文档的通道摘要；project.ts 中遗留的音轨配置不能作为编辑依据。visual.json 同样拥有可编辑视觉片段，beats 只是审片标记。损坏的任务元数据或文档会给出 needs_repair 及诊断，保留修复入口。
+上下文的 entrypoints 和 authority 指明权威文件及完整 SHA-256。声明 loadAudioDocument 的工程以 audio.json 为准，audioTracks 返回当前文档的通道摘要；project.ts 中遗留的音轨配置不能作为编辑依据。visual.json 拥有可编辑 Canvas 合成片段；Remotion 的 authority.visual 指向 React 根，canvasComposition 是可选子文档，只有被 FrameScene 实际连接才会显示。beats 只是审片标记。损坏的任务元数据或文档会给出 needs_repair 及诊断，保留修复入口。
 
 ## 修改与恢复
 

@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { audioEngines, audioProcessors } from "./audio-capabilities.mjs";
+export { audioEngines, audioProcessors } from "./audio-capabilities.mjs";
 import { assetReferenceSchema } from "./visual-document.mjs";
 const n = z.number().finite();
 const id = z
@@ -102,33 +104,13 @@ export const audioProcessorSchema = z.discriminatedUnion(
     }),
   ),
 );
-export const audioProcessors = effects.map(([type]) => ({
-  id: type,
-  name: {
-    gain: "增益",
-    pan: "声像",
-    filter: "均衡 / 滤波",
-    compressor: "压缩",
-    limiter: "峰值保护",
-    delay: "延迟",
-    reverb: "混响",
-    distortion: "失真",
-    stereo: "立体声宽度",
-    duck: "旁白避让",
-  }[type],
-}));
-export const audioEngines = [
-  { id: "web-audio", name: "Web Audio", realtime: true, offline: true },
-  { id: "tone", name: "Tone.js", realtime: true, offline: true },
-  {
-    id: "worker-pcm",
-    name: "PCM Worker / WASM",
-    realtime: true,
-    offline: true,
-  },
-  { id: "soundfont", name: "SoundFont / MIDI", realtime: true, offline: true },
-  { id: "custom", name: "项目自定义生成器", realtime: true, offline: true },
-];
+// The discovery registry and implemented schema must describe exactly the same
+// processor collection, in the same stable order; never advertise unsupported ids.
+if (
+  effects.length !== audioProcessors.length ||
+  effects.some(([type], index) => type !== audioProcessors[index].id)
+)
+  throw new Error("Audio processor capability registry does not match the schema");
 export const audioSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ id, kind: z.literal("file"), src: assetReferenceSchema }),
   z.strictObject({

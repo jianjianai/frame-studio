@@ -1,7 +1,19 @@
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
-import { authoringReferences, authoringModes, projectDefaults } from "../src/contracts/authoring.mjs";
-import { referenceCatalog, readAuthoringReference } from "../scripts/authoring-reference.mjs";
+import {
+  authoringReferences,
+  authoringModes,
+  projectDefaults,
+} from "../src/contracts/authoring.mjs";
+import {
+  referenceCatalog,
+  readAuthoringReference,
+} from "../scripts/authoring-reference.mjs";
+import {
+  capabilityFilterShape,
+  getAuthoringCapabilities,
+  authoringCapabilitySummary,
+} from "../src/contracts/capabilities.mjs";
 import { taskSummaryColumns } from "./task-summary.mjs";
 import { readTaskStatus, subscribeTaskStatus } from "./task-status-wait.mjs";
 import { PLATFORM_VERSION } from "../src/contracts/version.mjs";
@@ -10,11 +22,12 @@ import { problem } from "./security.mjs";
 
 // This allowlist is shared by discovery and MCP registration, never by authorization.
 export const isMcpOperation = (name) =>
-  /^(help$|works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local|discover)$|speech_(test|providers|status|cancel)$|models_list$|workspace_context$|tool_describe$|authoring_reference$)/.test(
+  /^(help$|capabilities$|works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local|discover)$|speech_(test|providers|status|cancel)$|models_list$|workspace_context$|tool_describe$|authoring_reference$)/.test(
     name,
   );
 const readOnly = new Set([
   "help",
+  "capabilities",
   "works_read_lines",
   "workspace_context",
   "tool_describe",
@@ -207,8 +220,24 @@ const nextTaskActions = (task, after) =>
 
 export function agentToolkitOperations({ add, registry, db, works, tasks }) {
   const uuid = z.string().uuid();
-  add("authoring_reference", "Read a fixed authoring reference or list the current catalog.", { name: z.enum(Object.keys(authoringReferences)).optional() }, ({ name }) =>
-    name ? readAuthoringReference(fileURLToPath(new URL("..", import.meta.url)), name) : { schemaVersion: 1, references: referenceCatalog() });
+  add(
+    "capabilities",
+    "Discover supported visual frameworks, media, animation helpers and audio capabilities with exact integration entrypoints and mixing limits. No work or engine is selected.",
+    capabilityFilterShape,
+    (args) => getAuthoringCapabilities(args),
+  );
+  add(
+    "authoring_reference",
+    "Read a fixed authoring reference or list the current catalog.",
+    { name: z.enum(Object.keys(authoringReferences)).optional() },
+    ({ name }) =>
+      name
+        ? readAuthoringReference(
+            fileURLToPath(new URL("..", import.meta.url)),
+            name,
+          )
+        : { schemaVersion: 1, references: referenceCatalog() },
+  );
   add(
     "workspace_context",
     "Start here: compact workspace overview, work UUIDs, tool recipes and safe editing boundaries. No project mutation.",
@@ -232,7 +261,19 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
       return {
         schemaVersion: 1,
         platformVersion: PLATFORM_VERSION,
-        defaults: projectDefaults, interfaces: authoringModes, references: referenceCatalog(),
+        defaults: projectDefaults,
+        interfaces: authoringModes,
+        references: referenceCatalog(),
+        capabilities: authoringCapabilitySummary(),
+        schemaDiscovery: {
+          tool: "frame_tool_describe",
+          arguments: { name: "frame_capabilities" },
+          reference: {
+            tool: "frame_authoring_reference",
+            arguments: { name: "capabilities" },
+          },
+          note: "A connector may cache an older tool schema. Read the live descriptor and workspace capability summary before treating an omitted renderer as unsupported; renderer selection is explicit and the default is an empty composition.",
+        },
         repositories,
         works: latestWorks.map((w) =>
           choose(w, [
@@ -248,6 +289,11 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
         boundaries:
           "Remote tools use the work UUID (id), not the project slug. Paths such as scene.ts are relative to that work. Do not write outside it. Local pnpm film commands use the project slug in a local checkout.",
         workflow: [
+          {
+            tool: "frame_capabilities",
+            purpose:
+              "Discover available frameworks, helpers, media and audio; choose according to this work's needs. Filter category, query or id for exact integration and limits.",
+          },
           {
             tool: "frame_works_context",
             purpose:
@@ -359,7 +405,8 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
         for (;;) {
           const revision = waiter?.revision;
           ({ task, rows } = await readTaskStatus(db, tasks, a));
-          if (!isActiveTask(task) || rows.length || Date.now() >= deadline) break;
+          if (!isActiveTask(task) || rows.length || Date.now() >= deadline)
+            break;
           await waiter.wait(revision, deadline - Date.now());
         }
       } finally {
