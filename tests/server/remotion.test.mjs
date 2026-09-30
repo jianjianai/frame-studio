@@ -171,6 +171,8 @@ test(
         "Remotion fixture: video, rate conversion and final audio mix passed",
       );
       await page.close();
+      await session.close();
+      session = undefined;
 
       const { createServer } = await import("vite");
       const { projectConfig } =
@@ -272,6 +274,11 @@ test(
           webGreen[1] > 200 && webGreen[0] < 60,
           "browser capture preserves embedded canvas first pixels",
         );
+        // Each export models one production task, without idle fixture browsers.
+        await browser.close();
+        browser = undefined;
+        await dev.close();
+        dev = undefined;
         const { exportProduction } =
           await import("../../scripts/production-export.mjs");
         const formal = await exportProduction(f.root, "test-film", {

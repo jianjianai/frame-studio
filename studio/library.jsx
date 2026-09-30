@@ -193,6 +193,8 @@ export function WorkLibrary({ repo, recent = false, notify }) {
     [create, setCreate] = useState(false),
     [edit, setEdit] = useState(null),
     [remove, setRemove] = useState(null),
+    [purge, setPurge] = useState(null),
+    [purgeFailures, setPurgeFailures] = useState([]),
     [run, busy] = useAction(notify);
   const query = useQuery("works_page", {
     ...(repo ? { repo: repo.id } : {}),
@@ -203,6 +205,16 @@ export function WorkLibrary({ repo, recent = false, notify }) {
     limit: 30,
     offset: page * 30,
   });
+  const trash = useQuery(deleted ? "works_page" : null, {
+    ...(repo ? { repo: repo.id } : {}),
+    deleted: true,
+    limit: 1,
+  });
+  const refreshTrash = () => {
+    setPage(0);
+    query.refresh();
+    trash.refresh();
+  };
   useEffect(() => {
     const refresh = () => query.refresh();
     window.addEventListener("focus", refresh);
@@ -255,7 +267,7 @@ export function WorkLibrary({ repo, recent = false, notify }) {
           <option value="review">待审片</option>
           <option value="finished">已完成</option>
         </select>
-        {repo && (
+        {!recent && (
           <Button
             icon={Trash2}
             className={deleted ? "selected" : ""}
@@ -265,6 +277,21 @@ export function WorkLibrary({ repo, recent = false, notify }) {
             }}
           >
             {deleted ? "返回作品" : "回收站"}
+          </Button>
+        )}
+        {deleted && (
+          <Button
+            icon={Trash2}
+            className="danger-text"
+            disabled={
+              busy || trash.loading || !!trash.error || !trash.data?.total
+            }
+            onClick={() => {
+              setPurgeFailures([]);
+              setPurge({ all: true });
+            }}
+          >
+            清空回收站{trash.data?.total ? `（${trash.data.total}）` : ""}
           </Button>
         )}
       </div>
@@ -330,19 +357,33 @@ export function WorkLibrary({ repo, recent = false, notify }) {
                 </summary>
                 <div>
                   {deleted ? (
-                    <Button
-                      onClick={() =>
-                        run(async () => {
-                          await api("works_trash", {
-                            id: w.id,
-                            deleted: false,
-                          });
-                          query.refresh();
-                        })
-                      }
-                    >
-                      恢复作品
-                    </Button>
+                    <>
+                      <Button
+                        disabled={busy}
+                        onClick={() =>
+                          run(async () => {
+                            await api("works_trash", {
+                              id: w.id,
+                              deleted: false,
+                            });
+                            refreshTrash();
+                          })
+                        }
+                      >
+                        恢复作品
+                      </Button>
+                      <Button
+                        className="danger-text"
+                        disabled={busy}
+                        onClick={(e) => {
+                          e.currentTarget.closest("details").open = false;
+                          setPurgeFailures([]);
+                          setPurge(w);
+                        }}
+                      >
+                        永久删除
+                      </Button>
+                    </>
                   ) : (
                     <>
                       <Button
@@ -463,6 +504,78 @@ export function WorkLibrary({ repo, recent = false, notify }) {
           >
             <Field label="输入作品名称确认">
               <input name="confirm" required autoComplete="off" />
+            </Field>
+          </Form>
+        </Modal>
+      )}
+      {purge && (
+        <Modal
+          title={purge.all ? "清空回收站" : "永久删除作品"}
+          onClose={() => {
+            if (!busy) setPurge(null);
+          }}
+        >
+          <p>
+            {purge.all
+              ? `将永久删除${repo ? `仓库“${repo.name}”` : "全部仓库"}回收站中的 ${trash.data?.total || 0} 个作品，包含所有分页和筛选之外的作品。`
+              : `将永久删除作品“${purge.title}”。`}
+            作品文件、历史版本、聊天和导出记录将被清除，对应远端作品分支也会删除。
+            素材库中的共享素材保留。此操作无法恢复。
+          </p>
+          {!!purgeFailures.length && (
+            <div role="alert">
+              <p>以下作品未能删除，仍在回收站中。处理原因后可重试。</p>
+              <ul>
+                {purgeFailures.map((failure) => (
+                  <li key={failure.id}>
+                    <strong>{failure.title}</strong>：{failure.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <Form
+            busy={busy}
+            submit={purgeFailures.length ? "重试清空" : "确认永久删除"}
+            onSubmit={(a) =>
+              run(async () => {
+                if (purge.all) {
+                  const result = await api("works_empty_trash", {
+                    ...(repo ? { repo: repo.id } : {}),
+                    confirm: a.confirm,
+                  });
+                  setPurgeFailures(result.failed);
+                  notify(
+                    `已永久删除 ${result.purged.length} 个作品${result.failed.length ? `，${result.failed.length} 个未能删除` : ""}`,
+                    result.failed.length ? "error" : "success",
+                  );
+                  if (!result.failed.length) setPurge(null);
+                } else {
+                  await api("works_purge", {
+                    id: purge.id,
+                    confirm: a.confirm,
+                  });
+                  notify("作品和对应远端分支已永久删除");
+                  setPurge(null);
+                }
+                refreshTrash();
+              })
+            }
+          >
+            <Field
+              label={
+                purge.all
+                  ? "输入“清空回收站”确认"
+                  : `输入完整作品名称“${purge.title}”确认`
+              }
+            >
+              <input
+                name="confirm"
+                required
+                autoFocus
+                autoComplete="off"
+                disabled={busy}
+              />
             </Field>
           </Form>
         </Modal>
