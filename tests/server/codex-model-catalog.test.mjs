@@ -5,6 +5,98 @@ import { fileURLToPath } from "node:url";
 import { discoverCodexModels } from "../../server/codex-model-catalog.mjs";
 import { Connections } from "../../server/connections.mjs";
 import { providerModelsSchema } from "../../src/contracts/ai-models.mjs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { randomUUID } from "node:crypto";
+import { sqliteDatabase } from "../../server/sqlite.mjs";
+
+test("SQLite sync preserves concurrent config and rejects identity/CAS changes", async (t) => {
+  const data = await fs.mkdtemp(path.join(os.tmpdir(), "frame-catalog-cas-"));
+  const db = await sqliteDatabase(path.join(data, "frame.sqlite"));
+  t.after(async () => {
+    await db.pool.end();
+    await fs.rm(data, { recursive: true, force: true });
+  });
+  const connections = new Connections(db, data, {
+    encrypt: JSON.stringify,
+    decrypt: JSON.parse,
+  });
+  const read = async (id) =>
+    JSON.parse(
+      (await db.one("SELECT config FROM connections WHERE id=$1", [id])).config,
+    );
+  for (const scenario of ["config", "identity", "cas"]) {
+    const id = randomUUID();
+    await db.pool.query(
+      "INSERT INTO connections(id,name,tool,mode,state,config) VALUES($1,'Codex','codex','official','ready',$2)",
+      [
+        id,
+        JSON.stringify({
+          model: "saved",
+          models: [{ id: "saved", name: "Saved", enabled: true }],
+        }),
+      ],
+    );
+    connections.codexCatalogLoader = async () => {
+      if (scenario === "identity")
+        await db.pool.query(
+          "UPDATE connections SET auth_generation=auth_generation+1 WHERE id=$1",
+          [id],
+        );
+      if (scenario === "config") {
+        const config = await read(id);
+        config.newerSetting = "preserved";
+        await db.pool.query("UPDATE connections SET config=$2 WHERE id=$1", [
+          id,
+          JSON.stringify(config),
+        ]);
+      }
+      return catalog();
+    };
+    const query = db.pool.query;
+    let raced = false;
+    if (scenario === "cas")
+      db.pool.query = async (sql, args) => {
+        if (
+          !raced &&
+          sql.startsWith("UPDATE connections SET config=$2 WHERE")
+        ) {
+          raced = true;
+          const config = await read(id);
+          config.newerSetting = "last-moment";
+          await query("UPDATE connections SET config=$2 WHERE id=$1", [
+            id,
+            JSON.stringify(config),
+          ]);
+        }
+        return query(sql, args);
+      };
+    try {
+      if (scenario === "config") {
+        await connections.syncModels(id);
+        const config = await read(id);
+        assert.equal(config.newerSetting, "preserved");
+        assert.equal(config.model, "saved");
+        assert.deepEqual(
+          config.models.map((model) => model.id),
+          ["saved", "native-one"],
+        );
+      } else {
+        await assert.rejects(connections.syncModels(id), { statusCode: 409 });
+        const config = await read(id);
+        assert.deepEqual(
+          config.models.map((model) => model.id),
+          ["saved"],
+        );
+        if (scenario === "cas")
+          assert.equal(config.newerSetting, "last-moment");
+      }
+    } finally {
+      db.pool.query = query;
+    }
+  }
+});
 
 const fixture = fileURLToPath(
   new URL("./fixtures/codex-model-catalog.mjs", import.meta.url),
