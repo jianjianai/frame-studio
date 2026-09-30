@@ -7,12 +7,14 @@ $application = Join-Path $fixture 'Application'
 if (-not $DataRoot) { $DataRoot = Join-Path $fixture 'Data' }
 $bundle = if ($BundleDirectory) { [IO.Path]::GetFullPath($BundleDirectory) } else { Join-Path $repo ".cache\release\FrameStudio-v$version-win-x64" }
 $installer = "$bundle-Setup.exe"
-$registry = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudio'
-$shortcuts = Join-Path ([Environment]::GetFolderPath('Programs')) 'FRAME Studio'
+$registry = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudioTest'
+$shortcuts = Join-Path ([Environment]::GetFolderPath('Programs')) 'FRAME Studio Test'
 if ((Test-Path $registry) -or (Test-Path -LiteralPath $shortcuts)) { throw 'Refusing installer smoke over an existing user installation.' }
 New-Item -ItemType Directory -Force -Path $fixture,$DataRoot | Out-Null
 $previousData = $env:FRAME_LOCAL_DATA
 $previousPath = $env:PATH
+$previousTest = $env:FRAME_DESKTOP_TEST
+$env:FRAME_DESKTOP_TEST = '1'
 $env:FRAME_LOCAL_DATA = $DataRoot
 function Run-Setup([string]$File) {
   $modules = $env:PSModulePath
@@ -48,7 +50,7 @@ try {
   Copy-Item (Join-Path $DataRoot 'installer.log') (Join-Path $fixture 'failure.log') -Force
   if ((Run-Setup $installer) -ne 0) { throw 'Real installer failed; see installer.log.' }
   $installed = Join-Path $application "versions\$version"
-  if ((Get-ItemProperty $registry).DisplayVersion -ne $version -or -not (Test-Path (Join-Path $shortcuts 'FRAME Studio.lnk'))) { throw 'Installer registration or shortcut missing.' }
+  if ((Get-ItemProperty $registry).DisplayVersion -ne $version -or -not (Test-Path (Join-Path $shortcuts 'FRAME Studio Test.lnk'))) { throw 'Installer registration or shortcut missing.' }
   $selection = Get-Content -Raw (Join-Path $DataRoot 'runtime-selection.json') | ConvertFrom-Json
   $marker = Join-Path $selection.dependencies 'FRAME-RUNTIME.json'
   $before = (Get-Item $marker).LastWriteTimeUtc
@@ -77,4 +79,5 @@ try {
   Remove-SmokeInstallation
   $env:FRAME_LOCAL_DATA = $previousData
   $env:PATH = $previousPath
+  $env:FRAME_DESKTOP_TEST = $previousTest
 }

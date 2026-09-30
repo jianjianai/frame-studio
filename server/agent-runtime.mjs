@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { processLaunch } from "./local-tools.mjs";
 import { StringDecoder } from "node:string_decoder";
 import { randomUUID } from "node:crypto";
 import { createAgentStream } from "./agent-stream.mjs";
@@ -139,7 +140,8 @@ export async function runAgentTurn({
   const activeSignal = signal
     ? AbortSignal.any([controller.signal, signal])
     : controller.signal;
-  const child = spawn(bin, args, {
+  const launch = processLaunch(bin, args);
+  const child = spawn(launch.bin, launch.args, {
     cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],

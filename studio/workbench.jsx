@@ -45,14 +45,14 @@ class PageBoundary extends Component {
   }
 }
 
-function Background({ notify }) {
+function Background({ notify, localMode }) {
   const query = useQuery("works_background", {}, 2000),
     [run, busy] = useAction(notify);
   return (
     <>
       <div className="page-heading">
         <h1>后台项目</h1>
-        <p>这些作品仍在服务器上制作，关闭浏览器不会中断。</p>
+        <p>{localMode ? "这些作品正在这台电脑上制作。收起到托盘后会继续运行。" : "这些作品仍在服务器上制作，关闭浏览器不会中断。"}</p>
       </div>
       <ErrorNote error={query.error} />
       {query.data?.map((w) => (
@@ -107,7 +107,7 @@ function Background({ notify }) {
     </>
   );
 }
-function RepositoryWorks({ id, notify }) {
+function RepositoryWorks({ id, notify, localMode }) {
   const [repo, setRepo] = useState(null),
     [error, setError] = useState("");
   useEffect(() => {
@@ -124,7 +124,7 @@ function RepositoryWorks({ id, notify }) {
   return error ? (
     <ErrorNote error={error} />
   ) : repo ? (
-    <WorkLibrary repo={repo} notify={notify} />
+    <WorkLibrary repo={repo} notify={notify} localMode={localMode} />
   ) : (
     <Loading />
   );
@@ -143,7 +143,7 @@ function App() {
   useEffect(() => {
     request("/api/me")
       .then(setMe)
-      .catch(() => setMe(null));
+      .catch(error => { setLoginError(error.message); setMe(null); });
     const listener = () =>
       setRoute(location.hash.replace(/^#\/?/, "").split("/"));
     window.addEventListener("hashchange", listener);
@@ -158,6 +158,25 @@ function App() {
     localStorage.setItem("frame.nav-collapsed", String(collapsed));
   }, [collapsed]);
   useEffect(() => {
+    if (!me?.localMode) return;
+    sessionStorage.setItem("frame.local-mode", "1");
+    const session = crypto.randomUUID();
+    // Use the same protection as browser navigation, including editors, forms and exports.
+    const report = () => {
+      const event = new Event("beforeunload", { cancelable: true });
+      window.dispatchEvent(event);
+      void request("/api/desktop/activity", { method: "POST", body: JSON.stringify({ session, dirty: event.defaultPrevented }) }).catch(() => {});
+    };
+    const release = () => navigator.sendBeacon("/api/desktop/activity", new Blob([JSON.stringify({ session, dirty: false })], { type: "application/json" }));
+    const changed = () => setTimeout(report, 0);
+    report(); const timer = setInterval(report, 5000);
+    window.addEventListener("pagehide", release);
+    window.addEventListener("pageshow", report);
+    document.addEventListener("visibilitychange", report);
+    document.addEventListener("input", changed);
+    return () => { clearInterval(timer); release(); window.removeEventListener("pagehide", release); window.removeEventListener("pageshow", report); document.removeEventListener("visibilitychange", report); document.removeEventListener("input", changed); };
+  }, [me?.localMode]);
+  useEffect(() => {
     if (!notice || notice.type === "error") return;
     const timer = setTimeout(
       () => setNotice(null),
@@ -168,6 +187,7 @@ function App() {
   const notify = (text, type = "success") =>
     setNotice({ text, type, id: Date.now() });
   if (me === undefined) return <Loading />;
+  if (!me && sessionStorage.getItem("frame.local-mode") === "1") return <main className="login-page"><section className="login-card"><div className="brand"><Film size={28} /> FRAME</div><h1>工作台正在恢复连接</h1><p>本机服务暂时没有响应。你的作品仍保存在这台电脑。可从托盘打开 Windows 控制中心检查运行状态。</p><ErrorNote error={loginError} /><Button className="primary" onClick={() => location.reload()}>重新连接</Button></section></main>;
   if (!me)
     return (
       <main className="login-page">
@@ -282,20 +302,20 @@ function App() {
         {section === "work" ? (
           <Creation key={route[1]} id={route[1]} notify={notify} />
         ) : section === "repository" ? (
-          <RepositoryWorks key={route[1]} id={route[1]} notify={notify} />
+          <RepositoryWorks key={route[1]} id={route[1]} notify={notify} localMode={me.localMode} />
         ) : section === "repositories" ? (
           <Repositories
             notify={notify}
             onOpen={(r) => go("repository/" + r.id)}
           />
         ) : section === "background" ? (
-          <Background notify={notify} />
+          <Background notify={notify} localMode={me.localMode} />
         ) : section === "materials" ? (
           <Materials notify={notify} />
         ) : section === "settings" ? (
           <Settings notify={notify} localMode={!!me.localMode} />
         ) : (
-          <WorkLibrary recent notify={notify} />
+          <WorkLibrary recent notify={notify} localMode={me.localMode} />
         )}
         </Suspense></PageBoundary>
       </main>

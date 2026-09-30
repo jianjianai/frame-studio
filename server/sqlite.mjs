@@ -13,6 +13,7 @@ const booleanColumns = new Set(["deleted", "enabled", "revoked", "ready", "ok"])
 
 export function sqliteQuery(sql) {
   let query = sql.replace(/\$([1-9]\d*)/g, "?$1")
+    .replace(/(\b\w+\([^()]*\)|\([^()]*\)|[\w.]+(?:->>?'[^']+')*|\?\d+)::(?:bigint|int|integer)\b/gi, "CAST($1 AS INTEGER)")
     .replace(/::(?:jsonb|uuid|text|bigint|int|integer|float8|numeric)(?:\[\])?/gi, "")
     .replace(/\bILIKE\b/gi, "LIKE")
     .replace(/\bjsonb_build_object\s*\(/gi, "json_object(")
@@ -35,6 +36,10 @@ export function sqliteQuery(sql) {
     .replace(/\bNOT\s*\(\s*([\w.]+)\s+IN\s*\(SELECT value FROM json_each\(\?(\d+)\)\)\s*\)/gi, "$1 NOT IN (SELECT value FROM json_each(?$2))")
     .replace(/\b(\w+)\s*=\s*\1\s*\|\|\s*(\?\d+)/gi, "$1=json_patch($1,$2)");
   query = query.replace(/\bartifact->>/g, "artifact.value->>")
+    // PostgreSQL ->> always returns text. SQLite returns a number for JSON numbers,
+    // which otherwise hides successful previews when compared with a text version.
+    .replace(/([\w.]+(?:->'[^']+')*)->>'([^']+)'/g, "frame_json_text($1,'$2')")
+    .replace(/([\w.]+)\s+\?\s*'([\w-]+)'/g, "json_type($1,'$.$2') IS NOT NULL")
     .replace(/\bcommit(?=\s*,)/gi, '"commit"');
   return query;
 }
@@ -88,6 +93,11 @@ export async function sqliteDatabase(file) {
   });
   raw.function("right", (value, count) => String(value).slice(-count));
   raw.function("octet_length", (value) => Buffer.byteLength(String(value)));
+  raw.function("frame_json_text", (value, key) => {
+    if (value == null) return null;
+    const item = JSON.parse(value)[key];
+    return item == null ? null : typeof item === "object" ? JSON.stringify(item) : String(item);
+  });
   raw.exec("CREATE TABLE IF NOT EXISTS frame_schema_migrations (id text PRIMARY KEY,checksum text NOT NULL,applied text NOT NULL DEFAULT (frame_now()))");
   const plan = migrationPlan();
   const known = new Map(plan.map((m) => [m.id, m]));

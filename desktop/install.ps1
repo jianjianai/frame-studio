@@ -5,6 +5,7 @@
 )
 $ErrorActionPreference = 'Stop'
 $env:PSModulePath = Join-Path $PSHOME 'Modules'
+. (Join-Path $PSScriptRoot 'progress.ps1')
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 New-Item -ItemType Directory -Path $DataRoot -Force | Out-Null
 Start-Transcript -Path (Join-Path $DataRoot 'installer.log') -Append | Out-Null
@@ -62,6 +63,7 @@ $browsers = @(
   (Join-Path $env:LOCALAPPDATA 'Google\Chrome\Application\chrome.exe')
 )
 if (-not ($browsers | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1)) {
+  Write-FrameProgress 'browser' 'installing' '正在下载预览浏览器'
   Write-Output '未找到系统浏览器，安装工作台专用 Chromium'
   $previousBrowserPath = $env:PLAYWRIGHT_BROWSERS_PATH
   try {
@@ -70,6 +72,7 @@ if (-not ($browsers | Where-Object { Test-Path -LiteralPath $_ } | Select-Object
     if ($LASTEXITCODE -ne 0) { throw 'Chromium 安装失败，请检查网络后重试。' }
   } finally { $env:PLAYWRIGHT_BROWSERS_PATH = $previousBrowserPath }
 }
+Write-FrameProgress 'browser' 'done' '预览浏览器已就绪'
 Write-Output '运行环境检查通过，准备安装应用'
 & (Join-Path $PSScriptRoot 'bootstrap.ps1') -AppRoot $SourceRoot -DataRoot $DataRoot -Selection (Join-Path $DataRoot 'runtime-selection.json') -LinkRoot $InstallRoot
 

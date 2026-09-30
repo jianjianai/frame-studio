@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { LocalWelcome } from "./desktop-settings";
 import {
   Plus,
   FolderGit2,
@@ -93,12 +94,14 @@ export function RepoPicker({ value, onChange, refreshKey = 0 }) {
     </div>
   );
 }
-export function NewWork({ repo, onClose, notify }) {
+export function NewWork({ repo, onClose, notify, localMode = false }) {
   const [selected, setSelected] = useState(repo?.id || ""),
     [created, setCreated] = useState(null),
     [adding, setAdding] = useState(false),
     [pickerRevision, setPickerRevision] = useState(0),
     [run, busy] = useAction(notify);
+  const repositories = useQuery("repositories_page", { limit: 30, offset: 0 });
+  useEffect(() => { if (localMode && !selected && repositories.data?.items?.length) setSelected(repositories.data.items[0].id); }, [localMode, repositories.data, selected]);
   return (
     <Modal title="新建作品" onClose={onClose}>
       {created && (
@@ -114,7 +117,7 @@ export function NewWork({ repo, onClose, notify }) {
           </a>
         </p>
       )}
-      <p>{repo ? `保存到 ${repo.name}` : "选择一个仓库保存作品"}</p>
+      <p>{repo ? `保存到 ${repo.name}` : localMode ? "作品保存在这台电脑。也可以选择其他作品仓库。" : "选择一个仓库保存作品"}</p>
       {!created && (
         <Form
           busy={busy}
@@ -122,7 +125,7 @@ export function NewWork({ repo, onClose, notify }) {
           submit="创建并开始创作"
           onSubmit={(a) =>
             run(async () => {
-              const tab = window.open("about:blank", "_blank");
+              const tab = localMode ? null : window.open("about:blank", "_blank");
               if (tab) {
                 tab.opener = null;
                 tab.document.title = "正在创建作品…";
@@ -137,6 +140,7 @@ export function NewWork({ repo, onClose, notify }) {
                 tab?.close();
                 throw error;
               }
+              if (localMode) { onClose(); location.hash = "/work/" + work.id; return; }
               if (tab && !tab.closed)
                 tab.location.replace(
                   new URL("#/work/" + work.id, location.href).href,
@@ -184,7 +188,7 @@ export function NewWork({ repo, onClose, notify }) {
     </Modal>
   );
 }
-export function WorkLibrary({ repo, recent = false, notify }) {
+export function WorkLibrary({ repo, recent = false, notify, localMode = false }) {
   const [status, setStatus] = useState("");
   const [page, setPage] = useState(0),
     [search, setSearch] = useState(""),
@@ -226,6 +230,7 @@ export function WorkLibrary({ repo, recent = false, notify }) {
           新建作品
         </Button>
       </div>
+      {localMode && recent && !query.loading && !query.data?.total && <LocalWelcome />}
       <div className="list-toolbar">
         {repo && (
           <Button onClick={() => setSettings(true)}>仓库设置与素材同步</Button>
@@ -414,7 +419,7 @@ export function WorkLibrary({ repo, recent = false, notify }) {
         </Modal>
       )}
       {create && (
-        <NewWork repo={repo} notify={notify} onClose={() => setCreate(false)} />
+        <NewWork repo={repo} notify={notify} localMode={localMode} onClose={() => setCreate(false)} />
       )}{" "}
       {edit && (
         <Modal title="重命名作品" onClose={() => setEdit(null)}>

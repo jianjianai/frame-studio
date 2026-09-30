@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { processLaunch } from "./local-tools.mjs";
 export function command(
   bin,
   args,
@@ -12,7 +13,8 @@ export function command(
   } = {},
 ) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, {
+    const launch = processLaunch(bin, args);
+    const child = spawn(launch.bin, launch.args, {
       cwd,
       env: env ? { ...process.env, ...env } : process.env,
       windowsHide: true,

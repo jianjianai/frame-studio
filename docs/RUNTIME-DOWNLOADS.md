@@ -1,6 +1,6 @@
 # 安装依赖与可选语音模型
 
-Windows Setup.exe 只嵌入托盘启动器、程序源码、前端和锁文件。安装时自动从 GitHub 的 `windows-runtimes` Release 下载缺少的工具与 Python 运行环境，校验 SHA-256，再安装到 `%LOCALAPPDATA%\FRAME Studio\runtimes\<组件版本>`。下载使用临时文件，失败可重试，依赖检查通过后才安装应用和切换快捷方式。更新工作台复用相同组件版本；卸载程序保留缓存和用户数据。
+Windows Setup.exe 只嵌入原生控制中心、安装向导、程序源码、前端和锁文件，工作台在默认浏览器打开。安装时自动从 GitHub 的 `windows-runtimes` Release 下载缺少的工具与 Python 运行环境，校验 SHA-256，再安装到 `%LOCALAPPDATA%\FRAME Studio\runtimes\<组件版本>`。下载使用持久化的 `.part` 文件续传，中断自动重试，完整安装包缓存于数据目录的 `downloads`。向导或控制中心显示下载量、速度与当前阶段，暂停后可继续。依赖检查通过后才安装应用和切换快捷方式。更新工作台复用相同组件版本；卸载程序保留缓存和用户数据。
 
 工具组件包含 Node、Git、FFmpeg、pnpm，语音运行环境包含 Python 与语音依赖。构建时只发布不存在的版本化组件，已有组件不可覆盖。程序包中的 `desktop/runtime-manifest.json` 固定各组件的下载地址和摘要。
 

@@ -8,6 +8,7 @@ New-Item -ItemType Directory -Path (Join-Path $app 'desktop'),$data,$assets -For
 Copy-Item (Join-Path $repo 'desktop\extract.mjs') (Join-Path $app 'desktop\extract.mjs')
 Copy-Item (Join-Path $repo 'desktop\dependencies.mjs') (Join-Path $app 'desktop\dependencies.mjs')
 Copy-Item (Join-Path $repo 'desktop\runtime-versions.json') (Join-Path $app 'desktop\runtime-versions.json')
+Copy-Item (Join-Path $repo 'desktop\progress.ps1') (Join-Path $app 'desktop\progress.ps1')
 foreach ($name in @('package.json','pnpm-lock.yaml','pnpm-workspace.yaml','.npmrc')) { Copy-Item (Join-Path $repo $name) (Join-Path $app $name) }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $selection = Join-Path $data 'selected.json'

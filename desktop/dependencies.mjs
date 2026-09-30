@@ -24,7 +24,7 @@ export function fingerprint(root) {
   return { manager: "pnpm", id: `pnpm-dependencies-win-x64-${sha256.slice(0, 20)}`, sha256, pnpm: versions.pnpm };
 }
 
-export async function installDependencies(app, cache, tools) {
+export async function installDependencies(app, cache, tools, { checkOnly = false } = {}) {
   const manifest = JSON.parse(read(path.join(app, "desktop", "runtime-manifest.json")));
   const entry = fingerprint(app);
   if (JSON.stringify(canonical(manifest.dependencies)) !== JSON.stringify(canonical(entry)))
@@ -39,6 +39,7 @@ export async function installDependencies(app, cache, tools) {
       return destination;
     }
   }
+  if (checkOnly) throw Error("工作台依赖缺失，请修复安装后重试");
   fs.mkdirSync(destination, { recursive: true });
   for (const name of metadata) fs.copyFileSync(path.join(app, name), path.join(destination, name));
   const pnpm = path.join(tools, "tools", "pnpm", "pnpm.exe");
@@ -66,6 +67,6 @@ export async function installDependencies(app, cache, tools) {
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   if (process.argv[2] === "fingerprint") console.log(JSON.stringify(fingerprint(path.resolve(process.argv[3]))));
-  else if (process.argv[2] === "install") await installDependencies(...process.argv.slice(3, 6).map((p) => path.resolve(p)));
+  else if (["install", "check"].includes(process.argv[2])) await installDependencies(...process.argv.slice(3, 6).map((p) => path.resolve(p)), { checkOnly: process.argv[2] === "check" });
   else throw Error("Expected fingerprint <app> or install <app> <cache> <tools>");
 }

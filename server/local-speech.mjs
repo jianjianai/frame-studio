@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const root = path.dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
 /** Runtime dependencies are cached independently; models are installed explicitly. */
-export async function startLocalSpeech(data, { port = 0, timeoutMs = 90000 } = {}) {
+export async function startLocalSpeech(data, { port = 0, timeoutMs = 90000, signal } = {}) {
   const python = process.env.FRAME_SPEECH_PYTHON || path.join(root, "python", "python.exe");
   if (!fs.existsSync(python)) throw Error("语音运行环境尚未安装，请从托盘退出后重新启动以重试下载");
   const drives = [];
@@ -60,10 +60,13 @@ export async function startLocalSpeech(data, { port = 0, timeoutMs = 90000 } = {
   let startupError = null;
   child.once("error", (error) => { startupError = error; });
   const url = `http://127.0.0.1:${port}`;
+  const stop = () => child.kill();
+  signal?.addEventListener("abort", stop, { once: true });
   try {
     const deadline = Date.now() + timeoutMs;
     let healthy = false;
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       if (startupError || child.exitCode !== null)
         throw Error(`本机语音服务启动失败，请查看 ${path.join(data, "speech.log")}: ${startupError?.message || child.exitCode}`);
       try {
@@ -73,11 +76,12 @@ export async function startLocalSpeech(data, { port = 0, timeoutMs = 90000 } = {
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
     if (!healthy) throw Error(`本机语音服务启动超时，请查看 ${path.join(data, "speech.log")}`);
-  } catch (error) { child.kill(); releaseDrives(); log.end(); throw error; }
+  } catch (error) { child.kill(); signal?.removeEventListener("abort", stop); releaseDrives(); log.end(); throw error; }
   let closed = false;
   return { url, async close() {
     if (closed) return;
     closed = true;
+    signal?.removeEventListener("abort", stop);
     if (child.exitCode === null) child.kill();
     await new Promise((resolve) => {
       if (child.exitCode !== null) return resolve();

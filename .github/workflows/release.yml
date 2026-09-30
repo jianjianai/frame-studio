@@ -69,6 +69,7 @@ jobs:
           ./tests/desktop/bootstrap.test.ps1
           node --test tests/desktop/dependencies.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'pnpm installation and cache reuse failed' }
+          ./tests/desktop/download.test.ps1
       - name: Build installer and immutable runtime components
         shell: pwsh
         env:
@@ -79,6 +80,22 @@ jobs:
       - name: Test actual installation, repair, failure and uninstall
         shell: pwsh
         run: ./tests/desktop/installer.test.ps1
+      - name: Test native Windows center and browser workbench
+        shell: pwsh
+        run: ./tests/desktop/product.test.ps1 -CacheData .cache/installer-smoke/Data
+      - name: Test verified update application and failed update recovery
+        shell: pwsh
+        run: ./tests/desktop/update-install.test.ps1 -CacheData .cache/installer-smoke/Data
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-product-evidence
+          path: |
+            .cache/desktop-product-smoke-*/screens/*
+            .cache/desktop-update-smoke-*/screens/*
+            .cache/desktop-product-smoke-*/Data/*.log
+            .cache/desktop-update-smoke-*/Data/*.log
+          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
@@ -120,13 +137,15 @@ jobs:
           cd release
           sha256sum --check *.sha256
           cat > notes.md <<EOF
-          Windows: download and run FrameStudio-v${VERSION}-win-x64-Setup.exe. Setup checks and installs missing dependencies, creates shortcuts and provides an uninstaller. Node dependencies use the persistent pnpm store. Speech models are optional downloads from Settings.
+          Windows: download and run FrameStudio-v${VERSION}-win-x64-Setup.exe. The full workbench opens in your default browser. The native Windows control center manages dependencies, repairs, restart, logs and automatic updates. Left-click the tray icon to open the browser; right-click for the control center or exit.
+
+          Setup checks and installs missing dependencies and creates shortcuts plus an uninstaller. App updates reuse the tools, Python environment and persistent pnpm store. Speech models are optional downloads from Settings. Local AI uses your installed Codex or Claude CLI.
 
           Docker images (built from the same tag):
           - ghcr.io/jianjianai/frame-studio/app:${VERSION}
           - ghcr.io/jianjianai/frame-studio/speech:${VERSION}
 
-          Both Windows installer checks and the complete server release gate passed before publication. Publishing does not switch a production server.
+          The actual Windows installer, native control center, browser creation/preview/MP4 export, verified update installation and failure recovery, and complete server release gate passed before publication. Publishing does not switch a production server.
           EOF
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" ./*-Setup.exe ./*.sha256 --clobber

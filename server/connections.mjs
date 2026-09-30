@@ -3,6 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
 import { command } from "./process.mjs";
+import { localToolBinary } from "./local-tools.mjs";
 import {
   providerModelsSchema,
   providerModels,
@@ -17,7 +18,7 @@ import { problem, hash } from "./security.mjs";
 
 export function toolBinary(data, tool) {
   const bin = tool === "codex" ? "codex" : "claude";
-  if (process.env.FRAME_LOCAL_MODE === "1") return bin;
+  if (process.env.FRAME_LOCAL_MODE === "1") return localToolBinary(bin);
   const marker = path.join(data, "tools", tool, "current");
   if (!fs.existsSync(marker)) return bin;
   const version = fs.readFileSync(marker, "utf8").trim();
@@ -27,12 +28,21 @@ export function toolBinary(data, tool) {
 }
 const localToolCache = new Map();
 async function localToolAvailable(data, tool) {
+  return (await localToolStatus(data, tool)).ready;
+}
+async function localToolStatus(data, tool, refresh = false) {
   const old = localToolCache.get(tool);
-  if (old && Date.now() - old.checked < 15000) return old.available;
-  const available = await command(toolBinary(data, tool), ["--version"], { timeout: 10000 })
-    .then(() => true, () => false);
-  localToolCache.set(tool, { checked: Date.now(), available });
-  return available;
+  if (!refresh && old && Date.now() - old.checked < 15000) return old.status;
+  const binary = toolBinary(data, tool);
+  const version = await command(binary, ["--version"], { timeout: 10000 }).catch(() => "");
+  let ready = false;
+  if (version) {
+    const auth = await command(binary, tool === "codex" ? ["login", "status"] : ["auth", "status"], { timeout: 10000, combined: true }).catch(() => null);
+    ready = auth !== null && !/"loggedIn"\s*:\s*false|not logged in/i.test(auth);
+  }
+  const status = { tool, installed: !!version, ready, version: version.slice(0, 160), path: version ? binary : "", state: !version ? "unavailable" : ready ? "ready" : "unconfigured", message: !version ? "本机未找到 CLI，请安装后重新检测。" : ready ? "已安装并登录，可以创作。" : "已安装，请先登录后重新检测。" };
+  localToolCache.set(tool, { checked: Date.now(), status });
+  return status;
 }
 
 export class Connections {
@@ -40,12 +50,15 @@ export class Connections {
     Object.assign(this, { db, data, secrets });
     this.children = new Map();
   }
+  async localStatus(refresh = false) {
+    return Promise.all(["codex", "claude"].map(tool => localToolStatus(this.data, tool, refresh)));
+  }
   async list() {
     const rows = await this.db.all(
         "SELECT * FROM connections WHERE state<>'deleted' ORDER BY created",
       );
     const available = process.env.FRAME_LOCAL_MODE === "1"
-      ? Object.fromEntries(await Promise.all(["codex", "claude"].map(async (tool) => [tool, await localToolAvailable(this.data, tool)])))
+      ? Object.fromEntries((await this.localStatus()).map(status => [status.tool, status]))
       : null;
     return rows.map((row) => {
       const c = this.secrets.decrypt(row.config);
@@ -64,9 +77,9 @@ export class Connections {
         enabled: c.enabled !== false,
         lastTest: c.lastTest || null,
         configured:
-          available && row.mode === "official" ? available[row.tool] && row.state === "ready"
+          available && row.mode === "official" ? available[row.tool].ready
             : row.mode === "official" ? row.state === "ready" : !!c.apiKey,
-        ...(available && row.mode === "official" && !available[row.tool] ? { state: "unavailable", error: "本机未找到 CLI" } : {}),
+        ...(available && row.mode === "official" ? { state: available[row.tool].state, error: available[row.tool].ready ? null : available[row.tool].message, localRuntime: available[row.tool] } : {}),
       };
     });
   }
