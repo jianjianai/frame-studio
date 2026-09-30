@@ -7,6 +7,15 @@ on:
         required: false
         type: string
   workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact source ref to verify
+        required: true
+        type: string
+      graphics_diagnostic:
+        description: Run only the mixed-renderer diagnostic (not a release gate)
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -39,6 +48,7 @@ jobs:
           sudo apt-get install -y ffmpeg git-lfs fonts-noto-cjk
           pnpm exec playwright install --with-deps chromium
       - name: Build candidate executor without publishing
+        if: ${{ !inputs.graphics_diagnostic }}
         run: docker build -f deploy/Dockerfile -t frame-studio:verification --build-arg REVISION="$(git rev-parse HEAD)" .
       - name: Run the same release gate used for local releases
         env:
@@ -46,6 +56,7 @@ jobs:
           FRAME_TEST_EXECUTOR: "1"
           FRAME_TEST_HOST_ROOT: ${{ github.workspace }}
           FRAME_EXECUTOR_IMAGE: frame-studio:verification
+          GRAPHICS_DIAGNOSTIC: ${{ inputs.graphics_diagnostic }}
         run: |
           BROWSER=$(node --input-type=module -e "import {chromium} from '@playwright/test'; console.log(chromium.executablePath())")
           # Only trusted repository fixtures run here; hosted runners have no GPU.
@@ -69,6 +80,11 @@ jobs:
             assert.equal(result.available, true, JSON.stringify(result));
           } finally { await browser.close(); }
           JS
+          if [ "$GRAPHICS_DIAGNOSTIC" = true ]; then
+            sudo env PATH="$PATH" FRAME_BROWSER="$BROWSER_WRAPPER" DEBUG=pw:browser \
+              node --test tests/server/mixed-composition.test.mjs
+            exit
+          fi
           sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
           sudo env PATH="$PATH" FRAME_BROWSER="$BROWSER_WRAPPER" \
             FRAME_TEST_DATABASE_URL="$FRAME_TEST_DATABASE_URL" \
