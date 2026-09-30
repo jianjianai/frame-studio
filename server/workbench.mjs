@@ -235,6 +235,12 @@ export function workbenchOperations({
     (a) => connections.discover(a.id),
   );
   add(
+    "connections_sync_models",
+    "Refresh and save Codex official-account models and capabilities, preserving manual choices",
+    { id: uuid },
+    (a) => connections.syncModels(a.id),
+  );
+  add(
     "connections_enabled",
     "Enable or disable a provider while preserving conversation history",
     { id: uuid, enabled: z.boolean() },

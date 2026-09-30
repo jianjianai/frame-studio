@@ -1,6 +1,7 @@
 import {
   modelSpecsSchema,
   modelSpecKeys,
+  reasoningEffortSchema,
 } from "../src/contracts/model-metadata.mjs";
 import { problem } from "./security.mjs";
 
@@ -117,29 +118,40 @@ function setSpec(target, key, value, source) {
 /** Normalize only explicitly advertised fields, never guess capabilities from a model name. */
 export function apiModelMetadata(entry, fetchedAt) {
   const result = { sources: {}, fetchedAt };
-  const name = text(entry.display_name) || text(entry.name);
+  const name = text(entry.displayName) || text(entry.display_name) || text(entry.name);
   if (name) {
     result.name = name;
     result.sources.name = "api";
+  }
+  if (typeof entry.description === "string" && entry.description.trim()) {
+    result.description = entry.description.replace(/[\x00-\x1f\x7f]/g, "").trim().slice(0, 500);
+    result.sources.description = "api";
   }
   const cap = entry.capabilities || {},
     arch = entry.architecture || {};
   const params = Array.isArray(entry.supported_parameters)
     ? entry.supported_parameters
     : undefined;
-  const inputs = list(arch.input_modalities ?? entry.input_modalities);
-  const outputs = list(arch.output_modalities ?? entry.output_modalities);
+  const inputs = list(arch.input_modalities ?? entry.input_modalities ?? entry.inputModalities);
+  const outputs = list(arch.output_modalities ?? entry.output_modalities ?? entry.outputModalities);
+  const advertisedEfforts = entry.supportedReasoningEfforts ?? entry.supported_reasoning_levels;
+  const efforts = Array.isArray(advertisedEfforts)
+    ? [...new Set(advertisedEfforts.map((v) => typeof v === "string" ? v : v?.reasoningEffort ?? v?.effort)
+      .filter((v) => reasoningEffortSchema.safeParse(v).success))]
+    : undefined;
   const values = {
     contextWindow: number(
       entry.top_provider?.context_length ??
         entry.context_length ??
         entry.context_window ??
+        entry.contextWindow ??
         entry.max_context_length,
     ),
-    maxInputTokens: number(entry.max_input_tokens ?? entry.input_token_limit),
+    maxInputTokens: number(entry.max_input_tokens ?? entry.input_token_limit ?? entry.maxInputTokens),
     maxOutputTokens: number(
       entry.top_provider?.max_completion_tokens ??
         entry.max_output_tokens ??
+        entry.maxOutputTokens ??
         entry.max_completion_tokens ??
         entry.max_tokens ??
         entry.output_token_limit,
@@ -151,11 +163,14 @@ export function apiModelMetadata(entry, fetchedAt) {
       (inputs?.length ? inputs.includes("image") : undefined),
     reasoning:
       bool(cap.thinking ?? cap.reasoning ?? entry.reasoning) ??
+      (efforts?.length ? efforts.some((effort) => effort !== "none") : undefined) ??
       (params
         ? params.some((p) =>
             ["reasoning", "reasoning_effort", "include_reasoning"].includes(p),
           )
         : undefined),
+    reasoningEfforts: efforts?.length ? efforts : undefined,
+    defaultReasoningEffort: entry.defaultReasoningEffort ?? entry.default_reasoning_level,
     toolCall:
       bool(cap.tool_call ?? cap.tools ?? entry.tool_call) ??
       (params

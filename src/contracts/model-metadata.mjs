@@ -8,6 +8,8 @@ const modalities = z
   )
   .max(7)
   .nullish();
+// Codex advertises an open string, so new effort levels need no client release.
+export const reasoningEffortSchema = z.string().trim().regex(/^[a-z][a-z0-9_-]{0,31}$/);
 /** Specifications, not generation settings. Unknown is never treated as false/zero. */
 export const modelSpecsSchema = z.strictObject({
   contextWindow: tokens,
@@ -17,6 +19,8 @@ export const modelSpecsSchema = z.strictObject({
   outputModalities: modalities,
   vision: z.boolean().nullish(),
   reasoning: z.boolean().nullish(),
+  reasoningEfforts: z.array(reasoningEffortSchema).max(32).nullish(),
+  defaultReasoningEffort: reasoningEffortSchema.nullish(),
   toolCall: z.boolean().nullish(),
   structuredOutput: z.boolean().nullish(),
   inputPrice: price,
@@ -27,8 +31,9 @@ export const modelSpecsSchema = z.strictObject({
 export const modelSpecKeys = modelSpecsSchema.keyof().options;
 export const modelMetadataSchema = modelSpecsSchema.extend({
   name: z.string().min(1).max(100).optional(),
+  description: z.string().max(500).optional(),
   sources: z.partialRecord(
-    z.enum(["name", ...modelSpecKeys]),
+    z.enum(["name", "description", ...modelSpecKeys]),
     z.enum(["api", "catalog"]),
   ),
   fetchedAt: z.iso.datetime(),

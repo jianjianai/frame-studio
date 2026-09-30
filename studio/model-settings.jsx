@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Plus,
   Search,
@@ -10,6 +10,7 @@ import {
   Power,
   Cpu,
   Download,
+  Star,
 } from "lucide-react";
 import {
   api,
@@ -40,19 +41,30 @@ import {
   DeleteProviderDialog,
   ModelSummary,
 } from "./provider-dialogs";
+import { CodexCatalogStatus } from "./provider-catalog-status";
 import "./provider-settings.css";
+import "./provider-account.css";
 
 const providerLabel = (provider) =>
   provider.enabled === false
     ? "已停用"
+    : provider.state === "authorizing" ? "正在登录"
+    : provider.state === "expired" ? "登录已过期"
     : provider.state === "unavailable"
       ? "CLI 不可用"
     : providerAvailable(provider)
       ? provider.mode !== "official" &&
         !provider.models?.some((m) => m.enabled !== false)
         ? "待添加模型"
-        : "已配置"
-      : "待连接";
+        : provider.mode === "official" ? "已连接" : "已配置"
+      : provider.mode === "official" ? "待登录" : "待连接";
+
+const providerModelLabel = (provider) => {
+  const count = providerModels(provider).filter(
+    (model) => model.id && model.enabled !== false,
+  ).length;
+  return count ? `${count} 个模型` : provider.mode === "official" ? "工具默认" : "尚未添加模型";
+};
 
 export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
   const connections = useQuery("connections_list", {}, 1),
@@ -64,11 +76,30 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
     [modelEdit, setModelEdit] = useState(null),
     [deleting, setDeleting] = useState(null),
     [discovery, setDiscovery] = useState(null);
-  const [run, busy] = useAction(notify),
+  const [syncError, setSyncError] = useState(null);
+  const [run, actionBusy] = useAction(notify),
+    [autoSync, setAutoSync] = useState(false),
     [pendingModel, setPendingModel] = useState(null);
+  const syncAttempts = useRef(new Set());
+  const busy = actionBusy || autoSync;
   const providers = connections.data || [];
   const selected =
     providers.find((provider) => provider.id === selectedId) || providers[0];
+  const codexAccount = selected?.mode === "official" && selected.tool === "codex";
+  useEffect(() => {
+    if (!codexAccount || !selected.configured || selected.state !== "ready" || busy || login) return;
+    const key = selected.id + ":" + selected.auth_generation;
+    const catalog = selected.modelCatalog;
+    if (syncAttempts.current.has(key) ||
+      (!catalog?.error && Date.now() - Date.parse(catalog?.fetchedAt || "") < 24 * 60 * 60 * 1000)) return;
+    syncAttempts.current.add(key);
+    setSyncError(null);
+    setAutoSync(true);
+    api("connections_sync_models", { id: selected.id })
+      .catch((error) => setSyncError({ id: selected.id, message: error.message }))
+      .finally(() => { setAutoSync(false); connections.refresh(); });
+  }, [selected?.id, selected?.auth_generation, selected?.configured, selected?.state,
+    selected?.modelCatalog?.fetchedAt, selected?.modelCatalog?.error, codexAccount, busy, login]);
   const filtered = providers.filter((provider) =>
     `${provider.name} ${provider.tool} ${provider.baseUrl}`
       .toLowerCase()
@@ -77,6 +108,17 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
   useEffect(() => {
     setModelSearch("");
   }, [selected?.id]);
+  const syncModels = () => run(async () => {
+    setSyncError(null);
+    setAutoSync(true);
+    try {
+      const result = await api("connections_sync_models", { id: selected.id });
+      notify(`已同步 ${result.count} 个模型及参数`);
+    } catch (error) {
+      setSyncError({ id: selected.id, message: error.message });
+      throw error;
+    } finally { setAutoSync(false); connections.refresh(); }
+  });
   const saveModels = (models, preferred = selected.model) =>
     run(async () => {
       let model = preferred || "";
@@ -106,7 +148,7 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
       <div className="settings-section-heading">
         <div>
           <h2>提供商与模型</h2>
-          <p>{localMode ? "使用本机 Codex 和 Claude CLI；未安装时显示不可用。请在终端登录官方账号。" : "连接 API，自动发现模型与规格。手动配置仅作兜底。"}</p>
+          <p>{localMode ? "使用本机 Codex 和 Claude CLI；Codex 登录后自动同步模型与参数。请在终端登录官方账号。" : "连接 API 或 OpenAI 官方账号，自动获取模型与参数。手动配置仅作兜底。"}</p>
         </div>
         {!localMode && <Button
           className="primary"
@@ -161,12 +203,7 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
                     <strong>{provider.name}</strong>
                     <small>
                       {providerLabel(provider)} ·{" "}
-                      {
-                        providerModels(provider).filter(
-                          (model) => model.enabled !== false,
-                        ).length
-                      }{" "}
-                      个模型
+                      {providerModelLabel(provider)}
                     </small>
                   </span>
                   <ChevronRight size={13} />
@@ -216,7 +253,7 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
                     !selected.configured ||
                     (selected.mode !== "official" && !selected.model)
                   }
-                  title="API 测试会向所选模型发送少量请求，可能产生费用"
+                  title={selected.mode === "official" ? "确认账号登录，并更新 Codex 模型目录" : "API 测试会向所选模型发送少量请求，可能产生费用"}
                   onClick={() => testModel(selected)}
                 >
                   {selected.mode === "official" ? "检查登录" : "测试默认模型"}
@@ -267,31 +304,38 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
                   <p>{selected.lastTest.message}</p>
                 </div>
               )}
+              {codexAccount && <CodexCatalogStatus
+                provider={selected} syncing={autoSync}
+                error={syncError?.id === selected.id ? syncError.message : ""}
+                onSync={syncModels} onLogin={() => setLogin(selected)} localMode={localMode}
+              />}
               <div className="provider-model-heading">
                 <div>
                   <h3>模型目录</h3>
                   <p>
-                    API 自动填参 · 可查看来源和覆盖值 ·{" "}
+                    {codexAccount ? "Codex 账号自动同步" : "API 自动填参"} · 可查看来源和覆盖值 ·{" "}
                     {selected.models?.length || 0} / 200 个模型
                   </p>
                 </div>
                 <div className="row">
                   <Button
-                    icon={Download}
+                    icon={codexAccount ? RefreshCw : Download}
                     disabled={
                       busy ||
-                      selected.mode === "official" ||
+                      (selected.mode === "official" && !codexAccount) ||
                       !selected.configured
                     }
                     title={
-                      selected.mode === "official"
+                      codexAccount
+                        ? "读取已登录 Codex 的模型与能力参数，并保留手动配置"
+                        : selected.mode === "official"
                         ? "官方登录请手动添加模型 ID"
                         : "从已保存的 API 地址读取 /models"
                     }
                     className="primary"
-                    onClick={() => setDiscovery({ provider: selected })}
+                    onClick={() => codexAccount ? syncModels() : setDiscovery({ provider: selected })}
                   >
-                    发现模型
+                    {codexAccount ? (autoSync ? "正在同步…" : "同步模型") : "发现模型"}
                   </Button>
                   <Button
                     icon={Plus}
@@ -344,7 +388,7 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
                       .includes(modelSearch.toLowerCase()),
                   )
                   .map((model) => (
-                    <div className="provider-model" key={model.id}>
+                    <div className={`provider-model ${model.enabled === false ? "disabled" : ""}`} key={model.id}>
                       <input
                         type="checkbox"
                         aria-label={`启用模型 ${model.name}`}
@@ -368,8 +412,18 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
                           )}
                         </strong>
                         <code>{model.id}</code>
+                        {codexAccount && selected.modelCatalog?.defaultModel === model.id && selected.model !== model.id && <span className="model-recommended">工具推荐</span>}
                         <ModelSummary model={model} />
                       </span>
+                      <Button
+                        icon={Star}
+                        className={selected.model === model.id ? "is-default-model" : ""}
+                        disabled={busy || model.enabled === false || selected.model === model.id}
+                        aria-label={`设为默认模型 ${model.name}`}
+                        aria-pressed={selected.model === model.id}
+                        title={selected.model === model.id ? "当前默认模型" : "设为此提供商的默认模型"}
+                        onClick={() => saveModels(selected.models, model.id)}
+                      />
                       <Button
                         icon={Settings2}
                         disabled={busy}
@@ -379,7 +433,7 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
                           setModelEdit({ provider: selected, initial: model })
                         }
                       />
-                      <Button
+                      {selected.mode !== "official" && <Button
                         disabled={
                           busy ||
                           model.enabled === false ||
@@ -390,7 +444,7 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
                         onClick={() => testModel(selected, model.id)}
                       >
                         {pendingModel === model.id ? "测试中…" : "测试"}
-                      </Button>
+                      </Button>}
                       <Button
                         icon={Trash2}
                         disabled={busy}
@@ -415,7 +469,9 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
                 ) && <Empty>没有匹配的模型，试试其他名称或 ID。</Empty>}
               {!selected.models?.length && (
                 <p className="settings-callout">
-                  {selected.mode === "official"
+                  {codexAccount
+                    ? autoSync ? "正在自动获取模型与参数…" : "登录后自动获取模型与参数，也可点击“同步模型”重试。"
+                    : selected.mode === "official"
                     ? "当前使用工具默认模型；可以手动添加账号支持的模型。"
                     : "连接已保存。点击“发现模型”，勾选后即可导入；首次导入自动选择默认模型。"}
                 </p>
@@ -453,6 +509,8 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
             notify("提供商已保存");
             if (created && saved.mode === "api")
               setDiscovery({ provider: saved });
+            if (created && saved.mode === "official" && !localMode)
+              setLogin(saved);
           }}
         />
       )}

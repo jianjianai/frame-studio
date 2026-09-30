@@ -6,8 +6,10 @@ import { command } from "./process.mjs";
 import {
   providerModelsSchema,
   providerModels,
+  mergeDiscoveredModels,
 } from "../src/contracts/ai-models.mjs";
 import { discoverModels, recordConnectionTest } from "./provider-catalog.mjs";
+import { discoverCodexModels } from "./codex-model-catalog.mjs";
 import {
   deleteProvider,
   providerUsage,
@@ -39,6 +41,7 @@ export class Connections {
   constructor(db, data, secrets) {
     Object.assign(this, { db, data, secrets });
     this.children = new Map();
+    this.modelSyncs = new Map();
   }
   async list() {
     const rows = await this.db.all(
@@ -63,6 +66,7 @@ export class Connections {
             : []),
         enabled: c.enabled !== false,
         lastTest: c.lastTest || null,
+        modelCatalog: c.modelCatalog || null,
         configured:
           available && row.mode === "official" ? available[row.tool] && row.state === "ready"
             : row.mode === "official" ? row.state === "ready" : !!c.apiKey,
@@ -201,11 +205,75 @@ export class Connections {
     ]);
     if (!row || row.state === "deleted")
       throw problem(404, "提供商已删除或不存在");
+    if (row.mode === "official" && row.tool === "codex") {
+      if (row.state !== "ready")
+        throw problem(409, "请先登录 OpenAI 官方账号，再同步模型");
+      const env = { ...process.env };
+      if (process.env.FRAME_LOCAL_MODE !== "1") {
+        env.HOME = path.join(this.data, "auth", id);
+        env.CODEX_HOME = path.join(env.HOME, "codex");
+      }
+      for (const key of ["OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL"])
+        delete env[key];
+      return (this.codexCatalogLoader || discoverCodexModels)(
+        { ...row, ...this.secrets.decrypt(row.config) },
+        { bin: toolBinary(this.data, "codex"), env, catalogLoader: this.catalogLoader },
+      );
+    }
     return discoverModels(
       { ...row, ...this.secrets.decrypt(row.config) },
       fetch,
       this.catalogLoader,
     );
+  }
+  async syncModels(id) {
+    if (this.modelSyncs.has(id)) return this.modelSyncs.get(id);
+    const sync = this.db.lock(`connection:${id}`, async () => {
+      const row = await this.db.one("SELECT * FROM connections WHERE id=$1", [id]);
+      if (!row || row.state === "deleted") throw problem(404, "提供商已删除或不存在");
+      if (row.mode !== "official" || row.tool !== "codex")
+        throw problem(400, "自动同步仅用于 Codex 官方账号；API 请使用发现模型");
+      if (row.state !== "ready") throw problem(409, "请先登录 OpenAI 官方账号，再同步模型");
+      const persist = async (update) => {
+        const latest = await this.db.one("SELECT * FROM connections WHERE id=$1", [id]);
+        if (!latest || latest.state !== "ready" || String(latest.auth_generation) !== String(row.auth_generation))
+          throw problem(409, "账号登录状态已改变，请重新同步模型");
+        const config = this.secrets.decrypt(latest.config);
+        update(config);
+        const saved = await this.db.pool.query(
+          "UPDATE connections SET config=$2 WHERE id=$1 AND config=$3 AND state='ready' AND auth_generation=$4",
+          [id, this.secrets.encrypt(config), latest.config, row.auth_generation],
+        );
+        if (!saved.rowCount) throw problem(409, "提供商配置已改变，请重新同步模型");
+      };
+      try {
+        const result = await this.discover(id);
+        await persist((config) => {
+          const saved = config.models || (config.model ? [{ id: config.model, name: config.model.slice(0, 100), enabled: true }] : []);
+          const existing = new Set(saved.map((model) => model.id));
+          let remaining = 200 - saved.length;
+          const ids = result.models.filter((model) => existing.has(model.id) || remaining-- > 0).map((model) => model.id);
+          if (ids.length < result.models.length)
+            result.warnings.push("模型目录已达 200 项上限；已有模型和手动配置全部保留，可移除不需要的模型后重试。");
+          config.models = mergeDiscoveredModels(saved, result.models, ids);
+          config.modelCatalog = {
+            source: "codex", fetchedAt: result.fetchedAt, defaultModel: result.defaultModel,
+            count: result.models.length, warnings: result.warnings, truncated: result.truncated, error: null,
+          };
+        });
+        return { ok: true, count: result.models.length, fetchedAt: result.fetchedAt, warnings: result.warnings };
+      } catch (error) {
+        const safe = error.statusCode ? error : problem(502, "Codex 模型同步失败，请重试；已有模型和登录状态已保留");
+        safe.expose = true;
+        if (safe.statusCode !== 409) await persist((config) => {
+          config.modelCatalog = { ...config.modelCatalog, source: "codex", attemptedAt: new Date().toISOString(), error: safe.message };
+        }).catch(() => {});
+        throw safe;
+      }
+    });
+    this.modelSyncs.set(id, sync);
+    try { return await sync; }
+    finally { this.modelSyncs.delete(id); }
   }
   async usage(id) {
     return providerUsage(this.db, id);
@@ -324,12 +392,21 @@ export class Connections {
           ? "官方账号登录有效；模型能力需在创作时确认"
           : "模型请求成功",
       );
+      let catalogMessage = "";
+      if (row.mode === "official" && row.tool === "codex") {
+        try {
+          const catalog = await this.syncModels(id);
+          catalogMessage = `；已同步 ${catalog.count} 个模型及参数`;
+        } catch {
+          catalogMessage = "；模型同步暂未成功，可在模型目录中重试";
+        }
+      }
       return {
         ok: true,
         elapsedMs: Date.now() - started,
         message:
           row.mode === "official"
-            ? "官方 CLI 已确认登录；实际模型可用性在创作时检查"
+            ? "官方 CLI 已确认登录；实际模型可用性在创作时检查" + catalogMessage
             : "模型请求成功",
       };
     } catch (error) {
@@ -539,9 +616,20 @@ export class Connections {
               [target],
             );
           }
+          let info = {};
+          if (kind === "codex") {
+            await this.db.pool.query("UPDATE auth_flows SET info=$2 WHERE id=$1 AND state='pending'",
+              [id, { stage: "models", message: "账号已登录，正在自动获取模型与参数…" }]);
+            try {
+              const catalog = await this.syncModels(target);
+              info = { catalogSynced: true, modelCount: catalog.count, message: `账号已连接，已自动同步 ${catalog.count} 个模型及参数。` };
+            } catch {
+              info = { catalogSynced: false, message: "账号已连接。模型目录暂未同步成功，可在提供商设置中重试；仍可使用工具默认模型。" };
+            }
+          }
           await this.db.pool.query(
-            "UPDATE auth_flows SET state='succeeded',target=$2,info='{}' WHERE id=$1",
-            [id, linked],
+            "UPDATE auth_flows SET state='succeeded',target=$2,info=$3 WHERE id=$1",
+            [id, linked, info],
           );
         } catch (e) {
           await this.db.pool.query(

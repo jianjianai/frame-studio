@@ -14,6 +14,7 @@ import {
   modelSelectionKey,
 } from "../src/contracts/ai-models.mjs";
 import { useAiPreferences } from "./ai-preferences";
+import { effectiveModelSpecs, formatModelTokens } from "../src/contracts/model-metadata.mjs";
 
 export function ModelPicker({
   connections = [],
@@ -217,6 +218,13 @@ export function ModelPicker({
                       selection?.connection === provider.id &&
                       selection?.model === model.id;
                   const favorite = preferences.favorites.includes(row.key);
+                  const specs = effectiveModelSpecs(model);
+                  const specLabel = [
+                    specs.contextWindow ? `${formatModelTokens(specs.contextWindow)} 上下文` : "",
+                    specs.defaultReasoningEffort ? `推理 ${specs.defaultReasoningEffort}` : "",
+                    specs.vision ? "视觉" : "",
+                  ].filter(Boolean).join(" · ");
+                  const recommended = provider.models?.find((entry) => entry.id === provider.modelCatalog?.defaultModel);
                   const unavailable =
                     provider.enabled === false
                       ? "提供商已停用"
@@ -244,8 +252,9 @@ export function ModelPicker({
                         <span>
                           <strong>{model.name}</strong>
                           <small>
-                            {unavailable || model.id || "跟随创作工具默认设置"}
+                            {unavailable || model.id || (recommended ? `工具推荐：${recommended.name}` : "跟随创作工具默认设置")}
                           </small>
+                          {specLabel && <small className="model-option-specs">{specLabel}</small>}
                         </span>
                         {selected && <Check size={15} />}
                       </button>
