@@ -342,7 +342,7 @@ export async function installOAuth(app, db, actions, origin) {
     schema: z.object({}),
     fn: () =>
       db.all(
-        "SELECT g.id,c.name,g.created,g.refresh_expires,g.revoked FROM oauth_grants g JOIN oauth_clients c ON c.id=g.client ORDER BY g.created DESC LIMIT 100",
+        "SELECT g.id,c.name,g.created,g.refresh_expires,g.revoked FROM oauth_grants g JOIN oauth_clients c ON c.id=g.client WHERE NOT g.revoked ORDER BY g.created DESC LIMIT 100",
       ),
   };
   actions.registry.oauth_revoke = {

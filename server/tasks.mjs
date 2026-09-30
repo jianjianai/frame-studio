@@ -348,8 +348,9 @@ export class Tasks {
       "4g",
       "--cpus",
       "2",
+      // Remotion uses native Chromium alongside the Frame audio/preview browser.
       "--pids-limit",
-      "256",
+      "512",
       "--cap-drop",
       "ALL",
       "--security-opt",
