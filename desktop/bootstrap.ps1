@@ -2,9 +2,15 @@
   [Parameter(Mandatory=$true)][string]$AppRoot,
   [Parameter(Mandatory=$true)][string]$DataRoot,
   [Parameter(Mandatory=$true)][string]$Selection,
+  [string]$LinkRoot,
+  [switch]$PrepareOnly,
+  [ValidateSet('tools','speech')][string[]]$RefreshComponents = @(),
   [switch]$LocalAssets
 )
 $ErrorActionPreference = 'Stop'
+# A caller using PowerShell 7 can pass its incompatible module search path to 5.1.
+# Provisioning needs only the modules shipped with the PowerShell running this file.
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -39,9 +45,12 @@ try {
     if (Test-Path -LiteralPath $marker) {
       $installed = Get-Content -Raw -LiteralPath $marker | ConvertFrom-Json
       if ($installed.sha256 -ne $entry.sha256) { throw 'Published runtime checksum changed; refusing to replace an immutable component.' }
-      Write-Output "复用已安装运行环境：$kind"
-      $selected[$kind] = $destination
-      continue
+      $requiredExecutable = if ($kind -eq 'tools') { 'node.exe' } else { 'python\python.exe' }
+      if ($RefreshComponents -notcontains $kind -and (Test-Path -LiteralPath (Join-Path $destination $requiredExecutable))) {
+        Write-Output "复用已安装运行环境：$kind"
+        $selected[$kind] = $destination
+        continue
+      }
     }
     $temporary = Join-Path $cache ('.i-' + [Guid]::NewGuid().ToString('N').Substring(0,16))
     New-Item -ItemType Directory -Path $temporary | Out-Null
@@ -104,11 +113,18 @@ try {
   & (Join-Path $selected.tools 'node.exe') (Join-Path $app 'desktop\dependencies.mjs') install $app $cache $selected.tools
   if ($LASTEXITCODE -ne 0) { throw 'Node 依赖安装失败，请查看 pnpm 日志；重新启动可继续安装。' }
   $selected.dependencies = Join-Path $cache $manifest.dependencies.id
-  $link = Join-Path $app 'node_modules'
+  if ($PrepareOnly) {
+    $selected | ConvertTo-Json | Set-Content -LiteralPath $Selection -Encoding utf8
+    Write-Output '依赖缓存已就绪'
+    return
+  }
+  $linkDirectory = if ($LinkRoot) { [IO.Path]::GetFullPath($LinkRoot) } else { $app }
+  New-Item -ItemType Directory -Path $linkDirectory -Force | Out-Null
+  $link = Join-Path $linkDirectory 'node_modules'
   $dependencyModules = Join-Path $selected.dependencies 'node_modules'
   if (Test-Path -LiteralPath $link) {
     $current = Get-Item -LiteralPath $link -Force
-    if (($current.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw '程序目录已有普通 node_modules，请将新版解压到新文件夹运行。' }
+    if (($current.Attributes -band [IO.FileAttributes]::ReparsePoint) -eq 0) { throw '程序目录已有非安装器管理的 node_modules，请选择新的安装目录。' }
     $currentTarget = [string]@($current.Target)[0]
     if (-not ([IO.Path]::GetFullPath($currentTarget)).StartsWith($cache + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Existing dependency junction is not managed by this installer.' }
     if ($currentTarget -ne $dependencyModules) { [IO.Directory]::Delete($link) }

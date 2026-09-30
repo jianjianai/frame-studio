@@ -4,11 +4,12 @@ Windows 本地包提供完整 FRAME 工作台：作品仓库、素材、预览�
 
 ## 安装与使用
 
-1. 从平台仓库的 [GitHub Releases](https://github.com/jianjianai/frame-studio/releases) 下载与版本号匹配的 `FrameStudio-v<版本>-win-x64.zip` 及 `.sha256`，校验 SHA-256 后完整解压到普通文件夹。
-2. 双击 `FrameStudio.exe`。首次启动下载并校验运行环境，进度显示在托盘提示与 desktop.log；成功后启动 SQLite、语音服务和工作台。左键单击托盘图标在默认浏览器打开工作台，右键选择“退出”会停止本次启动的服务与任务。
-3. 第一次使用时，工作台数据自动保存在 `%LOCALAPPDATA%\FRAME Studio`。更新版本时先从托盘退出，然后将新版解压到新文件夹运行。数据目录独立于程序目录。
+1. 从平台仓库的 [GitHub Releases](https://github.com/jianjianai/frame-studio/releases) 下载与版本号匹配的 `FrameStudio-v<版本>-win-x64-Setup.exe`（另提供 `.sha256` 校验文件），双击按向导安装。需要 Windows 10/11 x64；默认安装到当前用户目录，无需管理员权限。
+2. 安装程序自动检查、下载和校验工具、Python 语音运行环境，并使用 pnpm 安装 Node 依赖。安装窗口显示进度，详细日志在 `%LOCALAPPDATA%\FRAME Studio\installer.log`。完成后创建开始菜单快捷方式与 Windows 卸载入口，可以直接启动工作台。
+3. 启动后驻留托盘。左键单击托盘图标在默认浏览器打开工作台，右键选择“退出”会停止本次启动的服务与任务。数据保存在 `%LOCALAPPDATA%\FRAME Studio`，独立于程序目录。
+4. 更新时先从托盘退出，再运行新版 Setup。运行环境和 pnpm 缓存继续复用；依赖准备失败时不会切换旧版程序。重新运行安装程序可以修复缺失或无法运行的工具与 Python 组件。通过 Windows“已安装的应用”或开始菜单卸载会移除程序，保留作品、数据库、模型及依赖缓存。
 
-工作台仅监听 `127.0.0.1:43173`，语音服务使用临时分配的本机回环端口。工具与 Python 运行环境下载到数据目录的 runtimes 中；Node 依赖由 pnpm 根据锁文件安装，共享数据目录中的 pnpm-store。更新程序时复用已有运行环境和依赖，依赖变化时 pnpm 只下载缺少的包。下载失败可退出并重新启动重试。浏览器预览使用电脑上的 Microsoft Edge 或兼容 Chromium。详细原因保存在 desktop.log 或 speech.log。
+工作台仅监听 `127.0.0.1:43173`，语音服务使用临时分配的本机回环端口。工具与 Python 运行环境位于数据目录的 runtimes 中；Node 依赖由 pnpm 根据锁文件安装，共享数据目录中的 pnpm-store。依赖变化时 pnpm 只下载缺少的包。下载失败可重新运行安装程序重试。预览使用电脑上的 Microsoft Edge 或 Chrome；两者均未安装时，安装程序自动下载专用 Chromium。运行日志保存在 desktop.log 或 speech.log。
 
 ## 本机 AI CLI
 
@@ -24,6 +25,8 @@ Windows 本地包提供完整 FRAME 工作台：作品仓库、素材、预览�
 
 ## 发布规则
 
-平台版本由 `package.json` 与 `src/contracts/version.mjs` 定义。推送同版本 `v<版本>` 标签后，Windows [发布工作流](../.github/workflows/release.yml)验证原生运行模式，将缺失的版本化运行环境发布到 windows-runtimes Release，再创建轻量 ZIP 与 SHA-256，上传至同版本 Release。语音权重不进入任何发布包或服务器镜像。服务器镜像发布流程独立。
+平台版本由 `package.json` 与 `src/contracts/version.mjs` 定义。推送同版本 `v<版本>` 标签自动触发统一[发布工作流](../.github/workflows/release.yml)：校验版本与源码提交，执行完整服务端门禁和 Windows 实际安装测试，构建并发布两个 Docker 镜像，最后把 Setup.exe 与 SHA-256 发布到同版本 GitHub Release。任一门禁失败都不会创建正式 Release。镜像与安装程序来自同一标签；发布不自动切换生产服务器。
 
-本地开发运行 `node --test tests/server/local-mode.test.mjs tests/server/model-downloads.test.mjs tests/desktop/dependencies.test.mjs`；`tests/desktop/bootstrap.test.ps1` 检查工具安装、缓存复用与摘要失败。pnpm 测试使用本机临时下载源验证真实安装、失败重试、更新复用和增量下载。正式发布使用 `desktop/package.ps1 -PublishRuntimes`。组件缓存和发布规则见 [安装依赖与可选模型](RUNTIME-DOWNLOADS.md)。
+安装程序使用固定版本、SHA-256 校验的 NSIS 编译器构建。缺失的版本化运行环境发布到 windows-runtimes Release，已有组件保持不可变。语音权重不进入安装程序、运行环境组件或服务器镜像。
+
+本地开发运行 `node --test tests/server/local-mode.test.mjs tests/server/model-downloads.test.mjs tests/desktop/dependencies.test.mjs`；`tests/desktop/bootstrap.test.ps1` 检查工具安装、定向修复、缓存复用与摘要失败。pnpm 测试使用本机临时下载源验证真实安装、失败重试、更新复用和增量下载。`tests/desktop/installer.test.ps1` 执行真实 EXE 的安装、已安装工作台测试、失败修复、缓存复用与保留数据卸载；检测到已有用户安装时拒绝执行。正式发布使用 `desktop/package.ps1 -PublishRuntimes`。组件缓存和发布规则见 [安装依赖与可选模型](RUNTIME-DOWNLOADS.md)。

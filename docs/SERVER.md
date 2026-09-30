@@ -2,7 +2,9 @@
 
 ## 部署与更新
 
-`deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio:<版本>` 与 `ghcr.io/jianjianai/frame-speech:<版本>`。服务器需要 Linux x86_64、Docker、HTTPS 反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
+`deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio/app:<版本>` 与 `ghcr.io/jianjianai/frame-studio/speech:<版本>`。服务器需要 Linux x86_64、Docker、HTTPS 反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
+
+从 7.4.1 起，镜像统一使用以上仓库命名空间，由仓库的 GitHub Actions 令牌发布。旧的 `frame-studio` 与 `frame-speech` 包和历史镜像保留；已有部署升级时需同步采用新版 Compose 中的镜像路径。推送 `v<版本>` 标签自动执行服务端门禁、Windows 安装验证、两个镜像发布与 GitHub Release 发布，均固定到同一源码提交。发布不会自动切换正在运行的服务器。
 
 在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`，以及宿主机 `stat -c %g /var/run/docker.sock` 得到的 `FRAME_DOCKER_GID`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像；按需下载功能要求工作台与语音服务同时升级到 7.3.1，旧版语音服务不提供下载接口。主密钥丢失后无法恢复加密凭据，应妥善保管。
 
@@ -24,7 +26,7 @@ HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `con
 (
   set -eu
   docker compose config --quiet
-  FRAME_INIT_IMAGE=$(docker compose config --images | grep -m 1 '^ghcr.io/jianjianai/frame-studio[:@]')
+  FRAME_INIT_IMAGE=$(docker compose config --images | grep -m 1 '^ghcr.io/jianjianai/frame-studio/app[:@]')
   test -n "$FRAME_INIT_IMAGE"
   test ! -L ./data
   mkdir -p ./data

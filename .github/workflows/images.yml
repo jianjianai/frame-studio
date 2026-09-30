@@ -1,34 +1,31 @@
 name: Container images
 on:
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
+  workflow_call:
     inputs:
       version:
-        description: Image version (without v)
         required: true
+        type: string
+      source_ref:
+        required: true
+        type: string
 permissions:
   contents: read
   packages: write
 jobs:
-  verify:
-    uses: ./.github/workflows/verify.yml
-    with:
-      source_ref: ${{ inputs.version && format('refs/tags/v{0}', inputs.version) || github.ref }}
   publish:
-    needs: verify
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - image: frame-studio
+          - image: frame-studio/app
             dockerfile: deploy/Dockerfile
-          - image: frame-speech
+          - image: frame-studio/speech
             dockerfile: speech/Dockerfile
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.version && format('refs/tags/v{0}', inputs.version) || github.ref }}
+          ref: ${{ inputs.source_ref }}
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -39,21 +36,26 @@ jobs:
         env:
           REQUESTED: ${{ inputs.version }}
         run: |
-          if [ -n "$REQUESTED" ]; then VERSION="$REQUESTED";
-          elif [ "$GITHUB_REF_TYPE" = tag ]; then VERSION="${GITHUB_REF_NAME#v}";
-          else VERSION="3.0.0-preview-${GITHUB_SHA:0:8}"; fi
           ACTUAL=$(node -p "require('./package.json').version")
-          test "$VERSION" = "$ACTUAL" || { echo "Requested version does not match source package"; exit 1; }
-          echo "value=$VERSION" >> "$GITHUB_OUTPUT"
+          test "$REQUESTED" = "$ACTUAL" || { echo 'Requested version does not match source package'; exit 1; }
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
+        id: build
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
           tags: |
-            ghcr.io/jianjianai/${{ matrix.image }}:${{ steps.version.outputs.value }}
+            ghcr.io/jianjianai/${{ matrix.image }}:${{ inputs.version }}
             ghcr.io/jianjianai/${{ matrix.image }}:sha-${{ steps.version.outputs.revision }}
           build-args: REVISION=${{ steps.version.outputs.revision }}
           cache-from: type=gha,scope=${{ matrix.image }}
           cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+      - name: Record published digest
+        env:
+          IMAGE: ghcr.io/jianjianai/${{ matrix.image }}
+          VERSION: ${{ inputs.version }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          REVISION: ${{ steps.version.outputs.revision }}
+        run: |
+          printf '%s:%s@%s\nSource: %s\n' "$IMAGE" "$VERSION" "$DIGEST" "$REVISION" >> "$GITHUB_STEP_SUMMARY"
