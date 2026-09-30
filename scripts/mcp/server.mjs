@@ -24,7 +24,6 @@ import { ProjectService as Workspace } from "../project-service.mjs";
 import { Jobs } from "./jobs.mjs";
 import { compareReviews, recordReview } from "../production-media.mjs";
 import { runProcess } from "../project-execution.mjs";
-import { inspectProjectScope } from "../project-scope-report.mjs";
 import { imageResult } from "./image-result.mjs";
 import {
   initSpeech,
@@ -186,8 +185,8 @@ export function createFrameServer({
       offset: z.number().int().nonnegative().default(0),
       limit: z.number().int().min(1).max(500).default(200),
     },
-    ({ project: id, ...options }) =>
-      jsonResult(workspace.listFiles(id, options)),
+    async ({ project: id, ...options }) =>
+      jsonResult(await projectOperationAsync(workspace, "listFiles", id, options)),
   );
   register(
     "frame_read_file",
@@ -210,7 +209,7 @@ export function createFrameServer({
       directory: z.string().optional(),
       limit: z.number().int().min(1).max(500).default(100),
     },
-    ({ project: id, ...options }) => jsonResult(workspace.search(id, options)),
+    async ({ project: id, ...options }) => jsonResult(await projectOperationAsync(workspace, "search", id, options)),
   );
   register(
     "frame_patch_files",
@@ -677,29 +676,8 @@ export function createFrameServer({
         .regex(/^[a-fA-F0-9]{7,40}$/)
         .optional(),
     },
-    ({ project: id, base }) => {
-      const structure = workspace.check(id);
-      let scope;
-      try {
-        scope = inspectProjectScope(workspace.root, id, { base });
-      } catch (error) {
-        fail("SCOPE_CHECK_FAILED", "Git scope inspection could not run.", {
-          structure,
-          reason: error.message,
-        });
-      }
-      return jsonResult({
-        status: "completed",
-        passed: structure.passed && scope.passed,
-        projectPassed: structure.passed,
-        scopeVerified: scope.passed,
-        structure,
-        scope,
-        nextAction: !structure.passed
-          ? "Fix the structural errors before rendering."
-          : scope.nextAction,
-      });
-    },
+    async ({ project: id, base }) =>
+      jsonResult(await projectOperationAsync(workspace, "checkProject", id, { base })),
   );
   register(
     "frame_start_preview",

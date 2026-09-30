@@ -26,6 +26,9 @@ const interactiveOperations = new Set([
   "restore",
   "fingerprint",
   "search",
+  "listFiles",
+  "check",
+  "checkProject",
   "audioEdit",
   "visualEdit",
 ]);

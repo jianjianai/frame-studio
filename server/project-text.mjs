@@ -65,7 +65,11 @@ async function sourcePath(dir, relativePath) {
 }
 
 /** Hash the original bytes, never a lossy UTF-8 decoding. Reads are bounded even if a file grows. */
-export async function readSource(dir, relativePath, { missing = false } = {}) {
+export async function readSource(
+  dir,
+  relativePath,
+  { missing = false, maxBytes = MAX_FILE } = {},
+) {
   let handle;
   try {
     const file = await sourcePath(dir, relativePath);
@@ -85,6 +89,14 @@ export async function readSource(dir, relativePath, { missing = false } = {}) {
         413,
         "FILE_TOO_LARGE",
         "Source files must not exceed 1 MiB.",
+      );
+    // Search budgets count every candidate, including invalid UTF-8/binary files.
+    // Check its current size before reading so resumable pages never over-read a candidate.
+    if (before.size > maxBytes)
+      throw fileError(
+        413,
+        "SEARCH_BYTES_EXHAUSTED",
+        "Continue this candidate on the next search page.",
       );
     const buffer = Buffer.alloc(before.size + 1);
     let length = 0;
@@ -126,17 +138,19 @@ export async function readSource(dir, relativePath, { missing = false } = {}) {
         ignoreBOM: true,
       }).decode(bytes);
     } catch {
-      throw fileError(
-        400,
-        "NOT_UTF8",
-        "The file is not valid UTF-8; use the asset tools for binary media.",
+      throw Object.assign(
+        fileError(
+          400,
+          "NOT_UTF8",
+          "The file is not valid UTF-8; use the asset tools for binary media.",
+        ),
+        { bytes: length },
       );
     }
     if (content.includes("\0"))
-      throw fileError(
-        400,
-        "NOT_TEXT",
-        "Binary contents cannot be edited as text.",
+      throw Object.assign(
+        fileError(400, "NOT_TEXT", "Binary contents cannot be edited as text."),
+        { bytes: length },
       );
     return {
       file,
@@ -486,12 +500,17 @@ export function projectTextOperations({ add, db, repos, uuid, project }) {
           nextCursor = { path: file.path, line: 1 };
           break;
         }
-        scannedFiles++;
-
         let source;
         try {
-          source = await readSource(dir, file.path);
+          source = await readSource(dir, file.path, {
+            maxBytes: 4 * MAX_FILE - scannedBytes,
+          });
+          scannedFiles++;
         } catch (error) {
+          if (error.code === "SEARCH_BYTES_EXHAUSTED") {
+            nextCursor = { path: file.path, line: 1 };
+            break;
+          }
           if (
             [
               "NOT_UTF8",
@@ -500,6 +519,8 @@ export function projectTextOperations({ add, db, repos, uuid, project }) {
               "FILE_TOO_LARGE",
             ].includes(error.code)
           ) {
+            scannedFiles++;
+            scannedBytes += error.bytes || 0;
             if (skipped.length < 20)
               skipped.push({ path: file.path, reason: error.code });
             continue;

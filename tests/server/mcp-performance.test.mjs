@@ -6,6 +6,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
+import Fastify from "fastify";
+import { EventEmitter } from "node:events";
+import { requestAbortSignal } from "../../server/request-abort.mjs";
 import {
   McpServer,
   createMcpHandler,
@@ -584,4 +587,79 @@ test("status waits recover without notifications and release subscriptions on re
     subscribeTaskStatus(db, id),
   );
   subscriptions.forEach((subscription) => subscription.close());
+});
+
+test("HTTP API disconnect aborts the wait and releases subscriptions without cancelling a task", async (t) => {
+  const id = randomUUID(),
+    db = {
+      async all() {
+        return [];
+      },
+    };
+  let entered, finished;
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const ended = new Promise((resolve) => {
+    finished = resolve;
+  });
+  const tasks = {
+    async summary() {
+      entered();
+      return { id, kind: "build", state: "running" };
+    },
+  };
+  const status = registryStatus(db, tasks),
+    app = Fastify();
+  app.post("/api/action", async (req, res) => {
+    try {
+      return await withTaskStatusSignal(requestAbortSignal(req, res), () =>
+        status(req.body.args),
+      );
+    } finally {
+      finished();
+    }
+  });
+  await app.listen({ host: "127.0.0.1", port: 0 });
+  t.after(() => app.close());
+  const cancellation = new AbortController();
+  const request = fetch(
+    `http://127.0.0.1:${app.server.address().port}/api/action`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "task_status",
+        args: { id, waitMs: 10000 },
+      }),
+      signal: cancellation.signal,
+    },
+  );
+  await started;
+  cancellation.abort();
+  await assert.rejects(request, { name: "AbortError" });
+  await ended;
+  assert.equal((await tasks.summary()).state, "running");
+  const subscriptions = Array.from({ length: 1024 }, () =>
+    subscribeTaskStatus(db, id),
+  );
+  subscriptions.forEach((subscription) => subscription.close());
+});
+
+test("request signals remove listeners after success and abort already disconnected sockets", () => {
+  const req = { raw: new EventEmitter() },
+    res = { raw: new EventEmitter() };
+  const signal = requestAbortSignal(req, res);
+  res.raw.writableEnded = true;
+  res.raw.emit("finish");
+  assert(!signal.aborted);
+  assert.equal(req.raw.listenerCount("aborted"), 0);
+  assert.equal(res.raw.listenerCount("close"), 0);
+  assert.equal(res.raw.listenerCount("finish"), 0);
+  const disconnected = {
+    raw: Object.assign(new EventEmitter(), { destroyed: true }),
+  };
+  assert(requestAbortSignal(req, disconnected).aborted);
+  assert.equal(req.raw.listenerCount("aborted"), 0);
+  assert.equal(disconnected.raw.listenerCount("close"), 0);
 });

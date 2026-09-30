@@ -4,6 +4,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
+import { spawnSync } from "node:child_process";
+import { Jobs } from "../../scripts/mcp/jobs.mjs";
 import { fixture, repo, memoryClient, call } from "./helpers.mjs";
 import { ProjectService } from "../../scripts/project-service.mjs";
 import { Workspace } from "../../scripts/mcp/workspace.mjs";
@@ -297,6 +299,154 @@ test("local MCP async edit returns completed checkpoints and preserves project a
     assert.equal(denied.isError, true);
   } finally {
     await local?.close();
+    f.close();
+  }
+});
+
+test("local MCP tree listing, literal search and complete Git scope checks leave timers responsive", async () => {
+  const f = fixture();
+  let local;
+  try {
+    const directory = f.file("bulk");
+    fs.mkdirSync(directory);
+    for (let index = 0; index < 2048; index++)
+      fs.writeFileSync(
+        path.join(directory, String(index).padStart(4, "0") + ".txt"),
+        "worker needle\n",
+      );
+    const git = (args) => {
+      const result = spawnSync("git", args, { cwd: f.root, encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+    };
+    git(["init", "-b", "test"]);
+    git(["add", "--", "src", "projects"]);
+    git([
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@localhost",
+      "commit",
+      "-m",
+      "Fixture",
+    ]);
+    local = await memoryClient(f.root, {
+      projects: ["test-film"],
+      readOnly: true,
+    });
+    const responsive = async (name, args) => {
+      let timerFired = false;
+      const timer = setTimeout(() => {
+        timerFired = true;
+      }, 0);
+      try {
+        const result = await call(local.client, name, {
+          project: "test-film",
+          ...args,
+        });
+        assert.equal(
+          timerFired,
+          true,
+          name + " completed before the API timer could run",
+        );
+        return result;
+      } finally {
+        clearTimeout(timer);
+      }
+    };
+    const listing = await responsive("frame_list_files", {
+      directory: "bulk",
+      offset: 60,
+      limit: 60,
+    });
+    assert.equal(listing.total, 2048);
+    assert.equal(listing.files[0].path, "bulk/0060.txt");
+    assert.equal(listing.nextOffset, 120);
+    const found = await responsive("frame_search", {
+      directory: "bulk",
+      query: "worker needle",
+      limit: 1,
+    });
+    assert.equal(found.matches[0].path, "bulk/0000.txt");
+    assert.equal(found.matches[0].line, 1);
+    assert.equal(
+      found.matches[0].sha256,
+      new ProjectService(f.root).textFile("test-film", "bulk/0000.txt").sha256,
+    );
+    assert.equal(found.truncated, true);
+    const check = await responsive("frame_check_project", {});
+    assert.equal(check.status, "completed");
+    assert.equal(check.projectPassed, true);
+    assert.equal(check.scopeVerified, true);
+    fs.appendFileSync(
+      path.join(f.root, "src/engine/types.ts"),
+      "\n// external shared change\n",
+    );
+    const external = await responsive("frame_check_project", {});
+    assert.equal(external.projectPassed, true);
+    assert.equal(external.scopeVerified, false);
+    assert.equal(external.scope.attribution, "unknown");
+    assert.ok(
+      external.scope.externalWorkspaceChanges.shared.paths.includes(
+        "src/engine/types.ts",
+      ),
+    );
+    fs.symlinkSync(
+      path.join(f.root, "src/engine/types.ts"),
+      path.join(directory, "unsafe.txt"),
+    );
+    const unsafe = await local.client.callTool({
+      name: "frame_list_files",
+      arguments: { project: "test-film", directory: "bulk" },
+    });
+    assert.equal(unsafe.isError, true);
+    assert.equal(unsafe.structuredContent.error.code, "UNSAFE_LINK");
+    const denied = await local.client.callTool({
+      name: "frame_search",
+      arguments: { project: "other-film", query: "needle" },
+    });
+    assert.equal(denied.isError, true);
+    assert.equal(denied.structuredContent.error.code, "PROJECT_DENIED");
+  } finally {
+    await local?.close();
+    f.close();
+  }
+});
+
+test("async strict job validation reserves two starts and close releases pending project locks", async () => {
+  const f = fixture();
+  let jobs;
+  try {
+    for (const id of ["second-film", "third-film"]) {
+      const directory = path.join(f.root, "projects", id);
+      fs.cpSync(path.join(f.root, "projects/test-film"), directory, {
+        recursive: true,
+      });
+      const file = path.join(directory, "project.ts");
+      fs.writeFileSync(
+        file,
+        fs.readFileSync(file, "utf8").replaceAll("test-film", id),
+      );
+    }
+    const workspace = new ProjectService(f.root);
+    jobs = new Jobs(workspace);
+    const first = jobs.start("test-film", "validate", {});
+    const second = jobs.start("second-film", "validate", {});
+    const firstClosed = assert.rejects(first, { code: "SHUTTING_DOWN" });
+    const secondClosed = assert.rejects(second, { code: "SHUTTING_DOWN" });
+    await assert.rejects(jobs.start("third-film", "validate", {}), {
+      code: "JOB_LIMIT",
+    });
+    assert.equal(jobs.starting, 2);
+    assert.equal(workspace.operation("test-film").busy, true);
+    assert.equal(workspace.operation("second-film").busy, true);
+    await jobs.close();
+    await Promise.all([firstClosed, secondClosed]);
+    assert.equal(jobs.starting, 0);
+    assert.equal(jobs.running.size, 0);
+    assert.equal(workspace.operation("test-film").busy, false);
+    assert.equal(workspace.operation("second-film").busy, false);
+  } finally {
+    await jobs?.close();
     f.close();
   }
 });

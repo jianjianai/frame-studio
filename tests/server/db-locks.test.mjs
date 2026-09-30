@@ -45,12 +45,13 @@ test(
               await db.pool.query("SELECT pg_backend_pid() AS pid")
             ).rows[0];
             assert.equal(direct.pid, outer.pid);
-            await db.lock(id, async () => {
-              assert.equal(
-                (await db.one("SELECT pg_backend_pid() AS pid")).pid,
-                outer.pid,
-              );
-            });
+            await assert.rejects(
+              db.lock(id, async () => {}),
+              {
+                statusCode: 409,
+                message: "Repository is busy",
+              },
+            );
             await db.lock(id + ":nested", async () => {
               assert.equal(
                 (await db.one("SELECT pg_backend_pid() AS pid")).pid,
@@ -201,36 +202,101 @@ test(
   },
 );
 
-
 test(
   "saturated lock holders can await an ordinary database read started outside their scopes",
   options,
   async () => {
-    const db = await fixture(), gate = deferred();
+    const db = await fixture(),
+      gate = deferred();
     let listener, shared;
     try {
       listener = await db.pool.connect();
       await listener.query("LISTEN frame_changes");
       // This read belongs to an older background refresh, not either lock scope.
       // It needs ordinary-query capacity after every lock session is occupied.
-      shared = gate.promise.then(() => db.one("SELECT pg_backend_pid() AS pid"));
+      shared = gate.promise.then(() =>
+        db.one("SELECT pg_backend_pid() AS pid"),
+      );
       let entered = 0;
-      const results = await Promise.all([randomUUID(), randomUUID()].map((id) =>
-        db.lock(id, async () => {
-          const ownPid = (await db.one("SELECT pg_backend_pid() AS pid")).pid;
-          if (++entered === 2) gate.resolve();
-          const result = await shared;
-          assert.notEqual(result.pid, ownPid);
-          return result.pid;
-        })
-      ));
-      assert.equal(results[0], results[1], "the callbacks share the same outside-scope read");
+      const results = await Promise.all(
+        [randomUUID(), randomUUID()].map((id) =>
+          db.lock(id, async () => {
+            const ownPid = (await db.one("SELECT pg_backend_pid() AS pid")).pid;
+            if (++entered === 2) gate.resolve();
+            const result = await shared;
+            assert.notEqual(result.pid, ownPid);
+            return result.pid;
+          }),
+        ),
+      );
+      assert.equal(
+        results[0],
+        results[1],
+        "the callbacks share the same outside-scope read",
+      );
       assert.equal(db.pool.waitingCount, 0);
       assert.equal(db.lockPool.waitingCount, 0);
     } finally {
       gate.resolve();
       await shared?.catch(() => {});
       listener?.release();
+      await db.pool.end();
+    }
+  },
+);
+
+test(
+  "a detached nested lock keeps its session until its own callback settles",
+  options,
+  async () => {
+    const db = await fixture();
+    const outerKey = randomUUID(),
+      childKey = randomUUID();
+    const entered = deferred(),
+      finish = deferred();
+    let child, childPid, held;
+    try {
+      const outerPid = await db.lock(outerKey, async () => {
+        child = db.lock(childKey, async () => {
+          childPid = (await db.one("SELECT pg_backend_pid() AS pid")).pid;
+          entered.resolve();
+          await finish.promise;
+          assert.equal(
+            (await db.one("SELECT pg_backend_pid() AS pid")).pid,
+            childPid,
+            "the live child still owns its original session",
+          );
+        });
+        await Promise.race([entered.promise, child]);
+        return (await db.one("SELECT pg_backend_pid() AS pid")).pid;
+      });
+      assert.equal(childPid, outerPid);
+      held = await db.lockPool.connect();
+      assert.notEqual(
+        (await held.query("SELECT pg_backend_pid() AS pid")).rows[0].pid,
+        childPid,
+        "a settled parent must not return the live child's session to the pool",
+      );
+      held.release();
+      held = undefined;
+      await assert.rejects(
+        db.lock(childKey, async () => {}),
+        { statusCode: 409 },
+      );
+      await db.lock(outerKey, async () => {
+        assert.notEqual(
+          (await db.one("SELECT pg_backend_pid() AS pid")).pid,
+          childPid,
+        );
+      });
+      finish.resolve();
+      await child;
+      await db.lock(childKey, async () => {});
+      assert.equal(db.lockPool.waitingCount, 0);
+    } finally {
+      finish.resolve();
+      held?.release();
+      await child?.catch(() => {});
       await db.pool.end();
     }
   },

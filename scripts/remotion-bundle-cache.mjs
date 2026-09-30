@@ -314,7 +314,7 @@ export async function acquireRemotionBundle({
   build,
   signal,
   maxEntries = 3,
-  maxBytes = 1024 * 1024 * 1024,
+  maxBytes = 2 * 1024 * 1024 * 1024,
 }) {
   if (!/^[a-f0-9]{64}$/.test(key)) throw Error("Invalid Remotion bundle key");
   const base = projectPath(root, id, ".cache/remotion-bundles");

@@ -57,97 +57,109 @@ export class Jobs {
         "JOB_LIMIT",
         "Two render jobs are already running; wait or cancel one.",
       );
-    const validation = this.workspace.check(id);
-    if (!validation.passed)
-      fail("VALIDATION_FAILED", "Fix strict project checks before rendering.", {
-        validation,
-      });
-    const { meta } = readProject(this.workspace.file(id, "project.ts"));
-    const width =
-      options.width ??
-      fitComposition(meta, kind === "render" ? 1280 : 640).width;
-    const plan = createExportPlan({
-      duration: meta.duration,
-      composition: meta.composition,
-      fps: options.fps ?? meta.fps,
-      width,
-      start: options.start ?? 0,
-      end: options.end ?? meta.duration,
-    });
-    const args = [id, "--width", String(width)];
-    let script, outputName;
-    if (kind === "render") {
-      script = "render.mjs";
-      outputName = "video.mp4";
-      args.push(
-        "--fps",
-        String(plan.fps),
-        "--start",
-        String(plan.start),
-        "--end",
-        String(plan.end),
-      );
-    } else if (kind === "frame") {
-      script = "render.mjs";
-      outputName = "frame.png";
-      const time = options.time ?? 0;
-      if (time >= meta.duration)
-        fail("INVALID_TIME", "Frame time must be inside the project duration.");
-      args.push("--frame-mode", "--time", String(time));
-    } else if (kind === "storyboard") {
-      script = "storyboard.mjs";
-      outputName = "storyboard.png";
-      const times =
-        options.times ??
-        [
-          ...new Set([
-            0,
-            ...meta.beats.map((b) => b.at),
-            (plan.frames - 1) / plan.fps,
-          ]),
-        ].sort((a, b) => a - b);
-      if (
-        times.length > 48 ||
-        times.some((time) => time < 0 || time >= meta.duration)
-      )
-        fail(
-          "INVALID_TIME",
-          "Select at most 48 timestamps inside the project.",
-        );
-      args.push("--times", times.join(","));
-    } else if (
-      [
-        "validate",
-        "typecheck",
-        "test",
-        "test-e2e",
-        "build",
-        "review",
-        "verify",
-        "export",
-        "narrate",
-        "playback",
-      ].includes(kind)
-    ) {
-      script = "production-job.mjs";
-      outputName = "result.json";
-      args.splice(
-        0,
-        args.length,
-        id,
-        "--kind",
-        kind,
-        "--options",
-        JSON.stringify(options),
-      );
-    } else fail("INVALID_JOB", "Unknown job kind.");
-    if (options.subtitles === false) args.push("--no-subtitles");
     const jobId = randomUUID();
-    const release = this.workspace.lock(id, kind, { jobId });
-    const directory = this.folder(id, jobId);
-    let child;
+    let release, child;
     this.starting++;
     try {
+      release = this.workspace.lock(id, kind, { jobId });
+      const validation = await projectOperationAsync(
+        this.workspace,
+        "check",
+        id,
+      );
+      if (this.closed) fail("SHUTTING_DOWN", "Server is shutting down.");
+      if (!validation.passed)
+        fail(
+          "VALIDATION_FAILED",
+          "Fix strict project checks before rendering.",
+          {
+            validation,
+          },
+        );
+      const { meta } = readProject(this.workspace.file(id, "project.ts"));
+      const width =
+        options.width ??
+        fitComposition(meta, kind === "render" ? 1280 : 640).width;
+      const plan = createExportPlan({
+        duration: meta.duration,
+        composition: meta.composition,
+        fps: options.fps ?? meta.fps,
+        width,
+        start: options.start ?? 0,
+        end: options.end ?? meta.duration,
+      });
+      const args = [id, "--width", String(width)];
+      let script, outputName;
+      if (kind === "render") {
+        script = "render.mjs";
+        outputName = "video.mp4";
+        args.push(
+          "--fps",
+          String(plan.fps),
+          "--start",
+          String(plan.start),
+          "--end",
+          String(plan.end),
+        );
+      } else if (kind === "frame") {
+        script = "render.mjs";
+        outputName = "frame.png";
+        const time = options.time ?? 0;
+        if (time >= meta.duration)
+          fail(
+            "INVALID_TIME",
+            "Frame time must be inside the project duration.",
+          );
+        args.push("--frame-mode", "--time", String(time));
+      } else if (kind === "storyboard") {
+        script = "storyboard.mjs";
+        outputName = "storyboard.png";
+        const times =
+          options.times ??
+          [
+            ...new Set([
+              0,
+              ...meta.beats.map((b) => b.at),
+              (plan.frames - 1) / plan.fps,
+            ]),
+          ].sort((a, b) => a - b);
+        if (
+          times.length > 48 ||
+          times.some((time) => time < 0 || time >= meta.duration)
+        )
+          fail(
+            "INVALID_TIME",
+            "Select at most 48 timestamps inside the project.",
+          );
+        args.push("--times", times.join(","));
+      } else if (
+        [
+          "validate",
+          "typecheck",
+          "test",
+          "test-e2e",
+          "build",
+          "review",
+          "verify",
+          "export",
+          "narrate",
+          "playback",
+        ].includes(kind)
+      ) {
+        script = "production-job.mjs";
+        outputName = "result.json";
+        args.splice(
+          0,
+          args.length,
+          id,
+          "--kind",
+          kind,
+          "--options",
+          JSON.stringify(options),
+        );
+      } else fail("INVALID_JOB", "Unknown job kind.");
+      if (options.subtitles === false) args.push("--no-subtitles");
+      const directory = this.folder(id, jobId);
       fs.mkdirSync(directory, { recursive: true });
       const output = path.join(directory, outputName);
       args.push("--out", output);
@@ -331,7 +343,7 @@ export class Jobs {
       return this.status(id, jobId);
     } catch (error) {
       if (child && child.pid) child.kill();
-      release();
+      release?.();
       throw error;
     } finally {
       this.starting--;

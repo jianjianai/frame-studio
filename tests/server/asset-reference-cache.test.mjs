@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { Assets } from "../../server/assets.mjs";
+import { hash } from "../../server/security.mjs";
 
 function fixture(t, db = { all: async () => [] }) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "frame-reference-cache-"));
@@ -129,4 +131,107 @@ test("forced verification retries after an older background refresh failed", asy
   await forced;
   assert.equal(scans, 2);
   assert.equal(assets.referenceStatus("repository").status, "indexed");
+});
+
+test("adding repository membership invalidates already-indexed work references", async (t) => {
+  const assets = fixture(t, {
+    all: async () => [],
+    pool: { query: async () => {} },
+  });
+  const repoRoot = path.join(assets.data, "repository");
+  fs.mkdirSync(repoRoot);
+  const asset = { id: "asset", name: "media.bin", sha: hash("fixture") };
+  fs.writeFileSync(path.join(assets.data, "blobs", asset.sha), "fixture");
+  assets.get = async () => asset;
+  assets.repos.library = async () => ({ root: repoRoot });
+  assets.saveCatalog = async () => {};
+  assets.scans = new Map([
+    [
+      assets.referenceKey("repository", "work-a"),
+      {
+        repo: "repository",
+        project: "work-a",
+        at: Date.now(),
+      },
+    ],
+  ]);
+  assert.equal(
+    assets.referenceStatus("repository", "work-a").status,
+    "indexed",
+  );
+  await assets.linkRepository("asset", "repository", true);
+  assert.equal(
+    assets.referenceStatus("repository", "work-a").status,
+    "unindexed",
+  );
+});
+
+test("asset digests detect same-size inode replacements and refuse links after cache warmup", async (t) => {
+  const assets = fixture(t);
+  const file = path.join(assets.data, "media.bin");
+  fs.writeFileSync(file, "old");
+  assert.equal(await assets.digestFile(file), hash("old"));
+  const prior = fs.statSync(file);
+  const replacement = file + ".replacement";
+  fs.writeFileSync(replacement, "new");
+  fs.utimesSync(replacement, prior.atime, prior.mtime);
+  fs.renameSync(replacement, file);
+  assert.equal(await assets.digestFile(file), hash("new"));
+  const alias = file + ".alias";
+  fs.linkSync(file, alias);
+  await assert.rejects(assets.digestFile(file), /Links and special files/);
+  fs.unlinkSync(alias);
+  fs.renameSync(file, replacement);
+  fs.symlinkSync(replacement, file);
+  await assert.rejects(assets.digestFile(file), /Links and special files/);
+});
+
+test("nanosecond changes invalidate digests even when millisecond attributes coincide", async (t) => {
+  const assets = fixture(t);
+  const file = path.join(assets.data, "media.bin");
+  fs.writeFileSync(file, "old");
+  assert.equal(await assets.digestFile(file), hash("old"));
+  const prior = await fsp.lstat(file, { bigint: true });
+  fs.writeFileSync(file, "new");
+  const original = fsp.lstat;
+  fsp.lstat = async (...args) => {
+    const stat = await original(...args);
+    if (args[0] !== file || !args[1]?.bigint) return stat;
+    // Model two metadata updates inside the same millisecond; the hasher still
+    // opens and verifies the actual file independently using regular stats.
+    return Object.assign(Object.create(stat), {
+      mtimeMs: prior.mtimeMs,
+      ctimeMs: prior.ctimeMs,
+      mtimeNs: prior.mtimeNs + 1n,
+      ctimeNs: prior.ctimeNs + 1n,
+    });
+  };
+  try {
+    assert.equal(await assets.digestFile(file), hash("new"));
+  } finally {
+    fsp.lstat = original;
+  }
+});
+
+test("cache hits recheck permissions and reject changes during verification", async (t) => {
+  const assets = fixture(t);
+  const file = path.join(assets.data, "media.bin");
+  fs.writeFileSync(file, "fixture");
+  assert.equal(await assets.digestFile(file), hash("fixture"));
+  const original = fsp.lstat;
+  let checks = 0;
+  fsp.lstat = async (...args) => {
+    if (args[0] === file && args[1]?.bigint && ++checks === 2)
+      fs.chmodSync(file, 0o600);
+    return original(...args);
+  };
+  try {
+    await assert.rejects(
+      assets.digestFile(file),
+      (error) => error.statusCode === 409,
+    );
+  } finally {
+    fsp.lstat = original;
+  }
+  assert.equal(await assets.digestFile(file), hash("fixture"));
 });

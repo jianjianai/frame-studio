@@ -10,9 +10,16 @@ export async function database(url, password) {
   // Lock callbacks may await a shared scan started outside their ALS scope.
   // Dedicated, lazy pools reserve ordinary-query/LISTEN capacity even then.
   // The explicit upper bound is 12 ordinary + 12 lock sessions per process.
-  const poolOptions = { connectionString: url, max: 12, connectionTimeoutMillis: 10000 };
+  const poolOptions = {
+    connectionString: url,
+    max: 12,
+    connectionTimeoutMillis: 10000,
+  };
   const lockPool = new pg.Pool(poolOptions);
-  const { pool, lock, acquireClient } = scopedPool(new pg.Pool(poolOptions), lockPool);
+  const { pool, lock, acquireClient } = scopedPool(
+    new pg.Pool(poolOptions),
+    lockPool,
+  );
   try {
     await migrate(pool);
     const admin = await pool.query(

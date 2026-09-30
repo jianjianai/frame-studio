@@ -175,3 +175,44 @@ test("search rejects structural changes that arrive during a bounded page read",
     fsp.open = original;
   }
 });
+
+test("search charges binary candidates and resumes before a candidate that exceeds remaining bytes", async (t) => {
+  const root = fixture(t);
+  const mib = 1024 * 1024;
+  for (let i = 0; i < 3; i++)
+    fs.writeFileSync(
+      path.join(root, "a" + i + ".ts"),
+      Buffer.alloc(mib, i === 0 ? 0xff : 0),
+    );
+  fs.writeFileSync(path.join(root, "a3.ts"), Buffer.alloc(mib - 100));
+  fs.writeFileSync(path.join(root, "a4.ts"), Buffer.alloc(101));
+  fs.writeFileSync(path.join(root, "z.ts"), "needle");
+  const registry = {};
+  projectTextOperations({
+    add(name, description, shape, fn) {
+      registry[name] = fn;
+    },
+    db: {},
+    repos: { project: async () => ({ dir: root }) },
+    uuid: {},
+    project: {},
+  });
+  const args = {
+    query: "needle",
+    directory: "",
+    caseSensitive: false,
+    limit: 30,
+  };
+  const first = await registry.project_search(args);
+  assert.equal(first.scannedBytes, 4 * mib - 100);
+  assert.equal(first.scannedFiles, 4);
+  assert.deepEqual(first.nextCursor, { path: "a4.ts", line: 1 });
+  assert(first.skipped.some((file) => file.reason === "NOT_UTF8"));
+  const second = await registry.project_search({
+    ...args,
+    cursor: first.nextCursor,
+  });
+  assert.equal(second.scannedBytes, 107);
+  assert.equal(second.matches[0].path, "z.ts");
+  assert.equal(second.hasMore, false);
+});

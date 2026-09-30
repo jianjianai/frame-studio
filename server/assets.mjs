@@ -3,6 +3,28 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { problem, confined } from "./security.mjs";
 import { fileSha256, confinedAsync, exists } from "./project-files.mjs";
+const MAX_DIGESTS = 8192;
+const digestSignature = (stat) =>
+  [
+    stat.dev,
+    stat.ino,
+    stat.size,
+    stat.mtimeNs,
+    stat.ctimeNs,
+    stat.nlink,
+    stat.mode,
+  ].join(":");
+async function assetStat(file) {
+  const stat = await fs.promises.lstat(file, { bigint: true });
+  if (
+    stat.isSymbolicLink() ||
+    (stat.isFile() && stat.nlink !== 1n) ||
+    (!stat.isFile() && !stat.isDirectory())
+  )
+    throw problem(400, "Links and special files are not allowed");
+  return stat;
+}
+
 export class Assets {
   constructor(db, data, repos) {
     this.db = db;
@@ -10,6 +32,24 @@ export class Assets {
     this.repos = repos;
     fs.mkdirSync(path.join(data, "blobs"), { recursive: true });
     this.digests = new Map();
+  }
+  async digestFile(file, before = null) {
+    before ||= await assetStat(file);
+    if (!before.isFile()) throw problem(400, "Expected a regular asset file");
+    const signature = digestSignature(before);
+    let cache = this.digests.get(file);
+    if (cache?.signature !== signature)
+      cache = { signature, sha: await fileSha256(file) };
+    // The bounded async hasher checks the opened inode and file after hashing; this
+    // nanosecond check also guards cache hits, permissions, links and replacements.
+    const after = await assetStat(file);
+    if (!after.isFile() || digestSignature(after) !== signature)
+      throw problem(409, "Asset changed while verifying references");
+    this.digests.delete(file);
+    this.digests.set(file, cache);
+    while (this.digests.size > MAX_DIGESTS)
+      this.digests.delete(this.digests.keys().next().value);
+    return cache.sha;
   }
   async migrate() {
     if (await this.db.setting("asset-repositories-v4")) return;
@@ -222,16 +262,11 @@ export class Assets {
               .relative(dir, path.join(folder, entry.name))
               .replaceAll("\\", "/");
             const file = await confinedAsync(dir, relative),
-              st = await fs.promises.stat(file);
+              st = await assetStat(file);
             if (st.isDirectory()) await walk(file);
-            else if (sizes.has(st.size)) {
-              const signature = `${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
-              let cache = this.digests.get(file);
-              if (cache?.signature !== signature) {
-                cache = { signature, sha: await fileSha256(file) };
-                this.digests.set(file, cache);
-              }
-              for (const asset of byHash.get(r.id + ":" + cache.sha) || [])
+            else if (sizes.has(Number(st.size))) {
+              const sha = await this.digestFile(file, st);
+              for (const asset of byHash.get(r.id + ":" + sha) || [])
                 seen.set(`${asset}:${r.id}:${p.id}`, {
                   asset,
                   repo: r.id,
@@ -313,6 +348,7 @@ export class Assets {
         [id, repo],
       );
       await this.saveCatalog(repo);
+      this.invalidateReferences(repo);
     };
     return locked ? write() : this.db.lock(repo + ":materials", write);
   }
@@ -440,14 +476,8 @@ export class Assets {
         );
         if (entry.isDirectory()) await walk(file);
         else if (types[path.extname(entry.name).toLowerCase()]) {
-          const st = fs.statSync(file),
-            signature = `${st.size}:${st.mtimeMs}:${st.ctimeMs}`;
-          let cache = this.digests.get(file);
-          if (cache?.signature !== signature) {
-            cache = { signature, sha: await fileSha256(file) };
-            this.digests.set(file, cache);
-          }
-          if (known.has(cache.sha)) continue;
+          const sha = await this.digestFile(file);
+          if (known.has(sha)) continue;
           const url = `films/${project}/${path.relative(path.join(dir, "public"), file).replaceAll("\\", "/")}`;
           const meta = catalog.find((a) => a.url === url);
           await this.register(file, {
@@ -458,7 +488,7 @@ export class Assets {
             tags: "作品导入",
             repo,
           });
-          known.add(cache.sha);
+          known.add(sha);
         }
       }
     };

@@ -15,13 +15,22 @@ export function scopedPool(rawPool, lockPool = rawPool) {
   const pool = new Proxy(rawPool, {
     get(target, key) {
       if (key === "query") return query;
-      if (key === "end") return async () => {
-        const results = await Promise.allSettled(
-          [rawPool, ...(lockPool === rawPool ? [] : [lockPool])].map(pool => pool.end()),
-        );
-        const failed = results.filter(result => result.status === "rejected");
-        if (failed.length) throw new AggregateError(failed.map(result => result.reason), "Database pools failed to close");
-      };
+      if (key === "end")
+        return async () => {
+          const results = await Promise.allSettled(
+            [rawPool, ...(lockPool === rawPool ? [] : [lockPool])].map((pool) =>
+              pool.end(),
+            ),
+          );
+          const failed = results.filter(
+            (result) => result.status === "rejected",
+          );
+          if (failed.length)
+            throw new AggregateError(
+              failed.map((result) => result.reason),
+              "Database pools failed to close",
+            );
+        };
       const value = Reflect.get(target, key, target);
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -53,6 +62,8 @@ export function scopedPool(rawPool, lockPool = rawPool) {
     };
   }
 
+  const busy = () =>
+    Object.assign(new Error("Repository is busy"), { statusCode: 409 });
   async function lock(id, fn) {
     const parent = current();
     const resource = parent || {
@@ -60,28 +71,36 @@ export function scopedPool(rawPool, lockPool = rawPool) {
       active: true,
       borrowed: false,
       broken: false,
+      scopes: 0,
+      keys: new Set(),
     };
+    if (!parent) {
+      resource.onError = () => {
+        resource.broken = true;
+      };
+      resource.client.on("error", resource.onError);
+    }
+    resource.scopes++;
     const scope = { resource, active: true };
-    let locked = false;
-    const onError = () => {
-      resource.broken = true;
-    };
-    if (!parent) resource.client.on("error", onError);
+    let locked = false,
+      owned = false,
+      key;
     try {
       const row = await resource.client.query(
-        "SELECT pg_try_advisory_lock(hashtext($1)) AS ok",
+        "SELECT pg_try_advisory_lock(hashtext($1)) AS ok, hashtext($1) AS key",
         [id],
       );
-      if (!row.rows[0].ok) {
-        const error = new Error("Repository is busy");
-        error.statusCode = 409;
-        throw error;
-      }
+      if (!row.rows[0].ok) throw busy();
       locked = true;
+      key = row.rows[0].key;
+      // PostgreSQL session locks are reentrant. Frame's original operation
+      // contract is exclusive even inside one async call chain; retain its 409.
+      // Compare PostgreSQL keys, so hashtext collisions cannot bypass this rule.
+      if (resource.keys.has(key)) throw busy();
+      resource.keys.add(key);
+      owned = true;
       return await context.run(scope, fn);
     } finally {
-      // Detached continuations can outlive fn; they must not use a returned
-      // client merely because AsyncLocalStorage propagated the old scope.
       scope.active = false;
       if (locked) {
         try {
@@ -94,10 +113,15 @@ export function scopedPool(rawPool, lockPool = rawPool) {
           resource.broken = true;
         }
       }
-      if (!parent) {
+      if (owned) resource.keys.delete(key);
+      // A detached nested callback owns its different lock until it settles.
+      // Never return its physical session while that callback is still active.
+      if (--resource.scopes === 0) {
         resource.active = false;
-        resource.client.off("error", onError);
-        resource.client.release(resource.broken || resource.borrowed);
+        resource.client.off("error", resource.onError);
+        resource.client.release(
+          resource.broken || resource.borrowed || resource.keys.size > 0,
+        );
       }
     }
   }

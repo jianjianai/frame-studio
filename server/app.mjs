@@ -19,6 +19,7 @@ import staticPlugin from "@fastify/static";
 import { publicStaticHeaders } from "./static-cache.mjs";
 import { createPreparedMcpHandler } from "./mcp-catalog.mjs";
 import { withTaskStatusSignal } from "./task-status-wait.mjs";
+import { requestAbortSignal } from "./request-abort.mjs";
 import {
   hash,
   token,
@@ -188,8 +189,10 @@ export async function createApp({
     res.clearCookie("frame_session", { path: "/" });
     return { ok: true };
   });
-  app.post("/api/action", async (req) =>
-    actions.call(req.body?.name, req.body?.args),
+  app.post("/api/action", async (req, res) =>
+    withTaskStatusSignal(requestAbortSignal(req, res), () =>
+      actions.call(req.body?.name, req.body?.args),
+    ),
   );
   app.get("/api/works/:id/cover", async (req, res) => {
     const w = await actions.works.get(req.params.id);
@@ -446,39 +449,17 @@ export async function createApp({
     method: ["GET", "POST", "DELETE"],
     url: "/mcp",
     handler: async (req, res) => {
-      const cancellation = new AbortController();
-      const abort = () => cancellation.abort(
-        new DOMException("MCP client disconnected", "AbortError"),
-      );
-      const closed = () => {
-        if (!res.raw.writableEnded) abort();
-        cleanup();
-      };
-      const cleanup = () => {
-        req.raw.off("aborted", abort);
-        res.raw.off("close", closed);
-        res.raw.off("finish", cleanup);
-      };
-      req.raw.once("aborted", abort);
-      res.raw.once("close", closed);
-      res.raw.once("finish", cleanup);
-      if (req.raw.aborted || res.raw.destroyed) abort();
+      const signal = requestAbortSignal(req, res);
       const headers = new Headers();
       for (const [k, v] of Object.entries(req.headers))
         if (v) headers.set(k, Array.isArray(v) ? v.join(",") : v);
       const request = new Request(origin + "/mcp", {
         method: req.method,
         headers,
-        signal: cancellation.signal,
+        signal,
         ...(req.method === "POST" ? { body: JSON.stringify(req.body) } : {}),
       });
-      let response;
-      try {
-        response = await mcp.fetch(request, { parsedBody: req.body });
-      } catch (error) {
-        cleanup();
-        throw error;
-      }
+      const response = await mcp.fetch(request, { parsedBody: req.body });
       res.code(response.status);
       for (const [k, v] of response.headers) res.header(k, v);
       return response.body

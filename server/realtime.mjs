@@ -1,7 +1,10 @@
 import { WebSocketServer } from "ws";
 import { hash } from "./security.mjs";
 import { operationError } from "../src/contracts/errors.mjs";
-import { decodeNotification, notificationMatches } from "../src/contracts/realtime-scope.mjs";
+import {
+  decodeNotification,
+  notificationMatches,
+} from "../src/contracts/realtime-scope.mjs";
 import { notifyTaskStatus } from "./task-status-wait.mjs";
 
 const watched = {
@@ -22,7 +25,13 @@ const watched = {
   works_sync_status: ["work_sync"],
   works_scm_status: ["works", "work_sync", "tasks", "work_undos"],
 };
-export async function installRealtime(app, db, actions, origin, { localMode = false } = {}) {
+export async function installRealtime(
+  app,
+  db,
+  actions,
+  origin,
+  { localMode = false } = {},
+) {
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: 2 * 1024 * 1024,
@@ -38,7 +47,8 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
   };
   const listen = async () => {
     if (closed) return;
-    let client, stopped = false;
+    let client,
+      stopped = false;
     const failed = () => {
       if (stopped) return;
       stopped = true;
@@ -46,15 +56,17 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
         listener = undefined;
         client.release(true);
       }
-      for (const ws of wss.clients)
-        ws.close(1013, "State stream reconnecting");
+      for (const ws of wss.clients) ws.close(1013, "State stream reconnecting");
       notifyTaskStatus(db, null);
       clearTimeout(reconnect);
       if (!closed) reconnect = setTimeout(listen, 1000);
     };
     try {
       client = await db.pool.connect();
-      if (closed) { client.release(); return; }
+      if (closed) {
+        client.release();
+        return;
+      }
       listener = client;
       client.on("notification", ({ payload }) => changed(payload));
       client.once("error", failed);
@@ -67,11 +79,12 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
   if (!localMode) await listen();
   else reconnect = setInterval(() => changed(null), 1000);
   const authorized = async (session) =>
-    localMode || (!!session &&
-    !!(await db.one(
-      "SELECT hash FROM sessions WHERE hash=$1 AND expires>now()",
-      [session],
-    )));
+    localMode ||
+    (!!session &&
+      !!(await db.one(
+        "SELECT hash FROM sessions WHERE hash=$1 AND expires>now()",
+        [session],
+      )));
   const upgrade = async (req, socket, head) => {
     if (req.url !== "/api/ws") {
       socket.destroy();
@@ -131,7 +144,8 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
           }
           if (sub.name === "task_get" && result.events.length) {
             sub.args = { ...sub.args, after: Number(result.events.at(-1).id) };
-            if (result.hasMore ?? result.events.length === 100) sub.dirty = true;
+            if (result.hasMore ?? result.events.length === 100)
+              sub.dirty = true;
           }
         } while (
           sub.dirty &&
@@ -150,21 +164,28 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
     };
     const changes = new Map();
     ws.refresh = (change) => {
-      if (changes.size >= 1024) { changes.clear(); changes.set("all", null); }
-      else if (!changes.has("all")) changes.set(change ? JSON.stringify(change) : "all", change);
+      if (changes.size >= 1024) {
+        changes.clear();
+        changes.set("all", null);
+      } else if (!changes.has("all"))
+        changes.set(change ? JSON.stringify(change) : "all", change);
       if (timer) return;
       timer = setTimeout(() => {
         timer = undefined;
         for (const sub of subscriptions.values())
           if (
-            [...changes.values()].some(change => notificationMatches(change, watched[sub.name], sub.scope))
+            [...changes.values()].some((change) =>
+              notificationMatches(change, watched[sub.name], sub.scope),
+            )
           )
             void refresh(sub);
         changes.clear();
       }, 80);
     };
     ws.on("message", async (data) => {
-      let message, pendingSubscription, counted = false;
+      let message,
+        pendingSubscription,
+        counted = false;
       try {
         message = JSON.parse(data.toString());
         if (typeof message.id !== "string" || message.id.length > 80)
@@ -179,19 +200,29 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
         else if (message.type === "subscribe") {
           if (!watched[message.name] || subscriptions.size >= 80)
             throw Error("Invalid subscription");
-          const args = actions.registry[message.name].schema.parse(message.args || {});
+          const args = actions.registry[message.name].schema.parse(
+            message.args || {},
+          );
           const sub = { ...message, args, scope: {}, resolving: true };
           pendingSubscription = sub;
           subscriptions.set(message.id, sub);
           let scope = {};
           if (message.name === "task_get") scope = { task: args.id };
-          else if (message.name === "agent_questions") scope = { task: args.task, work: args.work };
-          else if (message.name === "agent_notifications" && args.work) scope = { work: args.work };
+          else if (message.name === "agent_questions")
+            scope = { task: args.task, work: args.work };
+          else if (message.name === "agent_notifications" && args.work)
+            scope = { work: args.work };
           else if (message.name.startsWith("works_") && args.id) {
             const work = await actions.works.get(args.id);
-            scope = { work: work.id, repo: work.repo, project: work.project, ...(args.chat ? { chat: args.chat } : {}) };
+            scope = {
+              work: work.id,
+              repo: work.repo,
+              project: work.project,
+              ...(args.chat ? { chat: args.chat } : {}),
+            };
           }
-          if (subscriptions.get(message.id) !== sub || ws.readyState !== 1) return;
+          if (subscriptions.get(message.id) !== sub || ws.readyState !== 1)
+            return;
           Object.assign(sub, { scope, resolving: false });
           void refresh(sub);
         } else if (message.type === "call") {
@@ -199,7 +230,10 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
           send({ type: "result", id: message.id, result });
         } else throw Error("Unknown message");
       } catch (e) {
-        if (pendingSubscription?.resolving && subscriptions.get(pendingSubscription.id) === pendingSubscription)
+        if (
+          pendingSubscription?.resolving &&
+          subscriptions.get(pendingSubscription.id) === pendingSubscription
+        )
           subscriptions.delete(pendingSubscription.id);
         send({
           type: message?.type === "subscribe" ? "update" : "result",
@@ -246,7 +280,9 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
       const client = listener;
       listener = undefined;
       let broken = false;
-      await client.query("UNLISTEN frame_changes").catch(() => { broken = true; });
+      await client.query("UNLISTEN frame_changes").catch(() => {
+        broken = true;
+      });
       client.release(broken);
     }
   });
