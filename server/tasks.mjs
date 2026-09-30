@@ -86,6 +86,7 @@ export class Tasks {
     }
     const id = randomUUID();
     const insert = async () => {
+      if (this.desktopClosing) throw problem(409, "工作台正在退出，请重新打开后再开始任务。");
       if (requestKey) {
         const existing = await this.db.one(
           "SELECT * FROM tasks WHERE request_key=$1",
@@ -127,6 +128,7 @@ export class Tasks {
         throw problem(409, "Another tool upgrade is running");
       const prepared = prepareInput ? await prepareInput(JSON.parse(JSON.stringify(input))) : {};
       input = JSON.parse(JSON.stringify(prepared.input ?? input));
+      if (this.desktopClosing) throw problem(409, "工作台正在退出，请重新打开后再开始任务。");
       return this.db.one(
         "INSERT INTO tasks(id,repo,project,kind,input,chat,request_key,request_input,execution,review_reference) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
         [id, repo || null, project || null, kind, input, chat, requestKey, requestedInput, prepared.execution || null, prepared.reviewReference || null],

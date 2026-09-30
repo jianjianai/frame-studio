@@ -110,7 +110,8 @@ foreach ($name in (@($pack.files.path) + @('pnpm-lock.yaml','pnpm-workspace.yaml
   Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $target
 }
 Copy-Item -LiteralPath (Join-Path $repo 'studio-dist') -Destination (Join-Path $bundle 'studio-dist') -Recurse
-Copy-Item -LiteralPath (Join-Path $repo '.cache\desktop\FrameStudio.exe') -Destination (Join-Path $bundle 'FrameStudio.exe')
+foreach ($name in @('FrameStudio.exe','FrameSetup.exe','FrameStudio.exe.config','FrameSetup.exe.config')) { Copy-Item -LiteralPath (Join-Path $repo ".cache\desktop\$name") -Destination (Join-Path $bundle $name) }
+Copy-Item (Join-Path $repo '.cache\desktop\FrameStudio.ico') (Join-Path $bundle 'desktop\FrameStudio.ico')
 @{schema=2;components=$components;dependencies=$dependencies} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $bundle 'desktop\runtime-manifest.json') -Encoding utf8
 $compiler = & (Join-Path $PSScriptRoot 'get-compiler.ps1')
 $output = Split-Path -Parent $bundle

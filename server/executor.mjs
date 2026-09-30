@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
+import { processLaunch, localToolBinary } from "./local-tools.mjs";
 import { agentEvent } from "./agent-events.mjs";
 import { runAgentTurn } from "./agent-runtime.mjs";
 import { createAgentFileInspector } from "./agent-file-changes.mjs";
@@ -51,7 +52,8 @@ const result = (value) =>
   fs.writeFileSync(work + "/result.json", JSON.stringify({ ...value, validation, executorMetrics: { ...executorMetrics, totalMs: Math.round(performance.now() - executorStarted) }, runtime: actualRuntime, runtimeFingerprint: actualRuntime?.fingerprint || null }));
 const run = (bin, args, options = {}) =>
   new Promise((resolve, reject) => {
-    const child = spawn(bin, args, {
+    const launch = processLaunch(bin, args);
+    const child = spawn(launch.bin, launch.args, {
       cwd: work,
       env: {
         ...process.env,
@@ -175,6 +177,7 @@ try {
     if (task.kind === "agent") {
       const p = task.input.provider;
       let bin = p === "codex" ? "codex" : "claude";
+      if (process.env.FRAME_LOCAL_MODE === "1") bin = localToolBinary(bin);
       const pinned = task.runtime?.tool;
       if (pinned?.provider && pinned.provider !== p) throw Error("Pinned tool/provider mismatch");
       if (pinned?.version) {

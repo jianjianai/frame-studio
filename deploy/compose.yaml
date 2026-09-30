@@ -3,7 +3,7 @@
 name: frame
 services:
   studio:
-    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.0}
+    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.1}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
@@ -21,7 +21,7 @@ services:
       FRAME_HOST_DATA: ${FRAME_HOST_DATA:-/opt/stacks/frame/data}
       FRAME_TASK_CONCURRENCY: ${FRAME_TASK_CONCURRENCY:-2}
       FRAME_MIN_FREE_BYTES: ${FRAME_MIN_FREE_BYTES:-1073741824}
-      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.0}
+      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.1}
       FRAME_TASK_TIMEOUT_SECONDS: ${FRAME_TASK_TIMEOUT_SECONDS:-21600}
       FRAME_SPEECH_URL: http://speech:8000
     volumes:
@@ -47,7 +47,7 @@ services:
       retries: 5
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   controller:
-    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.0}
+    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.1}
     restart: unless-stopped
     user: "1000:1000"
     group_add: ["${FRAME_DOCKER_GID:?Set FRAME_DOCKER_GID to the Docker socket group ID}"]
@@ -88,7 +88,7 @@ services:
       timeout: 3s
       retries: 15
   speech:
-    image: ghcr.io/jianjianai/frame-studio/speech:${FRAME_SPEECH_VERSION:-7.6.0}
+    image: ghcr.io/jianjianai/frame-studio/speech:${FRAME_SPEECH_VERSION:-7.6.1}
     restart: unless-stopped
     environment: { OMP_NUM_THREADS: "2", MKL_NUM_THREADS: "2" }
     volumes: [./models:/models]

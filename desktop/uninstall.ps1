@@ -1,7 +1,9 @@
 ﻿param([Parameter(Mandatory=$true)][string]$InstallRoot)
 $ErrorActionPreference = 'Stop'
 $env:PSModulePath = Join-Path $PSHOME 'Modules'
-$registered = (Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudio').InstallLocation
+$registry = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudio'
+if ($env:FRAME_DESKTOP_TEST -eq '1') { $registry += 'Test' }
+$registered = (Get-ItemProperty -LiteralPath $registry).InstallLocation
 $root = [IO.Path]::GetFullPath($InstallRoot).TrimEnd('\')
 if ($root -ne [IO.Path]::GetFullPath($registered).TrimEnd('\')) { throw 'Uninstall directory differs from registered installation.' }
 $versions = Join-Path $root 'versions'

@@ -13,8 +13,18 @@ test("preview HTTP streams bounded byte ranges, HEAD and suffixes without exposi
   const bytes = Buffer.from("0123456789abcdef");
   fs.writeFileSync(path.join(directory, "sample.wav"), bytes);
   fs.writeFileSync(path.join(directory, "empty.wav"), "");
-  fs.writeFileSync(path.join(f.root, "private.txt"), "outside");
-  fs.symlinkSync(path.join(f.root, "private.txt"), path.join(directory, "outside.txt"));
+  let outside = "/outside.txt";
+  if (process.platform === "win32") {
+    // A junction exercises the same realpath escape without requiring an elevated
+    // token or Windows Developer Mode just to run the desktop test suite.
+    fs.mkdirSync(path.join(f.root, "private"));
+    fs.writeFileSync(path.join(f.root, "private", "file.txt"), "outside");
+    fs.symlinkSync(path.join(f.root, "private"), path.join(directory, "outside"), "junction");
+    outside = "/outside/file.txt";
+  } else {
+    fs.writeFileSync(path.join(f.root, "private.txt"), "outside");
+    fs.symlinkSync(path.join(f.root, "private.txt"), path.join(directory, "outside.txt"));
+  }
   const server = await servePreview(directory);
   try {
     for (const [range, start, end] of [["bytes=0-3",0,3],["bytes=8-",8,15],["bytes=-4",12,15],["bytes=14-100",14,15]]) {
@@ -34,7 +44,7 @@ test("preview HTTP streams bounded byte ranges, HEAD and suffixes without exposi
     const head=await fetch(server.url+"/sample.wav",{method:"HEAD"});
     assert.equal(head.status,200);assert.equal(head.headers.get("content-length"),"16");assert.equal(await head.text(),"");
     const empty=await fetch(server.url+"/empty.wav");assert.equal(empty.status,200);assert.equal(await empty.text(),"");
-    assert.equal((await fetch(server.url+"/outside.txt")).status,404);
+    assert.equal((await fetch(server.url+outside)).status,404);
     const method=await fetch(server.url+"/sample.wav",{method:"POST"});
     assert.equal(method.status,405);assert.equal(method.headers.get("allow"),"GET, HEAD");
   } finally { await server.close(); f.close(); }

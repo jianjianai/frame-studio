@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { processLaunch } from "./local-tools.mjs";
 import { StringDecoder } from "node:string_decoder";
 import { providerModelSchema } from "../src/contracts/ai-models.mjs";
 import { apiModelMetadata, enrichModelMetadata } from "./provider-metadata.mjs";
@@ -11,9 +12,10 @@ export async function discoverCodexModels(
   config,
   { bin, env, cwd, spawnProcess = spawn, timeout = 20000, catalogLoader },
 ) {
+  const launch = processLaunch(bin, ["app-server", "--listen", "stdio://", "-c", 'model_provider="openai"']);
   const child = spawnProcess(
-    bin,
-    ["app-server", "--listen", "stdio://", "-c", 'model_provider="openai"'],
+    launch.bin,
+    launch.args,
     { env, cwd, stdio: ["pipe", "pipe", "pipe"], windowsHide: true },
   );
   const pending = new Map(),

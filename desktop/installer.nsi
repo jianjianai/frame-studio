@@ -1,125 +1,115 @@
 ﻿Unicode true
-!include "MUI2.nsh"
 !include "LogicLib.nsh"
+!include "FileFunc.nsh"
 !include "x64.nsh"
 !include "WinVer.nsh"
-!define REGKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudio"
 Name "FRAME Studio ${AppVersion}"
 OutFile "${OutputDir}\FrameStudio-v${AppVersion}-win-x64-Setup.exe"
 InstallDir "$LOCALAPPDATA\Programs\FRAME Studio"
-InstallDirRegKey HKCU "${REGKEY}" "InstallLocation"
+InstallDirRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudio" "InstallLocation"
 RequestExecutionLevel user
+SilentInstall silent
+SilentUnInstall silent
 SetCompressor /SOLID lzma
-ShowInstDetails show
-ShowUninstDetails show
+Icon "${BundleDir}\desktop\FrameStudio.ico"
+UninstallIcon "${BundleDir}\desktop\FrameStudio.ico"
 VIProductVersion "${AppVersion}.0"
 VIAddVersionKey "ProductName" "FRAME Studio"
-VIAddVersionKey "FileDescription" "FRAME Studio Installer"
+VIAddVersionKey "FileDescription" "FRAME Studio 安装程序"
 VIAddVersionKey "FileVersion" "${AppVersion}"
 VIAddVersionKey "LegalCopyright" "FRAME Studio contributors"
-!define MUI_ABORTWARNING
-!insertmacro MUI_PAGE_WELCOME
-!insertmacro MUI_PAGE_DIRECTORY
-!insertmacro MUI_PAGE_INSTFILES
-!define MUI_FINISHPAGE_RUN "$INSTDIR\versions\${AppVersion}\FrameStudio.exe"
-!insertmacro MUI_PAGE_FINISH
-!insertmacro MUI_UNPAGE_CONFIRM
-!insertmacro MUI_UNPAGE_INSTFILES
-!insertmacro MUI_LANGUAGE "SimpChinese"
-!insertmacro MUI_LANGUAGE "English"
-Var DataRoot
+Var Mode
+Var Restart
 Var SetupMutex
-
-!macro CheckRunning
-  System::Call 'kernel32::OpenMutexW(i 0x100000, i 0, w "Local\FRAME-Studio-Desktop") p .r0'
-  ${If} $0 <> 0
-    System::Call 'kernel32::CloseHandle(p r0)'
-    MessageBox MB_OK|MB_ICONEXCLAMATION "请先从托盘退出 FRAME Studio，再继续安装或卸载。" /SD IDOK
-    SetErrorLevel 2
-    Abort
-  ${EndIf}
-!macroend
-
+Var Parameters
+Var Registration
+Var Group
 Function .onInit
   SetShellVarContext current
   SetRegView 64
+  ReadEnvStr $0 "FRAME_DESKTOP_TEST"
+  StrCpy $Registration "Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudio"
+  StrCpy $Group "FRAME Studio"
+  ${If} $0 = "1"
+    StrCpy $Registration "Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudioTest"
+    StrCpy $Group "FRAME Studio Test"
+  ${EndIf}
   ${IfNot} ${RunningX64}
-    MessageBox MB_OK "FRAME Studio requires 64-bit Windows." /SD IDOK
+    MessageBox MB_OK "FRAME Studio 需要 64 位 Windows。" /SD IDOK
+    SetErrorLevel 1
     Abort
   ${EndIf}
   ${IfNot} ${AtLeastWin10}
-    MessageBox MB_OK "FRAME Studio requires Windows 10 or newer." /SD IDOK
+    MessageBox MB_OK "FRAME Studio 需要 Windows 10 或更新版本。" /SD IDOK
+    SetErrorLevel 1
     Abort
   ${EndIf}
-  !insertmacro CheckRunning
   System::Call 'kernel32::CreateMutexW(p 0, i 0, w "Local\FRAME-Studio-Setup") p .r0 ?e'
   Pop $1
   StrCpy $SetupMutex $0
   ${If} $1 = 183
-    MessageBox MB_OK "FRAME Studio Setup is already running." /SD IDOK
+    MessageBox MB_OK "安装程序已打开，请在现有窗口继续。" /SD IDOK
     SetErrorLevel 2
     Abort
   ${EndIf}
+  StrCpy $Mode ""
+  StrCpy $Restart ""
+  ${GetParameters} $Parameters
+  ClearErrors
+  ${GetOptions} $Parameters "/S" $0
+  ${IfNot} ${Errors}
+    StrCpy $Mode "--silent"
+  ${EndIf}
+  ClearErrors
+  ${GetOptions} $Parameters "/RESTARTAPP" $0
+  ${IfNot} ${Errors}
+    StrCpy $Restart "--restart"
+  ${EndIf}
 FunctionEnd
-
-Section "FRAME Studio"
-  !insertmacro CheckRunning
+Section "Install"
   InitPluginsDir
   SetOutPath "$PLUGINSDIR\payload"
   File /r "${BundleDir}\*"
-  ReadEnvStr $DataRoot FRAME_LOCAL_DATA
-  ${If} $DataRoot == ""
-    StrCpy $DataRoot "$LOCALAPPDATA\FRAME Studio"
-  ${EndIf}
-  DetailPrint "检查并安装运行环境、浏览器和 pnpm 依赖；已安装组件会复用。"
-  nsExec::ExecToLog '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$PLUGINSDIR\payload\desktop\install.ps1" -SourceRoot "$PLUGINSDIR\payload" -InstallRoot "$INSTDIR\versions\${AppVersion}" -DataRoot "$DataRoot"'
-  Pop $0
-  ${If} $0 != 0
-    DetailPrint "依赖准备失败，现有版本保持可用。请查看 $DataRoot\installer.log 后重试。"
-    SetErrorLevel 1
-    Abort
-  ${EndIf}
-  SetOutPath "$INSTDIR\versions\${AppVersion}"
-  ClearErrors
-  CopyFiles /SILENT "$PLUGINSDIR\payload\*.*" "$INSTDIR\versions\${AppVersion}"
-  ${If} ${Errors}
-    SetErrorLevel 1
-    Abort "Could not copy application files."
-  ${EndIf}
-  SetOutPath "$INSTDIR"
-  WriteUninstaller "$INSTDIR\Uninstall.exe"
-  CreateDirectory "$SMPROGRAMS\FRAME Studio"
-  CreateShortcut "$SMPROGRAMS\FRAME Studio\FRAME Studio.lnk" "$INSTDIR\versions\${AppVersion}\FrameStudio.exe" "" "$INSTDIR\versions\${AppVersion}\FrameStudio.exe"
-  CreateShortcut "$SMPROGRAMS\FRAME Studio\卸载 FRAME Studio.lnk" "$INSTDIR\Uninstall.exe"
-  WriteRegStr HKCU "${REGKEY}" "DisplayName" "FRAME Studio"
-  WriteRegStr HKCU "${REGKEY}" "DisplayVersion" "${AppVersion}"
-  WriteRegStr HKCU "${REGKEY}" "Publisher" "FRAME Studio"
-  WriteRegStr HKCU "${REGKEY}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${REGKEY}" "DisplayIcon" "$INSTDIR\versions\${AppVersion}\FrameStudio.exe"
-  WriteRegStr HKCU "${REGKEY}" "UninstallString" '$\"$INSTDIR\Uninstall.exe$\"'
-  WriteRegStr HKCU "${REGKEY}" "QuietUninstallString" '$\"$INSTDIR\Uninstall.exe$\" /S'
-  WriteRegDWORD HKCU "${REGKEY}" "NoModify" 1
-  WriteRegDWORD HKCU "${REGKEY}" "NoRepair" 1
+  WriteUninstaller "$PLUGINSDIR\Uninstall.exe"
+  ExecWait '"$PLUGINSDIR\payload\FrameSetup.exe" --source "$PLUGINSDIR\payload" --root "$INSTDIR" --version "${AppVersion}" --uninstaller "$PLUGINSDIR\Uninstall.exe" $Mode $Restart' $0
+  SetErrorLevel $0
 SectionEnd
-
 Function un.onInit
   SetShellVarContext current
   SetRegView 64
-  !insertmacro CheckRunning
-FunctionEnd
-
-Section "Uninstall"
-  SetOutPath "$INSTDIR"
-  nsExec::ExecToLog '"$WINDIR\Sysnative\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$INSTDIR\versions\${AppVersion}\desktop\uninstall.ps1" -InstallRoot "$INSTDIR"'
-  Pop $0
-  ${If} $0 != 0
-    SetErrorLevel 1
-    Abort "Could not remove application files; user data has been preserved."
+  ReadEnvStr $0 "FRAME_DESKTOP_TEST"
+  StrCpy $Registration "Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudio"
+  StrCpy $Group "FRAME Studio"
+  ${If} $0 = "1"
+    StrCpy $Registration "Software\Microsoft\Windows\CurrentVersion\Uninstall\FRAMEStudioTest"
+    StrCpy $Group "FRAME Studio Test"
   ${EndIf}
-  Delete "$SMPROGRAMS\FRAME Studio\FRAME Studio.lnk"
-  Delete "$SMPROGRAMS\FRAME Studio\卸载 FRAME Studio.lnk"
-  RMDir "$SMPROGRAMS\FRAME Studio"
-  DeleteRegKey HKCU "${REGKEY}"
-  Delete "$INSTDIR\Uninstall.exe"
-  RMDir "$INSTDIR"
+  StrCpy $Mode ""
+  ${GetParameters} $Parameters
+  ClearErrors
+  ${GetOptions} $Parameters "/S" $0
+  ${IfNot} ${Errors}
+    StrCpy $Mode "--silent"
+  ${EndIf}
+FunctionEnd
+Section "Uninstall"
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=FrameSetup.exe "${BundleDir}\FrameSetup.exe"
+  CreateDirectory "$PLUGINSDIR\desktop"
+  SetOutPath "$PLUGINSDIR\desktop"
+  File "${BundleDir}\desktop\uninstall.ps1"
+  ExecWait '"$PLUGINSDIR\FrameSetup.exe" --uninstall --source "$PLUGINSDIR" --root "$INSTDIR" $Mode' $0
+  SetErrorLevel $0
+  ${If} $0 = 0
+    Delete "$SMPROGRAMS\$Group\$Group.lnk"
+    Delete "$SMPROGRAMS\$Group\卸载 FRAME Studio.lnk"
+    Delete "$SMPROGRAMS\$Group\Windows 控制中心.lnk"
+    RMDir "$SMPROGRAMS\$Group"
+    Delete "$DESKTOP\$Group.lnk"
+    DeleteRegKey HKCU "$Registration"
+    Delete "$INSTDIR\installation.json"
+    Delete "$INSTDIR\Uninstall.exe"
+    RMDir "$INSTDIR"
+  ${EndIf}
 SectionEnd

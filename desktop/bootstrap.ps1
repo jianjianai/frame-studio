@@ -4,6 +4,7 @@
   [Parameter(Mandatory=$true)][string]$Selection,
   [string]$LinkRoot,
   [switch]$PrepareOnly,
+  [switch]$CheckOnly,
   [ValidateSet('tools','speech')][string[]]$RefreshComponents = @(),
   [switch]$LocalAssets
 )
@@ -14,6 +15,7 @@ $env:PSModulePath = Join-Path $PSHOME 'Modules'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.IO.Compression.FileSystem
+. (Join-Path $PSScriptRoot 'progress.ps1')
 $app = [IO.Path]::GetFullPath($AppRoot)
 $cache = Join-Path ([IO.Path]::GetFullPath($DataRoot)) 'runtimes'
 New-Item -ItemType Directory -Path $cache -Force | Out-Null
@@ -47,43 +49,31 @@ try {
       if ($installed.sha256 -ne $entry.sha256) { throw 'Published runtime checksum changed; refusing to replace an immutable component.' }
       $requiredExecutable = if ($kind -eq 'tools') { 'node.exe' } else { 'python\python.exe' }
       if ($RefreshComponents -notcontains $kind -and (Test-Path -LiteralPath (Join-Path $destination $requiredExecutable))) {
+        Write-FrameProgress $kind 'cached' '已安装，将复用现有环境'
         Write-Output "复用已安装运行环境：$kind"
         $selected[$kind] = $destination
         continue
       }
     }
+    if ($CheckOnly) { throw '运行环境缺失，请点击“修复安装”重新准备。' }
     $temporary = Join-Path $cache ('.i-' + [Guid]::NewGuid().ToString('N').Substring(0,16))
     New-Item -ItemType Directory -Path $temporary | Out-Null
     $extractNode = $null
     $stage = $null
     try {
-      $archivePath = Join-Path $temporary 'runtime.zip'
+      $archivePath = Join-Path $DataRoot ('downloads\' + $entry.id + '-' + $entry.sha256.Substring(0,12) + '.zip')
+      New-Item -ItemType Directory -Path (Split-Path -Parent $archivePath) -Force | Out-Null
+      if (-not (Test-Path -LiteralPath $archivePath)) {
       Write-Output "正在下载运行环境：$kind"
       if ($uri.Scheme -eq 'file' -and $LocalAssets) {
         Copy-Item -LiteralPath $uri.LocalPath -Destination $archivePath
       } else {
-        $request = [Net.HttpWebRequest]::Create($uri)
-        $request.UserAgent = 'FRAME-Studio-Windows-Installer'
-        $request.Timeout = 60000
-        $response = $request.GetResponse()
-        $inputStream = $response.GetResponseStream()
-        $outputStream = [IO.File]::Create($archivePath)
-        try {
-          $buffer = New-Object byte[] 1048576
-          $received = 0L
-          $reported = 0L
-          while (($count = $inputStream.Read($buffer,0,$buffer.Length)) -gt 0) {
-            $outputStream.Write($buffer,0,$count)
-            $received += $count
-            if ($received - $reported -ge 16777216) {
-              Write-Output "正在下载 $kind：$([Math]::Round($received/1MB)) MiB"
-              $reported = $received
-            }
-          }
-        } finally { $outputStream.Dispose(); $inputStream.Dispose(); $response.Dispose() }
+        Get-FrameDownload $uri $archivePath $kind $entry.bytes
       }
+      }
+      Write-FrameProgress $kind 'verifying' '正在校验下载文件'
       $digest = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash.ToLowerInvariant()
-      if ($digest -ne $entry.sha256) { throw "运行环境校验失败：$kind，请重新启动以重试。" }
+      if ($digest -ne $entry.sha256) { [IO.File]::Delete($archivePath); throw "运行环境校验失败：$kind，点击重试会重新下载。" }
       $stage = Join-Path $temporary 'files'
       New-Item -ItemType Directory -Path $stage | Out-Null
       if ($kind -eq 'tools') {
@@ -96,12 +86,14 @@ try {
         } finally { $archive.Dispose() }
       } else { $extractNode = Join-Path $selected.tools 'node.exe' }
       Write-Output "正在安装运行环境：$kind"
+      Write-FrameProgress $kind 'installing' '下载完成，正在安装'
       & $extractNode (Join-Path $app 'desktop\extract.mjs') $archivePath $stage
       if ($LASTEXITCODE -ne 0) { throw "Runtime extraction failed: $kind" }
       $entry | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $stage 'FRAME-RUNTIME.json') -Encoding utf8
       if (Test-Path -LiteralPath $destination) { Move-Item -LiteralPath $destination -Destination ($destination + '.incomplete-' + [Guid]::NewGuid().ToString('N')) }
       Move-Item -LiteralPath $stage -Destination $destination
       $selected[$kind] = $destination
+      Write-FrameProgress $kind 'done' '准备完成'
     } finally {
       if (-not ([IO.Path]::GetFullPath($temporary)).StartsWith($cache + [IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected installer cleanup path.' }
       if ($stage -and (Test-Path -LiteralPath $stage) -and $extractNode -and (Test-Path -LiteralPath $extractNode)) {
@@ -110,9 +102,11 @@ try {
       Remove-Item -LiteralPath $temporary -Recurse -Force
     }
   }
-  & (Join-Path $selected.tools 'node.exe') (Join-Path $app 'desktop\dependencies.mjs') install $app $cache $selected.tools
+  Write-FrameProgress 'dependencies' 'installing' '正在准备工作台依赖'
+  & (Join-Path $selected.tools 'node.exe') (Join-Path $app 'desktop\dependencies.mjs') $(if ($CheckOnly) { 'check' } else { 'install' }) $app $cache $selected.tools
   if ($LASTEXITCODE -ne 0) { throw 'Node 依赖安装失败，请查看 pnpm 日志；重新启动可继续安装。' }
   $selected.dependencies = Join-Path $cache $manifest.dependencies.id
+  Write-FrameProgress 'dependencies' 'done' '工作台依赖已就绪'
   if ($PrepareOnly) {
     $selected | ConvertTo-Json | Set-Content -LiteralPath $Selection -Encoding utf8
     Write-Output '依赖缓存已就绪'

@@ -1,4 +1,5 @@
 import { subscribe } from "./realtime";
+import { WindowsCenterLink, LocalAiSettings } from "./desktop-settings";
 import { useEffect, useState } from "react";
 import {
   Plus,
@@ -18,6 +19,7 @@ import {
   Shield,
   AudioLines,
   Activity,
+  Monitor,
 } from "lucide-react";
 import {
   api,
@@ -211,6 +213,7 @@ export function ModelConnections(props) {
 }
 
 const settingsSections = [
+  { id: "desktop", label: "Windows 控制中心", detail: "打开本机运行管理窗口", icon: Monitor },
   {
     id: "ai",
     label: "AI 模型",
@@ -266,7 +269,9 @@ export function Settings({ notify, localMode = false }) {
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
-  const matches = settingsSections.filter((section) =>
+  const sections = settingsSections.filter(section => localMode ? !["tools", "access", "system"].includes(section.id) : section.id !== "desktop");
+  const activeTab = sections.some(section => section.id === tab) ? tab : "ai";
+  const matches = sections.filter((section) =>
     `${section.label} ${section.detail}`
       .toLowerCase()
       .includes(search.toLowerCase().trim()),
@@ -295,12 +300,12 @@ export function Settings({ notify, localMode = false }) {
       </header>
       <div className="settings-layout">
         <nav className="settings-nav" aria-label="设置分类">
-          {settingsSections.map(({ id, label, icon: Icon }) => (
+          {sections.map(({ id, label, icon: Icon }) => (
             <button
               type="button"
               key={id}
-              aria-current={tab === id ? "page" : undefined}
-              className={tab === id ? "selected" : ""}
+              aria-current={activeTab === id ? "page" : undefined}
+              className={activeTab === id ? "selected" : ""}
               onClick={() => open(id)}
             >
               <Icon size={16} />
@@ -326,17 +331,19 @@ export function Settings({ notify, localMode = false }) {
                 <Empty>没有匹配的设置，请尝试“模型”“快捷键”或“语音”。</Empty>
               )}
             </section>
-          ) : tab === "ai" ? (
-            <ModelConnections notify={notify} localMode={localMode} />
-          ) : tab === "general" ? (
+          ) : activeTab === "desktop" ? (
+            <WindowsCenterLink />
+          ) : activeTab === "ai" ? (
+            localMode ? <LocalAiSettings notify={notify} /> : <ModelConnections notify={notify} />
+          ) : activeTab === "general" ? (
             <GeneralAiSettings />
-          ) : tab === "github" ? (
+          ) : activeTab === "github" ? (
             <GitHubAccounts notify={notify} />
-          ) : tab === "speech" ? (
+          ) : activeTab === "speech" ? (
             <SpeechSettings notify={notify} />
-          ) : tab === "tools" ? (
+          ) : activeTab === "tools" ? (
             <ToolSettings notify={notify} />
-          ) : tab === "system" ? (
+          ) : activeTab === "system" ? (
             <SystemStatus />
           ) : (
             <AccessSettings notify={notify} />
