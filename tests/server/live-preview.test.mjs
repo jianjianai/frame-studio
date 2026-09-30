@@ -74,6 +74,11 @@ test("capability resource routes never expose source, other projects, dependenci
     assert.equal((await app.inject("/preview-live/unknown/manifest.json")).statusCode, 401);
     const code = await app.inject({ url: base + "assets/project-one.js", headers: { "accept-encoding": "br,gzip" } });
     assert.equal(code.statusCode, 200); assert.equal(code.headers["content-encoding"], "br");
+    const csp = code.headers["content-security-policy"];
+    assert.match(csp, /(?:^|;)\s*media-src 'self' data: blob:(?:;|$)/, "Remotion shared silent audio can load inline media");
+    assert.match(csp, /(?:^|;)\s*sandbox allow-scripts allow-downloads(?:;|$)/, "preview retains an opaque origin");
+    assert.match(csp, /(?:^|;)\s*connect-src 'self'(?:;|$)/, "inline media does not broaden network access");
+    assert.doesNotMatch(csp, /script-src[^;]*data:/, "inline media does not authorize data scripts");
     assert.match(code.headers["cache-control"], /immutable/);
     assert.match(brotliDecompressSync(code.rawPayload).toString(), /value:1/);
     const conditional = await app.inject({ url: base + "assets/project-one.js", headers: { "if-none-match": code.headers.etag } });

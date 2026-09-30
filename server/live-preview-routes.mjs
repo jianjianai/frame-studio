@@ -76,7 +76,7 @@ export function installLivePreview(app, livePreview) {
     reply
       .header("Access-Control-Allow-Origin", "*")
       .header("Access-Control-Expose-Headers", "Content-Length, Content-Range, Accept-Ranges, ETag")
-      .header("Content-Security-Policy", "sandbox allow-scripts allow-downloads; default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'");
+      .header("Content-Security-Policy", "sandbox allow-scripts allow-downloads; default-src 'none'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'self'");
     if (relative === "index.html") {
       await livePreview.ready(session);
       const config = JSON.stringify({ sessionId: session.id, manifestUrl: "manifest.json", eventsUrl: "events" }).replaceAll("<", "\\u003c");

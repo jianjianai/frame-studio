@@ -74,6 +74,9 @@ export async function createRemotionScene(
           clickToPlay={false}
           moveToBeginningWhenEnded={false}
           playbackRate={state.rate}
+          // Frame owns persisted preferences; opaque previews cannot use localStorage.
+          initialVolume={state.volume}
+          initiallyMuted={state.muted}
           errorFallback={({ error }) => {
             failure = error;
             return <div role="alert">{error.message}</div>;
