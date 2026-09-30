@@ -38,3 +38,13 @@
 冻结明确提交的源码，以提交 SHA 标记不可变镜像；隔离 PostgreSQL 与真实 Docker 执行器执行 verify:release 和 test:workspace。通过后推送镜像，检查活动任务，只切换 studio/controller。上线后检查健康、真实 HTTP MCP、原生 CLI、桌面/手机工作台、既有作品预览以及源码/素材未变。
 
 遵守用户约定：不创建数据库或内容备份；保留原镜像用于回退。本次跨版本迁移为新增表/列/通知触发器，不删除业务数据。生产结果另行补充。
+
+## 首次生产验收与 7.1.1 补充修复
+
+7.1.0 提交 eb3d021df1bd56378fef301808e99815115daf08 已推送并通过不可变候选门禁：Vitest 81、MCP 81、服务端 188 项通过，2 项可选 GeneralUser 音色包测试跳过；真实 Docker Codex/Claude、真实 HTTP MCP → Docker 成片 → CLI 下载通过；工作台 27 项检查通过。镜像 digest 为 sha256:199cb80ff51f712fa21624aa3f05a928645c1b06ac3ea984f1a6e5960f5372e7。
+
+第一次生产切换仅更新 Studio/Controller，健康与就绪通过，未登录 API 返回 401；线上 MCP 87 工具、文档、24 秒默认值及全部未删除作品上下文通过。桌面/手机工作台、播放、模型选择、素材面板、草稿保留、设置页均通过，pageerror 为 0。现有 Codex 官方账户 20x 仍为 expired/configured:false，需要本人重新登录；未修改凭据或声称其线上模型调用成功。
+
+既有作品预览验收发现 the-learning-machine 的大文件音频触发有界缓存回读失败：buildPreviewAudio 的本地静态服务器始终返回 200，未实现 Range。已用 3.84 MB WAV 在真实 Chromium 中“37 秒 → 0 秒 → 20 秒 → 1 秒”重现同一错误。修复为真正的流式 206 范围响应，支持开放/后缀范围、HEAD、长度及 416；取消请求释放文件流，同时限制方法和实际文件路径。没有放宽音频内存预算或把整个素材常驻内存。
+
+新增两个回归测试在修复前均失败，修复后连同音频 V7/压缩预览回归共 8/8 通过，0 跳过。日志为 .cache/toolchain-range-before.log 与 .cache/toolchain-range-after.log。版本升级至 7.1.1，最终冻结候选门禁和既有作品验收将继续完成。

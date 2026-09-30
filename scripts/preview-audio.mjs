@@ -10,33 +10,54 @@ import { audioCacheKeys, restoreAudioTrack, saveAudioCache } from "./preview-aud
 import { projectPath } from "./project-paths.mjs";
 
 export function servePreview(directory) {
+  const root = fs.realpathSync(directory);
   const types = {
-    ".html": "text/html",
-    ".js": "text/javascript",
-    ".css": "text/css",
-    ".json": "application/json",
-    ".wasm": "application/wasm",
-    ".mp3": "audio/mpeg",
+    ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
+    ".json": "application/json", ".wasm": "application/wasm",
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac",
+    ".ogg": "audio/ogg", ".opus": "audio/ogg", ".m4a": "audio/mp4",
+    ".mp4": "video/mp4", ".webm": "video/webm",
   };
   const server = http.createServer((req, res) => {
+    if (!["GET", "HEAD"].includes(req.method)) {
+      res.writeHead(405, { Allow: "GET, HEAD" }).end();
+      return;
+    }
     try {
-      const pathname = decodeURIComponent(
-        new URL(req.url, "http://localhost").pathname,
-      );
-      const file = path.resolve(
-        directory,
-        "." + (pathname === "/" ? "/index.html" : pathname),
-      );
-      if (
-        !file.startsWith(path.resolve(directory) + path.sep) ||
-        !fs.statSync(file).isFile()
-      )
-        throw Error();
-      res.setHeader(
-        "Content-Type",
-        types[path.extname(file)] || "application/octet-stream",
-      );
-      fs.createReadStream(file).pipe(res);
+      const pathname = decodeURIComponent(new URL(req.url, "http://localhost").pathname);
+      const file = fs.realpathSync(path.resolve(root, "." + (pathname === "/" ? "/index.html" : pathname)));
+      const stat = fs.statSync(file);
+      if (!file.startsWith(root + path.sep) || !stat.isFile()) throw Error();
+      const size = stat.size;
+      res.setHeader("Content-Type", types[path.extname(file)] || "application/octet-stream");
+      res.setHeader("Accept-Ranges", "bytes");
+      let start = 0, end = size - 1;
+      // Bounded media decoders must be able to seek backwards after cache eviction.
+      // Serve exact ranges rather than buffering complete audio/video files.
+      if (req.method === "GET" && req.headers.range) {
+        const match = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range);
+        if (match?.[1]) {
+          start = Number(match[1]);
+          const requestedEnd = match[2] ? Number(match[2]) : end;
+          end = Number.isSafeInteger(requestedEnd) ? Math.min(requestedEnd, end) : NaN;
+        } else if (match?.[2]) {
+          const suffix = Number(match[2]);
+          start = Number.isSafeInteger(suffix) && suffix > 0 ? Math.max(0, size - suffix) : NaN;
+        } else start = NaN;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) ||
+            start < 0 || start > end || start >= size) {
+          res.writeHead(416, { "Content-Range": "bytes */" + size, "Content-Length": 0 }).end();
+          return;
+        }
+        res.statusCode = 206;
+        res.setHeader("Content-Range", "bytes " + start + "-" + end + "/" + size);
+      }
+      res.setHeader("Content-Length", size ? end - start + 1 : 0);
+      if (req.method === "HEAD" || !size) { res.end(); return; }
+      const stream = fs.createReadStream(file, { start, end });
+      res.once("close", () => stream.destroy());
+      stream.once("error", () => res.destroy());
+      stream.pipe(res);
     } catch {
       res.writeHead(404).end();
     }
@@ -45,11 +66,10 @@ export function servePreview(directory) {
     server.listen(0, "127.0.0.1", () =>
       resolve({
         url: `http://127.0.0.1:${server.address().port}`,
-        close: () =>
-          new Promise((done) => {
-            server.closeAllConnections();
-            server.close(done);
-          }),
+        close: () => new Promise((done) => {
+          server.closeAllConnections();
+          server.close(done);
+        }),
       }),
     ),
   );
