@@ -33,6 +33,22 @@ export class AudioTransport {
   volume = 0.65;
   muted = false;
   prepareMs = 0;
+  private visualBuffering = false;
+  private visualWaiters = new Set<() => void>();
+  setVisualBuffering(waiting: boolean) {
+    this.visualBuffering=waiting;
+    if (!waiting) { for(const resolve of this.visualWaiters)resolve();this.visualWaiters.clear(); }
+    else if(this.requestedPlay && !this.buffering)this.restart();
+  }
+  private async waitForVisual(signal: AbortSignal) {
+    signal.throwIfAborted();
+    if(!this.visualBuffering)return;
+    await new Promise<void>((resolve,reject)=>{
+      const done=()=>{signal.removeEventListener('abort',abort);this.visualWaiters.delete(done);resolve();};
+      const abort=()=>{this.visualWaiters.delete(done);reject(signal.reason);};
+      this.visualWaiters.add(done);signal.addEventListener('abort',abort,{once:true});
+    });
+  }
   async preparePosition(signal?: AbortSignal): Promise<void> {
     const began = performance.now();
     await this.load();
@@ -294,6 +310,7 @@ export class AudioTransport {
     const offset = this.clock.time(), length = this.clock.duration - offset;
     this.buffering = true;
     await Promise.all([
+      this.waitForVisual(request.signal),
       this.media?.prepare(offset, this.clock.rate, this.controls, request.signal),
       prepareAudioSegment(prepared, context, this.clock.duration, offset, length,
         this.clock.rate, this.controls, request.signal),

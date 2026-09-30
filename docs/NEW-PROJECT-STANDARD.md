@@ -32,7 +32,7 @@ pnpm film new my-film "我的动画"
 pnpm project:check my-film --strict
 ```
 
-默认创建空白合成，不预选引擎、镜头或风格。能力清单通过 `pnpm film composition engines --json` 查询，接口见 [混合合成](COMPOSITION.md)。脚手架创建全部必需文件后一次发布项目目录，拒绝覆盖已有目录。同 id 的创建锁在 `projects/.cache/new-project-locks/`；不清理不属于本次调用的锁。模板附带可选 `audio.ts` 示例，默认不启用声音。
+默认创建空白合成，不预选引擎、镜头或风格。显式 `--renderer remotion` 创建 React 组件工程，额外入口为 `composition.tsx`；见 [REMOTION.md](REMOTION.md)。能力清单通过 `pnpm film composition engines --json` 查询，接口见 [混合合成](COMPOSITION.md)。脚手架创建全部必需文件后一次发布项目目录，拒绝覆盖已有目录。同 id 的创建锁在 `projects/.cache/new-project-locks/`；不清理不属于本次调用的锁。模板附带可选 `audio.ts` 示例，默认不启用声音。
 
 工作台自动发现 `projects/*/project.ts`；素材直接从 `projects/<id>/public/` 映射到 `films/<id>/`，构建时复制进 dist，不在源码里生成第二份镜像。各项目保存自己的 `public/assets.json` 和 `public/waveforms.json`，工作台只读汇总，无需修改公共索引。
 

@@ -16,7 +16,7 @@
 | `scripts/`、`tests/` | 本项目的工具和测试 |
 | `exports/`、`.cache/` | 忽略的导出结果和临时文件 |
 
-可以使用共享依赖和公共引擎接口：Canvas、PixiJS、Three.js、Babylon.js，视频/图片/图像序列、Lottie，GLB/glTF 加载、后处理，多轨文件音频与 Web Audio 生成音频。完整能力以 `pnpm film composition engines --json` 为准。复杂逻辑可保留在项目代码中；公开参数可接入合成片段。不修改共享引擎、UI、配置、依赖或其他项目；缺少公共能力时提出维护需求。
+可以使用共享依赖和公共引擎接口：Canvas、PixiJS、Three.js、Babylon.js、Remotion React 组件（见 [接入指南](../../docs/REMOTION.md)，组件入口 composition.tsx），视频/图片/图像序列、Lottie，GLB/glTF 加载、后处理，多轨文件音频与 Web Audio 生成音频。完整能力以 `pnpm film composition engines --json` 为准。复杂逻辑可保留在项目代码中；公开参数可接入合成片段。不修改共享引擎、UI、配置、依赖或其他项目；缺少公共能力时提出维护需求。
 
 场景可同步或异步初始化；提供 canvas、render(time)、dispose()，可选 prepareFrame(time,{signal})。公共播放器负责绝对时间和取消；初始化失败及退出释放本实例资源。参数与时间映射见根 [docs/COMPOSITION.md](../../docs/COMPOSITION.md)，音频、资源和输出接口见 [docs/AUTHORING.md](../../docs/AUTHORING.md)。这些接口要求不限定创作方法或风格。
 

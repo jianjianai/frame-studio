@@ -237,7 +237,7 @@ async function runExport(root, id, options, renderId) {
     const temp = path.join(directory, ".assembling.mp4"),
       final = path.join(directory, "film.mp4");
     const args = ["-v", "error", "-f", "concat", "-safe", "1", "-i", concat];
-    const hasAudio = Boolean(meta.audio || meta.audioTracks?.length);
+    const hasAudio = Boolean(meta.renderer==='remotion' || meta.audio || meta.audioTracks?.length || meta.audioDocument || meta.visual?.clips?.some(c=>c.source.kind==='video'&&c.audio?.enabled&&!c.hidden));
     if (hasAudio) {
       session = await createRenderSession({ root: snapshot.root, width: 320 });
       const page = await session.page(id),

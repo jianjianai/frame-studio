@@ -29,6 +29,7 @@ check("pnpm lockfile", () => {
 });
 for (const pkg of [
   "react",
+  "remotion", "@remotion/player", "@remotion/renderer", "@remotion/bundler", "@remotion/web-renderer", "@remotion/media",
   "vite",
   "three",
   "pixi.js",

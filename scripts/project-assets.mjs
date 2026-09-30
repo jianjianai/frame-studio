@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { remotionProjectAssets } from "./remotion-project-assets.mjs";
 import path from "node:path";
 import { assetPath, projectPath } from "./project-paths.mjs";
 import { readProjectCatalog, validProjectId } from "./project-metadata.mjs";
@@ -22,6 +23,8 @@ export function projectAssets({ project } = {}) {
     name: "frame-project-assets",
     enforce: "pre",
     transform(code, id) {
+      const remotion=remotionProjectAssets(code,id,root);
+      if(remotion)return remotion;
       if (
         project &&
         id.replaceAll("\\", "/").endsWith("/src/projects/index.ts")

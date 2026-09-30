@@ -121,6 +121,7 @@ try {
     );
   const poster = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewBox="0 0 1280 720"><rect width="1280" height="720" fill="#e4ead9"/><circle cx="640" cy="300" r="74" fill="#6e926f"/><text x="640" y="460" text-anchor="middle" font-family="sans-serif" font-size="44" fill="#355449">DRAFT / ${xml(id)}</text><text x="640" y="520" text-anchor="middle" font-family="sans-serif" font-size="24" fill="#53675b">Placeholder — not a finished film poster</text></svg>`;
   await fs.writeFile(path.join(stage, "scene.ts"), sceneTemplate);
+  if (renderer === "remotion") await fs.writeFile(path.join(stage, "composition.tsx"), (await fs.readFile(new URL("../templates/remotion-component.txt", import.meta.url),"utf8")).replace('"{{PROJECT_TITLE}}"',JSON.stringify(title)));
   if (renderer === "composition") await fs.writeFile(path.join(stage, "visual.json"), JSON.stringify({schemaVersion:1,background:"transparent",clips:[]},null,2)+"\n");
   await fs.writeFile(
     path.join(stage, "audio.ts"),
@@ -146,6 +147,7 @@ try {
       JSON.stringify(meta, null, 2) +
       ", load: () => import('./scene')" +
       (audio === "generated" ? ", loadAudio: () => import('./audio')" : "") +
+      (renderer === "remotion" ? ", loadRemotion: () => import('./composition')" : "") +
       (renderer === "composition" ? ", loadVisual: () => import('./visual.json')" : "") +
       " };\nexport default project;\n",
   );

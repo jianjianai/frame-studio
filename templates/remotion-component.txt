@@ -1,0 +1,8 @@
+import { AbsoluteFill, useCurrentFrame, useVideoConfig, spring } from "remotion";
+export default function Film({ title = "{{PROJECT_TITLE}}" }: { title?: string }) {
+  const frame = useCurrentFrame(), { fps } = useVideoConfig();
+  const scale = spring({ frame, fps, config: { damping: 18 } });
+  return <AbsoluteFill style={{background:"#101827",color:"white",alignItems:"center",justifyContent:"center",fontFamily:"sans-serif"}}>
+    <div style={{fontSize:88,transform:"scale("+scale+")"}}>{title}</div>
+  </AbsoluteFill>;
+}

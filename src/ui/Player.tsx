@@ -45,7 +45,7 @@ import { FrameRenderer } from "../engine/renderer";
 import { AudioTransport } from "../engine/audio";
 import type { ExportProgress } from "../engine/browser-export";
 import { activeSubtitle, toSrt } from "../engine/subtitles";
-import { downloadBlob, downloadCanvas } from "../engine/download";
+import { downloadBlob, downloadFrame } from "../engine/download";
 import { clamp, formatTime } from "../engine/math";
 interface Playback {
   time: number;
@@ -252,9 +252,9 @@ export function Player({
     if (data.command === "export-cancel") exportAbort.current?.abort();
     if (data.command === "export-download" && lastExport.current)
       downloadBlob(lastExport.current, project.id + ".webm");
-    if (data.command === "snapshot" && canvas.current)
-      void downloadCanvas(
-        canvas.current,
+    if (data.command === "snapshot" && renderer.current)
+      void downloadFrame(
+        renderer.current,
         project.id + "-frame-" + Math.round(view.time * project.fps) + ".png",
       ).catch((error) =>
         parent.postMessage(
@@ -1026,7 +1026,9 @@ export function Player({
             <div className="info-block">
               <span className="eyebrow">RENDER ENGINE</span>
               <h3>
-                {project.renderer === "three"
+                {project.renderer === "remotion"
+                  ? "REMOTION"
+                  : project.renderer === "three"
                   ? "Three.js"
                   : project.renderer === "pixi"
                     ? "PixiJS"
@@ -1123,9 +1125,9 @@ export function Player({
             <button
               className="export-option"
               onClick={() => {
-                if (canvas.current)
-                  void downloadCanvas(
-                    canvas.current,
+                if (renderer.current)
+                  void downloadFrame(
+                    renderer.current,
                     project.id +
                       "-frame-" +
                       Math.round(view.time * project.fps) +

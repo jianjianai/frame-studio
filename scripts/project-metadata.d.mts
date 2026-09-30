@@ -5,6 +5,7 @@ export interface StaticProjectMeta {
   subtitle: string;
   description: string;
   renderer: import("../src/engine/adapters.mjs").RendererId;
+  remotion?: {inputProps: Record<string, unknown>};
   visual?: import("../src/engine/compositor").VisualDocument;
   status: "draft" | "demo" | "film";
   duration: number;
@@ -24,6 +25,7 @@ export interface StaticProject {
   directory: string;
   meta: StaticProjectMeta;
   loadPath?: string;
+  remotionLoadPath?: string;
   audioLoadPath?: string;
   audioDocumentLoadPath?: string;
   visualLoadPath?: string;

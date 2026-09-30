@@ -43,6 +43,7 @@ export const authoringReferences = Object.freeze({
   workflow: { path: "docs/AI-WORKFLOW.md", description: "AI handoff and editing workflow" },
   "creator-workflow": { path: "docs/CREATOR-WORKFLOW.md", description: "Codex and Claude task workflow" },
   production: { path: "docs/AI-PRODUCTION.md", description: "Review, jobs and delivery" },
+  remotion: { path: "docs/REMOTION.md", description: "React compositions, native rendering, media, FrameScene and audio integration" },
   composition: { path: "docs/COMPOSITION.md", description: "Authoritative visual.json and clip operations" },
   "audio-v7": { path: "docs/AUDIO-V7.md", description: "Authoritative audio.json, sources, tracks, clips and processors" },
   audio: { path: "docs/AUDIO.md", description: "Legacy and generated audio contracts" },
