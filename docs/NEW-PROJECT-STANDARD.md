@@ -32,7 +32,7 @@ pnpm film new my-film "我的动画"
 pnpm project:check my-film --strict
 ```
 
-默认创建空白合成，不预选引擎、镜头或风格。显式 `--renderer remotion` 创建 React 组件工程，额外入口为 `composition.tsx`；见 [REMOTION.md](REMOTION.md)。能力清单通过 `pnpm film composition engines --json` 查询，接口见 [混合合成](COMPOSITION.md)。脚手架创建全部必需文件后一次发布项目目录，拒绝覆盖已有目录。同 id 的创建锁在 `projects/.cache/new-project-locks/`；不清理不属于本次调用的锁。模板附带可选 `audio.ts` 示例，默认不启用声音。
+默认创建空白合成，不预选引擎、镜头或风格；composition 是基础容器。通过 `pnpm --silent film capabilities --json` 查询全部可用框架、素材、动画与音频能力，使用 `--category`、`--query` 或 `--id` 只读取本次需要的接入信息。目录和接口见 [CAPABILITIES.md](CAPABILITIES.md) 与 [混合合成](COMPOSITION.md)。框架和模板均为平等可选能力，由任务内容决定。显式 `--renderer remotion` 创建 React 组件工程，额外入口为 `composition.tsx`；见 [REMOTION.md](REMOTION.md)。脚手架创建全部必需文件后一次发布项目目录，拒绝覆盖已有目录。同 id 的创建锁在 `projects/.cache/new-project-locks/`；不清理不属于本次调用的锁。模板附带可选 `audio.ts` 示例，默认不启用声音。
 
 工作台自动发现 `projects/*/project.ts`；素材直接从 `projects/<id>/public/` 映射到 `films/<id>/`，构建时复制进 dist，不在源码里生成第二份镜像。各项目保存自己的 `public/assets.json` 和 `public/waveforms.json`，工作台只读汇总，无需修改公共索引。
 
@@ -40,11 +40,11 @@ pnpm project:check my-film --strict
 
 ## 3. 代码协议
 
-`project.ts` 只包含静态字面量或本文件常量、`load: () => import('./scene')` 、可选 `loadAudio: () => import('./audio')` 和 `loadVisual: () => import('./visual.json')`。元数据导入不执行网络或文件写入。
+`project.ts` 只包含静态字面量或本文件常量、`load: () => import('./scene')`，以及可选的 `loadAudio: () => import('./audio')`、`loadVisual: () => import('./visual.json')`、`loadAudioDocument: () => import('./audio.json')` 和 `loadRemotion: () => import('./composition')`。元数据导入不执行网络或文件写入。
 
-场景兼容 `createScene({width,height,quality}) -> {canvas,render(time),dispose()}`，createScene/render 支持 Promise，可选 `prepareFrame(time,{signal})` 等待资源并响应取消。支持任意绝对时间的直接、倒退和重复绘制。适配 GSAP、骨骼、粒子等库时关闭独立循环；所有调度由公共播放器负责。
+场景兼容 `createScene({width,height,quality}) -> Scene | Promise<Scene>`，Canvas 输出包含 `canvas/render(time)/dispose()`；Remotion 的 React/DOM 根由公共适配器提供，额外声明 `loadRemotion: () => import('./composition')`。DOM 不能直接当作 Canvas 图层，混用时通过 Remotion 根的 `FrameScene` 嵌入其他 Frame 场景。createScene/render 支持 Promise，可选 `prepareFrame(time,{signal})` 等待资源并响应取消。支持任意绝对时间的直接、倒退和重复绘制。适配 GSAP、骨骼、粒子等库时关闭独立循环；所有调度由公共播放器负责。
 
-声音通过 `audioTracks` 配置多条文件或生成音轨，使用同一时间轴。生成音轨在浏览器直接创建和播放，导出复用同一生成器，无需先生成 WAV。单条旧 `audio` 字段保留兼容，不能与非空 `audioTracks` 同时使用。具体协议见 [AUTHORING.md](AUTHORING.md)。
+声音通过 `loadAudioDocument` 声明的 audio.json 配置多轨混音；未声明文档的旧工程使用 `audioTracks`，以 context.authority 为准。文件或生成音轨使用同一时间轴。生成音轨在浏览器直接创建和播放，导出复用同一生成器，无需先生成 WAV。单条旧 `audio` 字段保留兼容，不能与非空 `audioTracks` 同时使用。具体协议见 [AUTHORING.md](AUTHORING.md)。
 
 初始化失败和 dispose 均回收本实例资源；单实例不误删共享缓存。
 

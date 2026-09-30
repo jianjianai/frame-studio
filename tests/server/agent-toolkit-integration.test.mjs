@@ -111,6 +111,51 @@ test(
           );
           const overview = await mcp("workspace_context");
           assert(
+            overview.structuredContent.capabilities.groups.visual.some(
+              (item) => item.id === "remotion",
+            ),
+          );
+          assert.equal(
+            overview.structuredContent.schemaDiscovery.tool,
+            "frame_tool_describe",
+          );
+          const capabilityTool = listed.tools.find(
+            (tool) => tool.name === "frame_capabilities",
+          );
+          assert(capabilityTool?.annotations.readOnlyHint);
+          const capabilityDescription = (
+            await mcp("tool_describe", { name: "frame_capabilities" })
+          ).structuredContent;
+          assert.deepEqual(
+            capabilityTool.inputSchema,
+            capabilityDescription.inputSchema,
+          );
+          const audioCapabilities = (
+            await mcp("capabilities", { category: "audio" })
+          ).structuredContent;
+          assert(audioCapabilities.items.some((item) => item.id === "tone"));
+          const cliCapabilities = await cli(
+            ["capabilities", "-"],
+            JSON.stringify({ category: "audio" }),
+          );
+          assert.equal(cliCapabilities.code, 0, cliCapabilities.stderr);
+          assert.deepEqual(
+            JSON.parse(cliCapabilities.stdout),
+            audioCapabilities,
+          );
+          const workContext = (
+            await mcp("works_context", { id: work.id, taskLimit: 0 })
+          ).structuredContent;
+          assert.deepEqual(
+            workContext.capabilities,
+            overview.structuredContent.capabilities,
+          );
+          assert(
+            workContext.nextActions.some(
+              (action) => action.tool === "frame_capabilities",
+            ),
+          );
+          assert(
             overview.structuredContent.works.some((w) => w.id === work.id),
           );
           const help = await cli(["describe", "works_patch"]);

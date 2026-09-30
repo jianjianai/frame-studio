@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { authoringState } from "./authoring-state.mjs";
+import { authoringCapabilitySummary } from "../src/contracts/capabilities.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { readProject, validProjectId } from "./project-metadata.mjs";
@@ -129,7 +130,8 @@ function scopeReport(root, id) {
 export function readCreatorContext(root, options = {}, env = process.env) {
   const { id, folder, task } = creatorWorkspace(root, options, env);
   const diagnostics = [];
-  let entry = null, state = null;
+  let entry = null,
+    state = null;
   try {
     entry = readProject(projectPath(root, id, "project.ts"));
     state = authoringState(entry);
@@ -185,7 +187,12 @@ export function readCreatorContext(root, options = {}, env = process.env) {
     projectInfo: meta
       ? pick(meta, ["title", "renderer", "duration", "fps", "composition"])
       : null,
-    ...(state ?? { entrypoints: { metadata: "project.ts" }, audioTracks: [], authority: { status: "needs_repair" } }),
+    ...(state ?? {
+      entrypoints: { metadata: "project.ts" },
+      audioTracks: [],
+      authority: { status: "needs_repair" },
+    }),
+    capabilities: state?.capabilities ?? authoringCapabilitySummary(),
     timeline: {
       shotCount: beats.length,
       shots: beats.slice(0, 48),
@@ -232,6 +239,11 @@ export function readCreatorContext(root, options = {}, env = process.env) {
       speech: "node scripts/work-tool.mjs engines",
     },
     commands: {
+      capabilities: "node scripts/work-tool.mjs capabilities",
+      capabilityDetails:
+        'node scripts/work-tool.mjs capabilities \'{"id":"<capability-id>"}\'',
+      capabilityReference:
+        'node scripts/work-tool.mjs reference \'{"name":"capabilities"}\'',
       check: `node scripts/work-tool.mjs check '{"project":"${id}"}'`,
       runtimeCheck: `node scripts/work-tool.mjs check '{"project":"${id}","runtime":true}'`,
       readMetadata: `pnpm --silent film read ${id} --path project.ts --json`,

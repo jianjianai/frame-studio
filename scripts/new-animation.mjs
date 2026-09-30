@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import { projectCreationOptions } from "../src/contracts/authoring.mjs";
+import { renderCapabilityOverview } from "../src/contracts/capabilities.mjs";
 import { projectPath } from "./project-paths.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -133,6 +134,7 @@ try {
   await fs.writeFile(
     path.join(stage, "README.md"),
     recordTemplate
+      .replaceAll("{{CAPABILITY_OVERVIEW}}", renderCapabilityOverview())
       .replaceAll("{{PROJECT_ID}}", id)
       .replaceAll("{{PROJECT_TITLE}}", title.trim().replace(/[\r\n]/g, " ")),
   );

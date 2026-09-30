@@ -43,7 +43,9 @@ export function registerToolHelp(add, registry) {
           isMcpOperation(key) &&
           (!exact || key === exact) &&
           (!needle ||
-            `${key} ${op.description}`.toLowerCase().includes(needle)),
+            `${key} frame_${key} ${op.description}`
+              .toLowerCase()
+              .includes(needle)),
       );
       return {
         schemaVersion: 1,
@@ -53,6 +55,7 @@ export function registerToolHelp(add, registry) {
         },
         workflows: {
           start: [
+            "frame_capabilities",
             "frame_repositories_page",
             "frame_works_create",
             "frame_works_context",

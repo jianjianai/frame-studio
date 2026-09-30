@@ -2,6 +2,7 @@ export const commandHelp: string;
 export function inspectProject(
   root: string,
   id: string,
+  options?: { detail?: boolean },
 ): {
   schemaVersion: number;
   id: string;
