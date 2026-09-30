@@ -1,10 +1,25 @@
 import fs from "node:fs";
 import { randomUUID } from "node:crypto";
 import { Workspace, fail, MAX_FILE, sha256 } from "./mcp/workspace.mjs";
-import { inputManifest } from "./production-input.mjs";
+import { inputManifest, fileSignature } from "./production-input.mjs";
+import { checkProjects } from "./check-projects.mjs";
 
 /** Shared editing domain: CLI and MCP use identical operations and conflict rules. */
 export class ProjectService extends Workspace {
+  constructor(root, options = {}) {
+    super(root, options);
+    this.checkOptions = options.checkOptions;
+  }
+  check(id) {
+    if (!this.checkOptions) return super.check(id);
+    this.project(id);
+    this.assertTree(id);
+    return checkProjects(this.root, {
+      ...this.checkOptions,
+      ids: [id],
+      strict: true,
+    });
+  }
   fingerprint(id) {
     this.project(id);
     return inputManifest(this.root, id).fingerprint;
@@ -92,7 +107,11 @@ export class ProjectService extends Workspace {
         files[file.path] = { content: value.text, sha256: value.sha256 };
       }
       const checkpoint = randomUUID();
-      if (this.fingerprint(id) !== fingerprint) fail('VERSION_CONFLICT', 'Input changed while taking checkpoint; retry.');
+      if (this.fingerprint(id) !== fingerprint)
+        fail(
+          "VERSION_CONFLICT",
+          "Input changed while taking checkpoint; retry.",
+        );
       const record = {
         schemaVersion: 1,
         checkpoint,
@@ -103,15 +122,129 @@ export class ProjectService extends Workspace {
       };
       const directory = this.file(id, ".history/checkpoints", true);
       fs.mkdirSync(directory, { recursive: true });
-      fs.writeFileSync(
-        this.file(id, ".history/checkpoints/" + checkpoint + ".json", true),
-        JSON.stringify(record),
-        { flag: "wx" },
+      const target = this.file(
+        id,
+        ".history/checkpoints/" + checkpoint + ".json",
+        true,
       );
+      const temporary = this.file(
+        id,
+        ".history/checkpoints/" + checkpoint + ".tmp",
+        true,
+      );
+      try {
+        fs.writeFileSync(temporary, JSON.stringify(record), { flag: "wx" });
+        if (fs.existsSync(target))
+          throw Object.assign(new Error("Checkpoint already exists"), {
+            code: "EEXIST",
+          });
+        // The generated UUID is exclusively owned by this operation. Publish a
+        // complete body so concurrent history readers never parse partial JSON.
+        fs.renameSync(temporary, target);
+      } finally {
+        try {
+          fs.unlinkSync(temporary);
+        } catch (error) {
+          if (error.code !== "ENOENT") throw error;
+        }
+      }
+      this.writeCheckpointMetadata(id, checkpoint, record);
       return { ...record, files: Object.keys(files), bytes };
     } finally {
       release();
     }
+  }
+  writeCheckpointMetadata(id, checkpoint, record, expectedSignature) {
+    const file = this.file(
+      id,
+      ".history/checkpoints/" + checkpoint + ".json",
+      true,
+    );
+    const signature = fileSignature(fs.lstatSync(file, { bigint: true }));
+    if (expectedSignature && signature !== expectedSignature)
+      fail(
+        "VERSION_CONFLICT",
+        "Checkpoint changed while reading history; retry.",
+      );
+    const metadata = {
+      schemaVersion: 1,
+      signature,
+      summary: {
+        checkpoint: record.checkpoint,
+        label: record.label,
+        time: record.time,
+        fingerprint: record.fingerprint,
+        files: Object.keys(record.files).length,
+      },
+    };
+    const directory = this.file(id, ".history/checkpoint-metadata", true);
+    const target = this.file(
+      id,
+      ".history/checkpoint-metadata/" + checkpoint + ".json",
+      true,
+    );
+    const temporary = this.file(
+      id,
+      ".history/checkpoint-metadata/" +
+        checkpoint +
+        "-" +
+        randomUUID() +
+        ".tmp",
+      true,
+    );
+    try {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(temporary, JSON.stringify(metadata), { flag: "wx" });
+      fs.renameSync(temporary, target);
+    } catch (error) {
+      // This is a rebuildable read cache, including in read-only mounted workspaces.
+      // Cache write failure must not turn a saved checkpoint into a failed edit.
+      if (!["EACCES", "EROFS", "ENOSPC", "EDQUOT"].includes(error.code))
+        throw error;
+    } finally {
+      try {
+        fs.unlinkSync(temporary);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+    return metadata.summary;
+  }
+  checkpointMetadata(id, name) {
+    const checkpoint = name.slice(0, -5);
+    const file = this.file(id, ".history/checkpoints/" + name, true);
+    const signature = fileSignature(fs.lstatSync(file, { bigint: true }));
+    const target = this.file(id, ".history/checkpoint-metadata/" + name, true);
+    try {
+      const stat = fs.lstatSync(target);
+      if (stat.isFile() && stat.size <= 8192) {
+        const metadata = JSON.parse(fs.readFileSync(target, "utf8"));
+        const summary = metadata.summary;
+        if (
+          metadata.schemaVersion === 1 &&
+          metadata.signature === signature &&
+          /^[a-f0-9-]{36}$/.test(summary?.checkpoint ?? "") &&
+          typeof summary.label === "string" &&
+          typeof summary.time === "string" &&
+          /^[a-f0-9]{64}$/.test(summary.fingerprint) &&
+          Number.isInteger(summary.files) &&
+          summary.files >= 0 &&
+          summary.files <= 400 &&
+          fileSignature(fs.lstatSync(file, { bigint: true })) === signature
+        )
+          return summary;
+      }
+    } catch (error) {
+      if (error.code !== "ENOENT" && !(error instanceof SyntaxError))
+        throw error;
+    }
+    const record = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (fileSignature(fs.lstatSync(file, { bigint: true })) !== signature)
+      fail(
+        "VERSION_CONFLICT",
+        "Checkpoint changed while reading history; retry.",
+      );
+    return this.writeCheckpointMetadata(id, checkpoint, record, signature);
   }
   history(id) {
     const directory = this.file(id, ".history/checkpoints", true);
@@ -120,21 +253,7 @@ export class ProjectService extends Workspace {
     const checkpoints = fs
       .readdirSync(directory)
       .filter((name) => /^[\da-f-]{36}\.json$/.test(name))
-      .map((name) => {
-        const record = JSON.parse(
-          fs.readFileSync(
-            this.file(id, ".history/checkpoints/" + name, true),
-            "utf8",
-          ),
-        );
-        return {
-          checkpoint: record.checkpoint,
-          label: record.label,
-          time: record.time,
-          fingerprint: record.fingerprint,
-          files: Object.keys(record.files).length,
-        };
-      })
+      .map((name) => this.checkpointMetadata(id, name))
       .sort((a, b) => b.time.localeCompare(a.time));
     return { checkpoints, fingerprint: this.fingerprint(id) };
   }

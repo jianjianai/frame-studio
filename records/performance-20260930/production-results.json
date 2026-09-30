@@ -1,0 +1,487 @@
+{
+  "time": "2026-09-30T13:04:43.487Z",
+  "mode": "production SELECT-only transaction default; no token/session/data writes; separate probe process",
+  "node": "v24.21.0",
+  "revision": "fc1bf504087ca022c27f48e11b75032b3fae9233",
+  "measurements": [
+    {
+      "name": "production Works.list existing works",
+      "n": 5,
+      "medianMs": 13.13,
+      "minMs": 12.29,
+      "maxMs": 64.72,
+      "queries": 55,
+      "samplesMs": [
+        64.72,
+        18.28,
+        12.29,
+        13.13,
+        12.57
+      ]
+    },
+    {
+      "name": "production files_page underlying listSource work 0",
+      "n": 3,
+      "medianMs": 2.14,
+      "minMs": 2.1,
+      "maxMs": 3.17,
+      "queries": 0,
+      "samplesMs": [
+        3.17,
+        2.14,
+        2.1
+      ]
+    },
+    {
+      "name": "production read project.ts work 0",
+      "n": 3,
+      "medianMs": 0.88,
+      "minMs": 0.46,
+      "maxMs": 1.73,
+      "queries": 0,
+      "samplesMs": [
+        1.73,
+        0.88,
+        0.46
+      ]
+    },
+    {
+      "name": "production preview SQL work 0",
+      "n": 3,
+      "medianMs": 1.45,
+      "minMs": 1.38,
+      "maxMs": 82.49,
+      "queries": 3,
+      "samplesMs": [
+        82.49,
+        1.45,
+        1.38
+      ]
+    },
+    {
+      "name": "production files_page underlying listSource work 1",
+      "n": 3,
+      "medianMs": 6.22,
+      "minMs": 5.13,
+      "maxMs": 8.84,
+      "queries": 0,
+      "samplesMs": [
+        8.84,
+        6.22,
+        5.13
+      ]
+    },
+    {
+      "name": "production read project.ts work 1",
+      "n": 3,
+      "medianMs": 0.53,
+      "minMs": 0.4,
+      "maxMs": 0.53,
+      "queries": 0,
+      "samplesMs": [
+        0.53,
+        0.53,
+        0.4
+      ]
+    },
+    {
+      "name": "production preview SQL work 1",
+      "n": 3,
+      "medianMs": 1.42,
+      "minMs": 1.36,
+      "maxMs": 2.05,
+      "queries": 3,
+      "samplesMs": [
+        2.05,
+        1.36,
+        1.42
+      ]
+    },
+    {
+      "name": "production files_page underlying listSource work 2",
+      "n": 3,
+      "medianMs": 30.19,
+      "minMs": 25.3,
+      "maxMs": 33.15,
+      "queries": 0,
+      "samplesMs": [
+        30.19,
+        25.3,
+        33.15
+      ]
+    },
+    {
+      "name": "production read project.ts work 2",
+      "n": 3,
+      "medianMs": 0.52,
+      "minMs": 0.43,
+      "maxMs": 0.59,
+      "queries": 0,
+      "samplesMs": [
+        0.59,
+        0.43,
+        0.52
+      ]
+    },
+    {
+      "name": "production preview SQL work 2",
+      "n": 3,
+      "medianMs": 1.62,
+      "minMs": 1.11,
+      "maxMs": 1.84,
+      "queries": 3,
+      "samplesMs": [
+        1.84,
+        1.11,
+        1.62
+      ]
+    },
+    {
+      "name": "production files_page underlying listSource work 3",
+      "n": 3,
+      "medianMs": 3.6,
+      "minMs": 3.53,
+      "maxMs": 3.7,
+      "queries": 0,
+      "samplesMs": [
+        3.7,
+        3.6,
+        3.53
+      ]
+    },
+    {
+      "name": "production read project.ts work 3",
+      "n": 3,
+      "medianMs": 0.36,
+      "minMs": 0.35,
+      "maxMs": 0.6,
+      "queries": 0,
+      "samplesMs": [
+        0.6,
+        0.35,
+        0.36
+      ]
+    },
+    {
+      "name": "production preview SQL work 3",
+      "n": 3,
+      "medianMs": 1.13,
+      "minMs": 1.03,
+      "maxMs": 1.37,
+      "queries": 3,
+      "samplesMs": [
+        1.37,
+        1.13,
+        1.03
+      ]
+    },
+    {
+      "name": "production files_page underlying listSource work 4",
+      "n": 3,
+      "medianMs": 6.2,
+      "minMs": 4.73,
+      "maxMs": 6.78,
+      "queries": 0,
+      "samplesMs": [
+        6.78,
+        6.2,
+        4.73
+      ]
+    },
+    {
+      "name": "production read project.ts work 4",
+      "n": 3,
+      "medianMs": 0.36,
+      "minMs": 0.33,
+      "maxMs": 0.49,
+      "queries": 0,
+      "samplesMs": [
+        0.49,
+        0.36,
+        0.33
+      ]
+    },
+    {
+      "name": "production preview SQL work 4",
+      "n": 3,
+      "medianMs": 1.05,
+      "minMs": 1.04,
+      "maxMs": 1.71,
+      "queries": 3,
+      "samplesMs": [
+        1.71,
+        1.04,
+        1.05
+      ]
+    }
+  ],
+  "counts": {
+    "works": "5",
+    "tasks": "109",
+    "assets": "30",
+    "active_tasks": "0"
+  },
+  "returnedWorks": 5,
+  "projects": [
+    {
+      "files": 11,
+      "inputBytes": 13898,
+      "largestFileBytes": 5718
+    },
+    {
+      "files": 19,
+      "inputBytes": 32582833,
+      "largestFileBytes": 32319396
+    },
+    {
+      "files": 84,
+      "inputBytes": 319100348,
+      "largestFileBytes": 50688078
+    },
+    {
+      "files": 19,
+      "inputBytes": 32433071,
+      "largestFileBytes": 32319396
+    },
+    {
+      "files": 24,
+      "inputBytes": 32423701,
+      "largestFileBytes": 32319396
+    }
+  ],
+  "taskPayloads": {
+    "max_result_bytes": 21559,
+    "mean_result_bytes": "6448"
+  },
+  "taskIndexPlan": [
+    {
+      "QUERY PLAN": [
+        {
+          "Plan": {
+            "Node Type": "Limit",
+            "Parallel Aware": false,
+            "Async Capable": false,
+            "Startup Cost": 38.95,
+            "Total Cost": 38.97,
+            "Plan Rows": 6,
+            "Plan Width": 408,
+            "Actual Startup Time": 0.234,
+            "Actual Total Time": 0.236,
+            "Actual Rows": 2,
+            "Actual Loops": 1,
+            "Disabled": false,
+            "Shared Hit Blocks": 26,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0,
+            "Plans": [
+              {
+                "Node Type": "Limit",
+                "Parent Relationship": "InitPlan",
+                "Subplan Name": "InitPlan 1",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Startup Cost": 17.7,
+                "Total Cost": 17.7,
+                "Plan Rows": 1,
+                "Plan Width": 24,
+                "Actual Startup Time": 0.092,
+                "Actual Total Time": 0.093,
+                "Actual Rows": 1,
+                "Actual Loops": 1,
+                "Disabled": false,
+                "Shared Hit Blocks": 16,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Sort",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Startup Cost": 17.7,
+                    "Total Cost": 17.98,
+                    "Plan Rows": 113,
+                    "Plan Width": 24,
+                    "Actual Startup Time": 0.092,
+                    "Actual Total Time": 0.092,
+                    "Actual Rows": 1,
+                    "Actual Loops": 1,
+                    "Disabled": false,
+                    "Sort Key": [
+                      "tasks.created DESC"
+                    ],
+                    "Sort Method": "top-N heapsort",
+                    "Sort Space Used": 25,
+                    "Sort Space Type": "Memory",
+                    "Shared Hit Blocks": 16,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0,
+                    "Plans": [
+                      {
+                        "Node Type": "Seq Scan",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Relation Name": "tasks",
+                        "Alias": "tasks",
+                        "Startup Cost": 0,
+                        "Total Cost": 17.13,
+                        "Plan Rows": 113,
+                        "Plan Width": 24,
+                        "Actual Startup Time": 0.01,
+                        "Actual Total Time": 0.066,
+                        "Actual Rows": 109,
+                        "Actual Loops": 1,
+                        "Disabled": false,
+                        "Shared Hit Blocks": 16,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0
+                      }
+                    ]
+                  }
+                ]
+              },
+              {
+                "Node Type": "Sort",
+                "Parent Relationship": "Outer",
+                "Parallel Aware": false,
+                "Async Capable": false,
+                "Startup Cost": 21.26,
+                "Total Cost": 21.27,
+                "Plan Rows": 6,
+                "Plan Width": 408,
+                "Actual Startup Time": 0.234,
+                "Actual Total Time": 0.234,
+                "Actual Rows": 2,
+                "Actual Loops": 1,
+                "Disabled": false,
+                "Sort Key": [
+                  "events.id"
+                ],
+                "Sort Method": "quicksort",
+                "Sort Space Used": 27,
+                "Sort Space Type": "Memory",
+                "Shared Hit Blocks": 26,
+                "Shared Read Blocks": 0,
+                "Shared Dirtied Blocks": 0,
+                "Shared Written Blocks": 0,
+                "Local Hit Blocks": 0,
+                "Local Read Blocks": 0,
+                "Local Dirtied Blocks": 0,
+                "Local Written Blocks": 0,
+                "Temp Read Blocks": 0,
+                "Temp Written Blocks": 0,
+                "Plans": [
+                  {
+                    "Node Type": "Bitmap Heap Scan",
+                    "Parent Relationship": "Outer",
+                    "Parallel Aware": false,
+                    "Async Capable": false,
+                    "Relation Name": "events",
+                    "Alias": "events",
+                    "Startup Cost": 4.34,
+                    "Total Cost": 21.18,
+                    "Plan Rows": 6,
+                    "Plan Width": 408,
+                    "Actual Startup Time": 0.183,
+                    "Actual Total Time": 0.193,
+                    "Actual Rows": 2,
+                    "Actual Loops": 1,
+                    "Disabled": false,
+                    "Recheck Cond": "((task = (InitPlan 1).col1) AND (id > 0))",
+                    "Rows Removed by Index Recheck": 0,
+                    "Exact Heap Blocks": 2,
+                    "Lossy Heap Blocks": 0,
+                    "Shared Hit Blocks": 23,
+                    "Shared Read Blocks": 0,
+                    "Shared Dirtied Blocks": 0,
+                    "Shared Written Blocks": 0,
+                    "Local Hit Blocks": 0,
+                    "Local Read Blocks": 0,
+                    "Local Dirtied Blocks": 0,
+                    "Local Written Blocks": 0,
+                    "Temp Read Blocks": 0,
+                    "Temp Written Blocks": 0,
+                    "Plans": [
+                      {
+                        "Node Type": "Bitmap Index Scan",
+                        "Parent Relationship": "Outer",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Index Name": "events_task",
+                        "Startup Cost": 0,
+                        "Total Cost": 4.33,
+                        "Plan Rows": 6,
+                        "Plan Width": 0,
+                        "Actual Startup Time": 0.161,
+                        "Actual Total Time": 0.161,
+                        "Actual Rows": 2,
+                        "Actual Loops": 1,
+                        "Disabled": false,
+                        "Index Cond": "((task = (InitPlan 1).col1) AND (id > 0))",
+                        "Index Searches": 1,
+                        "Shared Hit Blocks": 21,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          "Planning": {
+            "Shared Hit Blocks": 89,
+            "Shared Read Blocks": 0,
+            "Shared Dirtied Blocks": 0,
+            "Shared Written Blocks": 0,
+            "Local Hit Blocks": 0,
+            "Local Read Blocks": 0,
+            "Local Dirtied Blocks": 0,
+            "Local Written Blocks": 0,
+            "Temp Read Blocks": 0,
+            "Temp Written Blocks": 0
+          },
+          "Planning Time": 1.06,
+          "Triggers": [],
+          "Execution Time": 0.32
+        }
+      ]
+    }
+  ]
+}

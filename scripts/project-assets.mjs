@@ -3,6 +3,12 @@ import { remotionProjectAssets } from "./remotion-project-assets.mjs";
 import path from "node:path";
 import { assetPath, projectPath } from "./project-paths.mjs";
 import { readProjectCatalog, validProjectId } from "./project-metadata.mjs";
+import {
+  copyProjectAsset,
+  readProjectAsset,
+  scanProjectAssets,
+  writeSoundfontParts,
+} from "./project-asset-output.mjs";
 
 export function assetCatalog(root, ids) {
   const selected =
@@ -18,13 +24,16 @@ export function projectAssets({ project } = {}) {
   if (project && !validProjectId(project))
     throw new Error("Invalid FRAME_PROJECT");
   const ids = project ? [project] : undefined;
-  let root;
+  let root,
+    config,
+    files = [],
+    inMemory = false;
   return {
     name: "frame-project-assets",
     enforce: "pre",
     transform(code, id) {
-      const remotion=remotionProjectAssets(code,id,root);
-      if(remotion)return remotion;
+      const remotion = remotionProjectAssets(code, id, root);
+      if (remotion) return remotion;
       if (
         project &&
         id.replaceAll("\\", "/").endsWith("/src/projects/index.ts")
@@ -34,8 +43,10 @@ export function projectAssets({ project } = {}) {
           `import selected from '../../projects/${project}/project';\nconst modules = { selected: { default: selected } };`,
         );
     },
-    configResolved(config) {
-      root = config.root;
+    configResolved(resolved) {
+      config = resolved;
+      root = resolved.root;
+      inMemory = resolved.build?.write === false;
     },
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
@@ -70,7 +81,9 @@ export function projectAssets({ project } = {}) {
             ".webm": "video/webm",
             ".ogg": "audio/ogg",
             ".m4a": "audio/mp4",
-            ".flac":"audio/flac", ".opus":"audio/ogg", ".aac":"audio/aac",
+            ".flac": "audio/flac",
+            ".opus": "audio/ogg",
+            ".aac": "audio/aac",
           };
           res.setHeader(
             "Content-Type",
@@ -120,37 +133,31 @@ export function projectAssets({ project } = {}) {
         }
       });
     },
-    async generateBundle() {
-      const banks = [];
-      const walk = (dir, prefix) => {
-        if (!fs.existsSync(dir)) return;
-        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-          if (entry.isSymbolicLink())
-            throw new Error("Project assets cannot be symlinks");
-          const file = path.join(dir, entry.name),
-            name = prefix + "/" + entry.name;
-          if (entry.isDirectory()) walk(file, name);
-          else {
-            this.emitFile({
-              type: "asset",
-              fileName: name,
-              source: fs.readFileSync(file),
-            });
-            if (/\.sf2$/i.test(name) && fs.statSync(file).size > 1024 * 1024)
-              banks.push({ file, name });
-          }
-        }
-      };
-      for (const directory of ids ??
-        readProjectCatalog(root).map((p) => p.directory))
-        walk(
-          path.join(root, "projects", directory, "public"),
-          "films/" + directory,
-        );
-      if (banks.length) {
+    async generateBundle(_options, bundle = {}) {
+      files = await scanProjectAssets(
+        root,
+        ids ?? readProjectCatalog(root).map((p) => p.directory),
+      );
+      for (const asset of files)
+        if (Object.hasOwn(bundle, asset.name))
+          throw new Error(
+            "Project asset conflicts with bundled output: " + asset.name,
+          );
+      // write:false explicitly asks Rollup for an in-memory bundle. Normal builds
+      // keep binary bytes out of Rollup and publish bounded streams in writeBundle.
+      if (inMemory) {
+        for (const asset of files)
+          this.emitFile({
+            type: "asset",
+            fileName: asset.name,
+            source: await readProjectAsset(asset),
+          });
         const { splitSoundfont } = await import("./soundfont-parts.mjs");
-        for (const { file, name } of banks) {
-          const split = splitSoundfont(fs.readFileSync(file));
+        for (const asset of files.filter(
+          (f) => /\.sf2$/i.test(f.name) && f.size > 1024 * 1024,
+        )) {
+          const { name } = asset;
+          const split = splitSoundfont(await readProjectAsset(asset));
           if (!split) continue;
           this.emitFile({
             type: "asset",
@@ -174,6 +181,36 @@ export function projectAssets({ project } = {}) {
         fileName: "assets.json",
         source: JSON.stringify(assetCatalog(root, ids)),
       });
+    },
+    async writeBundle(options, bundle) {
+      if (inMemory) return;
+      const output =
+        options.dir || path.resolve(root, config?.build?.outDir || "dist");
+      const buffer = Buffer.allocUnsafe(1024 * 1024);
+      for (const asset of files) {
+        if (Object.hasOwn(bundle, asset.name))
+          throw new Error(
+            "Project asset conflicts with bundled output: " + asset.name,
+          );
+        await copyProjectAsset(asset, output, { buffer });
+      }
+      for (const asset of files.filter(
+        (f) => /\.sf2$/i.test(f.name) && f.size > 1024 * 1024,
+      )) {
+        const parts = asset.name + ".parts/";
+        if (
+          files.some((f) => f.name.startsWith(parts)) ||
+          Object.keys(bundle).some((name) => name.startsWith(parts))
+        )
+          throw new Error(
+            "Soundfont parts conflict with project assets: " + parts,
+          );
+        await writeSoundfontParts(
+          path.join(output, asset.name),
+          path.join(output, asset.name + ".parts"),
+          { buffer },
+        );
+      }
     },
   };
 }

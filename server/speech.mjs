@@ -3,6 +3,13 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { confined, problem } from "./security.mjs";
+import {
+  speechInputShape,
+  ttsProviders,
+  ttsProviderIds,
+  ttsCapabilities,
+} from "../scripts/tts-capabilities.mjs";
+import { synthesizeTts, discoverTts } from "../scripts/tts-adapters.mjs";
 
 export const builtinSpeech = JSON.parse(
   fs.readFileSync(new URL("../speech/catalog.json", import.meta.url), "utf8"),
@@ -46,7 +53,9 @@ async function local(route, options = {}) {
   try {
     response = await fetch(localUrl() + route, {
       ...options,
-      signal: AbortSignal.timeout(180000),
+      signal: options.signal
+        ? AbortSignal.any([options.signal, AbortSignal.timeout(180000)])
+        : AbortSignal.timeout(180000),
     });
   } catch {
     throw problem(502, "本地语音服务暂时不可用，请稍后重试");
@@ -60,12 +69,7 @@ async function local(route, options = {}) {
   }
   return response.json();
 }
-const inputShape = {
-  engine: uuid,
-  text: z.string().trim().min(1).max(4000),
-  voice: z.string().min(1).max(150).optional(),
-  speed: z.number().min(0.5).max(2).default(1),
-};
+const inputShape = speechInputShape;
 export function speechOperations({ add, db, data, secrets, assets }) {
   const resolve = async (id) => {
     const row = await db.one(
@@ -80,73 +84,152 @@ export function speechOperations({ add, db, data, secrets, assets }) {
       config: builtin ? builtinConfig(builtin) : secrets.decrypt(row.config),
     };
   };
+  const jobs = new Map();
   const synthesize = async (a) => {
-    const { row, builtin, config: c } = await resolve(a.engine),
-      start = Date.now(),
-      voice = a.voice || c.voice;
-    if (builtin || normalize(c.url) === normalize(localUrl() + "/v1")) {
-      const installed = (await local("/models")).find((m) => m.id === c.model);
-      if (!installed?.ready) throw problem(409, "请先在语音模型列表下载或上传该模型");
+    const requestId = a.requestId || randomUUID();
+    for (const [id, j] of jobs)
+      if (j.finished && Date.now() - j.finished > 600000) jobs.delete(id);
+    if (jobs.has(requestId))
+      throw problem(
+        409,
+        "此请求 ID 已使用，请查询 speech_status，不要重复合成",
+      );
+    if ([...jobs.values()].filter((j) => !j.finished).length >= 8)
+      throw problem(429, "语音任务繁忙，请稍后重试");
+    if (jobs.size >= 200) {
+      const oldest = [...jobs].find(([, j]) => j.finished);
+      if (oldest) jobs.delete(oldest[0]);
     }
-    if (
-      builtin &&
-      !builtin.voices.some((v) => v.id === voice) &&
-      !(
-        builtin.speakerCount &&
-        /^\d+$/.test(voice) &&
-        Number(voice) < builtin.speakerCount
-      )
-    )
-      throw problem(400, "该引擎不支持所选声线");
-    let response;
-    try {
-      response = await fetch(c.url.replace(/\/$/, "") + "/audio/speech", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(c.apiKey ? { Authorization: "Bearer " + c.apiKey } : {}),
-        },
-        body: JSON.stringify({
-          model: c.model,
-          voice,
-          input: a.text,
-          speed: a.speed,
-          response_format: "wav",
-        }),
-        signal: AbortSignal.timeout(180000),
-        redirect: "error",
-      });
-    } catch {
-      throw problem(502, "语音合成连接失败或超时，请检查引擎后重试");
-    }
-    if (!response.ok) {
-      await response.body?.cancel();
-      throw problem(502, "语音引擎返回 HTTP " + response.status);
-    }
-    const chunks = [];
-    let size = 0;
-    for await (const chunk of response.body) {
-      size += chunk.length;
-      if (size > 64 * 1024 * 1024) throw problem(413, "语音结果超过 64 MiB");
-      chunks.push(chunk);
-    }
-    const bytes = Buffer.concat(chunks);
-    const wav =
-      bytes.subarray(0, 4).toString() === "RIFF" &&
-      bytes.subarray(8, 12).toString() === "WAVE";
-    const mp3 =
-      bytes.subarray(0, 3).toString() === "ID3" ||
-      (bytes[0] === 255 && (bytes[1] & 224) === 224);
-    if (!wav && !mp3) throw problem(502, "引擎没有返回有效的 WAV 或 MP3 音频");
-    return {
-      bytes,
-      ext: wav ? "wav" : "mp3",
-      mime: wav ? "audio/wav" : "audio/mpeg",
-      elapsedMs: Date.now() - start,
-      row,
-      voice,
+    const controller = new AbortController(),
+      start = Date.now();
+    const job = {
+      state: "running",
+      phase: "preparing",
+      receivedBytes: 0,
+      controller,
+      started: start,
     };
+    jobs.set(requestId, job);
+    try {
+      const { row, builtin, config: c } = await resolve(a.engine),
+        voice = a.voice || c.voice;
+      if (builtin || normalize(c.url) === normalize(localUrl() + "/v1")) {
+        const installed = (
+          await local("/models", { signal: controller.signal })
+        ).find((m) => m.id === c.model);
+        if (!installed?.ready)
+          throw problem(409, "请先在语音模型列表下载或上传该模型");
+      }
+      if (
+        builtin &&
+        !builtin.voices.some((v) => v.id === voice) &&
+        !(
+          builtin.speakerCount &&
+          /^\d+$/.test(voice) &&
+          Number(voice) < builtin.speakerCount
+        )
+      )
+        throw problem(400, "该引擎不支持所选声线");
+      const result = await synthesizeTts(
+        { ...c, provider: builtin ? "local" : c.provider || "compatible" },
+        a,
+        {
+          signal: controller.signal,
+          onProgress: (p) => Object.assign(job, p),
+        },
+      );
+      controller.signal.throwIfAborted();
+      Object.assign(job, {
+        state: "succeeded",
+        phase: "completed",
+        finished: Date.now(),
+      });
+      return {
+        ...result,
+        elapsedMs: Date.now() - start,
+        row,
+        voice,
+        requestId,
+      };
+    } catch (error) {
+      const cancelled = controller.signal.aborted;
+      Object.assign(job, {
+        state: cancelled ? "cancelled" : "failed",
+        phase: cancelled ? "cancelled" : "failed",
+        finished: Date.now(),
+        error: {
+          code: cancelled ? "TTS_CANCELLED" : error.code || "TTS_FAILED",
+          message: cancelled ? "语音合成已取消" : error.message,
+        },
+      });
+      if (cancelled && error.code !== "TTS_CANCELLED")
+        throw Object.assign(problem(409, "语音合成已取消"), {
+          code: "TTS_CANCELLED",
+        });
+      throw error;
+    } finally {
+      delete job.controller;
+    }
   };
+  add(
+    "speech_providers",
+    "Discover speech provider presets and model-specific real capabilities; no credentials or network calls",
+    {},
+    () => ({
+      schemaVersion: 1,
+      providers: ttsProviders.map((p) => ({
+        ...p,
+        capabilities: ttsCapabilities(p.id, p.model, p.voice),
+      })),
+    }),
+  );
+  add(
+    "speech_status",
+    "Inspect a synthesis request by requestId; transient status expires after ten minutes, not a billing receipt",
+    { requestId: uuid },
+    ({ requestId }) => {
+      const j = jobs.get(requestId);
+      if (!j || (j.finished && Date.now() - j.finished > 600000))
+        throw problem(404, "语音请求状态不存在或已过期");
+      const { controller, ...state } = j;
+      return {
+        requestId,
+        ...state,
+        elapsedMs: (j.finished || Date.now()) - j.started,
+      };
+    },
+  );
+  add(
+    "speech_cancel",
+    "Cancel local work and abort the provider connection. An accepted remote request can still be billed; no automatic retry",
+    { requestId: uuid },
+    ({ requestId }) => {
+      const j = jobs.get(requestId);
+      if (!j) throw problem(404, "语音请求不存在");
+      j.controller?.abort();
+      return { requestId, cancelRequested: !!j.controller, state: j.state };
+    },
+  );
+  add(
+    "engines_discover",
+    "Read model/voice catalogs for an already configured engine; read-only, supports ElevenLabs cursor/search; unsupported catalogs remain manual",
+    {
+      engine: uuid,
+      cursor: z.string().max(500).optional(),
+      search: z.string().max(200).optional(),
+    },
+    async (a) => {
+      const { builtin, config } = await resolve(a.engine);
+      if (builtin)
+        return {
+          source: "builtin",
+          voices: builtin.voices,
+          models: [{ id: config.model }],
+          nextCursor: null,
+        };
+      return discoverTts(config, a);
+    },
+  );
   add(
     "engines_list",
     "List available speech engines, voices, languages and immutable built-ins; never returns credentials",
@@ -177,7 +260,19 @@ export function speechOperations({ add, db, data, secrets, assets }) {
           speakerCount: b?.speakerCount,
           license: b?.license,
           source: b?.source,
-          config: { ...c, apiKey: undefined, configured: !!c.apiKey },
+          provider: b ? "local" : c.provider || "compatible",
+          capabilities: ttsCapabilities(
+            b ? "local" : c.provider || "compatible",
+            c.model,
+            c.voice,
+          ),
+          config: {
+            url: c.url,
+            model: c.model,
+            voice: c.voice,
+            provider: c.provider || "compatible",
+            configured: !!c.apiKey,
+          },
         });
       }
       return result;
@@ -185,14 +280,17 @@ export function speechOperations({ add, db, data, secrets, assets }) {
   );
   add(
     "engines_save",
-    "Create or edit a custom OpenAI-compatible speech engine. Built-ins cannot be edited or duplicated.",
+    "Create or edit a speech provider adapter. Omitted provider preserves existing config or defaults to compatible. ElevenLabs may omit default voice for catalog discovery; select one before synthesis. Use speech_providers first. Built-ins cannot be edited or duplicated.",
     {
       id: uuid.optional(),
       name: z.string().trim().min(1).max(120),
       url: z.string().url(),
       model: z.string().trim().min(1).max(150),
-      voice: z.string().trim().min(1).max(150),
+      voice: z.string().trim().max(150).optional(),
       apiKey: z.string().max(8000).optional(),
+      provider: z
+        .enum(ttsProviderIds.filter((id) => id !== "local"))
+        .optional(),
       enabled: z.boolean().default(true),
     },
     async (a) => {
@@ -213,10 +311,27 @@ export function speechOperations({ add, db, data, secrets, assets }) {
         throw problem(409, "内置引擎已预置，无需添加且不能修改");
       const prior = old ? secrets.decrypt(old.config) : {},
         id = a.id || randomUUID();
+      const provider = a.provider || prior.provider || "compatible";
+      const voice = a.voice ?? prior.voice ?? "";
+      if (!voice && provider !== "elevenlabs")
+        throw problem(
+          400,
+          "请填写默认声线；ElevenLabs 可先保存，再发现账号音色",
+        );
+      const sameTarget =
+        provider === (prior.provider || "compatible") &&
+        prior.url &&
+        normalize(prior.url) === normalize(a.url);
+      if (prior.apiKey && !sameTarget && a.apiKey === undefined)
+        throw problem(
+          400,
+          "更换提供商或服务地址时，请明确提供新密钥或空字符串清除；原密钥不能转交给新服务",
+        );
       const config = {
+        provider,
         url: normalize(a.url),
         model: a.model,
-        voice: a.voice,
+        voice,
         apiKey: a.apiKey === undefined ? prior.apiKey || "" : a.apiKey,
       };
       await db.pool.query(
@@ -243,7 +358,7 @@ export function speechOperations({ add, db, data, secrets, assets }) {
   );
   add(
     "speech_test",
-    "Preview speech as a temporary audio file. Never adds assets or changes a work. Expires after 24 hours.",
+    "Preview temporary speech (24 hours). Discover capabilities via engines_list/speech_providers and voices via engines_discover. options are model-specific; unsupported controls fail unless fallback=omit (warnings returned). Send requestId for progress/cancellation. No synthesis retries.",
     inputShape,
     async (a) => {
       const s = await synthesize(a),
@@ -262,6 +377,7 @@ export function speechOperations({ add, db, data, secrets, assets }) {
             { engine: a.engine, voice: s.voice },
             {
               speech: {
+                applied: s.applied,
                 mime: s.mime,
                 name: s.row.name,
                 license:
@@ -291,6 +407,9 @@ export function speechOperations({ add, db, data, secrets, assets }) {
         throw e;
       }
       return {
+        requestId: s.requestId,
+        applied: s.applied,
+        warnings: s.warnings,
         task: id,
         url: `/api/tasks/${id}/file/${relative}`,
         path: relative,
@@ -370,7 +489,13 @@ export function speechOperations({ add, db, data, secrets, assets }) {
           repo: a.repo,
         });
         if (a.project) await assets.attach(asset.id, a.repo, a.project);
-        return { asset, elapsedMs: s.elapsedMs };
+        return {
+          asset,
+          elapsedMs: s.elapsedMs,
+          requestId: s.requestId,
+          applied: s.applied,
+          warnings: s.warnings,
+        };
       } finally {
         fs.unlinkSync(file);
       }

@@ -1,3 +1,4 @@
+import { acquireDatabaseClient } from "./scoped-pool.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { confined, problem } from "./security.mjs";
@@ -12,7 +13,7 @@ export async function agentEventTransaction(
   taskId,
   operation = async () => undefined,
 ) {
-  const client = await db.pool.connect();
+  const client = await acquireDatabaseClient(db);
   let broken = false;
   try {
     await client.query("BEGIN");

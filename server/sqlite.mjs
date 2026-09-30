@@ -68,12 +68,28 @@ function sqliteMigration(sql) {
 
 const encode = (value) => value == null ? null : typeof value === "boolean" ? Number(value)
   : typeof value === "object" && !(value instanceof Uint8Array) ? JSON.stringify(value) : value;
+function bindings(sql, values) {
+  // Node 22 treats SQLite's ?n placeholders as named parameters. Explicit
+  // binding also preserves PostgreSQL's repeated and out-of-order $n values.
+  const code = sql.replace(
+    /'(?:''|[^'])*'|"(?:""|[^"])*"|`(?:``|[^`])*`|\[[^\]]*\]|--[^\n]*|\/\*[\s\S]*?\*\//g,
+    "",
+  );
+  const names = [...new Set([...code.matchAll(/\?([1-9]\d*)/g)].map((m) => m[1]))];
+  return names.length
+    ? [Object.fromEntries(names.map((n) => ["?" + n, values[Number(n) - 1]]))]
+    : values;
+}
 function decode(row) {
   if (!row) return row;
   const result = { ...row };
   for (const [key, value] of Object.entries(result)) {
     if (value == null) continue;
-    if (jsonColumns.has(key) && typeof value === "string") {
+    if (typeof value === "bigint") {
+      const number = Number(value);
+      result[key] = booleanColumns.has(key) ? !!value
+        : Number.isSafeInteger(number) ? number : String(value);
+    } else if (jsonColumns.has(key) && typeof value === "string") {
       try { result[key] = JSON.parse(value); } catch { /* SQL scalar or older data. */ }
     } else if (booleanColumns.has(key)) result[key] = !!value;
   }
@@ -190,11 +206,13 @@ export async function sqliteDatabase(file) {
     if (!values.length && /;\s*\S/.test(text)) { raw.exec(text); return { rows: [], rowCount: 0 }; }
     if (/^(BEGIN|COMMIT|ROLLBACK)$/i.test(text)) { raw.exec(text); return { rows: [], rowCount: 0 }; }
     const statement = raw.prepare(text);
+    statement.setReadBigInts(true);
+    const parameters = bindings(text, values);
     if (/^\s*(SELECT|WITH|PRAGMA)\b|\bRETURNING\b/i.test(text)) {
-      const rows = statement.all(...values).map(decode);
+      const rows = statement.all(...parameters).map(decode);
       return { rows, rowCount: rows.length };
     }
-    const result = statement.run(...values);
+    const result = statement.run(...parameters);
     return { rows: [], rowCount: Number(result.changes) };
   };
   const pool = {

@@ -2,14 +2,15 @@ import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { authoringReferences, authoringModes, projectDefaults } from "../src/contracts/authoring.mjs";
 import { referenceCatalog, readAuthoringReference } from "../scripts/authoring-reference.mjs";
-import { setTimeout as sleep } from "node:timers/promises";
+import { taskSummaryColumns } from "./task-summary.mjs";
+import { readTaskStatus, subscribeTaskStatus } from "./task-status-wait.mjs";
 import { PLATFORM_VERSION } from "../src/contracts/version.mjs";
 import { isActiveTask } from "../src/contracts/platform.mjs";
 import { problem } from "./security.mjs";
 
 // This allowlist is shared by discovery and MCP registration, never by authorization.
 export const isMcpOperation = (name) =>
-  /^(help$|works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local)$|speech_test$|models_list$|workspace_context$|tool_describe$|authoring_reference$)/.test(
+  /^(help$|works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local|discover)$|speech_(test|providers|status|cancel)$|models_list$|workspace_context$|tool_describe$|authoring_reference$)/.test(
     name,
   );
 const readOnly = new Set([
@@ -79,8 +80,7 @@ export const textToolResult = (value) => ({
   structuredContent: structuredValue(value),
 });
 
-export const TASK_SUMMARY_COLUMNS =
-  "id,repo,project,kind,state,error,created,started,finished,expires,cleaned,source_commit,progress,result - 'input' AS result";
+export { TASK_SUMMARY_COLUMNS } from "./task-summary.mjs";
 const choose = (object, keys) =>
   Object.fromEntries(
     keys
@@ -318,7 +318,7 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
     async (a) => {
       const work = await works.get(a.id);
       const rows = await db.all(
-        `SELECT ${TASK_SUMMARY_COLUMNS} FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC,id DESC LIMIT $3 OFFSET $4`,
+        `SELECT ${taskSummaryColumns(db)} FROM tasks WHERE repo=$1 AND project=$2 ORDER BY created DESC,id DESC LIMIT $3 OFFSET $4`,
         [work.repo, work.project, a.limit + 1, a.offset],
       );
       return {
@@ -348,15 +348,17 @@ export function agentToolkitOperations({ add, registry, db, works, tasks }) {
     },
     async (a) => {
       const deadline = Date.now() + a.waitMs;
+      const waiter = a.waitMs ? subscribeTaskStatus(db, a.id) : null;
       let task, rows;
-      for (;;) {
-        task = await tasks.get(a.id);
-        rows = await db.all(
-          "SELECT id,kind,data,created FROM events WHERE task=$1 AND id>$2 ORDER BY id LIMIT $3",
-          [a.id, String(a.after), a.limit + 1],
-        );
-        if (!isActiveTask(task) || rows.length || Date.now() >= deadline) break;
-        await sleep(Math.min(500, deadline - Date.now()));
+      try {
+        for (;;) {
+          const revision = waiter?.revision;
+          ({ task, rows } = await readTaskStatus(db, tasks, a));
+          if (!isActiveTask(task) || rows.length || Date.now() >= deadline) break;
+          await waiter.wait(revision, deadline - Date.now());
+        }
+      } finally {
+        waiter?.close();
       }
       const events = rows
         .slice(0, a.limit)

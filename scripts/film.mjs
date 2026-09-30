@@ -59,7 +59,7 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film narrate <id> --input production/narration.json [--json]
   pnpm film speech <id> init --provider edge|openai|azure|custom [--voice <voice>] [--json]
   pnpm film speech <id> status|voices [--provider <name> --locale zh-CN] [--json]
-  pnpm film speech <id> say --text "语音试听" [--provider <name> --speaker <role> --voice <voice>] [--json]
+  pnpm film speech <id> say --text "语音试听" [--provider <name> --speaker <role> --voice <voice> --speed <ratio> --instructions "表达指令" --options <JSON>] [--json]
   pnpm film workspace <id> [--json]          建立可编辑的独立工作副本与 Git 基线
   pnpm film job <id> start --kind export --input options.json [--json]
   pnpm film job <id> status|cancel --id <job-id> [--json]

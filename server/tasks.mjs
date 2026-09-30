@@ -21,6 +21,7 @@ import { ControllerLease } from "./controller-lease.mjs";
 import { LocalProcesses } from "./local-processes.mjs";
 import { resolveExecution, continuationContext } from "./execution-selection.mjs";
 import { prepareReviewReference } from "./review-reference.mjs";
+import { taskSummaryColumns } from "./task-summary.mjs";
 // Pre-V5 chat tasks stored server-enriched input. Recover their original acknowledgement
 // before consulting mutable connection/catalog state; explicit changed input still conflicts.
 function sameTaskRequest(existing, requested) {
@@ -142,6 +143,14 @@ export class Tasks {
   }
   async get(id) {
     const row = await this.db.one("SELECT * FROM tasks WHERE id=$1", [id]);
+    if (!row) throw problem(404, "Task not found");
+    return row;
+  }
+  async summary(id) {
+    const row = await this.db.one(
+      `SELECT ${taskSummaryColumns(this.db)} FROM tasks WHERE id=$1`,
+      [id],
+    );
     if (!row) throw problem(404, "Task not found");
     return row;
   }

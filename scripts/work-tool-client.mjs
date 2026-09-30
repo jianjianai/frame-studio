@@ -3,6 +3,10 @@ import fs from "node:fs";
 const remoteNames = [
   "assets",
   "engines",
+  "speech_providers",
+  "engines_discover",
+  "speech_status",
+  "speech_cancel",
   "engine_add",
   "engine_test",
   "use",
@@ -15,7 +19,9 @@ export const workToolHelp = {
     "JSON object, @file, or - for stdin. Credentials belong in @file or stdin, never command arguments.",
   local: {
     context: { project: "optional outside a task; inferred inside a task" },
-    reference: { name: "optional fixed reference name; omit to list the catalog" },
+    reference: {
+      name: "optional fixed reference name; omit to list the catalog",
+    },
     check: {
       project: "optional",
       runtime:
@@ -27,7 +33,8 @@ export const workToolHelp = {
   remote: {
     ask: {
       title: "optional short creative clarification",
-      questions: "1..4 questions with id, question, optional options, multiSelect and allowOther; waits for human answers in the SAME task",
+      questions:
+        "1..4 questions with id, question, optional options, multiSelect and allowOther; waits for human answers in the SAME task",
       requestKey: "optional stable id for resuming the same question",
     },
     assets: {
@@ -35,31 +42,56 @@ export const workToolHelp = {
       limit: "1..200, default 60",
       offset: "nonnegative integer, default 0",
     },
-    engines: {},
+    engines: {
+      note: "Provider/model capabilities, built-in voices and credential presence; no secrets",
+    },
+    speech_providers: {},
+    engines_discover: {
+      engine: "required existing engine id",
+      cursor: "optional nextCursor from ElevenLabs",
+      search: "optional voice search",
+    },
+    speech_status: { requestId: "required synthesis request UUID" },
+    speech_cancel: {
+      requestId:
+        "required synthesis request UUID; remote requests may still be billed",
+    },
     engine_add: {
       name: "required",
-      url: "required compatible speech endpoint",
+      url: "required provider API base URL",
+      provider:
+        "optional compatible|openai|minimax|doubao|elevenlabs|qwen3; discover presets first",
       model: "required",
-      voice: "optional",
+      voice: "default voice id; ElevenLabs may omit until catalog discovery",
       apiKey: "optional secret",
     },
     engine_test: {
       engine: "required engine id",
       text: "required audition text",
       voice: "optional",
-      speed: "optional",
+      speed: "optional; engine capabilities.speed range, default 1",
+      options:
+        "optional model-supported expression object: instructions, emotion, language, pitch, pauses, pronunciation, stability, similarity, style, dictionaries, previousText, nextText. Read engines capabilities first.",
+      fallback: "error (default) or explicit omit, which returns warnings",
+      requestId:
+        "optional fresh UUID for progress/cancellation; never repeat an accepted ID",
     },
     use: { asset: "required material id from this repository" },
     speech: {
       engine: "required engine id",
       text: "required final narration",
       voice: "optional",
-      speed: "optional",
+      speed: "optional; engine capabilities.speed range, default 1",
+      options:
+        "optional model-supported expression object: instructions, emotion, language, pitch, pauses, pronunciation, stability, similarity, style, dictionaries, previousText, nextText. Read engines capabilities first.",
+      fallback: "error (default) or explicit omit, which returns warnings",
+      requestId:
+        "optional fresh UUID for progress/cancellation; never repeat an accepted ID",
     },
   },
   notes: [
     "Local context/check do not need platform credentials. Remote actions require an active platform task.",
-    "engines lists ready built-in engines and voices. Built-ins cannot be replaced.",
+    "engines lists real model capabilities. Discover configured voice catalogs before auditioning. Chinese pronunciation/pauses are provider-specific; unsupported controls are rejected, never fabricated. Built-ins cannot be replaced.",
     "engine_test creates temporary audition audio; speech creates a material. Neither automatically edits audioTracks or subtitles.",
     "Remote writes are never retried automatically; after a timeout their outcome may be unknown. Inspect assets before repeating speech.",
   ],

@@ -74,7 +74,7 @@ try {
       throw new Error("Output exists; use --force: " + file);
   }
   session = await createRenderSession({ root, width });
-  const page = await session.page(id);
+  const page = await session.page(id, { purpose: "visual" });
   const columns = Math.min(3, times.length),
     labelHeight = 36;
   const layers = [],

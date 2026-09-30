@@ -13,9 +13,14 @@ import { seedSpeech } from "./speech.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 
 /** Shared domain assembly, without HTTP listeners or a privileged scheduler. */
-export async function createServices({ db, data = process.env.FRAME_DATA || "/data",
-  masterKey = process.env.FRAME_MASTER_KEY, initialize = true } = {}) {
-  if (process.env.HOME?.startsWith("/tmp/")) fs.mkdirSync(process.env.HOME, { recursive: true, mode: 0o700 });
+export async function createServices({
+  db,
+  data = process.env.FRAME_DATA || "/data",
+  masterKey = process.env.FRAME_MASTER_KEY,
+  initialize = true,
+} = {}) {
+  if (process.env.HOME?.startsWith("/tmp/"))
+    fs.mkdirSync(process.env.HOME, { recursive: true, mode: 0o700 });
   fs.mkdirSync(data, { recursive: true });
   fs.mkdirSync(path.join(data, "uploads"), { recursive: true });
   fs.mkdirSync(path.join(data, "tools"), { recursive: true });
@@ -47,8 +52,7 @@ export async function createServices({ db, data = process.env.FRAME_DATA || "/da
   repos.onChange = async (id, project = null) => {
     if (!project) await assets.indexRepository(id);
     await actions.works.discover(id, project);
-    assets.scans?.delete(id);
-    assets.scans?.delete("all");
+    assets.invalidateReferences(id, project);
   };
   if (initialize) {
     await connections.migrate();
@@ -59,11 +63,24 @@ export async function createServices({ db, data = process.env.FRAME_DATA || "/da
       "UPDATE tasks SET expires=finished+interval '7 days' WHERE finished IS NOT NULL AND expires IS NULL",
     );
     await seedSpeech(db, secrets);
-  } else { actions.works.discovered = true; }
-  return { db, data, secrets, repos, assets, tasks, connections, github, retention, actions,
+  } else {
+    actions.works.discovered = true;
+  }
+  return {
+    db,
+    data,
+    secrets,
+    repos,
+    assets,
+    tasks,
+    connections,
+    github,
+    retention,
+    actions,
     async close() {
       await tasks.close();
       await retention.close();
+      await assets.close();
       connections.close();
       await db.pool.end();
     },
