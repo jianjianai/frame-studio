@@ -64,8 +64,10 @@ jobs:
           test -n "$TEST_USER"
           sudo usermod -aG docker "$TEST_USER"
           TEST_HOME="$RUNNER_TEMP/frame-test-home"
-          mkdir -p "$TEST_HOME"
+          mkdir -p "$TEST_HOME/config" "$TEST_HOME/cache" "$TEST_HOME/runtime"
+          chmod 700 "$TEST_HOME/runtime"
           sudo chown -R 1000:1000 "$GITHUB_WORKSPACE" "$TEST_HOME"
+          TEST_ENV=(PATH="$PATH" HOME="$TEST_HOME" XDG_CONFIG_HOME="$TEST_HOME/config" XDG_CACHE_HOME="$TEST_HOME/cache" XDG_RUNTIME_DIR="$TEST_HOME/runtime")
           # Allow the test identity to traverse the hosted runner's public tool paths.
           sudo chmod o+x "$HOME" "$HOME/work" "$(dirname "$GITHUB_WORKSPACE")" "$HOME/.cache" "$RUNNER_TEMP"
           sudo chmod -R a+rX "$HOME/.cache/ms-playwright"
@@ -73,7 +75,7 @@ jobs:
           BROWSER_WRAPPER="$RUNNER_TEMP/frame-chromium"
           printf '#!/bin/sh\nexec "%s" "$@" --use-gl=angle --use-angle=swiftshader-webgl --enable-unsafe-swiftshader\n' "$BROWSER" > "$BROWSER_WRAPPER"
           chmod +x "$BROWSER_WRAPPER"
-          sudo -u '#1000' -g '#1000' env PATH="$PATH" HOME="$TEST_HOME" FRAME_BROWSER="$BROWSER_WRAPPER" node --input-type=module <<'JS'
+          sudo -u '#1000' -g '#1000' env "${TEST_ENV[@]}" FRAME_BROWSER="$BROWSER_WRAPPER" node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
           import { launchBrowser } from './scripts/browser.mjs';
           const browser = await launchBrowser();
@@ -91,11 +93,11 @@ jobs:
           } finally { await browser.close(); }
           JS
           if [ "$GRAPHICS_DIAGNOSTIC" = true ]; then
-            sudo -u '#1000' -g '#1000' env PATH="$PATH" HOME="$TEST_HOME" FRAME_BROWSER="$BROWSER_WRAPPER" DEBUG=pw:browser \
+            sudo -u '#1000' -g '#1000' env "${TEST_ENV[@]}" FRAME_BROWSER="$BROWSER_WRAPPER" DEBUG=pw:browser \
               node --test tests/server/mixed-composition.test.mjs
             exit
           fi
-          sudo -u '#1000' -g '#1000' env PATH="$PATH" HOME="$TEST_HOME" FRAME_BROWSER="$BROWSER_WRAPPER" \
+          sudo -u '#1000' -g '#1000' env "${TEST_ENV[@]}" FRAME_BROWSER="$BROWSER_WRAPPER" \
             FRAME_TEST_DATABASE_URL="$FRAME_TEST_DATABASE_URL" \
             FRAME_TEST_EXECUTOR="$FRAME_TEST_EXECUTOR" \
             FRAME_TEST_HOST_ROOT="$FRAME_TEST_HOST_ROOT" \
