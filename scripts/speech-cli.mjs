@@ -37,6 +37,10 @@ try {
       result = await produceNarration(root, id, undefined, {
         plan: speechSamplePlan(values),
         signal: controller.signal,
+        onProgress: ({ completed, total, cached }) =>
+          process.stderr.write(
+            `Speech ${completed}/${total}${cached ? " cached" : " synthesized"}\n`,
+          ),
       });
     else throw new Error("Unknown speech action; use init|status|voices|say");
     console.log(JSON.stringify(result, null, values.json ? 0 : 2));
@@ -45,6 +49,12 @@ try {
     process.removeListener("SIGTERM", cancel);
   }
 } catch (error) {
-  console.log(JSON.stringify({ schemaVersion: 1, status: "failed", error: errorRecovery(error) }));
+  console.log(
+    JSON.stringify({
+      schemaVersion: 1,
+      status: "failed",
+      error: errorRecovery(error),
+    }),
+  );
   process.exitCode = 1;
 }

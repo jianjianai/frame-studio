@@ -1,3 +1,4 @@
+import { ttsProviderIds, ttsOptionsSchema } from "../tts-capabilities.mjs";
 import {exportAudio} from "../audio-export.mjs";
 import {inspectAudio} from "../audio-inspect.mjs";
 import {transcodeAudio} from "../audio-media.mjs";
@@ -568,7 +569,7 @@ export function createFrameServer({
   );
   register(
     "frame_narrate",
-    "Synthesize project speech using Edge, OpenAI/compatible, Azure or a custom adapter. Provide either input (project-local JSON plan) or text (one-line audition), never both. Poll frame_job, then use frame_read_speech to hear audio; no automatic provider fallback or metadata rewriting.",
+    "Synthesize project speech via configured adapters (including MiniMax, Doubao, ElevenLabs and optional Qwen bridge). Discover frame_speech_status capabilities first. Provide either input (JSON plan with flat settings) or text (audition with speed/options), never both. Poll frame_job; frame_read_speech returns audio. Unsupported controls fail, synthesis never retries or changes providers.",
     {
       project,
       input: filePath.optional(),
@@ -576,15 +577,17 @@ export function createFrameServer({
       provider: z.string().min(1).max(100).optional(),
       speaker: z.string().min(1).max(64).optional(),
       voice: z.string().min(1).max(200).optional(),
+      speed: z.number().min(0.25).max(4).optional(),
+      options: ttsOptionsSchema.optional(),
     },
     ({ project: id, ...options }) => {
       if (Boolean(options.input) === (options.text !== undefined))
         fail("INVALID_ARGUMENT", "Provide exactly one of input or text");
       if (options.input) {
-        if (options.provider || options.speaker || options.voice)
+        if (options.provider || options.speaker || options.voice || options.speed !== undefined || options.options)
           fail(
             "INVALID_ARGUMENT",
-            "Put provider, speaker and voice in the input plan",
+            "Put provider, speaker, voice and expression settings in the input plan",
           );
         workspace.file(id, options.input);
       }
@@ -603,7 +606,7 @@ export function createFrameServer({
     "Create project speech configuration and a sample narration plan without overwriting existing files. Does not contact providers or incur synthesis charges.",
     {
       project,
-      provider: z.enum(["edge", "openai", "azure", "custom"]).default("edge"),
+      provider: z.enum(["edge", "azure", "custom", ...ttsProviderIds.filter(id=>id!=="local")]).default("edge"),
       voice: z.string().min(1).max(200).optional(),
     },
     ({ project: id, ...options }) =>
@@ -612,11 +615,13 @@ export function createFrameServer({
   );
   register(
     "frame_list_voices",
-    "List voices for a project's provider; Edge/Azure query the service, OpenAI returns a documented static list, custom compatible services define their own voices. Supports locale filter and pagination.",
+    "Discover provider voices. Edge/Azure/MiniMax/ElevenLabs/Qwen bridge query configured services; OpenAI uses model-specific documented voices. Check frame_speech_status capabilities before adding expression settings to narration plans. Compatible/custom catalogs stay manual.",
     {
       project,
       provider: z.string().min(1).max(64).optional(),
       locale: z.string().min(2).max(32).optional(),
+      cursor: z.string().max(500).optional(),
+      search: z.string().max(200).optional(),
       limit: z.number().int().min(1).max(200).default(100),
       offset: z.number().int().nonnegative().default(0),
     },

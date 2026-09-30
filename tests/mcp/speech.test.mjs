@@ -5,7 +5,7 @@ import path from "node:path";
 import http from "node:http";
 import { randomBytes } from "node:crypto";
 import { once } from "node:events";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fixture, repo, memoryClient, call, waitForJob } from "./helpers.mjs";
 import { ProjectService } from "../../scripts/project-service.mjs";
 import { produceNarration } from "../../scripts/narration.mjs";
@@ -246,7 +246,7 @@ test("all sentence validation happens before synthesis; source audio and overlap
 });
 
 test(
-  "OpenAI official SDK sends real Speech requests, bounds responses, rejects redirects and does not retry or leak secrets",
+  "OpenAI-compatible HTTP adapter sends real Speech requests, bounds responses, rejects redirects and does not retry or leak secrets",
   { timeout: 30000 },
   async () => {
     const f = fixture();
@@ -324,7 +324,7 @@ test(
             }),
           (error) =>
             !error.message.includes("project-secret") &&
-            /failed|limit/i.test(error.message),
+            (error.code?.startsWith("TTS_") || /failed|limit/i.test(error.message)),
         );
         assert.equal(
           requests,
@@ -601,6 +601,120 @@ test(
       assert.equal(fs.existsSync(f.file("public/narration")), false);
     } finally {
       await connection?.close();
+      f.close();
+    }
+  },
+);
+
+
+test(
+  "CLI and local MCP transmit the same MiniMax expression settings through real HTTP test service",
+  { timeout: 30000 },
+  async () => {
+    const f = fixture({ browser: true }),
+      requests = [];
+    let connection;
+    const server = http.createServer(async (req, res) => {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      requests.push(JSON.parse(Buffer.concat(chunks)));
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          base_resp: { status_code: 0 },
+          data: { audio: wav().toString("hex") },
+        }),
+      );
+    });
+    await new Promise((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const config = speechTemplate("minimax", "zh-voice");
+      config.providers.minimax.apiKeyEnv = "FRAME_TEST_MINIMAX_KEY";
+      config.providers.minimax.baseUrlEnv = "FRAME_TEST_MINIMAX_URL";
+      fs.writeFileSync(
+        f.file("production/speech.json"),
+        JSON.stringify(config),
+      );
+      fs.writeFileSync(
+        f.file(".env"),
+        `FRAME_TEST_MINIMAX_KEY=fixture-only
+FRAME_TEST_MINIMAX_URL=http://127.0.0.1:${server.address().port}/v1
+`,
+      );
+      const text = "重庆，新的旅程开始。",
+        options = {
+          emotion: "calm",
+          language: "Chinese",
+          pronunciation: [{ word: "重庆", phonetic: "(chong2)(qing4)" }],
+          pauses: [{ after: 3, seconds: 0.5 }],
+        };
+      const child = spawn(
+        process.execPath,
+        [
+          path.join(repo, "scripts/film.mjs"),
+          "speech",
+          "test-film",
+          "say",
+          "--text",
+          text,
+          "--speed",
+          "0.95",
+          "--options",
+          JSON.stringify(options),
+          "--json",
+        ],
+        { cwd: f.root, windowsHide: true },
+      );
+      let out = "",
+        err = "";
+      child.stdout.on("data", (b) => (out += b));
+      child.stderr.on("data", (b) => (err += b));
+      const [code] = await once(child, "exit");
+      assert.equal(code, 0, err + out);
+      assert.equal(JSON.parse(out).status, "passed");
+      const cliRequest = requests.at(-1);
+      assert.equal(cliRequest.voice_setting.emotion, "calm");
+      assert.equal(cliRequest.text, "重庆，<#0.50#>新的旅程开始。");
+      connection = await memoryClient(f.root);
+      const privateFile = await connection.client.callTool({
+        name: "frame_read_file",
+        arguments: { project: "test-film", path: ".env" },
+      });
+      assert.equal(privateFile.isError, true);
+      assert(!JSON.stringify(privateFile).includes("fixture-only"));
+      const tools = (await connection.client.listTools()).tools;
+      assert(
+        tools.find((t) => t.name === "frame_narrate").inputSchema.properties
+          .options.properties.pronunciation,
+      );
+      // A changed punctuation forces a new request rather than a cache hit.
+      const started = await call(connection.client, "frame_narrate", {
+        project: "test-film",
+        text: text + "！",
+        speed: 0.95,
+        options,
+      });
+      const job = await waitForJob(connection.client, "test-film", started.id);
+      assert.equal(job.status, "succeeded", JSON.stringify(job));
+      assert.deepEqual(requests.at(-1).voice_setting, cliRequest.voice_setting);
+      assert.deepEqual(
+        requests.at(-1).pronunciation_dict,
+        cliRequest.pronunciation_dict,
+      );
+      const before = requests.length;
+      const invalid = await produceNarration(f.root, "test-film", undefined, {
+        plan: {
+          mode: "sequential",
+          settings: { instructions: "unsupported" },
+          sentences: [{ id: "bad", text }],
+        },
+      }).catch((e) => e);
+      assert(invalid instanceof Error);
+      assert.equal(requests.length, before);
+    } finally {
+      await connection?.close();
+      server.closeAllConnections();
+      await new Promise((r) => server.close(r));
       f.close();
     }
   },

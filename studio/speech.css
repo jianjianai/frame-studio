@@ -1,0 +1,47 @@
+.speech-expression {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  display: grid;
+  gap: 12px;
+}
+.speech-direction {
+  border: 1px solid var(--border, #354052);
+  border-radius: 9px;
+  padding: 12px;
+}
+.speech-direction summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.speech-direction[open] {
+  display: grid;
+  gap: 12px;
+}
+.speech-direction .speech-controls {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+.speech-expression small,
+.speech-feedback small {
+  line-height: 1.6;
+  opacity: 0.8;
+}
+.speech-feedback {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 9px;
+}
+.speech-feedback small {
+  flex-basis: 100%;
+}
+.speech-expression .row {
+  flex-wrap: wrap;
+}
+@media (max-width: 550px) {
+  .speech-expression .speech-controls {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+}

@@ -157,7 +157,7 @@ export async function createApp({
       .code(state.ready ? 200 : 503)
       .send({ status: state.ready ? "ready" : "degraded" });
   });
-  agentTools({ app, db, data, assets, actions });
+  agentTools({ app, db, data, assets, actions, localMode });
   app.post(
     "/api/login",
     { config: { rateLimit: { max: 8, timeWindow: "1 minute" } } },

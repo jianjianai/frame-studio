@@ -145,7 +145,7 @@ exposePcmGenerator(({ startFrame, frames, sampleRate, trackId }, signal) => {
 
 ## 旁白与字幕
 
-公共 Edge、OpenAI/兼容接口、Azure 及项目自定义合成器已统一接入，完整说明见 [项目语音合成](SPEECH.md)。最快开始：`pnpm film speech my-film init --provider edge`，然后 `pnpm film speech my-film say --text "你好"`。每个项目保存自己的 `production/speech.json`、角色声线和私有 `.env`。
+公共 Edge、OpenAI/compatible、Azure、MiniMax、豆包、ElevenLabs、可选 Qwen bridge 及项目自定义合成器已统一接入，完整说明见 [项目语音合成](SPEECH.md)。最快开始：`pnpm film speech my-film init --provider edge`，然后 `pnpm film speech my-film say --text "你好"`。每个项目保存自己的 `production/speech.json`、角色声线和私有 `.env`。
 
 `film narrate my-film --input production/narration.json` 接受：
 
