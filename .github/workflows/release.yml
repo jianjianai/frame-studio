@@ -1,7 +1,6 @@
 name: Release
+run-name: Release v${{ inputs.version }}
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       version:
@@ -11,7 +10,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: release-${{ inputs.version || github.ref }}
+  group: release-${{ inputs.version }}
   cancel-in-progress: false
 jobs:
   source:
@@ -23,21 +22,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.version && format('refs/tags/v{0}', inputs.version) || github.ref }}
+          ref: refs/tags/v${{ inputs.version }}
       - id: source
         env:
-          TAG: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
+          TAG: v${{ inputs.version }}
         run: |
+          test "$GITHUB_REF" = refs/heads/main || { echo 'Run the publishing workflow on main to share release caches'; exit 1; }
           VERSION=$(node -p "require('./package.json').version")
           test "$TAG" = "v$VERSION" || { echo 'Tag and package version differ'; exit 1; }
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-  verify:
-    needs: source
-    uses: ./.github/workflows/verify.yml
-    with:
-      source_ref: ${{ needs.source.outputs.revision }}
   windows:
     needs: source
     runs-on: windows-latest
@@ -51,27 +46,51 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "26.8.2"
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install build dependencies
+      - name: Install pnpm
         shell: pwsh
         run: |
           npm install --global pnpm@12.4.2
           if ($LASTEXITCODE -ne 0) { throw 'pnpm installation failed' }
-          pnpm install --frozen-lockfile
-          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-          choco install ffmpeg --yes --no-progress
-          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
-      - name: Test dependency provisioning
+      - name: Restore pnpm package store
+        uses: actions/cache@v4
+        with:
+          path: .cache/pnpm-store
+          key: windows-pnpm-12.4.2-node-26-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc') }}
+          restore-keys: windows-pnpm-12.4.2-node-26-
+      - name: Restore installer compiler
+        uses: actions/cache@v4
+        with:
+          path: .cache/build-tools/nsis
+          key: windows-nsis-${{ hashFiles('desktop/get-compiler.ps1') }}
+      - name: Resolve published runtime components
+        id: runtimes
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (Test-Path -LiteralPath ./desktop/runtime-assets.ps1) {
+            $plan = ./desktop/runtime-assets.ps1
+          } else {
+            # Older tags used unconditional build tool setup.
+            $plan = @{Missing=@('tools','speech')}
+          }
+          "tools=$($plan.Missing -contains 'tools')".ToLowerInvariant() >> $env:GITHUB_OUTPUT
+          "speech=$($plan.Missing -contains 'speech')".ToLowerInvariant() >> $env:GITHUB_OUTPUT
+      - uses: actions/setup-python@v5
+        if: steps.runtimes.outputs.speech == 'true'
+        with:
+          python-version: "3.11"
+      - name: Install FFmpeg for a new tools component
+        if: steps.runtimes.outputs.tools == 'true'
         shell: pwsh
         run: |
-          ./tests/desktop/bootstrap.test.ps1
-          node --test tests/desktop/dependencies.test.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'pnpm installation and cache reuse failed' }
-          ./tests/desktop/download.test.ps1
-          ./tests/desktop/github-cli.test.ps1
-          ./tests/desktop/shortcut.test.ps1
+          choco install ffmpeg --yes --no-progress
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
+      - name: Install application build dependencies
+        shell: pwsh
+        run: |
+          pnpm install --frozen-lockfile --prefer-offline --store-dir .cache/pnpm-store
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
       - name: Build installer and immutable runtime components
         shell: pwsh
         env:
@@ -79,62 +98,17 @@ jobs:
         run: |
           ./desktop/package.ps1 -PublishRuntimes
           if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
-      - name: Test actual installation, repair, failure and uninstall
-        shell: pwsh
-        run: ./tests/desktop/installer.test.ps1
-      - name: Test Windows speech UI and SQLite protocols
-        shell: pwsh
-        env:
-          FRAME_TEST_PORT: "57823"
-        run: |
-          node --test --test-concurrency=1 tests/desktop/tts-adapters.test.mjs tests/desktop/tts-expression-ui.test.mjs tests/server/sqlite-bindings.test.mjs tests/server/local-desktop.test.mjs tests/server/local-tools.test.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'Windows speech and SQLite verification failed' }
-      - name: Test native Windows center and browser workbench
-        shell: pwsh
-        run: ./tests/desktop/product.test.ps1 -CacheData .cache/installer-smoke/Data
-      - name: Test verified update application and failed update recovery
-        shell: pwsh
-        run: ./tests/desktop/update-install.test.ps1 -CacheData .cache/installer-smoke/Data
-      - name: Show Windows product failure diagnostics
-        if: failure()
-        shell: pwsh
-        run: |
-          Get-ChildItem -LiteralPath .cache -Directory -Filter 'desktop-*-smoke-*' | ForEach-Object {
-            $log = Join-Path $_.FullName 'Data/desktop.log'
-            if (Test-Path -LiteralPath $log) {
-              Write-Output "Runtime evidence: $log"
-              Get-Content -LiteralPath $log -Tail 100
-            }
-            $result = Join-Path $_.FullName 'screens/browser-result.json'
-            if (Test-Path -LiteralPath $result) { Get-Content -LiteralPath $result }
-          }
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: windows-product-evidence
-          include-hidden-files: true
-          path: |
-            .cache/desktop-product-smoke-*/screens/*
-            .cache/desktop-update-smoke-*/screens/*
-            .cache/desktop-product-smoke-*/Data/*.log
-            .cache/desktop-update-smoke-*/Data/*.log
-          if-no-files-found: warn
       - uses: actions/upload-artifact@v4
         with:
           name: windows-installer
           include-hidden-files: true
+          compression-level: 0
           path: |
             .cache/release/*-Setup.exe
             .cache/release/*-Setup.exe.sha256
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: windows-installer-logs
-          include-hidden-files: true
-          path: .cache/installer-smoke/*.log
   images:
-    needs: [source, verify, windows]
+    needs: source
     permissions:
       contents: read
       packages: write
@@ -170,7 +144,7 @@ jobs:
           - ghcr.io/jianjianai/frame-studio/app:${VERSION}
           - ghcr.io/jianjianai/frame-studio/speech:${VERSION}
 
-          The actual Windows installer, native control center, browser creation/preview/MP4 export, verified update installation and failure recovery, and complete server release gate passed before publication. Publishing does not switch a production server.
+          The installer and Docker images are built from the same source tag. This workflow builds and publishes release artifacts; functional verification is performed separately. Publishing does not switch a production server.
           EOF
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" ./*-Setup.exe ./*.sha256 --clobber

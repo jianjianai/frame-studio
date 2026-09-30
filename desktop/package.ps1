@@ -12,33 +12,13 @@ $assetDirectory = Join-Path $repo '.cache\runtime-assets'
 New-Item -ItemType Directory -Force -Path $assetDirectory | Out-Null
 $dependencies = (& node (Join-Path $PSScriptRoot 'dependencies.mjs') fingerprint $repo) | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Dependency fingerprint failed.' }
-$speechDigest = (Get-FileHash (Join-Path $repo 'speech\requirements-win.txt') -Algorithm SHA256).Hash.ToLowerInvariant().Substring(0,12)
-$ids = @{tools=$versions.tools;speech="$($versions.speech)-$speechDigest"}
+$runtimePlan = & (Join-Path $PSScriptRoot 'runtime-assets.ps1') -RepositoryRoot $repo -AssetDirectory $assetDirectory
+$ids = $runtimePlan.Ids
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$components = @{}
-foreach ($kind in @('tools','speech')) {
+$components = $runtimePlan.Components
+foreach ($kind in $runtimePlan.Missing) {
   $id = $ids[$kind]
   $descriptor = Join-Path $assetDirectory "$id.json"
-  # Existing published components are immutable and are reused across app versions.
-  if (-not (Test-Path -LiteralPath $descriptor)) {
-    & gh release download windows-runtimes --repo jianjianai/frame-studio --pattern "$id.json" --dir $assetDirectory 2>$null
-    if (-not (Test-Path -LiteralPath $descriptor)) {
-      $publishedText = & gh release view windows-runtimes --repo jianjianai/frame-studio --json assets 2>$null
-      if ($LASTEXITCODE -eq 0) {
-        $published = ($publishedText | ConvertFrom-Json).assets | Where-Object { $_.name -eq "$id.zip" -and $_.state -eq 'uploaded' } | Select-Object -First 1
-        if ($published) {
-          if ($published.digest -notmatch '^sha256:([a-f0-9]{64})$') { throw 'Published runtime lacks a verifiable digest.' }
-          @{id=$id;url="https://github.com/jianjianai/frame-studio/releases/download/windows-runtimes/$id.zip";sha256=$Matches[1];bytes=$published.size} | ConvertTo-Json | Set-Content -LiteralPath $descriptor -Encoding utf8
-        }
-      }
-    }
-  }
-  if (Test-Path -LiteralPath $descriptor) {
-    $entry = Get-Content -Raw $descriptor | ConvertFrom-Json
-    if ($entry.id -ne $id -or $entry.sha256 -notmatch '^[a-f0-9]{64}$') { throw "Invalid runtime descriptor: $descriptor" }
-    $components[$kind] = $entry
-    continue
-  }
   $stage = Join-Path $repo ".cache\runtime-build\$id"
   if (Test-Path -LiteralPath $stage) { throw "Runtime staging exists: $stage" }
   New-Item -ItemType Directory -Path $stage -Force | Out-Null

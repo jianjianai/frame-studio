@@ -49,8 +49,10 @@ jobs:
             ghcr.io/jianjianai/${{ matrix.image }}:${{ inputs.version }}
             ghcr.io/jianjianai/${{ matrix.image }}:sha-${{ steps.version.outputs.revision }}
           build-args: REVISION=${{ steps.version.outputs.revision }}
-          cache-from: type=gha,scope=${{ matrix.image }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          cache-from: |
+            type=registry,ref=ghcr.io/jianjianai/${{ matrix.image }}:buildcache
+            type=gha,scope=${{ matrix.image }}
+          cache-to: type=registry,ref=ghcr.io/jianjianai/${{ matrix.image }}:buildcache,mode=max,image-manifest=true,oci-mediatypes=true
       - name: Record published digest
         env:
           IMAGE: ghcr.io/jianjianai/${{ matrix.image }}

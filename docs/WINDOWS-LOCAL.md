@@ -25,8 +25,12 @@ Windows 本地包提供完整 FRAME 工作台：作品仓库、素材、预览�
 
 ## 发布规则
 
-平台版本由 `package.json` 与 `src/contracts/version.mjs` 定义。推送同版本 `v<版本>` 标签自动触发统一[发布工作流](../.github/workflows/release.yml)：校验版本与源码提交，执行完整服务端门禁和 Windows 实际安装测试，构建并发布两个 Docker 镜像，最后把 Setup.exe 与 SHA-256 发布到同版本 GitHub Release。任一门禁失败都不会创建正式 Release。镜像与安装程序来自同一标签；发布不自动切换生产服务器。
+平台版本由 `package.json` 与 `src/contracts/version.mjs` 定义。推送同版本 `v<版本>` 标签自动触发[标签工作流](../.github/workflows/release-tag.yml)，再启动 main 上的统一[发布工作流](../.github/workflows/release.yml)。发布任务先解析标签的确切提交，Windows 安装程序和两个 Docker 镜像并行构建，全部成功后把 Setup.exe 与 SHA-256 发布到同版本 GitHub Release。手动发布也在 main 上运行，并填写已有版本标签（不含 v）。镜像与安装程序来自同一标签；发布不自动切换生产服务器。
+
+GitHub 工作流只构建和发布，不运行功能测试、浏览器验收或服务端测试，也不安装测试用数据库、浏览器或 AI CLI。开发验收通过本地命令独立执行，实际结果记录在 records 中。发布时保留标签版本一致性检查、锁文件安装和资产 SHA-256 校验。
 
 安装程序使用固定版本、SHA-256 校验的 NSIS 编译器构建。缺失的版本化运行环境发布到 windows-runtimes Release，已有组件保持不可变。语音权重不进入安装程序、运行环境组件或服务器镜像。
+
+发布在 main 上调度以共享跨版本的 pnpm store 和 NSIS 编译器缓存，源码仍固定为目标标签提交。Docker 在 GHCR 的独立 buildcache 标签保存构建缓存；程序版本号变化不会重新下载 pnpm 依赖。运行组件存在时，只读取下载地址和摘要，跳过 Python/FFmpeg 的构建环境准备。首次发布新依赖版本时才构建对应组件。
 
 本地开发运行 `node --test tests/server/local-mode.test.mjs tests/server/model-downloads.test.mjs tests/desktop/dependencies.test.mjs`；`tests/desktop/bootstrap.test.ps1` 检查工具安装、定向修复、缓存复用与摘要失败。pnpm 测试使用本机临时下载源验证真实安装、失败重试、更新复用和增量下载。`tests/desktop/installer.test.ps1` 执行真实 EXE 的安装、已安装工作台测试、失败修复、缓存复用与保留数据卸载；检测到已有用户安装时拒绝执行。正式发布使用 `desktop/package.ps1 -PublishRuntimes`。组件缓存和发布规则见 [安装依赖与可选模型](RUNTIME-DOWNLOADS.md)。

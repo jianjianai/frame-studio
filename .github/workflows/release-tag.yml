@@ -1,0 +1,21 @@
+name: Release tag
+run-name: Publish ${{ github.ref_name }}
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  actions: write
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      # Running the publisher on main makes pnpm/NSIS caches available to every version.
+      # The publisher checks out the tag, then pins all builds to its exact commit.
+      - name: Start publishing the tagged version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh workflow run release.yml --ref main -f version="${TAG#v}"
+          printf 'Publishing %s: [release runs](%s/%s/actions/workflows/release.yml)\n' "$TAG" "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" >> "$GITHUB_STEP_SUMMARY"
