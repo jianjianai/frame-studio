@@ -24,6 +24,10 @@ try {
     New-Item -ItemType Directory -Path (Join-Path $stage 'node_modules') -Force | Out-Null
     Set-Content (Join-Path $stage 'node_modules\test.txt') $kind
     if ($kind -eq 'tools') { Copy-Item (Get-Command node.exe).Source (Join-Path $stage 'node.exe') }
+    else {
+      New-Item -ItemType Directory -Path (Join-Path $stage 'python') -Force | Out-Null
+      Set-Content (Join-Path $stage 'python\python.exe') 'speech executable fixture'
+    }
     $zip = Join-Path $assets "$kind.zip"
     [IO.Compression.ZipFile]::CreateFromDirectory($stage,$zip)
     $components[$kind] = @{id="$kind-test-1";url=([Uri]$zip).AbsoluteUri;sha256=(Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()}
@@ -31,6 +35,12 @@ try {
   @{schema=2;components=$components;dependencies=$dependencies} | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $app 'desktop\runtime-manifest.json') -Encoding utf8
   & (Join-Path $repo 'desktop\bootstrap.ps1') -AppRoot $app -DataRoot $data -Selection $selection -LocalAssets
   if (-not (Test-Path (Join-Path $app 'node_modules\test.txt'))) { throw 'Dependency junction did not resolve.' }
+  $toolsMarker = Join-Path $data 'runtimes\tools-test-1\FRAME-RUNTIME.json'
+  $toolsTimestamp = (Get-Item $toolsMarker).LastWriteTimeUtc
+  Set-Content (Join-Path $data 'runtimes\speech-test-1\python\python.exe') 'broken speech runtime'
+  & (Join-Path $repo 'desktop\bootstrap.ps1') -AppRoot $app -DataRoot $data -Selection $selection -LocalAssets -PrepareOnly -RefreshComponents speech
+  if ((Get-Content (Join-Path $data 'runtimes\speech-test-1\python\python.exe')) -ne 'speech executable fixture' -or (Get-Item $toolsMarker).LastWriteTimeUtc -ne $toolsTimestamp) { throw 'Targeted runtime repair failed or replaced an unrelated component.' }
+  Write-Output 'PASS: targeted repair replaces damaged speech files and preserves the tools cache.'
   foreach ($zip in Get-ChildItem $assets -Filter '*.zip') { Remove-Item -LiteralPath $zip.FullName }
   & (Join-Path $repo 'desktop\bootstrap.ps1') -AppRoot $app -DataRoot $data -Selection $selection -LocalAssets
   Write-Output 'PASS: updating an application reuses all installed dependencies without source archives.'

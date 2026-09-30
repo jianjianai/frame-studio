@@ -112,8 +112,11 @@ foreach ($name in (@($pack.files.path) + @('pnpm-lock.yaml','pnpm-workspace.yaml
 Copy-Item -LiteralPath (Join-Path $repo 'studio-dist') -Destination (Join-Path $bundle 'studio-dist') -Recurse
 Copy-Item -LiteralPath (Join-Path $repo '.cache\desktop\FrameStudio.exe') -Destination (Join-Path $bundle 'FrameStudio.exe')
 @{schema=2;components=$components;dependencies=$dependencies} | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $bundle 'desktop\runtime-manifest.json') -Encoding utf8
-$zip = "$bundle.zip"
-[IO.Compression.ZipFile]::CreateFromDirectory($bundle,$zip,[IO.Compression.CompressionLevel]::Optimal,$false)
-$digest=(Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -LiteralPath "$zip.sha256" -Value "$digest  $(Split-Path -Leaf $zip)" -Encoding ascii
-Write-Output "$zip ($((Get-Item $zip).Length) bytes)"
+$compiler = & (Join-Path $PSScriptRoot 'get-compiler.ps1')
+$output = Split-Path -Parent $bundle
+& $compiler /V2 "/DAppVersion=$version" "/DBundleDir=$bundle" "/DOutputDir=$output" (Join-Path $PSScriptRoot 'installer.nsi')
+if ($LASTEXITCODE -ne 0) { throw 'Windows installer compilation failed.' }
+$installer = Join-Path $output "FrameStudio-v$version-win-x64-Setup.exe"
+$digest=(Get-FileHash $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+Set-Content -LiteralPath "$installer.sha256" -Value "$digest  $(Split-Path -Leaf $installer)" -Encoding ascii
+Write-Output "$installer ($((Get-Item $installer).Length) bytes)"

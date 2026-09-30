@@ -17,7 +17,7 @@ V6 增加统一混合合成、视频/图片/图像序列、Three/Pixi/Canvas/Bab
 
 Windows 客户端见 [Windows 本地模式](docs/WINDOWS-LOCAL.md)；服务器部署见 [Docker / Dockge 部署](docs/SERVER.md)。产品与数据边界见 [作品平台设计](docs/WORKS-PLATFORM.md)。
 
-Windows 首次启动下载工具与 Python 运行环境，Node 依赖由 pnpm 按锁文件安装并缓存，更新时复用。Windows 程序包和服务器语音镜像均不携带语音权重；在设置中按需下载推荐模型或上传自定义 Kokoro 模型。
+Windows 提供 Setup.exe 安装向导，安装时自动检查并下载工具与 Python 运行环境，Node 依赖由 pnpm 按锁文件安装并缓存，更新时复用。Windows 安装程序和服务器语音镜像均不携带语音权重；在设置中按需下载推荐模型或上传自定义 Kokoro 模型。
 
 首页显示最近打开。通过仓库进入作品列表，新建只填名称。每个作品使用同仓库内独立的 `works/<id>` 分支，素材库独立使用 `frame/materials`；作品历史和拉取/推送互不干扰。具体产品契约见 [AI 工作台](docs/AI-WORKBENCH.md)。
 

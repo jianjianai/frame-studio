@@ -1,60 +1,135 @@
-name: Windows desktop release
+name: Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Existing version tag to release (without v)
+        required: true
+        type: string
 permissions:
-  contents: write
+  contents: read
+concurrency:
+  group: release-${{ inputs.version || github.ref }}
+  cancel-in-progress: false
 jobs:
-  windows:
-    runs-on: windows-latest
-    timeout-minutes: 120
+  source:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.source.outputs.version }}
+      revision: ${{ steps.source.outputs.revision }}
+      tag: ${{ steps.source.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version && format('refs/tags/v{0}', inputs.version) || github.ref }}
+      - id: source
+        env:
+          TAG: ${{ inputs.version && format('v{0}', inputs.version) || github.ref_name }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          test "$TAG" = "v$VERSION" || { echo 'Tag and package version differ'; exit 1; }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "revision=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+  verify:
+    needs: source
+    uses: ./.github/workflows/verify.yml
+    with:
+      source_ref: ${{ needs.source.outputs.revision }}
+  windows:
+    needs: source
+    runs-on: windows-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.source.outputs.revision }}
       - uses: actions/setup-node@v4
         with:
           node-version: "26.8.2"
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Check tag and install dependencies
+      - name: Install build dependencies
         shell: pwsh
         run: |
-          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
-          if ($env:GITHUB_REF_NAME -ne "v$version") { throw "Tag and package version differ: $env:GITHUB_REF_NAME / $version" }
           npm install --global pnpm@12.4.2
+          if ($LASTEXITCODE -ne 0) { throw 'pnpm installation failed' }
           pnpm install --frozen-lockfile
           if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
           choco install ffmpeg --yes --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'FFmpeg installation failed' }
-      - name: Test native Windows runtime
+      - name: Test dependency provisioning
         shell: pwsh
         run: |
-          $env:FRAME_BROWSER = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
-          node --test tests/server/local-mode.test.mjs tests/server/model-downloads.test.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'Windows local mode failed' }
           ./tests/desktop/bootstrap.test.ps1
           node --test tests/desktop/dependencies.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'pnpm installation and cache reuse failed' }
-      - name: Build lightweight installer and reusable runtime components
+      - name: Build installer and immutable runtime components
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           ./desktop/package.ps1 -PublishRuntimes
-          if ($LASTEXITCODE -ne 0) { throw 'Windows package failed' }
-      - name: Publish GitHub Release with the matching tag
+          if ($LASTEXITCODE -ne 0) { throw 'Installer build failed' }
+      - name: Test actual installation, repair, failure and uninstall
         shell: pwsh
+        run: ./tests/desktop/installer.test.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: |
+            .cache/release/*-Setup.exe
+            .cache/release/*-Setup.exe.sha256
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: windows-installer-logs
+          path: .cache/installer-smoke/*.log
+  images:
+    needs: [source, verify, windows]
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/images.yml
+    with:
+      version: ${{ needs.source.outputs.version }}
+      source_ref: ${{ needs.source.outputs.revision }}
+  publish:
+    needs: [source, windows, images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-installer
+          path: release
+      - name: Publish matching GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.source.outputs.version }}
+          TAG: ${{ needs.source.outputs.tag }}
         run: |
-          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
-          $asset = ".cache/release/FrameStudio-v$version-win-x64.zip"
-          $checksum = "$asset.sha256"
-          if (-not (Test-Path -LiteralPath $asset) -or -not (Test-Path -LiteralPath $checksum)) { throw 'Release assets are missing' }
-          gh release view $env:GITHUB_REF_NAME *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $env:GITHUB_REF_NAME $asset $checksum --clobber
-          } else {
-            gh release create $env:GITHUB_REF_NAME $asset $checksum --verify-tag --title "FRAME Studio $version" --generate-notes
-          }
-          if ($LASTEXITCODE -ne 0) { throw 'GitHub Release publication failed' }
+          cd release
+          sha256sum --check *.sha256
+          cat > notes.md <<EOF
+          Windows: download and run FrameStudio-v${VERSION}-win-x64-Setup.exe. Setup checks and installs missing dependencies, creates shortcuts and provides an uninstaller. Node dependencies use the persistent pnpm store. Speech models are optional downloads from Settings.
+
+          Docker images (built from the same tag):
+          - ghcr.io/jianjianai/frame-studio/app:${VERSION}
+          - ghcr.io/jianjianai/frame-studio/speech:${VERSION}
+
+          Both Windows installer checks and the complete server release gate passed before publication. Publishing does not switch a production server.
+          EOF
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" ./*-Setup.exe ./*.sha256 --clobber
+          else
+            gh release create "$TAG" ./*-Setup.exe ./*.sha256 --verify-tag --title "FRAME Studio $VERSION" --notes-file notes.md --generate-notes
+          fi

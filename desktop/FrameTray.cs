@@ -72,7 +72,7 @@ namespace FrameStudioDesktop {
       try {
         var selection = Path.Combine(data, "runtime-selection.json");
         var setup = Path.Combine(root, "desktop", "bootstrap.ps1");
-        if (!File.Exists(setup)) throw new Exception("安装包缺少运行环境安装器，请重新下载并完整解压。");
+        if (!File.Exists(setup)) throw new Exception("安装文件缺失，请重新运行 FRAME Studio 安装程序修复。");
         var setupInfo = new ProcessStartInfo(
           Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), @"WindowsPowerShell\v1.0\powershell.exe"),
           "-NoProfile -ExecutionPolicy Bypass -File \"" + setup + "\" -AppRoot \"" + root.TrimEnd('\\') +
@@ -95,7 +95,7 @@ namespace FrameStudioDesktop {
         var node = Path.Combine(tools, "node.exe");
         var entry = Path.Combine(root, "server", "local-app.mjs");
         if (!File.Exists(node) || !File.Exists(entry) || !File.Exists(Path.Combine(root, "studio-dist", "index.html")))
-          throw new Exception("安装包缺少本地运行文件，请重新下载完整的 Windows 压缩包并解压。");
+          throw new Exception("本地运行文件缺失，请重新运行 FRAME Studio 安装程序修复。");
         var info = new ProcessStartInfo(node, "\"" + entry + "\"") {
           WorkingDirectory = root,
           UseShellExecute = false,
@@ -115,6 +115,7 @@ namespace FrameStudioDesktop {
         });
         info.EnvironmentVariables["FRAME_LOCAL_MODE"] = "1";
         info.EnvironmentVariables["FRAME_LOCAL_DATA"] = data;
+        info.EnvironmentVariables["PLAYWRIGHT_BROWSERS_PATH"] = Path.Combine(data, "browsers");
         info.EnvironmentVariables["FRAME_SPEECH_PYTHON"] = Path.Combine(runtime["speech"], "python", "python.exe");
         info.EnvironmentVariables["PORT"] = "43173";
         var edge = @"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe";
