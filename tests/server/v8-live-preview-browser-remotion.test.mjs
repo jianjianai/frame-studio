@@ -336,6 +336,21 @@ test(
           window.__FRAME_LIVE_STATUS__?.revision === 4 &&
           window.__FRAME_LIVE_STATUS__.state === "ready",
       );
+      // Renderer disposal waits for the previous in-flight frame; native
+      // AudioContext.suspend also completes asynchronously after acceptance.
+      await page.waitForFunction(
+        () => document.querySelectorAll("[data-remotion-surface]").length === 1,
+      );
+      await page.waitForFunction(
+        ({ count, frame }) =>
+          window.__V8_CONTEXTS__
+            .slice(0, count)
+            .every(
+              (item, index) =>
+                index === frame || item.context.state !== "running",
+            ),
+        { count: failed.contexts, frame: playing.frameContext },
+      );
       const recovered = await state(page);
       assert.equal(recovered.version, 4);
       assert.equal(recovered.color, "rgb(21, 128, 61)");
@@ -367,6 +382,17 @@ test(
       );
       await page.waitForFunction(
         () => window.__FRAME_LIVE_STATUS__?.revision === 5,
+      );
+      await page.waitForFunction(
+        () => document.querySelectorAll("[data-remotion-surface]").length === 1,
+      );
+      await page.waitForFunction(
+        (frame) =>
+          window.__V8_CONTEXTS__.every(
+            (item, index) =>
+              index === frame || item.context.state !== "running",
+          ),
+        playing.frameContext,
       );
       const paused = await state(page);
       assert.equal(paused.version, 5);
