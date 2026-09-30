@@ -162,7 +162,13 @@ test("Doubao uses new-key auth and resource id; instructions require verified 2.
   assert.equal(r.headers["X-Api-Key"], c.apiKey);
   assert.equal(r.headers["X-Api-Resource-Id"], "seed-tts-2.0");
   assert(!r.headers.Authorization);
-  assert.equal(r.body.req_params.audio_params.speech_rate, 15);
+  assert.deepEqual(r.body.req_params.audio_params, {
+    format: "mp3",
+    sample_rate: 24000,
+    bit_rate: 64000,
+    speech_rate: 15,
+  });
+  assert(!Object.hasOwn(r.body.req_params, "sample_rate"));
   assert.deepEqual(JSON.parse(r.body.req_params.additions), {
     context_texts: ["自然中文"],
     post_process: { pitch: -2 },

@@ -55,6 +55,24 @@ test(
             data: { audio: wave().toString("hex") },
           }),
         );
+      if (req.url.endsWith("/api/v3/tts/unidirectional/sse")) {
+        const audio = input.req_params?.audio_params;
+        // Validate the documented protocol at the HTTP boundary, rather than
+        // accepting arbitrary mock bodies that would fail against the service.
+        if (
+          !audio ||
+          ![64000, 160000].includes(audio.bit_rate) ||
+          audio.sample_rate !== 24000 ||
+          Object.hasOwn(input.req_params, "sample_rate")
+        ) {
+          res.writeHead(400);
+          return res.end("Invalid Doubao audio parameters");
+        }
+        res.setHeader("content-type", "text/event-stream");
+        return res.end(
+          `data: ${JSON.stringify({ code: 0, data: wave().toString("base64") })}\n\ndata: {"code":20000000}\n\n`,
+        );
+      }
       res.setHeader("content-type", "audio/wav");
       res.end(wave());
     });
@@ -148,6 +166,31 @@ test(
       });
       assert.deepEqual(final.applied, preview.applied);
       assert(final.asset.id);
+      const doubao = await call("engines_save", {
+        name: "Doubao protocol fixture",
+        provider: "doubao",
+        url: url.replace(/\/v1$/, ""),
+        model: "seed-tts-2.0",
+        voice: "zh_female_vv_uranus_bigtts",
+        apiKey: "fixture-doubao-not-a-real-credential",
+      });
+      const doubaoInput = {
+        engine: doubao.id,
+        text: "让每一句旁白，自然地讲述故事。",
+        speed: 0.95,
+        options: { instructions: "自然中文", pitch: -2 },
+      };
+      const doubaoPreview = await call("speech_test", doubaoInput);
+      const doubaoFinal = await call("works_speech", {
+        ...doubaoInput,
+        id: work.id,
+      });
+      assert.deepEqual(doubaoFinal.applied, doubaoPreview.applied);
+      assert.equal(requests.at(-1).input.req_params.audio_params.speech_rate, -5);
+      assert.deepEqual(JSON.parse(requests.at(-1).input.req_params.additions), {
+        context_texts: ["自然中文"],
+        post_process: { pitch: -2 },
+      });
       await assert.rejects(
         call("engines_save", {
           id: adapter.id,

@@ -180,11 +180,56 @@ export function SpeechControls({
   const id = useId(),
     [catalog, setCatalog] = useState(null),
     [discovering, setDiscovering] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    discoveryGeneration = useRef(0);
+  const catalogKey = JSON.stringify([
+    engine?.id,
+    engine?.provider,
+    engine?.config?.provider,
+    engine?.config?.url,
+    engine?.config?.model,
+  ]);
   useEffect(() => {
+    ++discoveryGeneration.current;
     setCatalog(null);
+    setDiscovering(false);
     setError("");
-  }, [engine?.id]);
+    return () => {
+      ++discoveryGeneration.current;
+    };
+  }, [catalogKey]);
+  const discover = async (cursor) => {
+    const generation = ++discoveryGeneration.current;
+    setDiscovering(true);
+    setError("");
+    try {
+      const next = await api("engines_discover", {
+        engine: engine.id,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (generation !== discoveryGeneration.current) return;
+      setCatalog(
+        cursor
+          ? {
+              ...next,
+              models: catalog.models,
+              voices: [
+                ...new Map(
+                  [...catalog.voices, ...next.voices].map((voice) => [
+                    voice.id,
+                    voice,
+                  ]),
+                ).values(),
+              ],
+            }
+          : next,
+      );
+    } catch (e) {
+      if (generation === discoveryGeneration.current) setError(e.message);
+    } finally {
+      if (generation === discoveryGeneration.current) setDiscovering(false);
+    }
+  };
   const caps = ttsCapabilities(
     engine?.provider || engine?.config?.provider || "compatible",
     engine?.config?.model,
@@ -258,19 +303,7 @@ export function SpeechControls({
           <Button
             type="button"
             disabled={discovering}
-            onClick={async () => {
-              setDiscovering(true);
-              setError("");
-              try {
-                setCatalog(
-                  await api("engines_discover", { engine: engine.id }),
-                );
-              } catch (e) {
-                setError(e.message);
-              } finally {
-                setDiscovering(false);
-              }
-            }}
+            onClick={() => discover()}
           >
             {discovering ? "读取音色…" : "发现音色与模型"}
           </Button>
@@ -286,23 +319,7 @@ export function SpeechControls({
             <Button
               type="button"
               disabled={discovering}
-              onClick={async () => {
-                setDiscovering(true);
-                try {
-                  const next = await api("engines_discover", {
-                    engine: engine.id,
-                    cursor: catalog.nextCursor,
-                  });
-                  setCatalog({
-                    ...next,
-                    voices: [...catalog.voices, ...next.voices],
-                  });
-                } catch (e) {
-                  setError(e.message);
-                } finally {
-                  setDiscovering(false);
-                }
-              }}
+              onClick={() => discover(catalog.nextCursor)}
             >
               更多音色
             </Button>
@@ -577,7 +594,13 @@ function ExternalEditor({ engine, model, onSaved }) {
   );
   const preset = ttsProviders.find((p) => p.id === provider) || ttsProviders[0];
   const [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [apiKey, setApiKey] = useState(""),
+    [keyReset, setKeyReset] = useState(false);
+  const clearDraftKey = () => {
+    if (apiKey) setKeyReset(true);
+    setApiKey("");
+  };
   return (
     <Form
       busy={busy}
@@ -626,7 +649,11 @@ function ExternalEditor({ engine, model, onSaved }) {
             <select
               aria-label="提供商"
               value={provider}
-              onChange={(e) => setProvider(e.target.value)}
+              disabled={busy}
+              onChange={(e) => {
+                clearDraftKey();
+                setProvider(e.target.value);
+              }}
             >
               {ttsProviders.map((p) => (
                 <option key={p.id} value={p.id}>
@@ -647,6 +674,7 @@ function ExternalEditor({ engine, model, onSaved }) {
         <input
           name="name"
           required
+          disabled={busy}
           maxLength="120"
           defaultValue={engine.name}
           placeholder="例如：我的语音服务"
@@ -660,6 +688,7 @@ function ExternalEditor({ engine, model, onSaved }) {
             <select
               name="voice"
               aria-label="默认声线"
+              disabled={busy}
               defaultValue={engine.config.voice}
             >
               {(model?.voices || [engine.config.voice]).map((v) => (
@@ -676,6 +705,8 @@ function ExternalEditor({ engine, model, onSaved }) {
                 name="url"
                 type="url"
                 required
+                disabled={busy}
+                onChange={clearDraftKey}
                 defaultValue={
                   provider === engine.config?.provider ||
                   (!engine.config?.provider && provider === "compatible")
@@ -695,6 +726,7 @@ function ExternalEditor({ engine, model, onSaved }) {
                 <input
                   name="model"
                   required
+                  disabled={busy}
                   list="tts-model-presets"
                   defaultValue={
                     provider === engine.config?.provider ||
@@ -714,6 +746,7 @@ function ExternalEditor({ engine, model, onSaved }) {
               >
                 <input
                   name="voice"
+                  disabled={busy}
                   required={provider !== "elevenlabs"}
                   defaultValue={
                     provider === engine.config?.provider ||
@@ -735,6 +768,12 @@ function ExternalEditor({ engine, model, onSaved }) {
               name="apiKey"
               type="password"
               autoComplete="new-password"
+              disabled={busy}
+              value={apiKey}
+              onChange={(e) => {
+                setApiKey(e.target.value);
+                setKeyReset(false);
+              }}
               placeholder={
                 engine.config?.configured
                   ? "已配置，留空保留原密钥"
@@ -742,11 +781,20 @@ function ExternalEditor({ engine, model, onSaved }) {
               }
             />
           </Field>
+          {keyReset && (
+            <small role="status">
+              更换提供商或地址已清除未保存的密钥，请为当前服务重新填写。
+            </small>
+          )}
         </>
       )}
       {engine.id && (
         <Field label="状态">
-          <select name="enabled" defaultValue={String(engine.enabled)}>
+          <select
+            name="enabled"
+            disabled={busy}
+            defaultValue={String(engine.enabled)}
+          >
             <option value="true">启用</option>
             <option value="false">停用</option>
           </select>

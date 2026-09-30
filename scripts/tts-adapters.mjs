@@ -126,10 +126,10 @@ export function buildTtsRequest(config, input) {
       req_params: {
         text: n.text,
         speaker: n.voice,
-        sample_rate: 24000,
         audio_params: {
           format: "mp3",
-          bit_rate: 128000,
+          sample_rate: 24000,
+          bit_rate: 64000,
           speech_rate: Math.round((n.speed - 1) * 100),
         },
         additions: JSON.stringify({
