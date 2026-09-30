@@ -74,6 +74,7 @@ export function workbenchOperations({
       recent: z.boolean().default(false),
       deleted: z.boolean().default(false),
       status: z.enum(["", "draft", "review", "finished"]).default(""),
+      sort: z.enum(["", "updated", "opened", "created", "title"]).default(""),
       search,
       limit,
       offset,
