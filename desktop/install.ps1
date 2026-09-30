@@ -4,6 +4,7 @@
   [Parameter(Mandatory=$true)][string]$DataRoot
 )
 $ErrorActionPreference = 'Stop'
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 New-Item -ItemType Directory -Path $DataRoot -Force | Out-Null
 Start-Transcript -Path (Join-Path $DataRoot 'installer.log') -Append | Out-Null

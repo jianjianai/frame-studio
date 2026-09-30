@@ -8,6 +8,9 @@
   [switch]$LocalAssets
 )
 $ErrorActionPreference = 'Stop'
+# A caller using PowerShell 7 can pass its incompatible module search path to 5.1.
+# Provisioning needs only the modules shipped with the PowerShell running this file.
+$env:PSModulePath = Join-Path $PSHOME 'Modules'
 [Console]::OutputEncoding = New-Object Text.UTF8Encoding $false
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 Add-Type -AssemblyName System.IO.Compression.FileSystem

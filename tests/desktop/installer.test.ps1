@@ -15,8 +15,13 @@ $previousData = $env:FRAME_LOCAL_DATA
 $previousPath = $env:PATH
 $env:FRAME_LOCAL_DATA = $DataRoot
 function Run-Setup([string]$File) {
-  $process = Start-Process -FilePath $File -ArgumentList @('/S',('/D=' + $application)) -WindowStyle Hidden -Wait -PassThru
-  return $process.ExitCode
+  $modules = $env:PSModulePath
+  try {
+    # Reproduce callers such as pwsh/Actions whose module path omits Windows PS 5.1.
+    $env:PSModulePath = Join-Path $fixture 'nonexistent-caller-modules'
+    $process = Start-Process -FilePath $File -ArgumentList @('/S',('/D=' + $application)) -WindowStyle Hidden -Wait -PassThru
+    return $process.ExitCode
+  } finally { $env:PSModulePath = $modules }
 }
 function Remove-SmokeInstallation {
   if ((Test-Path $registry) -and (Get-ItemProperty $registry).InstallLocation -eq $application) {
