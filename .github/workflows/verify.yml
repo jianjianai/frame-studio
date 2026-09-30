@@ -48,10 +48,27 @@ jobs:
           FRAME_EXECUTOR_IMAGE: frame-studio:verification
         run: |
           BROWSER=$(node --input-type=module -e "import {chromium} from '@playwright/test'; console.log(chromium.executablePath())")
-          # Hosted runners have no GPU. Exercise real WebGL using Chromium's CPU driver.
+          # Only trusted repository fixtures run here; hosted runners have no GPU.
           BROWSER_WRAPPER="$RUNNER_TEMP/frame-chromium"
-          printf '#!/bin/sh\nexec "%s" --use-gl=angle --use-angle=swiftshader "$@"\n' "$BROWSER" > "$BROWSER_WRAPPER"
+          printf '#!/bin/sh\nexec "%s" "$@" --use-gl=angle --use-angle=swiftshader-webgl --enable-unsafe-swiftshader\n' "$BROWSER" > "$BROWSER_WRAPPER"
           chmod +x "$BROWSER_WRAPPER"
+          FRAME_BROWSER="$BROWSER_WRAPPER" node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { launchBrowser } from './scripts/browser.mjs';
+          const browser = await launchBrowser();
+          try {
+            const page = await browser.newPage();
+            const result = await page.evaluate(() => {
+              const canvas = document.createElement('canvas');
+              let error;
+              canvas.addEventListener('webglcontextcreationerror', event => { error = event.statusMessage; });
+              const gl = canvas.getContext('webgl2', { alpha: true, antialias: true, preserveDrawingBuffer: true });
+              return { available: !!gl, renderer: gl?.getParameter(gl.RENDERER), error };
+            });
+            console.log('CI WebGL2 preflight', result);
+            assert.equal(result.available, true, JSON.stringify(result));
+          } finally { await browser.close(); }
+          JS
           sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
           sudo env PATH="$PATH" FRAME_BROWSER="$BROWSER_WRAPPER" \
             FRAME_TEST_DATABASE_URL="$FRAME_TEST_DATABASE_URL" \
