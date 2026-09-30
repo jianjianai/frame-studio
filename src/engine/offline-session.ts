@@ -68,10 +68,10 @@ export async function installOffline(project: AnimationProject) {
       renderer.setOverlay(enabled);
       await renderer.render(time);
     },
-    async audioChunk(start, duration, trackId) {
+    async audioChunk(start, duration, trackId, format) {
       const key = trackId ?? "__mix__";
       const tracks = projectAudioTracks(project);
-      if (trackId && !tracks.some((t) => t.id === trackId))
+      if (trackId && !tracks.some((t) => t.id === trackId||t.channel===trackId))
         throw new Error("Unknown audio track");
       if (!audio.has(key))
         audio.set(
@@ -84,13 +84,13 @@ export async function installOffline(project: AnimationProject) {
                 {
                   gain: t.gain ?? 1,
                   muted:
-                    Boolean(t.muted) || Boolean(trackId && t.id !== trackId),
+                    Boolean(t.muted) || Boolean(trackId && t.id !== trackId && t.channel!==trackId),
                 },
               ]),
             ),
           ),
         );
-      return audio.get(key)!.pcm(start, duration);
+      return audio.get(key)!.pcm(start, duration,format);
     },
   };
   window.__FRAME_STUDIO__ = api;

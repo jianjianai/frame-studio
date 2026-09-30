@@ -2,7 +2,7 @@ import { createPlayerSession } from "../engine/player-session";
 import { exportPlayerVideo } from "./player-export";
 import { compositionSize, fitComposition } from "../engine/dimensions.mjs";
 import { playerCommandSchema } from "../contracts/platform.mjs";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { TimelineDisclosure } from "./TimelineDisclosure";
 import { Timeline } from "./Timeline";
 import { ResizeHandle } from "./ResizeHandle";
@@ -69,7 +69,7 @@ export function Player({
     previewStatus: "ready" | "stale" | "building" | "unknown";
     updateDisabled: boolean;
   } | null>(null);
-  const audioTracks = projectAudioTracks(project);
+  const audioTracks = useMemo(()=>projectAudioTracks(project),[project]);
   const composition = compositionSize(project);
   const exportSizes = [640, 1280, 1920, 3840].map((edge) =>
     fitComposition(project, edge),

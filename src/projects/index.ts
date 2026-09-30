@@ -15,7 +15,7 @@ export const projects = (await Promise.all(Object.values(modules)
       !project.loadAudio
     )
       throw new Error("代码音轨缺少 loadAudio: " + meta.id);
-    return resolveProject({ ...meta, load: project.load, loadAudio: project.loadAudio, loadVisual:project.loadVisual });
+    return resolveProject({ ...meta, load: project.load, loadAudio: project.loadAudio, loadVisual:project.loadVisual,loadAudioDocument:project.loadAudioDocument });
   })))
   .sort((a, b) => a.id.localeCompare(b.id));
 export const findProject = (id: string): AnimationProject | undefined =>

@@ -11,6 +11,7 @@ export interface StaticProjectMeta {
   fps: number;
   poster: string;
   audio?: string;
+  audioDocument?: import("../src/engine/types").AudioDocument;
   audioTracks?: import("../src/engine/types").AudioTrack[];
   research?: string;
   tags: string[];
@@ -24,6 +25,7 @@ export interface StaticProject {
   meta: StaticProjectMeta;
   loadPath?: string;
   audioLoadPath?: string;
+  audioDocumentLoadPath?: string;
   visualLoadPath?: string;
 }
 export function validProjectId(id: unknown): boolean;

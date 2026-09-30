@@ -65,7 +65,7 @@ export function readProject(file) {
   if (!exported)
     throw new Error("project.ts must have a default project export");
   const visiting = new Set();
-  let loadPath, audioLoadPath, visualLoadPath;
+  let loadPath, audioLoadPath, visualLoadPath, audioDocumentLoadPath;
   function value(node, depth = 0) {
     if (!node || depth > 64)
       throw new Error("Missing or excessively nested metadata");
@@ -128,7 +128,7 @@ export function readProject(file) {
           property.key.type === "Identifier"
             ? property.key.name
             : property.key.value;
-        if (name === "load" || name === "loadAudio" || name === "loadVisual") {
+        if (name === "load" || name === "loadAudio" || name === "loadVisual" || name === "loadAudioDocument") {
           const fn = property.value;
           if (
             fn.type !== "ArrowFunctionExpression" ||
@@ -138,7 +138,8 @@ export function readProject(file) {
             throw new Error('load must be () => import("./scene")');
           if (name === "load") loadPath = fn.body.source.value;
           else if (name === "loadAudio") audioLoadPath = fn.body.source.value;
-          else visualLoadPath = fn.body.source.value;
+          else if(name === "loadVisual") visualLoadPath = fn.body.source.value;
+          else audioDocumentLoadPath=fn.body.source.value;
         } else result[name] = value(property.value, depth + 1);
       }
       return result;
@@ -157,7 +158,14 @@ export function readProject(file) {
     if(!visualStat.isFile()||visualStat.isSymbolicLink()||visualStat.nlink>1||visualStat.size>1024*1024)throw new Error("Visual document must be an owned regular file within 1 MiB");
     meta.visual=JSON.parse(fs.readFileSync(visualFile,"utf8"));
   }
+  if(audioDocumentLoadPath){
+    if(audioDocumentLoadPath!=="./audio.json")throw new Error("loadAudioDocument must import ./audio.json");
+    const p=path.join(path.dirname(file),"audio.json"), stat=fs.lstatSync(p);
+    if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink>1||stat.size>1024*1024)throw new Error("Audio document must be an owned regular file within 1 MiB");
+    meta.audioDocument=JSON.parse(fs.readFileSync(p,"utf8"));
+  }
   return {
+    audioDocumentLoadPath,
     visualLoadPath,
     file,
     directory: path.basename(path.dirname(file)),

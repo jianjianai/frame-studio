@@ -184,6 +184,7 @@ export function createPlayerSession({
         state: sound.context?.state ?? "locked",
         buffering: sound.buffering,
         prepareMs: sound.prepareMs,
+        source: sound.diagnostics(),
         tracks: Object.fromEntries(sound.controls),
         bufferedRanges: sound.bufferedRanges(),
       },

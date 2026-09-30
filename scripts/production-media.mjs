@@ -188,33 +188,34 @@ export async function verifyDelivery(
   return { ...report, report: path.join(directory, "verification.json") };
 }
 
-export async function writeAudio(page, file, start, duration, trackId) {
+export async function writeAudio(page, file, start, duration, trackId, format="pcm16") {
+  const stride=format==="float32"?8:4;
   const samples = Math.round(duration * 48000);
   const header = Buffer.alloc(44);
   header.write("RIFF");
-  header.writeUInt32LE(36 + samples * 4, 4);
+  header.writeUInt32LE(36 + samples * stride, 4);
   header.write("WAVEfmt ", 8);
   header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(format==="float32"?3:1, 20);
   header.writeUInt16LE(2, 22);
   header.writeUInt32LE(48000, 24);
-  header.writeUInt32LE(192000, 28);
-  header.writeUInt16LE(4, 32);
-  header.writeUInt16LE(16, 34);
+  header.writeUInt32LE(48000*stride, 28);
+  header.writeUInt16LE(stride, 32);
+  header.writeUInt16LE(format==="float32"?32:16, 34);
   header.write("data", 36);
-  header.writeUInt32LE(samples * 4, 40);
+  header.writeUInt32LE(samples * stride, 40);
   const handle = fs.openSync(file, "wx");
   try {
     fs.writeSync(handle, header);
     for (let sample = 0; sample < samples; sample += 480000) {
       const count = Math.min(480000, samples - sample);
       const data = await page.evaluate(
-        ({ at, seconds, track }) =>
-          window.__FRAME_STUDIO__.audioChunk(at, seconds, track),
-        { at: start + sample / 48000, seconds: count / 48000, track: trackId },
+        ({ at, seconds, track,format }) =>
+          window.__FRAME_STUDIO__.audioChunk(at, seconds, track,format),
+        { at: start + sample / 48000, seconds: count / 48000, track: trackId,format },
       );
       const bytes = Buffer.from(data, "base64");
-      if (bytes.length !== count * 4) throw new Error("Unexpected PCM length");
+      if (bytes.length !== count * stride) throw new Error("Unexpected PCM length");
       fs.writeSync(handle, bytes);
     }
   } finally {
@@ -346,7 +347,7 @@ export async function reviewSegment(root, id, options = {}) {
       diagnostics: page.frameDiagnostics(),
     };
     const tracks =
-      meta.audioTracks ?? (meta.audio ? [{ id: "main", name: "main" }] : []);
+      meta.audioDocument?.tracks ?? meta.audioTracks ?? (meta.audio ? [{ id: "main", name: "main" }] : []);
     const audio = [];
     for (const track of [{ id: null, name: "mix" }, ...tracks]) {
       const name = track.id ? `track-${track.id}.wav` : "mix.wav";

@@ -1,3 +1,8 @@
+import {inspectAudio} from "../scripts/audio-inspect.mjs";
+import {transcodeAudio} from "../scripts/audio-media.mjs";
+import {probeMedia} from "../scripts/media-probe.mjs";
+import {audioContext,audioEdit} from "../scripts/audio-service.mjs";
+import {audioOperationSchema} from "../src/engine/audio-document.mjs";
 import { z } from "zod";
 import { fileURLToPath } from "node:url";
 import { checkProjects } from "../scripts/check-projects.mjs";
@@ -114,6 +119,11 @@ export function workSourceTools({ add, works, repos, db, registry }) {
     return db.lock(`${work.repo}:${work.project}`, run);
   };
   const id = z.string().uuid();
+  add("works_audio_inspect","Read streamed source waveform and peak/RMS levels",{id,src:z.string()},({id,src})=>source(id,(workspace,project)=>inspectAudio(workspace.root,project,src)));
+  add("works_audio_media_probe","Inspect audio streams and codecs",{id,src:z.string()},({id,src})=>source(id,(workspace,project)=>probeMedia(workspace.root,project,src)));
+  add("works_audio_transcode","Create a compatible audio copy without replacing source or destination",{id,src:z.string(),out:z.string()},({id,src,out})=>source(id,(workspace,project)=>transcodeAudio(workspace.root,project,{src,out}),{write:true}));
+  add("works_audio","Read authoritative audio document and capabilities",{id},({id})=>source(id,(workspace,project)=>audioContext(workspace,project)));
+  add("works_audio_edit","Atomically edit multitrack audio with revision protection",{id,expectedSha256:digest.nullable(),projectSha256:digest.optional(),operations:z.array(audioOperationSchema).min(1).max(100),dryRun:z.boolean().default(false)},({id,...request})=>source(id,(workspace,project)=>audioEdit(workspace,project,request),{write:true,dryRun:request.dryRun}));
   add(
     "works_read_lines",
     "Read a UTF-8 line slice; sha256 covers the ENTIRE file, not just the slice. Follow nextLine until null.",

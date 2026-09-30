@@ -20,6 +20,7 @@ export interface StudioApi {
     start: number,
     duration: number,
     trackId?: string,
+    format?: "pcm16" | "float32",
   ): Promise<string>;
   waitUntilReady?(options?: {
     audio?: boolean;

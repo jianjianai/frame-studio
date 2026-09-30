@@ -13,6 +13,10 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film context <id> [--json]             AI 接手上下文与修改边界（只读）
   pnpm film new <id> "标题" [--renderer composition|canvas|pixi|three|babylon]
     [--duration 24] [--fps 30] [--audio silent|generated] [--width 1080 --height 1920]
+  pnpm film audio engines --json
+  pnpm film audio <id> [edit --input request.json] --json
+  pnpm film audio <id> export --format wav|flac|mp3|ogg|m4a [--stems] [--start 0 --end 10]
+  pnpm film audio-media <id> probe|inspect|transcode --src films/<id>/file --out public/compatible.wav
   pnpm film composition engines --json
   pnpm film composition <id> [get|edit --input request.json] --json
   pnpm film media <id> probe|transcode --src films/<id>/file [--out public/compatible.webm]
@@ -75,9 +79,10 @@ export function inspectProject(root, id) {
     id,
     folder,
     metadata: meta,
-    entrypoints: { scene: entry.loadPath, audio: entry.audioLoadPath ?? null, visual:entry.visualLoadPath??null },
+    entrypoints: { scene: entry.loadPath, audio: entry.audioLoadPath ?? null, audioDocument:entry.audioDocumentLoadPath??null, visual:entry.visualLoadPath??null },
     adapters,
     visual:meta.visual??null,
+    audioDocument:meta.audioDocument??null,
     audioTracks:
       meta.audioTracks ??
       (meta.audio ? [{ id: "main", kind: "file", src: meta.audio }] : []),
@@ -234,6 +239,8 @@ export function runFilm(args, root = process.cwd()) {
   }
   const routes = {
     composition: ["visual-cli.mjs", ...rest],
+    audio: ["audio-cli.mjs", ...rest],
+    "audio-media": ["audio-media-cli.mjs", ...rest],
     media: ["media-cli.mjs", ...rest],
     speech: ["speech-cli.mjs", ...rest],
     asset: ["asset-cli.mjs", ...rest],

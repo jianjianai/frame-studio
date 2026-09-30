@@ -1,17 +1,36 @@
 import {
-  assetUrl,
   projectAudioTracks,
   type AnimationProject,
   type AudioTrack,
   type GeneratedAudioModule,
 } from "./types";
 import { preparePreviewAudio } from "./preview-audio";
+import { audioSegments } from "./audio-document.mjs";
+import { AudioSourcePool } from "./audio-source-pool";
+import {
+  buildMixGraph,
+  scheduleClipEnvelope,
+  mixPreroll,
+  type AudioMixDocument,
+} from "./audio-processors";
 export interface PreparedAudio {
   preview?: boolean;
   tracks: AudioTrack[];
   buffers: Map<string, AudioBuffer>;
   generated?: GeneratedAudioModule;
   progressive?: boolean;
+  files?: AudioSourcePool;
+  document?: AudioMixDocument;
+  modules?: Map<string, GeneratedAudioModule>;
+}
+function generator(prepared: PreparedAudio, track: AudioTrack) {
+  if (track.kind !== "generated") throw Error("Not a generated track");
+  const mod =
+    track.module && track.module !== "legacy"
+      ? prepared.generated?.generators?.[track.module]
+      : prepared.generated;
+  if (!mod) throw Error("未注册的声音生成器：" + (track.module ?? track.id));
+  return { mod, id: track.sourceTrackId ?? track.id };
 }
 export async function prepareAudio(
   project: AnimationProject,
@@ -19,42 +38,52 @@ export async function prepareAudio(
   signal?: AbortSignal,
   progressive = false,
 ): Promise<PreparedAudio> {
-  if (progressive) {
+  if (progressive && !project.audioDocument) {
     const preview = await preparePreviewAudio(project, context, signal);
     if (preview) return preview;
   }
   const tracks = projectAudioTracks(project),
-    buffers = new Map<string, AudioBuffer>();
-  await Promise.all(
-    tracks.map(async (track) => {
-      if (track.kind !== "file" || progressive) return;
-      const response = await fetch(assetUrl(track.src), { signal });
-      if (!response.ok)
-        throw new Error(`音轨 ${track.name} 载入失败：${response.status}`);
-      buffers.set(
-        track.id,
-        await context.decodeAudioData(await response.arrayBuffer()),
-      );
-    }),
-  );
-  const generated = tracks.some((t) => t.kind === "generated")
-    ? await project.loadAudio?.()
-    : undefined;
-  if (tracks.some((t) => t.kind === "generated") && !generated)
-    throw new Error("缺少代码音轨生成器");
-  const release = () => generated?.disposeAudio?.(context);
-  signal?.addEventListener("abort", release, { once: true });
+    generated = tracks.some((t) => t.kind === "generated")
+      ? await project.loadAudio?.()
+      : undefined;
+  const prepared: PreparedAudio = {
+    tracks,
+    buffers: new Map(),
+    generated,
+    progressive: progressive && !project.audioDocument,
+    files: new AudioSourcePool(),
+    document: project.audioDocument as AudioMixDocument | undefined,
+    modules: new Map(),
+  };
   try {
+    for (const track of tracks)
+      if (track.kind === "generated") {
+        const { mod } = generator(prepared, track),
+          key = track.module ?? "__legacy__";
+        if (!prepared.modules!.has(key)) {
+          prepared.modules!.set(key, mod);
+          signal?.throwIfAborted();
+          await mod.prepareAudio?.(context);
+        }
+      }
     signal?.throwIfAborted();
-    await generated?.prepareAudio?.(context);
-    signal?.throwIfAborted();
-  } catch (error) {
-    release();
-    throw error;
-  } finally {
-    signal?.removeEventListener("abort", release);
+    return prepared;
+  } catch (e) {
+    disposePreparedAudio(prepared, context);
+    throw e;
   }
-  return { tracks, buffers, generated, progressive };
+}
+export function disposePreparedAudio(
+  prepared: PreparedAudio,
+  context: BaseAudioContext,
+) {
+  prepared.files?.dispose();
+  for (const mod of new Set(
+    prepared.modules?.values() ??
+      (prepared.generated ? [prepared.generated] : []),
+  ))
+    mod.disposeAudio?.(context);
+  prepared.buffers.clear();
 }
 export function trackSegment(
   track: AudioTrack,
@@ -62,22 +91,23 @@ export function trackSegment(
   from: number,
   length: number,
 ) {
-  const start = Math.max(from, track.start ?? 0);
-  const end = Math.min(
-    from + length,
-    projectDuration,
-    (track.start ?? 0) + (track.duration ?? projectDuration),
-  );
-  return end > start
-    ? {
-        delay: start - from,
-        offset: (track.offset ?? 0) + (track.loop ? (((start-(track.start??0))*(track.playbackRate??1)+(track.phase??0))%track.loop) : ((start-(track.start??0))*(track.playbackRate??1)+(track.phase??0))),
-        duration: (end - start)*(track.playbackRate??1),
-      }
-    : undefined;
+  const start = Math.max(from, track.start ?? 0),
+    end = Math.min(
+      from + length,
+      projectDuration,
+      (track.start ?? 0) + (track.duration ?? projectDuration),
+    );
+  if (end <= start) return;
+  const t =
+    (start - (track.start ?? 0)) * (track.playbackRate ?? 1) +
+    (track.phase ?? 0);
+  return {
+    delay: start - from,
+    offset: (track.offset ?? 0) + (track.loop ? t % track.loop : t),
+    duration: (end - start) * (track.playbackRate ?? 1),
+  };
 }
-/** Only generated tracks need a source-time buffer before scheduling. */
-export function prepareAudioSegment(
+export async function prepareAudioSegment(
   prepared: PreparedAudio,
   context: BaseAudioContext,
   projectDuration: number,
@@ -86,28 +116,75 @@ export function prepareAudioSegment(
   rate = 1,
   overrides = new Map<string, { gain: number; muted: boolean }>(),
   signal?: AbortSignal,
-): void | Promise<void> {
+) {
   signal?.throwIfAborted();
-  if (!prepared.generated?.prepareSegment) return;
-  return Promise.all(
-    prepared.tracks.map(async (track) => {
+  const offline = "startRendering" in context;
+  if (!offline && prepared.files && !prepared.progressive) {
+    const needed = new Set<string>(),
+      budget = prepared.files.diagnostics().budgetBytes;
+    for (const track of prepared.tracks) {
       const control = overrides.get(track.id) ?? track;
-      if (track.kind !== "generated" || control.muted || control.gain === 0)
-        return;
-      const segment = trackSegment(track, projectDuration, from, length);
-      if (!segment) return;
-      await prepared.generated!.prepareSegment!({
-        trackId: track.id,
-        context,
-        offset: segment.offset,
-        duration: segment.duration,
-        rate: rate*(track.playbackRate??1),
-        signal,
-      });
-    }),
-  ).then(() => {});
+      if (track.kind !== "file" || control.muted || control.gain === 0)
+        continue;
+      for (const segment of audioSegments(
+        track,
+        projectDuration,
+        from,
+        Math.min(length, 1.5 * rate),
+      )) {
+        for (
+          let i = Math.floor(segment.offset * 2);
+          i < Math.ceil((segment.offset + segment.duration) * 2 - 1e-8);
+          i++
+        ) {
+          needed.add(track.src + ":" + i);
+          if (needed.size * 192000 > budget)
+            throw Error(
+              "当前音频预缓冲超出 128 MiB 预算，请降低播放速度、减少重叠片段，或先导出分轨素材",
+            );
+        }
+      }
+    }
+  }
+  // Only the audible interval is decoded. Source pooling deduplicates repeated clips.
+  for (const track of prepared.tracks) {
+    const control = overrides.get(track.id) ?? track;
+    if (
+      control.muted ||
+      control.gain === 0 ||
+      (track.kind === "file" && prepared.progressive)
+    )
+      continue;
+    const countLength = offline ? length : Math.min(length, 1.5 * rate);
+    for (const segment of audioSegments(
+      track,
+      projectDuration,
+      from,
+      countLength,
+    )) {
+      signal?.throwIfAborted();
+      if (track.kind === "file") {
+        if (offline) continue;
+        await prepared.files!.prepare(
+          track.src,
+          segment.offset,
+          segment.duration,
+          signal,
+        );
+      } else {
+        const { mod, id } = generator(prepared, track);
+        await mod.prepareSegment?.({
+          trackId: id,
+          context,
+          offset: segment.offset,
+          duration: segment.duration,
+          rate: rate * (track.playbackRate ?? 1),
+          signal,
+        });
+      }
+    }
+  }
 }
-/** One scheduling graph for realtime playback and offline export. */
 export function scheduleAudio(
   prepared: PreparedAudio,
   context: BaseAudioContext,
@@ -120,83 +197,204 @@ export function scheduleAudio(
   overrides = new Map<string, { gain: number; muted: boolean }>(),
   onError?: (error: Error) => void,
 ) {
-  const cleanups: (() => void)[] = [];
-  const gains = new Map<string, GainNode>();
+  const pending: Promise<void>[] = [],
+    cleanups: (() => void)[] = [],
+    gains = new Map<string, GainNode>();
+  const offline = "startRendering" in context;
+  const mix = buildMixGraph(
+    context,
+    destination,
+    prepared.document,
+    from,
+    when,
+    rate,
+  );
+  cleanups.push(() => mix.dispose());
   const dispose = () => {
-    for (const cleanup of cleanups.splice(0).reverse()) cleanup();
+    for (const f of cleanups.splice(0).reverse()) f();
   };
   try {
     for (const track of prepared.tracks) {
       if (track.kind === "file" && prepared.progressive) continue;
-      const segment = trackSegment(track, projectDuration, from, length);
       const control = overrides.get(track.id) ?? {
         gain: track.gain ?? 1,
         muted: track.muted ?? false,
       };
-      if (!segment || control.muted || control.gain === 0) continue;
-      const gain = context.createGain();
+      if (
+        control.muted ||
+        control.gain === 0 ||
+        !trackSegment(track, projectDuration, from, length)
+      )
+        continue;
+      const gain = context.createGain(),
+        envelope = context.createGain(),
+        pan = context.createStereoPanner();
       gains.set(track.id, gain);
       gain.gain.value = control.gain;
-      gain.connect(destination);
-      cleanups.push(() => gain.disconnect());
-      const at = when + segment.delay / rate;
-      if (track.kind === "file") {
-        const buffer = prepared.buffers.get(track.id)!;
-        const duration = Math.min(
-          segment.duration,
-          track.loop ? segment.duration : buffer.duration - segment.offset,
-        );
-        if (duration <= 0) continue;
-        const source = context.createBufferSource();
-        source.buffer = buffer;
-        source.playbackRate.value = rate*(track.playbackRate??1);
-        if(track.loop){
-          if((track.offset??0)+track.loop>buffer.duration+0.001)throw new Error("Audio loop exceeds source duration: "+track.id);
-          source.loop=true;source.loopStart=track.offset??0;source.loopEnd=(track.offset??0)+track.loop;
-        }
-        source.connect(gain);
-        cleanups.push(() => {
-          source.stop();
-          source.disconnect();
-        });
-        source.start(at, segment.offset, duration);
-      } else {
-        const voice = prepared.generated!.createAudio({
-          trackId: track.id,
+      pan.pan.value = track.pan ?? 0;
+      gain.connect(envelope);
+      envelope.connect(pan);
+      pan.connect(mix.destination(track));
+      scheduleClipEnvelope(envelope.gain, track, from, length, when, rate);
+      cleanups.push(() => {
+        gain.disconnect();
+        envelope.disconnect();
+        pan.disconnect();
+      });
+      const trackEnd = Math.min(
+        from + length,
+        (track.start ?? 0) + (track.duration ?? projectDuration),
+      );
+      let disposed = false,
+        pumping = false,
+        cursor = from;
+      const abort = new AbortController(),
+        voices = new Set<{ dispose(): void }>();
+      const schedule = (
+        segment: { delay: number; offset: number; duration: number },
+        base: number,
+      ) => {
+        const at = when + (base - from + segment.delay) / rate;
+        if (!offline && at < context.currentTime - 0.04)
+          throw Error("音频准备超时，已暂停");
+        const options = {
           context,
           destination: gain,
           when: at,
           offset: segment.offset,
           duration: segment.duration,
-          rate: rate*(track.playbackRate??1),
+          rate: rate * (track.playbackRate ?? 1),
           onError,
-        });
-        cleanups.push(() => voice.dispose());
-      }
+        };
+        let voice: { dispose(): void; ready?: Promise<void> };
+        if (track.kind === "file")
+          voice = prepared.files!.play(track.src, options);
+        else {
+          const { mod, id } = generator(prepared, track);
+          voice = mod.createAudio({ ...options, trackId: id });
+        }
+        voices.add(voice);
+        if (voice.ready) {
+          pending.push(voice.ready);
+          void voice.ready.catch(() => {});
+        }
+        // Dispose finite voices after their requested interval; no film-length node accumulation.
+        if (!offline) {
+          const timer = setTimeout(
+            () => {
+              timeouts.delete(timer);
+              voices.delete(voice);
+              voice.dispose();
+            },
+            Math.max(
+              0,
+              (at + segment.duration / options.rate - context.currentTime) *
+                1000,
+            ) + 100,
+          );
+          timeouts.add(timer);
+        }
+      };
+      const timeouts = new Set<ReturnType<typeof setTimeout>>();
+      // Non-looping generators schedule their own future chunks. Files use the same bounded source reader.
+      const selfScheduled = track.kind === "generated" && !track.loop;
+      const limit =
+        offline || selfScheduled
+          ? trackEnd
+          : Math.min(trackEnd, from + 1.5 * rate);
+      for (const s of audioSegments(track, projectDuration, from, limit - from))
+        schedule(s, from);
+      cursor = limit;
+      const pump = async () => {
+        if (disposed || pumping) return;
+        if (cursor >= trackEnd) {
+          clearInterval(timer);
+          return;
+        }
+        pumping = true;
+        try {
+          const until = Math.min(
+            trackEnd,
+            from + Math.max(0, context.currentTime - when) * rate + 1.5 * rate,
+          );
+          if (until <= cursor + 1e-7) return;
+          // Fixed scheduling windows preserve loops while keeping node counts bounded.
+          const stop = Math.min(trackEnd, cursor + Math.max(0.25, rate * 0.5));
+          if (cursor >= until) return;
+          for (const s of audioSegments(
+            track,
+            projectDuration,
+            cursor,
+            stop - cursor,
+          )) {
+            if (track.kind === "file")
+              await prepared.files!.prepare(
+                track.src,
+                s.offset,
+                s.duration,
+                abort.signal,
+              );
+            else {
+              const { mod, id } = generator(prepared, track);
+              await mod.prepareSegment?.({
+                trackId: id,
+                context,
+                offset: s.offset,
+                duration: s.duration,
+                rate: rate * (track.playbackRate ?? 1),
+                signal: abort.signal,
+              });
+            }
+            if (disposed) return;
+            schedule(s, cursor);
+          }
+          cursor = stop;
+        } catch (e) {
+          if (!disposed) {
+            disposed = true;
+            onError?.(e instanceof Error ? e : Error(String(e)));
+          }
+        } finally {
+          pumping = false;
+        }
+      };
+      const timer =
+        offline || selfScheduled
+          ? undefined
+          : setInterval(() => void pump(), 100);
+      cleanups.push(() => {
+        disposed = true;
+        abort.abort();
+        clearInterval(timer);
+        for (const t of timeouts) clearTimeout(t);
+        for (const v of voices) v.dispose();
+        voices.clear();
+      });
     }
     return {
       dispose,
+      ready: Promise.all(pending),
       setTrack(id: string, control: { gain: number; muted: boolean }) {
-        const gain = gains.get(id);
-        if (gain)
-          gain.gain.setTargetAtTime(
+        const g = gains.get(id);
+        if (g)
+          g.gain.setTargetAtTime(
             control.muted ? 0 : control.gain,
             context.currentTime,
             0.012,
           );
-        return !!gain;
+        return !!g;
       },
     };
-  } catch (error) {
+  } catch (e) {
     dispose();
-    throw error;
+    throw e;
   }
 }
-/** Bounded chunks prevent film-sized WAV transfers through the browser bridge. */
 export class OfflineAudioRenderer {
   private prepared?: Promise<PreparedAudio>;
   private sessionContext?: OfflineAudioContext;
   private abort = new AbortController();
+  private rendering: Promise<unknown> = Promise.resolve();
   constructor(
     private project: AnimationProject,
     private controls = new Map<string, { gain: number; muted: boolean }>(),
@@ -207,12 +405,22 @@ export class OfflineAudioRenderer {
     const context = this.sessionContext;
     if (context)
       void this.prepared
-        ?.then((prepared) => prepared.generated?.disposeAudio?.(context))
+        ?.then((p) => disposePreparedAudio(p, context))
         .catch(() => {});
     this.prepared = undefined;
     this.sessionContext = undefined;
   }
-  async render(start: number, duration: number): Promise<AudioBuffer> {
+  render(start: number, duration: number): Promise<AudioBuffer> {
+    const request = this.rendering
+      .catch(() => {})
+      .then(() => this.renderChunk(start, duration));
+    this.rendering = request;
+    return request;
+  }
+  private async renderChunk(
+    start: number,
+    duration: number,
+  ): Promise<AudioBuffer> {
     this.abort.signal.throwIfAborted();
     if (
       !Number.isFinite(start) ||
@@ -221,82 +429,104 @@ export class OfflineAudioRenderer {
       duration <= 0 ||
       duration > 10
     )
-      throw new Error("Audio chunks must be between 0 and 10 seconds");
-    const context = new OfflineAudioContext(
-      2,
-      Math.round(duration * 48000),
-      48000,
+      throw Error("Audio chunks must be between 0 and 10 seconds");
+    const preroll = Math.min(
+      start,
+      mixPreroll(this.project.audioDocument as AudioMixDocument | undefined),
     );
+    if (preroll > 120)
+      throw Error(
+        "效果链尾音超过 120 秒离线预滚动预算，请降低反馈或先将效果导出为素材",
+      );
+    const begin = Math.round((start - preroll) * 48000) / 48000,
+      warmup = Math.round((start - begin) * 48000),
+      frames = Math.round(duration * 48000);
+    const context = new OfflineAudioContext(2, warmup + frames, 48000);
     if (!this.prepared) this.sessionContext = context;
     this.prepared ??= prepareAudio(
       this.project,
       context,
       this.abort.signal,
-    ).catch((error) => {
+    ).catch((e) => {
       this.prepared = undefined;
-      throw error;
+      throw e;
     });
     const prepared = await this.prepared;
-    this.abort.signal.throwIfAborted();
     await prepareAudioSegment(
       prepared,
       context,
       this.project.duration,
-      start,
-      duration,
+      begin,
+      (warmup + frames) / 48000,
       1,
       this.controls,
       this.abort.signal,
     );
-    this.abort.signal.throwIfAborted();
     const master = context.createGain();
     master.gain.value = this.volume;
     master.connect(context.destination);
-    let graph: { dispose(): void } | undefined;
+    let graph: { dispose(): void; ready: Promise<unknown> } | undefined;
     try {
       graph = scheduleAudio(
         prepared,
         context,
         master,
         this.project.duration,
-        start,
-        duration,
+        begin,
+        (warmup + frames) / 48000,
         0,
         1,
         this.controls,
       );
-      const buffer = await context.startRendering();
+      await graph.ready;
+      const all = await context.startRendering();
       this.abort.signal.throwIfAborted();
-      for (let channel = 0; channel < buffer.numberOfChannels; channel++)
-        for (const sample of buffer.getChannelData(channel))
-          if (!Number.isFinite(sample)) throw new Error("音轨包含无效采样");
-      return buffer;
+      const result = new AudioBuffer({
+        numberOfChannels: 2,
+        length: frames,
+        sampleRate: 48000,
+      });
+      for (let ch = 0; ch < 2; ch++) {
+        const samples = all
+          .getChannelData(ch)
+          .subarray(warmup, warmup + frames);
+        for (const s of samples)
+          if (!Number.isFinite(s)) throw Error("音轨包含无效采样");
+        result.copyToChannel(samples, ch);
+      }
+      return result;
     } finally {
       graph?.dispose();
       master.disconnect();
     }
   }
-  async pcm(start: number, duration: number): Promise<string> {
-    const buffer = await this.render(start, duration);
-    const bytes = new Uint8Array(buffer.length * 4),
+  async pcm(
+    start: number,
+    duration: number,
+    format: "pcm16" | "float32" = "pcm16",
+  ): Promise<string> {
+    const buffer = await this.render(start, duration),
+      bytes = new Uint8Array(buffer.length * (format === "float32" ? 8 : 4)),
       view = new DataView(bytes.buffer);
-    for (let channel = 0; channel < 2; channel++) {
-      const samples = buffer.getChannelData(channel);
+    for (let ch = 0; ch < 2; ch++) {
+      const samples = buffer.getChannelData(ch);
       for (let i = 0; i < samples.length; i++) {
         const sample = samples[i];
-        if (!Number.isFinite(sample)) throw new Error("音轨包含无效采样");
-        view.setInt16(
-          (i * 2 + channel) * 2,
-          Math.round(
-            Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767),
-          ),
-          true,
-        );
+        if (format === "float32")
+          view.setFloat32((i * 2 + ch) * 4, sample, true);
+        else
+          view.setInt16(
+            (i * 2 + ch) * 2,
+            Math.round(
+              Math.max(-1, Math.min(1, sample)) * (sample < 0 ? 32768 : 32767),
+            ),
+            true,
+          );
       }
     }
     let binary = "";
-    for (let offset = 0; offset < bytes.length; offset += 8192)
-      binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    for (let i = 0; i < bytes.length; i += 8192)
+      binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
     return btoa(binary);
   }
 }

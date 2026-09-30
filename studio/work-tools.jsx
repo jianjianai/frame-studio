@@ -3,6 +3,7 @@ import { AgentNotificationBell, useAgentNotifications } from "./agent/AgentNotif
 import {
   Film,
   Layers,
+  Music2,
   MessageSquare,
   Image,
   Mic,
@@ -19,6 +20,7 @@ import {
 const tools = [
   ["ai", MessageSquare, "AI"],
   ["composition", Layers, "合成"],
+  ["audio",Music2,"音频"],
   ["materials", Image, "素材"],
   ["voice", Mic, "配音"],
 ];
@@ -44,7 +46,7 @@ export function WorkTools({
   const menuTrigger = useRef(null);
   const keys = compact
     ? ["work", "tools", "ai", ...(agentNotifications ? ["notifications"] : []), "exports"]
-    : ["work", "ai", "composition", "materials", "voice", "tasks", "sync", ...(agentNotifications ? ["notifications"] : []), "exports"];
+    : ["work", "ai", "composition", "audio", "materials", "voice", "tasks", "sync", ...(agentNotifications ? ["notifications"] : []), "exports"];
   const focusKey = keys.includes(focused) ? focused : "work";
   const syncLabel =
     syncError || sync?.error

@@ -1,6 +1,6 @@
 # 工程接入与接口说明
 
-V6 保留场景/音频协议 1 的旧作品兼容，新增可等待目标帧的协议与独立 `visual.json` 合成文档。默认新建为空白合成，无预选引擎。能力与接口见 [混合合成](COMPOSITION.md)。`beats` 中可选的唯一 `id` 用于更稳定的审片引用，例如 `{ id: 'opening', at: 0, title: '开场', detail: '...' }`；beats 是审片标记，可编辑视觉片段位于 visual.json，两者独立。引用和结果操作见 [V5 升级说明](V5-UPGRADE.md)。
+V7 的音频编辑、生成框架和处理器见 [AUDIO-V7.md](AUDIO-V7.md)。V6 保留场景/音频协议 1 的旧作品兼容，新增可等待目标帧的协议与独立 `visual.json` 合成文档。默认新建为空白合成，无预选引擎。能力与接口见 [混合合成](COMPOSITION.md)。`beats` 中可选的唯一 `id` 用于更稳定的审片引用，例如 `{ id: 'opening', at: 0, title: '开场', detail: '...' }`；beats 是审片标记，可编辑视觉片段位于 visual.json，两者独立。引用和结果操作见 [V5 升级说明](V5-UPGRADE.md)。
 
 修改边界见 [NEW-PROJECT-STANDARD.md](NEW-PROJECT-STANDARD.md)。每个视频的全部文件都属于 `projects/<id>/`，项目任务不能修改目录之外的文件。
 

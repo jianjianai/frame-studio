@@ -126,6 +126,7 @@ export function workOperations({
         work,
         ...context,
         composition: await invoke("works_composition", { id: a.id }),
+        audio: await invoke("works_audio", {id:a.id}).then(value=>({declared:value.declared,path:value.path,sha256:value.sha256,tracks:value.document.tracks.length,clips:value.document.clips.length,tools:["frame_works_audio","frame_works_audio_edit"]})),
         authoring: a.detail
           ? context.authoring
           : "createScene({width,height,quality}) returns {canvas,render(time),dispose()} or a Promise; prepareFrame(time,{signal}) and render may be async. Default works use editable visual.json composition; all media share absolute seconds, with no independent clock. Keep all source/media under this work. Use detail:true for the complete scene/audio/export reference.",

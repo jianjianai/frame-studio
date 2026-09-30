@@ -124,8 +124,8 @@ export async function exportPlayerVideo(
         start: options?.start,
         end: options?.end,
         subtitles: options?.subtitles ?? subtitleRef.current,
-        controls: options ? undefined : new Map(sound.controls),
-        volume: options ? 1 : sound.muted ? 0 : sound.volume,
+        controls: undefined,
+        volume: 1,
         signal: abort.signal,
         onProgress: (progress) => {
           setExportProgress(progress);

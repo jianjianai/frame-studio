@@ -76,7 +76,7 @@ async function encode(pcm, output, signal) {
         "-c:a",
         "libmp3lame",
         "-b:a",
-        "64k",
+        "192k",
         "-write_xing",
         "1",
         output,
@@ -128,9 +128,11 @@ export async function buildPreviewAudio(output, { signal, onLog, root, project }
       await page.goto(server.url + "/?prepare-audio=1");
       await page.waitForFunction(() => window.__FRAME_PREPARE_AUDIO__);
       const meta = await page.evaluate(() => ({
+        directAudio:window.__FRAME_PREPARE_AUDIO__.directAudio,
         duration: window.__FRAME_PREPARE_AUDIO__.duration,
         tracks: window.__FRAME_PREPARE_AUDIO__.tracks,
       }));
+      if(meta.directAudio)return {version:2,mode:"direct",tracks:[],metrics:{...metrics,totalChunks:0,totalMs:Math.round(performance.now()-started)}};
       const manifest = { version: 1, duration: meta.duration, tracks: [], reusedTracks: 0 };
       let complete = 0;
       const encoded = new Map();

@@ -1,3 +1,8 @@
+import {exportAudio} from "../audio-export.mjs";
+import {inspectAudio} from "../audio-inspect.mjs";
+import {transcodeAudio} from "../audio-media.mjs";
+import {audioContext,audioEdit} from "../audio-service.mjs";
+import {audioOperationSchema,audioEngines,audioProcessors} from "../../src/engine/audio-document.mjs";
 import fs from "node:fs";
 import { rendererIds, adapters } from "../../src/engine/adapters.mjs";
 import { probeMedia,transcodeMedia } from "../media-probe.mjs";
@@ -141,6 +146,12 @@ export function createFrameServer({
   register("frame_media_probe","Read project media dimensions, duration and codecs",{project,src:z.string()},async({project:id,src})=>{workspace.project(id);return jsonResult(await probeMedia(workspace.root,id,src));});
   register("frame_media_transcode","Create a separate VP9/Opus compatible video copy without overwriting source or output",{project,src:z.string(),out:z.string()},async({project:id,...request})=>{workspace.writable();const release=workspace.lock(id,"media-transcode");try{return jsonResult(await transcodeMedia(workspace.root,id,request));}finally{release();}},{write:true});
   register("frame_renderers", "List built-in engines, media sources and their capabilities; no preferred engine", {}, () => jsonResult({adapters}));
+  register("frame_audio_export","Export frozen mix and optional channel stems with loudness/true peak report",{project,format:z.enum(["wav","flac","mp3","ogg","m4a"]).default("wav"),stems:z.boolean().default(false),start:z.number().nonnegative().default(0),end:z.number().positive().optional()},async({project:id,...request})=>{workspace.writable();workspace.project(id);const release=workspace.lock(id,"audio-export");try{return jsonResult(await exportAudio(workspace.root,id,request));}finally{release();}},{write:true});
+  register("frame_audio_inspect","Read source waveform and sample peak/RMS; not a listening review",{project,src:z.string()},async({project:id,src})=>{workspace.project(id);return jsonResult(await inspectAudio(workspace.root,id,src));});
+  register("frame_audio_transcode","Convert a project audio source to a separate WAV FLAC MP3 Ogg or M4A copy",{project,src:z.string(),out:z.string()},async({project:id,...request})=>{workspace.writable();workspace.project(id);const release=workspace.lock(id,"audio-transcode");try{return jsonResult(await transcodeAudio(workspace.root,id,request));}finally{release();}},{write:true});
+  register("frame_audio_engines","List audio source frameworks and processor capabilities",{},()=>jsonResult({engines:audioEngines,processors:audioProcessors}));
+  register("frame_audio","Read audio document and revision, or an editable legacy migration",{project},({project:id})=>jsonResult(audioContext(workspace,id)));
+  register("frame_audio_edit","Edit audio sources tracks clips buses and processors atomically",{project,expectedSha256:z.string().length(64).nullable(),projectSha256:z.string().length(64).optional(),operations:z.array(audioOperationSchema).min(1).max(100),dryRun:z.boolean().default(false)},({project:id,...request})=>jsonResult(audioEdit(workspace,id,request)),{write:true});
   register("frame_composition", "Read authoritative visual.json clips and edit revision", {project}, ({project:id}) => jsonResult(visualContext(workspace,id)));
   register("frame_composition_edit", "Add, trim, split, move, reorder, replace or keyframe visual clips atomically", {project,expectedSha256:z.string().length(64),operations:z.array(visualOperationSchema).min(1).max(100),dryRun:z.boolean().default(false)}, ({project:id,...request}) => jsonResult(visualEdit(workspace,id,request)), {write:true});
   register(

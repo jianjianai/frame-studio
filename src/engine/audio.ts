@@ -3,6 +3,7 @@ import { MediaTracks } from "./media-tracks";
 import { PreviewBuffering } from "./preview-audio";
 import {
   prepareAudio,
+  disposePreparedAudio,
   prepareAudioSegment,
   scheduleAudio,
   type PreparedAudio,
@@ -75,7 +76,7 @@ export class AudioTransport {
       this.gain.connect(this.context.destination);
       this.clock.seek(saved);
       this.applyGain();
-      this.media = new MediaTracks(
+      this.media = this.project.audioDocument ? undefined : new MediaTracks(
         projectAudioTracks(this.project),
         this.context,
         this.gain,
@@ -368,12 +369,13 @@ export class AudioTransport {
     this.pause();
     this.abort.abort();
     this.media?.dispose();
-    if (this.context) this.prepared?.generated?.disposeAudio?.(this.context);
+    if (this.context && this.prepared) disposePreparedAudio(this.prepared,this.context);
     this.prepared = undefined;
     this.gain?.disconnect();
     if (this.context && this.context.state !== "closed")
       await this.context.close();
   }
+  diagnostics(){return {files:this.prepared?.files?.diagnostics()??null,mode:this.project.audioDocument?"direct":this.prepared?.preview?"proxy":"legacy"};}
   bufferedRanges() {
     return this.media?.ranges() || {};
   }

@@ -6,6 +6,7 @@ export function installPreviewPreparation(project: AnimationProject) {
   let current = "",
     renderer: OfflineAudioRenderer | undefined;
   return {
+    directAudio:!!project.audioDocument,
     duration: project.duration,
     tracks: projectAudioTracks(project).map(({ id }) => id),
     async pcm(id: string, start: number, duration: number) {

@@ -28,7 +28,6 @@ export function installAiBrowser(project: AnimationProject) {
     }
   >();
   const controls = new Map<string, { gain: number; muted: boolean }>();
-  let volume = 1;
   const api = () => {
     const value = window.__FRAME_STUDIO__;
     if (!value) throw Error("Player not ready; await FRAME_AI.ready()");
@@ -256,7 +255,6 @@ export function installAiBrowser(project: AnimationProject) {
     setVolume(value: number) {
       if (!Number.isFinite(value) || value < 0 || value > 1)
         throw Error("Volume must be 0..1");
-      volume = value;
       api().setVolume?.(value);
     },
     setTrack(id: string, change: Partial<{ gain: number; muted: boolean }>) {
@@ -298,8 +296,8 @@ export function installAiBrowser(project: AnimationProject) {
         end: options.end,
         subtitles: options.subtitles ?? true,
         signal: job.controller.signal,
-        controls,
-        volume,
+        controls: undefined,
+        volume: 1,
         onProgress: (progress) => Object.assign(job, { progress }),
       })
         .then((blob) => {

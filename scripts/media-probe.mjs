@@ -93,6 +93,7 @@ export async function probeMedia(root, id, src) {
     videoCodec: video?.codec_name,
     audioCodec: audio?.codec_name,
     hasAudio: !!audio,
+    sampleRate:audio?Number(audio.sample_rate):undefined,channels:audio?.channels,channelLayout:audio?.channel_layout,
     browserDecode: "probed-at-frame-load",
     compatibleCopy:
       "pnpm film media " +

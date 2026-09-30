@@ -5,6 +5,7 @@ import { RevisionPreview } from "./revision-preview";
 import { WorkChat } from "./work-chat";
 import { WorkTools } from "./work-tools";
 import { WorkDock } from "./work-dock";
+const AudioEditor=lazy(()=>import("./audio-editor").then(m=>({default:m.AudioEditor})));
 const CompositionEditor = lazy(() => import("./composition-editor").then(m=>({default:m.CompositionEditor})));
 import { ExportProgress, exportState } from "./exports";
 import { useEffect, useRef, useState, lazy, Suspense } from "react";
@@ -58,7 +59,7 @@ export function Creation({ id, notify }) {
         ? "ai"
         : "";
       const saved = readPreference("frame.work-tool", fallback);
-      return ["ai", "composition", "materials", "voice", "tasks", "sync", ""].includes(saved)
+      return ["ai", "composition", "audio", "materials", "voice", "tasks", "sync", ""].includes(saved)
         ? saved
         : fallback;
     }),
@@ -487,6 +488,7 @@ export function Creation({ id, notify }) {
               }
             />
           </div>
+          {visited.audio && <div className="work-tool-pane dock-content" data-dock-pane="audio" hidden={tool!=="audio"}><Suspense fallback={<Loading/>}><AudioEditor work={work} visible={tool==="audio"} position={position} disabled={browserBusy} onSeek={time=>sendPlayer("seek",{time})} onSaved={()=>{syncQuery.refresh();previewQuery.refresh();}}/></Suspense></div>}
           {visited.composition && <div className="work-tool-pane dock-content" data-dock-pane="composition" hidden={tool!=="composition"}><Suspense fallback={<Loading/>}><CompositionEditor work={work} visible={tool==="composition"} position={position} disabled={browserBusy} onSeek={time=>sendPlayer("seek",{time})} onSaved={()=>{syncQuery.refresh();previewQuery.refresh();}}/></Suspense></div>}
           {visited.materials && (
             <div

@@ -67,6 +67,7 @@ export function projectAssets({ project } = {}) {
             ".webm": "video/webm",
             ".ogg": "audio/ogg",
             ".m4a": "audio/mp4",
+            ".flac":"audio/flac", ".opus":"audio/ogg", ".aac":"audio/aac",
           };
           res.setHeader(
             "Content-Type",

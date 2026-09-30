@@ -87,7 +87,7 @@ test(
         fs.readFileSync(path.join(built.output, "preview-audio.json")),
       );
       assert.equal(manifest.tracks[0].chunks.length, 6);
-      assert(manifest.tracks[0].chunks.every((c) => c.bytes < 22000));
+      assert(manifest.tracks[0].chunks.every((c) => c.bytes < 65000));
       app.get("/", (req, res) =>
         res
           .type("text/html")
@@ -150,6 +150,7 @@ test(
       });
       const page = await context.newPage(),
         errors = [];
+      page.setDefaultTimeout(12000);
       page.on("pageerror", (e) => errors.push(e.message));
       await page.goto("http://127.0.0.1:" + app.server.address().port);
       const frame = page.frames().find((f) => f.url().includes("/film/"));
@@ -255,6 +256,21 @@ test(
             .reduce((n, c) => n + c.bytes, 0),
         }),
       );
+    } catch (error) {
+      for (const page of browser?.contexts()[0]?.pages() ?? [])
+        for (const frame of page.frames())
+          if (frame.url().includes("/film/")) {
+            try {
+              console.log(
+                "PREVIEW_DIAGNOSTIC",
+                await frame.evaluate(() => ({
+                  state: window.__FRAME_STUDIO__?.getState(),
+                  body: document.body.innerText.slice(-2500),
+                })),
+              );
+            } catch {}
+          }
+      throw error;
     } finally {
       await browser?.close();
       await app.close();

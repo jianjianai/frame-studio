@@ -1,3 +1,4 @@
+import {validateAudioDocument,audioAssets} from "../src/engine/audio-document.mjs";
 import fs from "node:fs";
 import { rendererIds } from "../src/engine/adapters.mjs";
 import { validateVisualDocument } from "../src/engine/visual-document.mjs";
@@ -152,6 +153,11 @@ export function checkProjects(root = process.cwd(), options = {}) {
       continue;
     }
     const { meta, loadPath } = record;
+    if(meta.audioDocument) try {
+      const doc=validateAudioDocument(meta.audioDocument,{projectId:directory,duration:meta.duration});
+      for(const src of audioAssets(doc))localAsset(root,src,directory);
+      if(doc.sources.some(s=>s.kind==="generated")&&!record.audioLoadPath)throw Error("Generated sources require loadAudio");
+    }catch(error){report("error","AUDIO_DOCUMENT",file,error.message);}
     const visualFile=path.join(folder,"visual.json");
     if(fs.existsSync(visualFile)) try {
       const visual=validateVisualDocument(JSON.parse(fs.readFileSync(visualFile,"utf8")),{projectId:directory,duration:meta.duration});

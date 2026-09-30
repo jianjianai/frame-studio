@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { compileAudioTracks, audioDocumentSchema, automationSchema } from "./audio-document.mjs";
+export type AudioDocument = z.infer<typeof audioDocumentSchema>;
 import { rendererIds } from "./adapters.mjs";
 import { visualAudioTracks } from "./visual-audio.mjs";
 import type { VisualDocument } from "./compositor";
@@ -23,10 +25,14 @@ const trackTiming = {
   phase: z.number().nonnegative().optional(),
   loop: z.number().positive().optional(),
   muted: z.boolean().optional(),
+  channel: z.string().optional(), pan: z.number().min(-1).max(1).optional(),
+  fadeIn: z.number().nonnegative().optional(), fadeOut: z.number().nonnegative().optional(),
+  fadeOffset: z.number().nonnegative().optional(), fadeDuration: z.number().positive().optional(),
+  automation: automationSchema.optional(),
 };
 export const audioTrackSchema = z.discriminatedUnion("kind", [
   z.object({ ...trackTiming, kind: z.literal("file"), src: z.string().min(1) }),
-  z.object({ ...trackTiming, kind: z.literal("generated") }),
+  z.object({ ...trackTiming, kind: z.literal("generated"), module:z.string().optional(), sourceTrackId:z.string().optional() }),
 ]);
 export type AudioTrack = z.infer<typeof audioTrackSchema>;
 export const projectSchema = z
@@ -121,6 +127,8 @@ export interface AnimationProject extends ProjectMeta {
   loadAudio?: () => Promise<GeneratedAudioModule>;
   loadVisual?: () => Promise<{default:unknown}>;
   visual?: VisualDocument;
+  audioDocument?: AudioDocument;
+  loadAudioDocument?: () => Promise<{default:unknown}>;
 }
 /** Schedule this source-time segment and release every owned node on dispose. */
 export interface GeneratedAudioOptions {
@@ -143,18 +151,20 @@ export interface GeneratedAudioModule {
   /** Prepare the initial live buffer or the entire requested offline segment. */
   prepareSegment?(options: GeneratedAudioSegmentOptions): void | Promise<void>;
   createAudio(options: GeneratedAudioOptions): { dispose(): void };
+  /** Optional project-local registry; ids in audio.json select modules without global state. */
+  generators?: Record<string, GeneratedAudioModule>;
   /** Release resources held for this playback/export session. */
   disposeAudio?(context: BaseAudioContext): void;
 }
 export function projectAudioTracks(
-  project: Pick<AnimationProject, "audio" | "audioTracks" | "visual">,
+  project: Pick<AnimationProject, "audio" | "audioTracks" | "visual" | "audioDocument">,
 ): AudioTrack[] {
   return [...(
-    project.audioTracks ??
+    project.audioDocument ? compileAudioTracks(project.audioDocument) : project.audioTracks ??
     (project.audio
       ? [{ id: "main", name: "配乐与音效", kind: "file", src: project.audio }]
       : [])
-  ), ...visualAudioTracks(project.visual)];
+  ), ...(project.audioDocument?.linkedVideo===false?[]:visualAudioTracks(project.visual))];
 }
 export const assetUrl = (relative: string): string =>
   import.meta.env.BASE_URL + relative.replace(/^\//, "");
