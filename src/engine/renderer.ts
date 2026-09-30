@@ -1,8 +1,9 @@
-import type { AnimationProject, Scene, Quality } from "./types";
+import type { AnimationProject, Scene, Quality, ScenePlayback } from "./types";
 import { activeSubtitle, paintSubtitle } from "./subtitles";
 /** One serialized frame transaction; only the newest request may commit to the output. */
 export class FrameRenderer {
   private scene?: Scene;
+  onBuffering?: (waiting: boolean) => void;
   private ctx: CanvasRenderingContext2D;
   private destroyed = false;
   private lastTime = 0;
@@ -12,6 +13,7 @@ export class FrameRenderer {
   private request?: AbortController;
   private tail: Promise<unknown> = Promise.resolve();
   private preparing = false;
+  private cleanupSurface?: () => void;
   constructor(
     public readonly canvas: HTMLCanvasElement,
     public readonly project: AnimationProject,
@@ -31,7 +33,12 @@ export class FrameRenderer {
     if (this.project.renderer === "pixi") await import("pixi.js/unsafe-eval");
     const mod = await this.project.load();
     if (this.destroyed) return;
-    const scene = await mod.createScene({ width, height, quality });
+    const scene = await mod.createScene({
+      width,
+      height,
+      quality,
+      onBuffering: (waiting) => this.onBuffering?.(waiting),
+    });
     if (this.destroyed) {
       scene.dispose();
       return;
@@ -39,6 +46,34 @@ export class FrameRenderer {
     this.scene = scene;
     this.canvas.width = width;
     this.canvas.height = height;
+    if (scene.element && this.canvas.parentElement) {
+      const parent = this.canvas.parentElement,
+        el = scene.element;
+      const position = parent.style.position,
+        visibility = this.canvas.style.visibility;
+      if (getComputedStyle(parent).position === "static")
+        parent.style.position = "relative";
+      this.canvas.style.visibility = "hidden";
+      el.style.cssText =
+        "position:absolute;overflow:hidden;pointer-events:none";
+      parent.append(el);
+      const resize = () =>
+        Object.assign(el.style, {
+          left: this.canvas.offsetLeft + "px",
+          top: this.canvas.offsetTop + "px",
+          width: this.canvas.clientWidth + "px",
+          height: this.canvas.clientHeight + "px",
+        });
+      const observer = new ResizeObserver(resize);
+      observer.observe(this.canvas);
+      resize();
+      this.cleanupSurface = () => {
+        observer.disconnect();
+        el.remove();
+        parent.style.position = position;
+        this.canvas.style.visibility = visibility;
+      };
+    }
     await this.render(0, true);
   }
   render(
@@ -70,6 +105,7 @@ export class FrameRenderer {
           ]);
           await this.scene.prepareFrame?.(time, { signal: combined });
           combined.throwIfAborted();
+          this.scene.setSubtitles?.(subtitles);
           await this.scene.render(time);
           combined.throwIfAborted();
           if (revision !== this.revision || this.destroyed) return false;
@@ -83,7 +119,7 @@ export class FrameRenderer {
             this.canvas.width,
             this.canvas.height,
           );
-          if (subtitles)
+          if (subtitles && !this.scene.element)
             paintSubtitle(
               this.ctx,
               activeSubtitle(this.project.subtitles, time),
@@ -110,6 +146,23 @@ export class FrameRenderer {
       .finally(() => signal?.removeEventListener("abort", abort));
     this.tail = task;
     return task;
+  }
+  dataURL(): string {
+    if (this.scene?.element)
+      throw new Error(
+        "DOM scene capture is asynchronous; use await capture() or captureAt().",
+      );
+    return this.canvas.toDataURL("image/png");
+  }
+  setPlayback(state: ScenePlayback) {
+    this.scene?.setPlayback?.(state);
+  }
+  async capture(): Promise<string> {
+    if (this.destroyed) throw new Error("Renderer disposed");
+    await this.settled();
+    return this.scene?.capture
+      ? this.scene.capture()
+      : this.canvas.toDataURL("image/png");
   }
   async settled() {
     await this.tail;
@@ -150,6 +203,14 @@ export class FrameRenderer {
     if (this.destroyed) return;
     this.destroyed = true;
     this.request?.abort();
+    this.scene?.setPlayback?.({
+      time: this.lastTime,
+      playing: false,
+      rate: 1,
+      volume: 0,
+      muted: true,
+    });
+    this.cleanupSurface?.();
     this.revision++;
     const scene = this.scene;
     void this.tail

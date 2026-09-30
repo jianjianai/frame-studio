@@ -3,11 +3,21 @@ import { LocalWelcome } from "./desktop-settings";
 import {
   Plus,
   FolderGit2,
-  MoreHorizontal,
   Film,
   ArrowLeft,
   Search,
   Trash2,
+  Settings2,
+  Clock3,
+  ChevronRight,
+  LayoutGrid,
+  List,
+  RefreshCw,
+  X,
+  RotateCcw,
+  ArrowUpRight,
+  Pencil,
+  Copy,
 } from "lucide-react";
 import {
   api,
@@ -29,6 +39,15 @@ import {
 } from "./ui";
 import { RepositorySettings } from "./repository-settings";
 import { LoginFlow } from "./accounts";
+import {
+  LibraryMenu,
+  LibrarySkeleton,
+  WorkCover,
+  productionLabels,
+  readLibraryView,
+  saveLibraryView,
+} from "./library-components";
+import "./library.css";
 
 export function RepoPicker({ value, onChange, refreshKey = 0 }) {
   const [search, setSearch] = useState("");
@@ -189,247 +208,545 @@ export function NewWork({ repo, onClose, notify, localMode = false }) {
   );
 }
 export function WorkLibrary({ repo, recent = false, notify, localMode = false }) {
-  const [status, setStatus] = useState("");
-  const [page, setPage] = useState(0),
-    [search, setSearch] = useState(""),
-    [deleted, setDeleted] = useState(false),
-    [settings, setSettings] = useState(false),
-    [create, setCreate] = useState(false),
-    [edit, setEdit] = useState(null),
-    [remove, setRemove] = useState(null),
-    [run, busy] = useAction(notify);
+  const [scope, setScope] = useState(recent ? "recent" : "all");
+  const [status, setStatus] = useState(""),
+    [search, setSearch] = useState("");
+  const [sort, setSort] = useState(recent ? "opened" : "updated"),
+    [page, setPage] = useState(0);
+  const [view, setView] = useState(readLibraryView);
+  const [settings, setSettings] = useState(false),
+    [create, setCreate] = useState(false);
+  const [edit, setEdit] = useState(null),
+    [duplicate, setDuplicate] = useState(null);
+  const [remove, setRemove] = useState(null),
+    [confirmation, setConfirmation] = useState("");
+  const [purge, setPurge] = useState(null),
+    [purgeFailures, setPurgeFailures] = useState([]);
+  const [run, busy] = useAction(notify);
+  const deleted = scope === "trash",
+    pageSize = 24;
+  const debouncedSearch = useDebouncedValue(search.trim());
   const query = useQuery("works_page", {
     ...(repo ? { repo: repo.id } : {}),
-    recent,
+    recent: scope === "recent",
     deleted,
     status,
-    search: useDebouncedValue(search),
-    limit: 30,
-    offset: page * 30,
+    sort,
+    search: debouncedSearch,
+    limit: pageSize,
+    offset: page * pageSize,
   });
+  const trash = useQuery(deleted ? "works_page" : null, {
+    ...(repo ? { repo: repo.id } : {}),
+    deleted: true,
+    limit: 1,
+  });
+  const refresh = () => {
+    query.refresh();
+    trash.refresh();
+  };
+  const refreshTrash = () => {
+    setPage(0);
+    refresh();
+  };
   useEffect(() => {
-    const refresh = () => query.refresh();
     window.addEventListener("focus", refresh);
     return () => window.removeEventListener("focus", refresh);
   }, []);
+  useEffect(() => {
+    if (query.loading || query.error || !query.data) return;
+    const last = Math.max(0, Math.ceil(query.data.total / pageSize) - 1);
+    if (page > last) setPage(last);
+  }, [query.data, query.loading, query.error, page]);
+  const selectScope = (value) => {
+    setScope(value);
+    setPage(0);
+    setStatus("");
+    setSearch("");
+    setSort(value === "recent" ? "opened" : "updated");
+  };
+  const clearFilters = () => {
+    setStatus("");
+    setSearch("");
+    setPage(0);
+  };
+  const changeView = (value) => {
+    setView(value);
+    saveLibraryView(value);
+  };
+  const items = query.data?.items || [],
+    total = query.data?.total || 0;
+  const filtered = !!(search.trim() || status);
   return (
-    <>
-      <div className="page-heading row">
+    <section className="library-page" aria-labelledby="library-title">
+      <header className="library-heading">
         <div>
           {repo && (
             <a href="#/repositories" className="breadcrumb">
-              <ArrowLeft size={14} /> 仓库
+              <ArrowLeft size={14} />
+              作品仓库
             </a>
           )}
-          <h1>{recent ? "最近打开" : repo?.name || "作品"}</h1>
+          <div className="library-eyebrow">
+            {repo ? "作品空间" : "你的创作空间"}
+          </div>
+          <h1 id="library-title">{repo?.name || "作品库"}</h1>
           <p>
-            {recent ? "从上次的想法继续" : "让 AI 创作，随时审片和调整方向"}
+            {repo
+              ? "在这里整理作品，继续创作，或查看最新进展。"
+              : "找到上次的灵感，开始下一部作品。"}
           </p>
         </div>
-        <Button className="primary" icon={Plus} onClick={() => setCreate(true)}>
-          新建作品
-        </Button>
-      </div>
-      {localMode && recent && !query.loading && !query.data?.total && <LocalWelcome />}
-      <div className="list-toolbar">
-        {repo && (
-          <Button onClick={() => setSettings(true)}>仓库设置与素材同步</Button>
+        <div className="library-heading-actions">
+          {repo && (
+            <Button icon={Settings2} onClick={() => setSettings(true)}>
+              仓库设置
+            </Button>
+          )}
+          <Button
+            className="primary"
+            icon={Plus}
+            onClick={() => setCreate(true)}
+          >
+            新建作品
+          </Button>
+        </div>
+      </header>
+      {localMode && !repo && !deleted && !filtered && !query.loading && !query.data?.total && <LocalWelcome />}
+      <div className="library-navigation">
+        <div className="library-scopes" role="group" aria-label="作品范围">
+          {[
+            ["all", Film, "全部作品"],
+            ["recent", Clock3, "最近打开"],
+            ["trash", Trash2, "回收站"],
+          ].map(([id, Icon, label]) => (
+            <Button
+              key={id}
+              icon={Icon}
+              aria-pressed={scope === id}
+              className={scope === id ? "selected" : ""}
+              onClick={() => selectScope(id)}
+            >
+              {label}
+            </Button>
+          ))}
+        </div>
+        {!repo && (
+          <a href="#/repositories" className="library-repositories-link">
+            <FolderGit2 size={15} />
+            管理作品仓库
+            <ChevronRight size={14} />
+          </a>
         )}
-        <div className="search-box">
-          <Search size={17} />
+      </div>
+      {deleted && (
+        <div className="library-trash-note">
+          <Trash2 size={18} />
+          <p>
+            这里的作品已移入回收站，内容和素材仍然保留。恢复后即可继续创作。
+          </p>
+          <Button
+            className="danger-text"
+            disabled={
+              busy || trash.loading || !!trash.error || !trash.data?.total
+            }
+            onClick={() => {
+              setPurgeFailures([]);
+              setPurge({ all: true, count: trash.data.total });
+            }}
+          >
+            清空回收站（{trash.data?.total || 0}）
+          </Button>
+          <ErrorNote error={trash.error} />
+          {trash.error && (
+            <Button onClick={trash.refresh}>重试读取回收站</Button>
+          )}
+        </div>
+      )}
+      <div className="library-toolbar">
+        <div className="search-box library-search">
+          <Search size={17} aria-hidden="true" />
           <input
+            type="search"
             aria-label="搜索作品"
             value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
+            maxLength={200}
+            onChange={(event) => {
+              setSearch(event.target.value);
               setPage(0);
             }}
-            placeholder="搜索作品"
+            placeholder="搜索作品名称或简介"
           />
+          {search && (
+            <Button
+              icon={X}
+              className="library-icon-button"
+              aria-label="清除搜索"
+              onClick={() => {
+                setSearch("");
+                setPage(0);
+              }}
+            />
+          )}
         </div>
-        <select
-          aria-label="制作状态筛选"
-          value={status}
-          onChange={(event) => {
-            setStatus(event.target.value);
-            setPage(0);
-          }}
-        >
-          <option value="">全部制作状态</option>
-          <option value="draft">制作中</option>
-          <option value="review">待审片</option>
-          <option value="finished">已完成</option>
-        </select>
-        {repo && (
-          <Button
-            icon={Trash2}
-            className={deleted ? "selected" : ""}
-            onClick={() => {
-              setDeleted(!deleted);
+        <label className="library-filter">
+          <span>状态</span>
+          <select
+            aria-label="制作状态筛选"
+            value={status}
+            onChange={(event) => {
+              setStatus(event.target.value);
               setPage(0);
             }}
           >
-            {deleted ? "返回作品" : "回收站"}
+            <option value="">全部状态</option>
+            {Object.entries(productionLabels).map(([id, label]) => (
+              <option key={id} value={id}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="library-filter">
+          <span>排序</span>
+          <select
+            aria-label="作品排序"
+            value={sort}
+            onChange={(event) => {
+              setSort(event.target.value);
+              setPage(0);
+            }}
+          >
+            <option value="updated">最近修改</option>
+            <option value="opened">最近打开</option>
+            <option value="created">最新创建</option>
+            <option value="title">名称 A → Z</option>
+          </select>
+        </label>
+        <div
+          className="library-view-switch"
+          role="group"
+          aria-label="作品显示方式"
+        >
+          <Button
+            icon={LayoutGrid}
+            aria-label="卡片视图"
+            title="卡片视图"
+            aria-pressed={view === "grid"}
+            className={view === "grid" ? "selected" : ""}
+            onClick={() => changeView("grid")}
+          />
+          <Button
+            icon={List}
+            aria-label="列表视图"
+            title="列表视图"
+            aria-pressed={view === "list"}
+            className={view === "list" ? "selected" : ""}
+            onClick={() => changeView("list")}
+          />
+        </div>
+        <Button
+          icon={RefreshCw}
+          className="library-icon-button"
+          aria-label="刷新作品"
+          title="刷新作品"
+          disabled={query.loading}
+          onClick={refresh}
+        />
+      </div>
+      <div className="library-results">
+        <span role="status" aria-live="polite">
+          {query.loading
+            ? "正在读取作品…"
+            : query.error
+              ? "作品读取失败"
+              : (filtered ? "找到 " : "共 ") + total + " 部作品"}
+        </span>
+        {filtered ? (
+          <Button icon={X} onClick={clearFilters}>
+            清除筛选
           </Button>
+        ) : (
+          <span>
+            {deleted ? "恢复后回到作品库" : "打开作品会在新标签页继续创作"}
+          </span>
         )}
       </div>
-      <ErrorNote error={query.error} />
-      {query.error ? (
-        <Empty action={<Button onClick={query.refresh}>重试加载作品</Button>}>
-          暂时无法读取作品，已有作品不会因此丢失。
-        </Empty>
-      ) : query.loading && !query.data ? (
-        <Loading />
-      ) : query.data?.items.length ? (
-        <div className="work-grid">
-          {query.data.items.map((w) => (
-            <article className="work-card" key={w.id}>
-              <a
-                className="work-open"
-                href={deleted ? undefined : "#/work/" + w.id}
-                aria-disabled={deleted || undefined}
-                target="_blank"
-                rel="noopener"
-                aria-label={w.title + "（在新标签页打开）"}
-              >
-                <div className="work-cover">
-                  {w.cover ? (
-                    <img src={w.cover} alt="" loading="lazy" />
-                  ) : (
-                    <Film size={40} />
-                  )}
-                </div>
-                <div className="work-card-info">
-                  <h3 title={w.title}>{w.title}</h3>
-                  <div className="work-card-status">
-                    <span className={"badge production-" + w.status}>
-                      {{
-                        draft: "制作中",
-                        review: "待审片",
-                        finished: "已完成",
-                      }[w.status] || "制作中"}
+      {query.error && (
+        <div className="library-error">
+          <ErrorNote error={query.error} />
+          <Button icon={RefreshCw} onClick={refresh}>
+            重试加载作品
+          </Button>
+        </div>
+      )}
+      {query.loading && !query.data ? (
+        <LibrarySkeleton view={view} />
+      ) : items.length ? (
+        <>
+          {view === "list" && (
+            <div className="library-list-heading" aria-hidden="true">
+              <span>作品</span>
+              <span>制作状态</span>
+              <span>{scope === "recent" ? "上次打开" : "最近修改"}</span>
+              <span>操作</span>
+            </div>
+          )}
+          <div
+            className={
+              "library-works " + (view === "grid" ? "work-grid" : "work-list")
+            }
+            aria-busy={query.loading}
+          >
+            {items.map((work) => {
+              const Open = deleted ? "div" : "a";
+              const workLink = "#/work/" + work.id;
+              return (
+                <article
+                  className={
+                    "work-card library-work " + (deleted ? "is-deleted" : "")
+                  }
+                  key={work.id}
+                >
+                  <Open
+                    className="work-open"
+                    {...(!deleted
+                      ? {
+                          href: workLink,
+                          target: "_blank",
+                          rel: "noopener",
+                          "aria-label": work.title + "（在新标签页打开）",
+                        }
+                      : {})}
+                  >
+                    <WorkCover work={work} />
+                    <div className="work-card-info">
+                      <h3 title={work.title}>{work.title}</h3>
+                      <p className="library-description">
+                        {work.description ||
+                          (deleted ? "恢复后即可继续编辑" : "尚未添加作品简介")}
+                      </p>
+                      <div className="library-work-meta">
+                        <span title={work.storage_name}>
+                          {work.storage_name || repo?.name || "作品仓库"}
+                        </span>
+                        {work.composition && (
+                          <span>
+                            {work.composition.width} × {work.composition.height}
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </Open>
+                  <div className="library-work-status work-card-status">
+                    <span className={"badge production-" + work.status}>
+                      {productionLabels[work.status] || "制作中"}
                     </span>
-                    {w.activity && w.activity.state !== "succeeded" && (
-                      <span className={"badge " + w.activity.state}>
-                        {kinds[w.activity.kind] || "任务"} ·{" "}
-                        {states[w.activity.state] || "状态更新中"}
+                    {work.activity && work.activity.state !== "succeeded" && (
+                      <span className={"badge " + work.activity.state}>
+                        {kinds[work.activity.kind] || "任务"} ·{" "}
+                        {states[work.activity.state] || "状态更新中"}
                       </span>
                     )}
-                    {w.modified &&
-                      new Date(w.modified) > new Date(w.opened || 0) && (
-                        <span className="badge ready">有新修改</span>
+                    {!deleted &&
+                      work.opened &&
+                      work.modified &&
+                      new Date(work.modified) > new Date(work.opened || 0) && (
+                        <span className="library-update-dot">有新修改</span>
                       )}
-                    {w.unavailable && (
+                    {work.unavailable && (
                       <span className="badge failed">内容需检查</span>
                     )}
                   </div>
-                  <p>
-                    {recent ? w.storage_name : date(w.modified || w.updated)}
-                  </p>
-                  {recent && <small>打开于 {date(w.opened)}</small>}
-                </div>
-              </a>
-              <details className="card-menu">
-                <summary aria-label={`${w.title}操作`}>
-                  <MoreHorizontal size={19} />
-                </summary>
-                <div>
-                  {deleted ? (
-                    <Button
-                      onClick={() =>
-                        run(async () => {
-                          await api("works_trash", {
-                            id: w.id,
-                            deleted: false,
-                          });
-                          query.refresh();
-                        })
+                  <div className="library-work-date">
+                    <span>{scope === "recent" ? "打开于" : "修改于"}</span>
+                    <time
+                      dateTime={
+                        scope === "recent"
+                          ? work.opened || undefined
+                          : work.modified || work.updated || undefined
                       }
                     >
-                      恢复作品
+                      {date(
+                        scope === "recent"
+                          ? work.opened
+                          : work.modified || work.updated,
+                      )}
+                    </time>
+                  </div>
+                  <div className="library-work-actions">
+                    {deleted ? (
+                      <>
+                        <Button
+                          icon={RotateCcw}
+                          disabled={busy}
+                          onClick={() =>
+                            run(async () => {
+                              await api("works_trash", {
+                                id: work.id,
+                                deleted: false,
+                              });
+                              notify("已恢复「" + work.title + "」");
+                              refresh();
+                            })
+                          }
+                        >
+                          恢复作品
+                        </Button>
+                        <LibraryMenu
+                          label={work.title + "操作"}
+                          disabled={busy}
+                          items={[
+                            {
+                              label: "永久删除",
+                              icon: Trash2,
+                              danger: true,
+                              action: () => {
+                                setPurgeFailures([]);
+                                setPurge(work);
+                              },
+                            },
+                          ]}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <a
+                          className="button library-continue"
+                          href={workLink}
+                          target="_blank"
+                          rel="noopener"
+                        >
+                          继续创作
+                          <ArrowUpRight size={15} />
+                        </a>
+                        <LibraryMenu
+                          label={work.title + "操作"}
+                          disabled={busy}
+                          items={[
+                            {
+                              label: "编辑作品信息",
+                              icon: Pencil,
+                              action: () => setEdit(work),
+                            },
+                            {
+                              label: "创建副本",
+                              icon: Copy,
+                              action: () => setDuplicate({ work }),
+                            },
+                            {
+                              label: "移入回收站",
+                              icon: Trash2,
+                              danger: true,
+                              action: () => {
+                                setConfirmation("");
+                                setRemove(work);
+                              },
+                            },
+                          ]}
+                        />
+                      </>
+                    )}
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        !query.error && (
+          <Empty
+            action={
+              filtered ? (
+                <Button onClick={clearFilters}>清除筛选</Button>
+              ) : deleted ? (
+                <Button icon={Film} onClick={() => selectScope("all")}>
+                  返回全部作品
+                </Button>
+              ) : (
+                <div className="row">
+                  <Button
+                    className="primary"
+                    icon={Plus}
+                    onClick={() => setCreate(true)}
+                  >
+                    创建作品
+                  </Button>
+                  {scope === "recent" && (
+                    <Button onClick={() => selectScope("all")}>
+                      浏览全部作品
                     </Button>
-                  ) : (
-                    <>
-                      <Button
-                        onClick={(e) => {
-                          e.currentTarget.closest("details").open = false;
-                          setEdit(w);
-                        }}
-                      >
-                        重命名
-                      </Button>
-                      <Button
-                        className="danger-text"
-                        onClick={(e) => {
-                          e.currentTarget.closest("details").open = false;
-                          setRemove(w);
-                        }}
-                      >
-                        删除
-                      </Button>
-                    </>
                   )}
                 </div>
-              </details>
-            </article>
-          ))}
-        </div>
-      ) : (
-        <Empty
-          action={
-            search || status ? (
-              <Button
-                onClick={() => {
-                  setSearch("");
-                  setStatus("");
-                  setPage(0);
-                }}
-              >
-                清除筛选
-              </Button>
-            ) : !deleted ? (
-              <Button onClick={() => setCreate(true)}>创建作品</Button>
-            ) : null
-          }
-        >
-          {search || status
-            ? "没有符合当前筛选条件的作品。"
-            : deleted
-              ? "回收站为空。"
-              : recent
-                ? "还没有最近打开的作品。可以打开作品仓库，或开始一个新想法。"
-                : "这个仓库还没有作品。"}
-        </Empty>
+              )
+            }
+          >
+            <span className="library-empty-icon">
+              {deleted ? <Trash2 size={28} /> : <Film size={28} />}
+            </span>
+            <strong>
+              {filtered
+                ? "没有符合当前筛选条件的作品"
+                : deleted
+                  ? "回收站为空"
+                  : scope === "recent"
+                    ? "还没有最近打开的作品"
+                    : "从一个想法开始"}
+            </strong>
+            <p>
+              {filtered
+                ? "试试其他关键词，或清除筛选条件。"
+                : deleted
+                  ? "移入回收站的作品会出现在这里。"
+                  : scope === "recent"
+                    ? "浏览全部作品，或新建作品开始创作。"
+                    : "新建一部作品，把画面、声音和制作交给 AI。"}
+            </p>
+          </Empty>
+        )
       )}
-      <Pagination
-        page={page}
-        setPage={setPage}
-        total={query.data?.total || 0}
-      />
+      <Pagination page={page} setPage={setPage} total={total} size={pageSize} />
       {settings && (
         <Modal title="仓库设置" onClose={() => setSettings(false)}>
           <RepositorySettings
             repo={repo}
             notify={notify}
             onSaved={() => {
-              query.refresh();
+              refresh();
               setSettings(false);
             }}
           />
         </Modal>
       )}
       {create && (
-        <NewWork repo={repo} notify={notify} localMode={localMode} onClose={() => setCreate(false)} />
-      )}{" "}
+        <NewWork
+          repo={repo}
+          notify={notify}
+          localMode={localMode}
+          onClose={() => {
+            setCreate(false);
+            refresh();
+          }}
+        />
+      )}
       {edit && (
-        <Modal title="重命名作品" onClose={() => setEdit(null)}>
+        <Modal title="作品信息" onClose={() => setEdit(null)}>
+          <p>整理名称、简介与制作状态，方便下次找到作品。</p>
           <Form
             busy={busy}
-            onSubmit={(a) =>
+            submit="保存作品信息"
+            onSubmit={(values) =>
               run(async () => {
-                await api("works_update", { id: edit.id, title: a.title });
+                await api("works_update", {
+                  id: edit.id,
+                  expectedRevision: edit.metadataRevision,
+                  title: values.title.trim(),
+                  description: values.description.trim(),
+                  status: values.status,
+                });
                 setEdit(null);
-                query.refresh();
+                notify("作品信息已保存");
+                refresh();
               })
             }
           >
@@ -439,138 +756,414 @@ export function WorkLibrary({ repo, recent = false, notify, localMode = false })
                 required
                 autoFocus
                 defaultValue={edit.title}
-                maxLength="150"
+                maxLength={150}
+              />
+            </Field>
+            <Field label="制作状态">
+              <select name="status" defaultValue={edit.status || "draft"}>
+                {Object.entries(productionLabels).map(([id, label]) => (
+                  <option key={id} value={id}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="作品简介">
+              <textarea
+                name="description"
+                defaultValue={edit.description || ""}
+                rows={3}
+                maxLength={4000}
+                placeholder="记录内容、目标或当前进度"
               />
             </Field>
           </Form>
         </Modal>
       )}
+      {duplicate && (
+        <Modal title="创建作品副本" onClose={() => setDuplicate(null)}>
+          {duplicate.created ? (
+            <p role="status">
+              副本已创建。
+              <a
+                className="button primary"
+                href={"#/work/" + duplicate.created.id}
+                target="_blank"
+                rel="noopener"
+                onClick={() => setDuplicate(null)}
+              >
+                打开副本
+                <ArrowUpRight size={15} />
+              </a>
+            </p>
+          ) : (
+            <>
+              <p>
+                复制「{duplicate.work.title}
+                」的内容和引用素材，作为一个独立作品继续创作。
+              </p>
+              <Form
+                busy={busy}
+                submit="创建并打开副本"
+                onSubmit={(values) =>
+                  run(async () => {
+                    const tab = window.open("about:blank", "_blank");
+                    if (tab) {
+                      tab.opener = null;
+                      tab.document.title = "正在创建副本…";
+                    }
+                    let created;
+                    try {
+                      created = await api("works_duplicate", {
+                        id: duplicate.work.id,
+                        title: values.title.trim(),
+                      });
+                    } catch (error) {
+                      tab?.close();
+                      throw error;
+                    }
+                    refresh();
+                    notify("作品副本已创建");
+                    if (tab && !tab.closed) {
+                      tab.location.replace(
+                        new URL("#/work/" + created.id, location.href).href,
+                      );
+                      setDuplicate(null);
+                    } else setDuplicate({ ...duplicate, created });
+                  })
+                }
+              >
+                <Field label="副本名称">
+                  <input
+                    name="title"
+                    required
+                    autoFocus
+                    maxLength={150}
+                    defaultValue={(duplicate.work.title + " · 副本").slice(
+                      0,
+                      150,
+                    )}
+                  />
+                </Field>
+              </Form>
+            </>
+          )}
+        </Modal>
+      )}
       {remove && (
-        <Modal title="删除作品" onClose={() => setRemove(null)}>
+        <Modal title="移入回收站" onClose={() => setRemove(null)}>
           <p>
-            输入完整名称 <strong>{remove.title}</strong>{" "}
-            确认。作品和素材会保留在回收站中。
+            「<strong>{remove.title}</strong>
+            」将从作品列表移除。内容和素材会保留，可在回收站恢复。
           </p>
           <Form
             busy={busy}
-            submit="确认删除"
-            onSubmit={(a) =>
+            protect={false}
+            submit="移入回收站"
+            disabled={confirmation !== remove.title}
+            onSubmit={(values) =>
               run(async () => {
                 await api("works_trash", {
                   id: remove.id,
                   deleted: true,
-                  confirm: a.confirm,
+                  confirm: values.confirm,
                 });
                 setRemove(null);
-                query.refresh();
+                notify("作品已移入回收站");
+                refresh();
               })
             }
           >
             <Field label="输入作品名称确认">
-              <input name="confirm" required autoComplete="off" />
+              <input
+                name="confirm"
+                required
+                autoFocus
+                autoComplete="off"
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                placeholder={remove.title}
+              />
             </Field>
           </Form>
         </Modal>
       )}
-    </>
+      {purge && (
+        <Modal
+          title={purge.all ? "清空回收站" : "永久删除作品"}
+          onClose={() => {
+            if (!busy) setPurge(null);
+          }}
+        >
+          <p>
+            {purge.all
+              ? `将永久删除${repo ? `仓库“${repo.name}”` : "全部仓库"}回收站中的 ${trash.data?.total || 0} 个作品，包含所有分页和筛选之外的作品。`
+              : `将永久删除作品“${purge.title}”。`}
+            作品文件、历史版本、聊天和导出记录将被清除，对应远端作品分支也会删除。
+            素材库中的共享素材保留。此操作无法恢复。
+          </p>
+          {!!purgeFailures.length && (
+            <div role="alert">
+              <p>以下作品未能删除，仍在回收站中。处理原因后可重试。</p>
+              <ul>
+                {purgeFailures.map((failure) => (
+                  <li key={failure.id}>
+                    <strong>{failure.title}</strong>：{failure.error}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+          <Form
+            busy={busy}
+            submit={purgeFailures.length ? "重试清空" : "确认永久删除"}
+            onSubmit={(a) =>
+              run(async () => {
+                if (purge.all) {
+                  const result = await api("works_empty_trash", {
+                    ...(repo ? { repo: repo.id } : {}),
+                    confirm: a.confirm,
+                  });
+                  setPurgeFailures(result.failed);
+                  notify(
+                    `已永久删除 ${result.purged.length} 个作品${result.failed.length ? `，${result.failed.length} 个未能删除` : ""}`,
+                    result.failed.length ? "error" : "success",
+                  );
+                  if (!result.failed.length) setPurge(null);
+                } else {
+                  await api("works_purge", {
+                    id: purge.id,
+                    confirm: a.confirm,
+                  });
+                  notify("作品和对应远端分支已永久删除");
+                  setPurge(null);
+                }
+                refreshTrash();
+              })
+            }
+          >
+            <Field
+              label={
+                purge.all
+                  ? "输入“清空回收站”确认"
+                  : `输入完整作品名称“${purge.title}”确认`
+              }
+            >
+              <input
+                name="confirm"
+                required
+                autoFocus
+                autoComplete="off"
+                disabled={busy}
+              />
+            </Field>
+          </Form>
+        </Modal>
+      )}
+    </section>
   );
 }
 export function Repositories({ notify, onOpen }) {
   const [page, setPage] = useState(0),
     [search, setSearch] = useState(""),
-    [account, setAccount] = useState(""),
-    [add, setAdd] = useState(false);
+    [account, setAccount] = useState("");
+  const [add, setAdd] = useState(false),
+    [create, setCreate] = useState(false);
   const query = useQuery("repositories_page", {
-      search: useDebouncedValue(search),
-      limit: 30,
-      offset: page * 30,
-      ...(account ? { account } : {}),
-    }),
-    accounts = useQuery("github_accounts");
+    search: useDebouncedValue(search.trim()),
+    limit: 30,
+    offset: page * 30,
+    ...(account ? { account } : {}),
+  });
+  const accounts = useQuery("github_accounts");
+  useEffect(() => {
+    if (!query.loading && !query.error && query.data) {
+      const last = Math.max(0, Math.ceil(query.data.total / 30) - 1);
+      if (page > last) setPage(last);
+    }
+  }, [query.data, query.loading, query.error, page]);
+  const clearFilters = () => {
+    setSearch("");
+    setAccount("");
+    setPage(0);
+  };
   return (
-    <>
-      <div className="page-heading row">
+    <section className="library-page" aria-labelledby="repositories-title">
+      <header className="library-heading">
         <div>
-          <h1>作品仓库</h1>
-          <p>按仓库组织作品、素材和发布</p>
+          <div className="library-eyebrow">组织你的创作</div>
+          <h1 id="repositories-title">作品仓库</h1>
+          <p>按主题或项目整理作品，每个仓库共享自己的素材。</p>
         </div>
-        <Button className="primary" icon={Plus} onClick={() => setAdd(true)}>
-          添加仓库
-        </Button>
+        <div className="library-heading-actions">
+          <Button icon={Plus} onClick={() => setAdd(true)}>
+            添加仓库
+          </Button>
+          <Button
+            className="primary"
+            icon={Plus}
+            onClick={() => setCreate(true)}
+          >
+            新建作品
+          </Button>
+        </div>
+      </header>
+      <div className="library-navigation">
+        <a className="library-repositories-link" href="#/library">
+          <ArrowLeft size={15} />
+          返回作品库
+        </a>
+        <span className="library-navigation-note">
+          打开仓库，查看其中的作品与素材
+        </span>
       </div>
-      <div className="list-toolbar">
-        <div className="search-box">
-          <Search size={17} />
+      <div className="library-toolbar">
+        <div className="search-box library-search">
+          <Search size={17} aria-hidden="true" />
           <input
+            type="search"
             aria-label="搜索仓库"
             value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
+            maxLength={200}
+            placeholder="搜索仓库名称或地址"
+            onChange={(event) => {
+              setSearch(event.target.value);
               setPage(0);
             }}
-            placeholder="搜索仓库"
           />
+          {search && (
+            <Button
+              icon={X}
+              className="library-icon-button"
+              aria-label="清除仓库搜索"
+              onClick={() => {
+                setSearch("");
+                setPage(0);
+              }}
+            />
+          )}
         </div>
-        <select
-          aria-label="GitHub 账号筛选"
-          value={account}
-          onChange={(e) => {
-            setAccount(e.target.value);
-            setPage(0);
-          }}
-        >
-          <option value="">全部账号</option>
-          {accounts.data?.map((a) => (
-            <option key={a.id} value={a.id}>
-              {a.login}
-            </option>
-          ))}
-        </select>
+        <label className="library-filter">
+          <span>账号</span>
+          <select
+            aria-label="GitHub 账号筛选"
+            value={account}
+            onChange={(event) => {
+              setAccount(event.target.value);
+              setPage(0);
+            }}
+          >
+            <option value="">全部账号</option>
+            {accounts.data?.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.login}
+              </option>
+            ))}
+          </select>
+        </label>
+        <Button
+          icon={RefreshCw}
+          className="library-icon-button"
+          title="刷新仓库"
+          aria-label="刷新仓库"
+          disabled={query.loading}
+          onClick={query.refresh}
+        />
       </div>
-      <ErrorNote error={query.error} />
+      <div className="library-results">
+        <span role="status" aria-live="polite">
+          {query.loading
+            ? "正在读取仓库…"
+            : query.error
+              ? "仓库读取失败"
+              : "共 " + (query.data?.total || 0) + " 个仓库"}
+        </span>
+        {(search || account) && (
+          <Button icon={X} onClick={clearFilters}>
+            清除筛选
+          </Button>
+        )}
+      </div>
+      {accounts.error && (
+        <div className="library-error">
+          <ErrorNote error={accounts.error} />
+          <Button onClick={accounts.refresh}>重试读取账号</Button>
+        </div>
+      )}
+      {query.error && (
+        <div className="library-error">
+          <ErrorNote error={query.error} />
+          <Button icon={RefreshCw} onClick={query.refresh}>
+            重试加载仓库
+          </Button>
+        </div>
+      )}
       {query.loading && !query.data ? (
-        <Loading />
-      ) : (
+        <LibrarySkeleton />
+      ) : query.data?.items.length ? (
         <div className="repository-grid">
-          {query.data?.items.map((r) => (
+          {query.data.items.map((repository) => (
             <button
               className="repository-card"
-              key={r.id}
-              onClick={() => onOpen(r)}
+              key={repository.id}
+              onClick={() => onOpen(repository)}
             >
-              <FolderGit2 size={28} />
-              <h3>{r.name}</h3>
-              <p>
-                {r.work_count} 个作品 · {r.login || "本地仓库"}
+              <div className="library-repository-top">
+                <span className="library-repository-icon">
+                  <FolderGit2 size={25} strokeWidth={1.5} />
+                </span>
+                <span className="library-storage-type">
+                  {repository.url ? "GitHub 同步" : "本地存储"}
+                </span>
+              </div>
+              <h3>{repository.name}</h3>
+              <p className="library-repository-account">
+                {repository.login ||
+                  (repository.url ? "已关联远端仓库" : "保存在当前服务器")}
               </p>
-              <small>{r.url ? "每个作品独立分支" : "保存在服务器"}</small>
+              <div className="library-repository-footer">
+                <span>
+                  <Film size={15} />
+                  {repository.work_count} 部作品
+                </span>
+                <span>
+                  查看作品
+                  <ChevronRight size={16} />
+                </span>
+              </div>
             </button>
           ))}
         </div>
-      )}
-      {query.error && <Button onClick={query.refresh}>重试加载仓库</Button>}
-      {!query.loading && !query.error && !query.data?.items.length && (
-        <Empty
-          action={
-            search || account ? (
-              <Button
-                onClick={() => {
-                  setSearch("");
-                  setAccount("");
-                  setPage(0);
-                }}
-              >
-                清除筛选
-              </Button>
-            ) : (
-              <Button onClick={() => setAdd(true)}>添加仓库</Button>
-            )
-          }
-        >
-          {search || account
-            ? "没有匹配的仓库。"
-            : "添加已有仓库，或创建新的 GitHub 作品仓库。"}
-        </Empty>
+      ) : (
+        !query.error && (
+          <Empty
+            action={
+              search || account ? (
+                <Button onClick={clearFilters}>清除筛选</Button>
+              ) : (
+                <Button
+                  className="primary"
+                  icon={Plus}
+                  onClick={() => setAdd(true)}
+                >
+                  添加第一个仓库
+                </Button>
+              )
+            }
+          >
+            <span className="library-empty-icon">
+              <FolderGit2 size={28} />
+            </span>
+            <strong>
+              {search || account ? "没有匹配的仓库" : "给作品一个家"}
+            </strong>
+            <p>
+              {search || account
+                ? "换一个关键词或账号，重新查找。"
+                : "连接已有 GitHub 仓库，或创建一个本地仓库开始创作。"}
+            </p>
+          </Empty>
+        )
       )}
       <Pagination
         page={page}
@@ -581,14 +1174,23 @@ export function Repositories({ notify, onOpen }) {
         <AddRepository
           notify={notify}
           onClose={() => setAdd(false)}
-          onAdded={(r) => {
+          onAdded={(repository) => {
             query.refresh();
             setAdd(false);
-            onOpen(r);
+            onOpen(repository);
           }}
         />
       )}
-    </>
+      {create && (
+        <NewWork
+          notify={notify}
+          onClose={() => {
+            setCreate(false);
+            query.refresh();
+          }}
+        />
+      )}
+    </section>
   );
 }
 function AddRepository({ notify, onClose, onAdded }) {

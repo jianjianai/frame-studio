@@ -269,6 +269,8 @@ export function checkProjects(root = process.cwd(), options = {}) {
         file,
         "status must match the project schema enum when supplied",
       );
+    if (meta.renderer === "remotion" && (!["./composition","./composition.tsx"].includes(record.remotionLoadPath) || !fs.existsSync(path.join(folder,"composition.tsx"))))
+      report("error", "REMOTION_ENTRY", file, "Remotion requires loadRemotion: () => import('./composition') and composition.tsx");
     if (!rendererIds.includes(meta.renderer))
       report("error", "RENDERER", file, "Unknown renderer");
     for (const key of ["title", "subtitle", "description"])

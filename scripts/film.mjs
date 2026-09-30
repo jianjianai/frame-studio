@@ -17,7 +17,7 @@ export const commandHelp = `FRAME · 视频制作工具
   pnpm film list [--json]                     列出项目
   pnpm film inspect <id> [--json]             元数据、素材、音轨和时间标记
   pnpm film context <id> [--json]             AI 接手上下文与修改边界（只读）
-  pnpm film new <id> "标题" [--renderer composition|canvas|pixi|three|babylon]
+  pnpm film new <id> "标题" [--renderer composition|canvas|pixi|three|babylon|remotion]
     [--duration 24] [--fps 30] [--audio silent|generated] [--width 1080 --height 1920]
   pnpm film audio engines --json
   pnpm film audio <id> [edit --input request.json] --json

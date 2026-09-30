@@ -3,7 +3,6 @@ import { createRoot } from "react-dom/client";
 import { AgentNotificationProvider, AgentNotificationBell } from "./agent/AgentNotifications";
 import {
   Film,
-  Clock3,
   FolderGit2,
   Images,
   Settings2,
@@ -233,10 +232,10 @@ function App() {
         </form>
       </main>
     );
-  const section = route[0] || "recent",
+  const section = route[0] || "library",
     isWork = section === "work",
     navigation = [
-      ["recent", Clock3, "最近打开"],
+      ["library", Film, "作品库"],
       ["repositories", FolderGit2, "作品仓库"],
       ["background", Film, "后台项目"],
       ["materials", Images, "素材库"],
@@ -252,7 +251,7 @@ function App() {
     >
       {!isWork && (
         <aside className="navigation">
-          <a className="brand" href="#/recent">
+          <a className="brand" href="#/library">
             <Film size={25} />
             <span>FRAME</span>
           </a>
@@ -264,6 +263,7 @@ function App() {
                 title={label}
                 className={
                   section === id ||
+                  (id === "library" && section === "recent") ||
                   (id === "repositories" &&
                     ["repository", "work"].includes(section))
                     ? "selected"
@@ -315,7 +315,7 @@ function App() {
         ) : section === "settings" ? (
           <Settings notify={notify} localMode={!!me.localMode} />
         ) : (
-          <WorkLibrary recent notify={notify} localMode={me.localMode} />
+          <WorkLibrary key={section} recent={section === "recent"} notify={notify} localMode={me.localMode} />
         )}
         </Suspense></PageBoundary>
       </main>

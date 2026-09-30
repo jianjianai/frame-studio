@@ -5,8 +5,6 @@ import {
   providerModelsSchema,
 } from "../src/contracts/ai-models.mjs";
 import { problem } from "./security.mjs";
-import { toolBinary } from "./connections.mjs";
-import { command } from "./process.mjs";
 import { RuntimeStatus } from "./runtime-status.mjs";
 import { workQueueStatus } from "./task-diagnostics.mjs";
 
@@ -74,6 +72,7 @@ export function workbenchOperations({
       recent: z.boolean().default(false),
       deleted: z.boolean().default(false),
       status: z.enum(["", "draft", "review", "finished"]).default(""),
+      sort: z.enum(["", "updated", "opened", "created", "title"]).default(""),
       search,
       limit,
       offset,
@@ -235,6 +234,12 @@ export function workbenchOperations({
     (a) => connections.discover(a.id),
   );
   add(
+    "connections_sync_models",
+    "Refresh and save Codex official-account models and capabilities, preserving manual choices",
+    { id: uuid },
+    (a) => connections.syncModels(a.id),
+  );
+  add(
     "connections_enabled",
     "Enable or disable a provider while preserving conversation history",
     { id: uuid, enabled: z.boolean() },
@@ -292,25 +297,6 @@ export function workbenchOperations({
     { id: uuid, code: z.string().max(4000) },
     (a) => connections.submit(a.id, a.code),
   );
-  add("tools_info", "Installed and selected CLI versions", {}, async () => {
-    const rows = [];
-    for (const tool of ["codex", "claude"]) {
-      const version = await command(toolBinary(data, tool), ["--version"], {
-        timeout: 15000,
-      }).catch(() => "不可用");
-      rows.push({
-        tool,
-        version,
-        available: version !== "不可用",
-        localMode: process.env.FRAME_LOCAL_MODE === "1",
-        updates: await db.all(
-          "SELECT id,state,input,result,error FROM tasks WHERE kind='tools-update' AND input->>'provider'=$1 ORDER BY created DESC LIMIT 3",
-          [tool],
-        ),
-      });
-    }
-    return rows;
-  });
   add(
     "works_chat_turns",
     "Paginate one conversation independently of other work activity",

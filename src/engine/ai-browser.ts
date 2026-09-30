@@ -131,7 +131,7 @@ export function installAiBrowser(project: AnimationProject) {
           : options.frame / project.fps,
       );
       await api().frame(time, options.subtitles ?? true);
-      let dataURL = api().dataURL(),
+      let dataURL = await (api().capture?.() ?? api().dataURL()),
         width = api().getState().width,
         height = api().getState().height;
       if (options.width !== undefined) {

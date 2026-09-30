@@ -275,16 +275,13 @@ test(
       await reopened.getByText("当前没有在后台运行的项目。").waitFor();
       await reopened.goto(origin + "/#/repository/" + repo.id);
       await reopened.getByLabel("MCP 测试操作").click();
-      await reopened.getByRole("button", { name: "删除", exact: true }).click();
-      const confirm = reopened.getByRole("dialog", { name: "删除作品" });
+      await reopened.getByRole("menuitem", { name: "移入回收站", exact: true }).click();
+      const confirm = reopened.getByRole("dialog", { name: "移入回收站" });
+      const trash = confirm.getByRole("button", { name: "移入回收站", exact: true });
       await confirm.getByLabel("输入作品名称确认").fill("wrong");
-      await confirm.getByRole("button", { name: "确认删除" }).click();
-      await reopened
-        .getByText("请输入完整作品名称确认删除", { exact: true })
-        .first()
-        .waitFor();
+      assert.equal(await trash.isDisabled(), true);
       await confirm.getByLabel("输入作品名称确认").fill(work.title);
-      await confirm.getByRole("button", { name: "确认删除" }).click();
+      await trash.click();
       await confirm.waitFor({ state: "hidden" });
       assert.equal(
         (await db.one("SELECT deleted FROM works WHERE id=$1", [work.id]))

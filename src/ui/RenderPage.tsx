@@ -39,7 +39,8 @@ export function RenderPage({ project }: { project: AnimationProject }) {
         width,
         height,
       }),
-      dataURL: () => canvas.current!.toDataURL("image/png"),
+      dataURL: () => renderer.dataURL(),
+      capture: () => renderer.capture(),
       audioChunk: (start, duration) => audio.pcm(start, duration),
     };
     window.__FRAME_STUDIO__ = api;

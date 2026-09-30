@@ -3,6 +3,10 @@ import { WindowsCenterLink, LocalAiSettings } from "./desktop-settings";
 import { useEffect, useState } from "react";
 import {
   Plus,
+  Check,
+  Copy,
+  CheckCircle2,
+  LoaderCircle,
   ExternalLink,
   RefreshCw,
   FolderGit2,
@@ -37,107 +41,98 @@ import {
 import "./ai-workbench.css";
 import { SpeechSettings } from "./speech";
 import { SystemStatus } from "./system-status";
+import { AccessSettings } from "./access-settings";
 
 export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
-  const [flow, setFlow] = useState(null),
-    [error, setError] = useState(""),
-    [code, setCode] = useState("");
+  const [flow, setFlow] = useState(null), [error, setError] = useState(""),
+    [code, setCode] = useState(""), [opened, setOpened] = useState(false),
+    [attempt, setAttempt] = useState(0), [copied, setCopied] = useState(false);
   const [run, busy] = useAction(notify);
   useEffect(() => {
-    let done = false,
-      timer;
-    let stop;
-    const watch = (id) => {
-      stop = subscribe("auth_state", { id }, ({ result: row, error }) => {
+    let done = false, stop, successDelivered = false;
+    setFlow(null); setError(""); setCode(""); setOpened(false); setCopied(false);
+    api("auth_begin", { kind, ...(target ? { target } : {}) }).then((row) => {
+      if (done) return;
+      setFlow(row);
+      stop = subscribe("auth_state", { id: row.id }, ({ result: next, error: failure }) => {
         if (done) return;
-        if (error) {
-          setError(error);
-          return;
+        if (failure) { setError(failure); return; }
+        setFlow(next);
+        if (next.state === "succeeded" && !successDelivered) {
+          successDelivered = true;
+          onSuccess?.();
         }
-        setFlow(row);
-        if (row.state === "succeeded") onSuccess?.();
       });
-    };
-    api("auth_begin", { kind, ...(target ? { target } : {}) })
-      .then((row) => {
-        if (!done) {
-          setFlow(row);
-          watch(row.id);
-        }
-      })
-      .catch((e) => setError(e.message));
-    return () => {
-      done = true;
-      stop?.();
-    };
-  }, [kind, target]);
+    }).catch((err) => { if (!done) setError(err.message); });
+    return () => { done = true; stop?.(); };
+  }, [kind, target, attempt]);
+  const codex = kind === "codex", succeeded = flow?.state === "succeeded";
+  const pending = flow?.state === "pending";
+  const syncing = pending && flow.info.stage === "models";
+  const catalogFailed = succeeded && flow.info.catalogSynced === false;
+  const step = succeeded ? catalogFailed ? 2 : 3 : syncing ? 2 : opened ? 1 : 0;
+  const retry = () => setAttempt((old) => old + 1);
   return (
-    <Modal
-      title={`连接 ${kind === "github" ? "GitHub" : kind === "codex" ? "ChatGPT / Codex" : "Claude 官方账号"}`}
-      onClose={onClose}
-    >
+    <Modal title={`连接 ${kind === "github" ? "GitHub" : codex ? "ChatGPT / Codex" : "Claude 官方账号"}`} onClose={onClose}>
+      {codex && <ol className="account-login-steps" aria-label="账号连接进度">
+        {["打开授权页", "确认账号", "同步模型"].map((label, index) => (
+          <li key={label} className={index < step ? "complete" : index === 2 && catalogFailed ? "attention" : index === step ? "current" : ""}
+            aria-current={index === step ? "step" : undefined}>
+            <span>{index < step ? <Check size={12} /> : index + 1}</span>{label}
+          </li>
+        ))}
+      </ol>}
       <ErrorNote error={error} />
       {!flow && !error && <Loading />}
-      {flow?.state === "pending" && (
+      {pending && (
         <>
-          <p>{flow.info.message || "正在向官方申请授权链接…"}</p>
-          {flow.info.code && (
-            <div className="device-code">
-              <code>{flow.info.code}</code>
-              <Button
-                onClick={() =>
-                  navigator.clipboard
-                    .writeText(flow.info.code)
-                    .then(() => notify("设备码已复制"))
-                }
-              >
-                复制设备码
-              </Button>
+          <div className="account-login-message" role="status">
+            {syncing && <LoaderCircle size={18} className="catalog-spin" />}
+            <p>{flow.info.message || "正在准备官方授权链接…"}</p>
+          </div>
+          {flow.info.code && <div className="account-device-code">
+            <small>设备验证码</small>
+            <div><code>{flow.info.code}</code>
+              <Button icon={copied ? Check : Copy} aria-label="复制设备码" onClick={() => run(async () => {
+                await navigator.clipboard.writeText(flow.info.code);
+                setCopied(true); notify("设备码已复制");
+              })}>{copied ? "已复制" : "复制"}</Button>
             </div>
-          )}
-          {flow.info.url && (
-            <a
-              className="button primary"
-              href={flow.info.url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              前往官方页面授权 <ExternalLink size={16} />
-            </a>
-          )}
-          {flow.info.needsCode && (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                run(() => api("auth_submit", { id: flow.id, code }));
-              }}
-            >
-              <Field label="官方页面返回的验证码">
-                <input
-                  value={code}
-                  onChange={(e) => setCode(e.target.value)}
-                  autoComplete="off"
-                  required
-                />
-              </Field>
-              <Button disabled={busy || !code.trim()}>完成授权</Button>
-            </form>
-          )}
-          <p>
-            凭据保存在服务器，关闭弹窗后授权等待会持续 15 分钟。Codex
-            设备码登录需先在 ChatGPT 安全设置中启用。
+          </div>}
+          {flow.info.url && <a className="button primary account-authorize" href={flow.info.url} target="_blank"
+            rel="noreferrer" onClick={() => setOpened(true)}>前往官方页面授权 <ExternalLink size={16} /></a>}
+          {flow.info.needsCode && <form onSubmit={(event) => {
+            event.preventDefault(); run(() => api("auth_submit", { id: flow.id, code }));
+          }}>
+            <Field label="官方页面返回的验证码"><input value={code} onChange={(event) => setCode(event.target.value)}
+              autoComplete="off" required /></Field>
+            <Button className="primary" disabled={busy || !code.trim()}>完成授权</Button>
+          </form>}
+          <p className="settings-help account-login-hint">
+            {syncing ? "登录已经完成，正在准备模型目录。此时关闭窗口也会继续同步。"
+              : "授权完成后会自动更新，无需重复点击或刷新。关闭窗口后仍会继续等待授权。"}
           </p>
+          {codex && !syncing && <details className="account-login-help">
+            <summary>设备码登录提示</summary>
+            <p>若官方页面提示未启用设备码登录，请先在 ChatGPT 安全设置中启用，再继续授权。授权等待最长 15 分钟。</p>
+          </details>}
         </>
       )}
-      {flow && flow.state !== "pending" && (
+      {succeeded && (
         <>
-          <p role="status">
-            {flow.state === "succeeded"
-              ? "账号已连接，可以开始创作。"
-              : flow.info.message || "授权已过期，请重新发起登录。"}
-          </p>
-          <Button onClick={onClose}>完成</Button>
+          <div className="account-login-result" role="status">
+            <CheckCircle2 size={30} />
+            <h3>{catalogFailed ? "登录成功，模型待同步" : "账号已连接"}</h3>
+            <p>{flow.info.message || "可以开始创作。"}</p>
+          </div>
+          <Button className="primary account-authorize" onClick={onClose}>{codex ? "查看模型" : "完成"}</Button>
         </>
+      )}
+      {(error && !pending || flow && !pending && !succeeded) && (
+        <div className="account-login-failure">
+          {!error && <p role="alert">{flow.info.message || "授权已过期，请重新获取。"}</p>}
+          <div className="row"><Button className="primary" icon={RefreshCw} onClick={retry}>重新获取授权</Button><Button onClick={onClose}>关闭</Button></div>
+        </div>
       )}
     </Modal>
   );
@@ -217,97 +212,6 @@ export function ModelConnections(props) {
   return <ProviderSettings {...props} LoginDialog={LoginFlow} />;
 }
 
-function AccessTokens({ notify }) {
-  const tokens = useQuery("tokens_list"),
-    grants = useQuery("oauth_grants"),
-    [newToken, setNewToken] = useState(""),
-    [run, busy] = useAction(notify);
-  return (
-    <>
-      <h2>MCP 与 CLI</h2>
-      <p>
-        远程 MCP 地址：<code>{location.origin}/mcp</code>。ChatGPT
-        添加此地址并选择 OAuth， 在 FRAME 登录后授权即可，客户端 ID
-        与密钥留空。其他 CLI 客户端也可以使用下方的 Bearer 令牌。
-      </p>
-      <h3>OAuth 连接</h3>
-      <ErrorNote error={grants.error} />
-      {grants.data?.map((g) => (
-        <div className="settings-row" key={g.id}>
-          <span>
-            {g.name} ·{" "}
-            {g.revoked
-              ? "已撤销"
-              : new Date(g.refresh_expires) < new Date()
-                ? "已过期"
-                : "已授权"}
-          </span>
-          <Button
-            disabled={busy || g.revoked}
-            onClick={() =>
-              run(async () => {
-                await api("oauth_revoke", { id: g.id });
-                grants.refresh();
-                notify("OAuth 连接已撤销");
-              })
-            }
-          >
-            撤销授权
-          </Button>
-        </div>
-      ))}
-      <Form
-        busy={busy}
-        submit="创建令牌"
-        onSubmit={(a) =>
-          run(async () => {
-            const token = await api("tokens_create", a);
-            setNewToken(token.token);
-            tokens.refresh();
-          })
-        }
-      >
-        <Field label="令牌名称">
-          <input name="name" required placeholder="例如：桌面 AI" />
-        </Field>
-      </Form>
-      {newToken && (
-        <div className="secret-once">
-          <p>请立即保存，仅本次显示。</p>
-          <code>{newToken}</code>
-          <Button
-            onClick={() =>
-              navigator.clipboard
-                .writeText(newToken)
-                .then(() => notify("令牌已复制"))
-            }
-          >
-            复制
-          </Button>
-        </div>
-      )}
-      {tokens.data?.map((t) => (
-        <div className="settings-row" key={t.id}>
-          <strong>{t.name}</strong>
-          <Button
-            onClick={() =>
-              run(async () => {
-                await api("tokens_revoke", { id: t.id });
-                tokens.refresh();
-              })
-            }
-          >
-            撤销
-          </Button>
-        </div>
-      ))}
-      <div className="panel">
-        <h3>工作台登录密码</h3>
-        <p>仅由服务器环境变量 FRAME_ADMIN_PASSWORD 配置。网页不能修改密码。</p>
-      </div>
-    </>
-  );
-}
 const settingsSections = [
   { id: "desktop", label: "Windows 控制中心", detail: "打开本机运行管理窗口", icon: Monitor },
   {
@@ -442,7 +346,7 @@ export function Settings({ notify, localMode = false }) {
           ) : activeTab === "system" ? (
             <SystemStatus />
           ) : (
-            <AccessTokens notify={notify} />
+            <AccessSettings notify={notify} />
           )}
         </main>
       </div>

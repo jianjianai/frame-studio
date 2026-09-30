@@ -6,6 +6,13 @@ export function downloadBlob(blob: Blob, filename: string): void {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 10000);
 }
+export async function downloadFrame(
+  renderer: { capture(): Promise<string> },
+  filename: string,
+): Promise<void> {
+  const image = await renderer.capture();
+  downloadBlob(await (await fetch(image)).blob(), filename);
+}
 export async function downloadCanvas(
   canvas: HTMLCanvasElement,
   filename: string,

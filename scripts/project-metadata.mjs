@@ -65,7 +65,7 @@ export function readProject(file) {
   if (!exported)
     throw new Error("project.ts must have a default project export");
   const visiting = new Set();
-  let loadPath, audioLoadPath, visualLoadPath, audioDocumentLoadPath;
+  let loadPath, audioLoadPath, visualLoadPath, audioDocumentLoadPath, remotionLoadPath;
   function value(node, depth = 0) {
     if (!node || depth > 64)
       throw new Error("Missing or excessively nested metadata");
@@ -128,7 +128,7 @@ export function readProject(file) {
           property.key.type === "Identifier"
             ? property.key.name
             : property.key.value;
-        if (name === "load" || name === "loadAudio" || name === "loadVisual" || name === "loadAudioDocument") {
+        if (name === "load" || name === "loadAudio" || name === "loadVisual" || name === "loadAudioDocument" || name === "loadRemotion") {
           const fn = property.value;
           if (
             fn.type !== "ArrowFunctionExpression" ||
@@ -139,6 +139,7 @@ export function readProject(file) {
           if (name === "load") loadPath = fn.body.source.value;
           else if (name === "loadAudio") audioLoadPath = fn.body.source.value;
           else if(name === "loadVisual") visualLoadPath = fn.body.source.value;
+          else if(name === "loadRemotion") remotionLoadPath=fn.body.source.value;
           else audioDocumentLoadPath=fn.body.source.value;
         } else result[name] = value(property.value, depth + 1);
       }
@@ -165,6 +166,7 @@ export function readProject(file) {
     meta.audioDocument=JSON.parse(fs.readFileSync(p,"utf8"));
   }
   return {
+    remotionLoadPath,
     audioDocumentLoadPath,
     visualLoadPath,
     file,

@@ -188,7 +188,8 @@ export async function verifyDelivery(
   return { ...report, report: path.join(directory, "verification.json") };
 }
 
-export async function writeAudio(page, file, start, duration, trackId, format="pcm16") {
+export async function writeAudio(page, file, start, duration, trackId, format="pcm16", frameOnly=false) {
+  if(page.remotionAudio && !trackId && !frameOnly) return page.remotionAudio(file,start,duration,format);
   const stride=format==="float32"?8:4;
   const samples = Math.round(duration * 48000);
   const header = Buffer.alloc(44);

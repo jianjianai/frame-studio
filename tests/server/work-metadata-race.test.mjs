@@ -12,6 +12,7 @@ for (const scenario of ["fresh-under-lock", "stale-revision", "database-failure"
     const dir = path.join(data, "project");
     let row = { id: randomUUID(), repo: "repo", project: "film", title: "old", description: "old description", category: "", status: "draft", deleted: false };
     const db = {
+      setting: async () => null,
       one: async () => ({ ...row }),
       lock: async (_key, fn) => {
         if (scenario !== "database-failure") row.title = "concurrent title";

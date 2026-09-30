@@ -16,6 +16,7 @@ export interface StudioApi {
     height: number;
   };
   dataURL(): string;
+  capture?(): Promise<string>;
   audioChunk?(
     start: number,
     duration: number,

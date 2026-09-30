@@ -4,6 +4,7 @@ import { api, Field, Form, Modal } from "./ui";
 import { providerPayload } from "./provider-dialogs";
 
 const presets = [
+  { id: "openai-account", name: "ChatGPT 账号", tool: "codex", mode: "official", baseUrl: "", description: "官方登录 · 自动同步模型" },
   {
     id: "openai",
     name: "OpenAI",
@@ -39,7 +40,7 @@ export function ConnectionForm({ initial, onClose, onSave }) {
   return (
     <Modal title={initial.id ? "编辑提供商" : "添加提供商"} onClose={onClose}>
       <Form
-        submit={!initial.id && mode === "api" ? "保存并获取模型" : "保存提供商"}
+        submit={!initial.id ? mode === "api" ? "保存并获取模型" : "保存并登录" : "保存提供商"}
         onSubmit={async ({ apiKey, model }) => {
           const saved = await api("connections_save", {
             ...(initial.id ? providerPayload(initial) : {}),
@@ -70,7 +71,7 @@ export function ConnectionForm({ initial, onClose, onSave }) {
         {!initial.id && (
           <>
             <p className="settings-help">
-              选择连接类型，填入密钥。保存后自动获取模型及规格，无需逐个填写参数。
+              使用 ChatGPT 账号登录，或连接 API 服务。选择后会自动设置认证方式，无需逐个填写模型参数。
             </p>
             <div className="provider-presets" aria-label="提供商模板">
               {presets.map((entry) => (
@@ -81,7 +82,7 @@ export function ConnectionForm({ initial, onClose, onSave }) {
                   onClick={() => {
                     setPreset(entry.id);
                     setTool(entry.tool);
-                    setMode("api");
+                    setMode(entry.mode || "api");
                     setBaseUrl(entry.baseUrl);
                     setName(entry.id === "custom" ? "" : entry.name);
                   }}
@@ -212,10 +213,20 @@ export function ConnectionForm({ initial, onClose, onSave }) {
             </details>
           </>
         ) : (
-          <p className="settings-callout">
-            保存后通过“登录官方账号”授权。官方账号与 API
-            密钥的可用模型范围不同，不会拿公共目录冒充账号权限；可使用工具默认模型，或手动补充账号支持的模型。
-          </p>
+          <>
+            <div className="provider-account-intro">
+              <strong>{tool === "codex" ? "使用 ChatGPT 账号，无需 API 密钥" : "使用 Claude 官方账号"}</strong>
+              <p>{tool === "codex"
+                ? "保存后直接进入官方授权。登录完成会自动同步模型、推理档位与可获取的规格；默认跟随 Codex 推荐模型，也可自行选择。"
+                : "保存后进入官方授权。可使用工具默认模型，或手动添加账号支持的模型 ID。"}</p>
+            </div>
+            {tool === "codex" && <label className="provider-option">
+              <input type="checkbox" checked={publicCatalog} onChange={(event) => setPublicCatalog(event.target.checked)} />
+              <span>自动补齐未提供的模型规格
+                <small>优先使用 Codex 返回的参数；从公共目录精确补齐缺失项，并标明参考来源。</small>
+              </span>
+            </label>}
+          </>
         )}
       </Form>
     </Modal>

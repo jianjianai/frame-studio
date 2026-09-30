@@ -32,6 +32,7 @@ export async function createRenderSession({
         failures.push(error);
       }
       try {
+        await entry.remotion?.close();
         entry.snapshot.close();
       } catch (error) {
         failures.push(error);
@@ -51,6 +52,13 @@ export async function createRenderSession({
       const entry = { snapshot };
       owned.push(entry);
       inputs.set(id, snapshot.manifest);
+      const meta = readProject(
+        path.join(snapshot.root, "projects", id, "project.ts"),
+      ).meta;
+      if (meta.renderer === "remotion")
+        entry.remotion = await (
+          await import("./remotion-render.mjs")
+        ).createRemotionRender({ root: snapshot.root, id, meta, width });
       fs.writeFileSync(
         path.join(snapshot.root, "index.html"),
         '<!doctype html><meta charset="utf-8"><link rel="icon" href="data:,"><style>body{margin:0;background:#000}canvas{display:block}</style><script type="module" src="/entry.ts"></script>',
@@ -80,6 +88,21 @@ export async function createRenderSession({
         ),
         deviceScaleFactor: 1,
       });
+      if (entry.remotion) {
+        page.remotion = entry.remotion;
+        page.remotionAudio = (file, start, duration, format, nativeOnly) =>
+          import("./remotion-export.mjs").then((m) =>
+            m.writeRemotionAudio(
+              page,
+              file,
+              start,
+              duration,
+              meta,
+              format,
+              nativeOnly,
+            ),
+          );
+      }
       const errors = [];
       let cancelledMediaRequests = 0;
       page.on("pageerror", (error) => errors.push(error.message));
@@ -134,6 +157,7 @@ export async function createRenderSession({
   };
 }
 export async function framePng(page, time, subtitles = true) {
+  if (page.remotion) return page.remotion.still(time, subtitles);
   const data = await page.evaluate(
     async ({ time, subtitles }) => {
       await window.__FRAME_STUDIO__.frame(time, subtitles);

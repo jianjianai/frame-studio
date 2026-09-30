@@ -22,7 +22,7 @@ const decodeRpc = (body) =>
   );
 test(
   "real film: MCP atomic source installation → Docker frame/render → CLI wait/download → decoded media",
-  { skip: !enabled, timeout: 240000 },
+  { skip: !enabled, timeout: 450000 },
   async (t) => {
     const databaseUrl = process.env.FRAME_TEST_DATABASE_URL;
     assert.match(new URL(databaseUrl).pathname, /frame_test/);
@@ -222,7 +222,7 @@ test(
           task: render.id,
           bytes: download.bytes,
           sha256: download.sha256,
-          runtimeImage: ready.runtime?.image,
+          runtimeImage: (await cli.call("task_get", { id: render.id })).task.result.runtime?.image,
           width: video.width,
           height: video.height,
           frames: Number(video.nb_read_frames),
@@ -235,6 +235,62 @@ test(
         tickErrors,
         artifactDirectory: path.relative(process.cwd(), artifactDirectory),
       };
+      await t.test("Remotion runs inside the production Docker resource boundary", async () => {
+        const remotion = await cli.call("works_create", {
+          repo: repo.id, title: "Remotion executor acceptance", renderer: "remotion",
+          duration: 2, fps: 12, width: 320, height: 180, audio: "generated",
+        });
+        const toneFile = path.join(artifactDirectory, "remotion-tone.wav");
+        await command("ffmpeg", ["-v", "error", "-f", "lavfi", "-i", "sine=frequency=997:sample_rate=48000:duration=2", "-y", toneFile]);
+        const toneAsset = await cli.upload(toneFile, { repo: repo.id, license: "Original test tone", mime: "audio/wav" });
+        const toneRef = await cli.call("works_use_asset", { id: remotion.id, asset: toneAsset.id });
+        const imageRef = await cli.call("works_use_asset", { id: remotion.id, asset: asset.id });
+        const previous = await cli.call("works_read_lines", { id: remotion.id, path: "composition.tsx", lineCount: 1 });
+        const component = [
+          'import {AbsoluteFill,Img,Sequence,staticFile,useCurrentFrame} from "remotion";',
+          'import {Audio} from "@remotion/media";import {FrameScene} from "../../src/engine/remotion-composition";',
+          'const load=()=>import("./layer");',
+          'export default function Film(){const f=useCurrentFrame();return <AbsoluteFill style={{background:"#102030"}}><FrameScene load={load}/><Sequence from={3}><div style={{position:"absolute",left:80,top:50,color:"white",fontSize:30}}>Frame {f}</div><Img src={staticFile(' + JSON.stringify(imageRef.path.slice(7)) + ')} style={{position:"absolute",right:0,width:40,height:40}}/></Sequence><Audio src={staticFile(' + JSON.stringify(toneRef.path.slice(7)) + ')} volume={.25}/></AbsoluteFill>;}',
+        ].join("\n");
+        const edit = await cli.call("works_edit", { id: remotion.id, changes: [
+          { path: "composition.tsx", expectedSha256: previous.sha256, content: component },
+          { path: "layer.ts", expectedSha256: null, content: 'import type {SceneOptions} from "../../src/engine/types";export function createScene({width,height}:SceneOptions){const canvas=document.createElement("canvas");canvas.width=width;canvas.height=height;return{canvas,render(time:number){const c=canvas.getContext("2d")!;c.clearRect(0,0,width,height);c.fillStyle="#00ff88";c.fillRect(time*40,0,30,30)},dispose(){canvas.remove()}}}' },
+        ] });
+        assert(edit.applied && edit.validation.passed);
+        const accepted = [];
+        for (const [kind, input] of [
+          ["build", {}],
+          ["frame", { time: .5, width: 320, subtitles: false }],
+          ["render", { width: 320, fps: 24, start: .27, end: 1.77, subtitles: false }],
+        ]) {
+          const task = await cli.call("works_task", { id: remotion.id, kind, input });
+          taskIds.push(task.id);
+          await cli.wait(task.id, { timeoutMs: 150000 });
+          const done = (await cli.call("task_get", { id: task.id })).task;
+          assert.equal(done.state, "succeeded", kind + ": " + (done.error || ""));
+          assert(done.result.runtime?.image, "Executor runtime identity must be recorded");
+          const result = { kind, task: task.id, image: done.result.runtime.image };
+          if (kind !== "build") {
+            const artifact = done.result.artifacts.find(a => a.path.endsWith(kind === "frame" ? ".png" : ".mp4"));
+            assert(artifact);
+            const download = await cli.download(task.id, artifact.path, path.join(artifactDirectory, "remotion-" + kind + (kind === "frame" ? ".png" : ".mp4")));
+            if (kind === "frame") {
+              const { default: sharp } = await import("sharp");
+              const pixel = await sharp(download.output).extract({ left: 25, top: 5, width: 1, height: 1 }).removeAlpha().raw().toBuffer();
+              assert(pixel[1] > 200 && pixel[0] < 60, "Embedded scene is painted before native capture");
+            } else {
+              const media = await probeMedia(download.output);
+              const video = media.streams.find(s => s.codec_type === "video");
+              assert.equal(Number(video.nb_read_frames), 36);
+              assert.equal(video.avg_frame_rate, "24/1");
+              assert(media.streams.some(s => s.codec_type === "audio"));
+            }
+            result.bytes = download.bytes;
+          }
+          accepted.push(result);
+        }
+        report.remotion = accepted;
+      });
       assert.deepEqual(tickErrors, []);
       fs.mkdirSync(".cache/real-film", { recursive: true });
       fs.writeFileSync(

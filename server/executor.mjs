@@ -121,7 +121,9 @@ try {
   if (task.runtime?.image && task.runtime.image !== actualRuntime.image)
     throw Error("Executor image does not match the frozen task runtime");
   if (task.kind === "tools-update") {
-    result(await installToolVersion({ provider: task.input.provider, version: task.input.version, run }));
+    result(await installToolVersion({ provider: task.input.provider, version: task.input.version, run,
+      onProgress: stage => fs.writeFileSync(work + "/progress.json", JSON.stringify({ stage })),
+    }));
   } else {
     for (const name of [
       "src",

@@ -39,7 +39,8 @@ export async function installOffline(project: AnimationProject) {
       width,
       height,
     }),
-    dataURL: () => canvas.toDataURL("image/png"),
+    dataURL: () => renderer.dataURL(),
+    capture: () => renderer.capture(),
     async waitUntilReady(options = {}) {
       await waitForStudio(api, options);
       if (options.audio)
@@ -51,7 +52,7 @@ export async function installOffline(project: AnimationProject) {
       await api.waitUntilReady!(options);
       return {
         time,
-        dataURL: api.dataURL(),
+        dataURL: await api.capture!(),
         diagnostics: api.getDiagnostics!(),
       };
     },

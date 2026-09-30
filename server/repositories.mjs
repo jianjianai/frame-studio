@@ -6,6 +6,7 @@ import { allowedGitUrl, confined, problem } from "./security.mjs";
 import { copyTree } from "./project-files.mjs";
 import { ProjectRevisions } from "./project-revisions.mjs";
 import { validProjectId, readProject } from "../scripts/project-metadata.mjs";
+import { purgedWorkKey } from "./work-purge.mjs";
 export class Repositories {
   constructor(db, data, secrets) {
     this.db = db;
@@ -39,6 +40,8 @@ export class Repositories {
   }
   async checkout(repo, branch, target) {
     return this.db.lock("git-layout:" + repo.id, async () => {
+      if (branch.startsWith("works/") && await this.db.setting(purgedWorkKey(repo.id, branch.slice(6))))
+        throw problem(410, "作品已永久删除，不能重新检出旧分支");
       if (fs.existsSync(path.join(target, ".git"))) return target;
       fs.mkdirSync(path.dirname(target), { recursive: true });
       const hasHead = await this.git(repo.root, [
@@ -155,7 +158,7 @@ export class Repositories {
     if (!repo.url) return;
     await this.git(
       repo.root,
-      ["fetch", "origin", "+refs/heads/*:refs/remotes/origin/*"],
+      ["fetch", "--prune", "origin", "+refs/heads/*:refs/remotes/origin/*"],
       true,
     );
     const refs = await this.git(repo.root, [
@@ -166,10 +169,12 @@ export class Repositories {
     for (const branch of refs.split("\n").filter(Boolean)) {
       const slug = branch.slice("works/".length);
       if (!validProjectId(slug)) continue;
+      if (await this.db.setting(purgedWorkKey(id, slug))) continue;
       let work = await this.db.one(
         "SELECT * FROM works WHERE repo=$1 AND branch=$2",
         [id, branch],
       );
+      if (work && await this.db.setting("work-purge:" + work.id)) continue;
       if (!work)
         work = await this.db.one(
           "INSERT INTO works(id,repo,project,title,branch) VALUES($1,$2,$3,$3,$4) ON CONFLICT(repo,project) DO UPDATE SET branch=EXCLUDED.branch RETURNING *",
@@ -178,7 +183,11 @@ export class Repositories {
       await this.checkout(repo, branch, path.join(this.data, "works", work.id));
     }
   }
-  async writable(id, project = null) {
+  async writable(id, project = null, { purging = false } = {}) {
+    if (!purging && await this.db.one(
+      "SELECT w.id FROM works w JOIN settings s ON s.key='work-purge:'||w.id::text WHERE w.repo=$1 AND ($2::text IS NULL OR w.project=$2) LIMIT 1",
+      [id, project],
+    )) throw problem(409, "作品正在永久清理，请在回收站重试完成清理");
     const undo = await this.db.one(
       "SELECT u.id FROM work_undos u JOIN works w ON w.id=u.work WHERE w.repo=$1 AND ($2::text IS NULL OR w.project=$2) AND u.state IN ('applying','failed') LIMIT 1", [id, project],
     );
@@ -399,9 +408,16 @@ export class Repositories {
         ...(fs.existsSync(base) ? fs.readdirSync(base) : []),
         ...indexed.map((w) => w.project),
       ]);
+      const purged = new Set((await this.db.all(
+        "SELECT key FROM settings WHERE key LIKE $1", ["purged-work:" + row.id + ":%"],
+      )).map(item => item.key));
+      const purging = new Set((await this.db.all(
+        "SELECT value FROM settings WHERE key LIKE 'work-purge:%' AND value->>'repo'=$1", [row.id],
+      )).map(item => item.value.project));
       for (const id of projects) {
         if (projectId && id !== projectId) continue;
         if (!validProjectId(id)) continue;
+        if (purged.has(purgedWorkKey(row.id, id)) || purging.has(id)) continue;
         try {
           const indexedWork = indexed.find((w) => w.project === id && w.branch);
           const file = indexedWork

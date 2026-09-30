@@ -18,7 +18,7 @@ export function authoringState(entry) {
   return {
     authoringProtocol: AUTHORING_PROTOCOL_VERSION,
     entrypoints: {
-      metadata: "project.ts", scene: entry.loadPath, audio: entry.audioLoadPath ?? null,
+      metadata: "project.ts", scene: entry.loadPath, remotion: entry.remotionLoadPath ?? null, audio: entry.audioLoadPath ?? null,
       audioDocument: entry.audioDocumentLoadPath ?? null, visual: entry.visualLoadPath ?? null,
     },
     audioTracks: tracks.slice(0, 128).map(track => audio ? {
@@ -35,7 +35,7 @@ export function authoringState(entry) {
       visual: visual ? {
         mode: "document", path: "visual.json", sha256: revision("visual.json"), schemaVersion: visual.schemaVersion,
         clips: visual.clips.length, read: "composition get", edit: "composition edit", reference: "composition",
-      } : { mode: "code", path: entry.loadPath, reference: "authoring" },
+      } : { mode: "code", path: entry.remotionLoadPath ?? entry.loadPath, reference: meta.renderer === "remotion" ? "remotion" : "authoring" },
     },
     references: referenceCatalog(),
     interfaces: authoringModes,

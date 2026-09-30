@@ -44,6 +44,7 @@ export const projectSchema = z
     renderer: z.enum(rendererIds),
     engineProtocol: z.literal(ENGINE_PROTOCOL_VERSION).optional(),
     composition: compositionSchema.optional(),
+    remotion: z.object({ inputProps: z.record(z.string(), z.json()).default({}) }).optional(),
     duration: z.number().positive().max(3600),
     fps: z.number().int().min(12).max(60),
     accent: z.string(),
@@ -98,11 +99,17 @@ export const projectSchema = z
 export type ProjectMeta = z.infer<typeof projectSchema>;
 export type Quality = "draft" | "standard" | "high";
 export interface SceneOptions {
+  onBuffering?: (waiting: boolean) => void;
   width: number;
   height: number;
   quality: Quality;
 }
+export interface ScenePlayback { time: number; playing: boolean; rate: number; volume: number; muted: boolean }
 export interface Scene {
+  element?: HTMLElement;
+  setSubtitles?(enabled: boolean): void;
+  setPlayback?(state: ScenePlayback): void;
+  capture?(): Promise<string>;
   canvas: HTMLCanvasElement;
   /** Prepare asynchronous media; renderer serializes requests and aborts stale frames. */
   prepareFrame?(time: number, options: { signal: AbortSignal }): Promise<void>;
@@ -124,6 +131,7 @@ export interface SceneModule {
 }
 export interface AnimationProject extends ProjectMeta {
   load: () => Promise<SceneModule>;
+  loadRemotion?: () => Promise<import('./remotion-composition').RemotionModule>;
   loadAudio?: () => Promise<GeneratedAudioModule>;
   loadVisual?: () => Promise<{default:unknown}>;
   visual?: VisualDocument;

@@ -90,8 +90,8 @@ export async function discoverModels(config, fetcher = fetch, catalogLoader) {
         }
         seen.add(parsed.data.id);
         const metadata = apiModelMetadata(entry, fetchedAt);
-        if (metadata.name)
-          metadata.name = metadata.name.replaceAll(config.apiKey, "[redacted]");
+        for (const key of ["name", "description"])
+          if (metadata[key]) metadata[key] = metadata[key].replaceAll(config.apiKey, "[redacted]");
         models.push({
           ...parsed.data,
           name: metadata.name || parsed.data.id.slice(0, 100),

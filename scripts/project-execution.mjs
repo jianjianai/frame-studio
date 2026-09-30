@@ -92,6 +92,7 @@ export function projectConfig(root, id, outDir) {
         },
       },
     ],
+    optimizeDeps: { include: ["tone", "remotion", "@remotion/player", "@remotion/media", "@remotion/web-renderer"] },
     worker: { format: "iife" },
     cacheDir: projectPath(root, id, ".cache/vite"),
     build: { target: "es2022", outDir, emptyOutDir: false },

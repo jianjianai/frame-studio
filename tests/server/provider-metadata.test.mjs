@@ -238,7 +238,11 @@ test("catalog errors redact upstream content and reported secrets; duplicates do
   const result = await discoverModels(config, async () =>
     json({
       data: [
-        { id: "one", name: `API ${config.apiKey}` },
+        {
+          id: "one",
+          name: `API ${config.apiKey}`,
+          description: `Description ${config.apiKey}`,
+        },
         { id: "one" },
         { id: "bad\nname" },
         { id: config.apiKey },

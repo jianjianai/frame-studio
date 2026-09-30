@@ -41,6 +41,7 @@ export async function exportWebm(
   options: BrowserExportOptions,
 ): Promise<Blob | null> {
   project = await resolveProject(project);
+  if(project.renderer === 'remotion') return (await import('./remotion-export')).exportRemotionWebm(project,options);
   const plan = createExportPlan({
     duration: project.duration,
     composition: project.composition,

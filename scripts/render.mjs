@@ -5,7 +5,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { randomUUID } from "node:crypto";
 import { writeProjectPoster } from "./poster-output.mjs";
-import { createRenderSession } from "./render-session.mjs";
+import { createRenderSession, framePng } from "./render-session.mjs";
 import { createExportPlan } from "../src/engine/export-plan.mjs";
 import { frameDimensions, fitComposition } from "../src/engine/dimensions.mjs";
 import { projectPath } from "./project-paths.mjs";
@@ -126,14 +126,11 @@ try {
       const at =
         catalog.find((entry) => entry.directory === folder.name)?.meta
           .posterTime ?? duration * 0.5;
-      const data = await page.evaluate(async (t) => {
-        await window.__FRAME_STUDIO__.frame(t, false);
-        return window.__FRAME_STUDIO__.dataURL().split(",")[1];
-      }, at);
+      const data = await framePng(page,at,false);
       const output = await writeProjectPoster(
         root,
         folder.name,
-        Buffer.from(data, "base64"),
+        data,
       );
       console.log("[poster] " + folder.name + " at " + at + "s -> " + output);
       await page.close();
@@ -180,18 +177,18 @@ try {
         "projects/" + id + "/exports/frame-" + time.toFixed(6) + ".png",
         ".png",
       );
-      const data = await page.evaluate(
-        async ({ time, subtitles }) => {
-          await window.__FRAME_STUDIO__.frame(time, subtitles);
-          return window.__FRAME_STUDIO__.dataURL().split(",")[1];
-        },
-        { time, subtitles: !args.includes("--no-subtitles") },
-      );
+      const data = await framePng(page,time,!args.includes("--no-subtitles"));
       await fs.mkdir(path.dirname(output), { recursive: true });
-      await fs.writeFile(output, Buffer.from(data, "base64"), {
+      await fs.writeFile(output, data, {
         flag: args.includes("--force") ? "w" : "wx",
       });
       console.log("Exported frame at " + time + "s -> " + output);
+      await page.close();
+    } else if(meta.renderer==="remotion") {
+      const plan=createExportPlan({duration:meta.duration,composition:meta.composition,width,fps,start:Number(val("--start","0")),end:Number(val("--end",String(meta.duration)))});
+      const output=scopedOutput("projects/"+id+"/exports/"+id+"-"+new Date().toISOString().replace(/[:.]/g,"-")+".mp4",".mp4");
+      await fs.mkdir(path.dirname(output),{recursive:true});
+      await (await import("./remotion-export.mjs")).renderRemotionVideo({page,meta,plan,output,subtitles:!args.includes("--no-subtitles"),input:session.input(id)});
       await page.close();
     } else {
       const ffmpeg = process.env.FFMPEG_PATH || "ffmpeg";

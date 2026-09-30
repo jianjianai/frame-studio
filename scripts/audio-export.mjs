@@ -39,7 +39,7 @@ export async function exportAudio(
   fs.mkdirSync(temporary, { recursive: true });
   const session = await createRenderSession({ root, width: 320 });
   let page;
-  const abort = () => void page?.close().catch(() => {});
+  const abort = () => { void page?.close().catch(() => {}); void page?.remotion?.close().catch(() => {}); };
   signal?.addEventListener("abort", abort, { once: true });
   try {
     signal?.throwIfAborted();
@@ -53,14 +53,16 @@ export async function exportAudio(
     for (const track of [
       { id: undefined, name: "Mix" },
       ...(stems ? channels : []),
+      ...(stems && meta.renderer === 'remotion' ? [{id:undefined,name:'Remotion components',native:true}] : []),
     ]) {
       signal?.throwIfAborted();
-      const name = track.id
+      const name = track.native ? "remotion-components" : track.id
         ? "stem-" + track.id.replace(/[^a-zA-Z0-9_-]/g, "_")
         : "mix";
       const raw = path.join(temporary, name + "-input.wav"),
         target = path.join(temporary, name + "." + format);
-      await writeAudio(page, raw, start, end - start, track.id, "float32");
+      if(track.native)await page.remotionAudio(raw,start,end-start,"float32",true);
+      else await writeAudio(page, raw, start, end - start, track.id, "float32");
       await checkedProcess(
         process.env.FFMPEG_PATH || "ffmpeg",
         ["-v", "error", "-i", raw, "-c:a", ...codecs[format], "-n", target],
@@ -70,6 +72,7 @@ export async function exportAudio(
       const analysis = await analyzeAudio(target);
       files.push({
         track: track.id ?? null,
+        ...(track.native ? {engine:'remotion'} : {}),
         name: track.name,
         file: path.basename(target),
         analysis,

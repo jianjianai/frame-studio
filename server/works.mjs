@@ -14,6 +14,7 @@ import {
   visitNodes,
 } from "../scripts/project-metadata.mjs";
 import { applyProject } from "./apply-project.mjs";
+import { purgeWork, purgeTrash, purgedWorkKey } from "./work-purge.mjs";
 
 export class Works {
   constructor(db, data, repos, assets, tasks) {
@@ -23,53 +24,68 @@ export class Works {
     await this.recoverInfo();
     for (const repo of await this.repos.list(repository, projectId)) {
       for (const project of repo.projects) {
-        const { dir } = await this.repos.project(repo.id, project.id);
-        const file = confined(dir, "production/work.json");
-        let info = {};
         try {
-          info = JSON.parse(fs.readFileSync(file, "utf8"));
-        } catch {}
-        const title =
-          typeof info.title === "string"
-            ? info.title.slice(0, 150)
-            : project.title;
-        const inserted = await this.db.pool.query(
-          `INSERT INTO works(id,repo,project,title,category,status,description,deleted)
-          VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(repo,project) DO UPDATE
-          SET title=EXCLUDED.title,category=EXCLUDED.category,status=EXCLUDED.status,description=EXCLUDED.description,deleted=EXCLUDED.deleted,updated=now()
-          WHERE (works.title,works.category,works.status,works.description,works.deleted)
-          IS DISTINCT FROM (EXCLUDED.title,EXCLUDED.category,EXCLUDED.status,EXCLUDED.description,EXCLUDED.deleted)`,
-          [
-            randomUUID(),
-            repo.id,
-            project.id,
-            title,
-            String(info.category || "").slice(0, 80),
-            ["draft", "review", "finished"].includes(info.status)
-              ? info.status
-              : "draft",
-            String(info.description || "").slice(0, 4000),
-            info.deleted === true,
-          ],
-        );
-        const work = await this.db.one(
-          "SELECT * FROM works WHERE repo=$1 AND project=$2",
-          [repo.id, project.id],
-        );
-        const migrated = !work.branch;
-        await this.repos.isolate(work);
-        if (migrated)
-          await this.repos.checkpoint(
-            repo.id,
-            project.id,
-            "导入作品 · " + title,
-          );
-        if (inserted.rowCount || migrated || repository)
-          await this.assets.importProject(repo.id, project.id);
-        await this.repos.revisions?.refreshIfIdle(repo.id, project.id);
+          const discovered = await this.db.lock(`${repo.id}:${project.id}`, async () => {
+            // Recheck after taking the lock, even if the filesystem listing is stale.
+            if (await this.db.setting(purgedWorkKey(repo.id, project.id))) return;
+            const work = await this.db.one("SELECT id FROM works WHERE repo=$1 AND project=$2", [repo.id, project.id]);
+            if (work && await this.db.setting("work-purge:" + work.id)) return;
+            await this.discoverProject(repo, project, !!repository);
+            return true;
+          });
+          if (discovered) await this.repos.revisions?.refreshIfIdle(repo.id, project.id);
+        } catch (error) {
+          if (error.statusCode !== 409) throw error;
+          // Busy works keep their existing indexed row until a later refresh.
+        }
       }
     }
     if (!repository) this.discovered = true;
+  }
+  async discoverProject(repo, project, refreshAssets) {
+    const { dir } = await this.repos.project(repo.id, project.id);
+    const file = confined(dir, "production/work.json");
+    let info = {};
+    try {
+      info = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {}
+    const title =
+      typeof info.title === "string"
+        ? info.title.slice(0, 150)
+        : project.title;
+    const inserted = await this.db.pool.query(
+      `INSERT INTO works(id,repo,project,title,category,status,description,deleted)
+      VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(repo,project) DO UPDATE
+      SET title=EXCLUDED.title,category=EXCLUDED.category,status=EXCLUDED.status,description=EXCLUDED.description,deleted=EXCLUDED.deleted,updated=now()
+      WHERE (works.title,works.category,works.status,works.description,works.deleted)
+      IS DISTINCT FROM (EXCLUDED.title,EXCLUDED.category,EXCLUDED.status,EXCLUDED.description,EXCLUDED.deleted)`,
+      [
+        randomUUID(),
+        repo.id,
+        project.id,
+        title,
+        String(info.category || "").slice(0, 80),
+        ["draft", "review", "finished"].includes(info.status)
+          ? info.status
+          : "draft",
+        String(info.description || "").slice(0, 4000),
+        info.deleted === true,
+      ],
+    );
+    const work = await this.db.one(
+      "SELECT * FROM works WHERE repo=$1 AND project=$2",
+      [repo.id, project.id],
+    );
+    const migrated = !work.branch;
+    await this.repos.isolate(work);
+    if (migrated)
+      await this.repos.checkpoint(
+        repo.id,
+        project.id,
+        "导入作品 · " + title,
+      );
+    if (inserted.rowCount || migrated || refreshAssets)
+      await this.assets.importProject(repo.id, project.id);
   }
   async list({
     deleted = false,
@@ -80,14 +96,21 @@ export class Works {
     recent = false,
     limit = 60,
     offset = 0,
+    sort = "",
   } = {}) {
     if (!this.discovered) await this.discover();
+    // Fixed expressions only; order the whole result before applying pagination.
+    const ordering = sort === "title"
+      ? "lower(w.title) ASC,modified DESC"
+      : sort === "created" ? "w.created DESC"
+      : sort === "opened" || (!sort && recent) ? "w.opened DESC NULLS LAST"
+      : "modified DESC";
     const rows = await this.db.all(
       `SELECT w.*, r.name AS storage_name, r.url AS remote,
       (SELECT jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'finished',t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.input->>'version' IS NULL ORDER BY (t.state IN ('queued','running','cancelling','publishing','publish_failed')) DESC,t.created DESC LIMIT 1) AS activity,
       greatest(w.updated,COALESCE((SELECT max(t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.kind IN ('agent','new') AND t.state='succeeded'),w.updated)) AS modified
       FROM works w JOIN repos r ON r.id=w.repo WHERE w.deleted=$1 AND (w.title ILIKE $2 OR w.description ILIKE $2) AND ($3='' OR w.category=$3) AND ($4='' OR w.status=$4) AND ($5::uuid IS NULL OR w.repo=$5) AND (NOT $6 OR w.opened IS NOT NULL)
-      ORDER BY CASE WHEN $6 THEN w.opened ELSE w.updated END DESC,w.id LIMIT $7 OFFSET $8`,
+      ORDER BY ${ordering},w.id LIMIT $7 OFFSET $8`,
       [
         deleted,
         "%" + search + "%",
@@ -100,6 +123,7 @@ export class Works {
       ],
     );
     for (const row of rows) {
+      row.metadataRevision = hash(JSON.stringify(this.info(row)));
       try {
         const { dir } = await this.repos.project(row.repo, row.project);
         const { meta } = readProject(confined(dir, "project.ts"));
@@ -136,6 +160,8 @@ export class Works {
     const row = await this.db.one("SELECT * FROM works WHERE id=$1", [id]);
     if (!row) throw problem(404, "Work not found");
     if (active && row.deleted) throw problem(409, "Restore this work first");
+    if (active && await this.db.setting("work-purge:" + id))
+      throw problem(409, "作品正在永久清理，请在回收站重试完成清理");
     return {
       ...row,
       metadataRevision: hash(JSON.stringify(this.info(row))),
@@ -217,6 +243,8 @@ export class Works {
     else if (fs.existsSync(target))
       fs.rmSync(target, { recursive: true, force: true });
   }
+  purge(id, confirm) { return purgeWork(this, id, confirm); }
+  emptyTrash(repo, confirm) { return purgeTrash(this, repo, confirm); }
   info(work) {
     return Object.fromEntries(
       ["title", "category", "status", "description", "deleted"].map((key) => [
@@ -233,6 +261,7 @@ export class Works {
       : fs.readdirSync(root).map((name) => name.replace(/\.json$/, ""));
     for (const key of ids) {
       if (!/^[0-9a-f-]{36}$/.test(key)) continue;
+      if (await this.db.setting("work-purge:" + key)) continue;
       const file = path.join(root, key + ".json");
       if (!fs.existsSync(file)) continue;
       const recover = async () => {

@@ -67,7 +67,7 @@ export function createPlayerSession({
     fpsAt = performance.now();
   const output = new FrameRenderer(canvas, project);
   const publish = () => {
-    if (!canceled) onSnapshot(readPlayback(sound));
+    if (!canceled) { output.setPlayback(readPlayback(sound)); onSnapshot(readPlayback(sound)); }
   };
   const diagnosticErrors: string[] = [];
   const sound = new AudioTransport(project, (error) => {
@@ -77,6 +77,7 @@ export function createPlayerSession({
       publish();
     }
   });
+  output.onBuffering = waiting => { sound.setVisualBuffering(waiting); publish(); };
   for (const [id, control] of Object.entries(controls))
     if (sound.controls.has(id)) sound.setTrack(id, control);
   sound.seek(initial.time);
@@ -143,7 +144,8 @@ export function createPlayerSession({
       width: size.width,
       height: size.height,
     }),
-    dataURL: () => canvas.toDataURL("image/png"),
+    dataURL: () => output.dataURL(),
+    capture: () => output.capture(),
     async waitUntilReady(options = {}) {
       await waitForStudio(api, options);
       if (options.audio)
@@ -157,7 +159,7 @@ export function createPlayerSession({
       await api.waitUntilReady!(options);
       return {
         time: sound.clock.time(),
-        dataURL: api.dataURL(),
+        dataURL: await api.capture!(),
         diagnostics: api.getDiagnostics!(),
       };
     },
@@ -222,6 +224,7 @@ export function createPlayerSession({
       const tick = async (now: number) => {
         if (canceled) return;
         try {
+          output.setPlayback(readPlayback(sound));
           const t = sound.clock.time();
           const end = segmentEnd();
           if (end !== null && t >= end) {

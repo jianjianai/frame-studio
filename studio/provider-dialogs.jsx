@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { Download, RefreshCw, Search, RotateCcw, Plus } from "lucide-react";
 import {
   api,
@@ -38,7 +38,7 @@ export const providerPayload = (provider, patch = {}) => ({
   ...patch,
 });
 const sources = {
-  api: "API 返回",
+  api: "官方 / API 返回",
   catalog: "公共目录参考",
   manual: "手动覆盖",
   unknown: "未提供",
@@ -49,6 +49,8 @@ const specFields = [
   ["maxOutputTokens", "最大输出", "tokens"],
   ["vision", "图像理解", "boolean"],
   ["reasoning", "推理能力", "boolean"],
+  ["reasoningEfforts", "支持的推理档位", "list"],
+  ["defaultReasoningEffort", "默认推理档位", "effort"],
   ["toolCall", "工具调用", "boolean"],
   ["structuredOutput", "结构化输出", "boolean"],
   ["inputModalities", "输入类型", "list"],
@@ -69,7 +71,7 @@ const formatSpec = (value, kind) =>
           : "不支持"
         : kind === "price"
           ? `$${value.toLocaleString("en-US", { maximumFractionDigits: 6 })} / 百万 tokens`
-          : value.join("、") || "未提供";
+          : kind === "effort" ? value : value.join("、") || "未提供";
 
 export function ModelSummary({ model }) {
   const spec = effectiveModelSpecs(model);
@@ -81,11 +83,11 @@ export function ModelSummary({ model }) {
   if (spec.maxOutputTokens)
     bits.push(`${formatModelTokens(spec.maxOutputTokens)} 输出`);
   if (spec.vision) bits.push("视觉");
-  if (spec.reasoning) bits.push("推理");
+  if (spec.reasoning) bits.push(spec.defaultReasoningEffort ? `推理 · ${spec.defaultReasoningEffort}` : "推理");
   if (spec.toolCall) bits.push("工具");
   return (
     <span className="model-spec-summary">
-      {bits.join(" · ") || "规格未提供 · 可先测试或手动补充"}
+      {bits.length ? bits.map((bit) => <span className="model-spec-tag" key={bit}>{bit}</span>) : "规格未提供 · 可手动补充"}
     </span>
   );
 }
@@ -361,9 +363,11 @@ export function DiscoverDialog({ provider, onClose, onSave, onManual }) {
 }
 
 export function ModelEditor({ initial = {}, onClose, onSave }) {
+  const effortListId = useId();
   const [overrides, setOverrides] = useState(initial.overrides || {});
   const draft = { ...initial, overrides },
     specs = effectiveModelSpecs(draft);
+  const effortOptions = [...new Set([...(specs.reasoningEfforts || []), specs.defaultReasoningEffort].filter(Boolean))];
   const set = (key, value) => setOverrides((old) => ({ ...old, [key]: value }));
   const reset = (key) =>
     setOverrides((old) => {
@@ -416,6 +420,7 @@ export function ModelEditor({ initial = {}, onClose, onSave }) {
         </div>
         {initial.id && (
           <>
+            {initial.metadata?.description && <p className="model-description">{initial.metadata.description}</p>}
             <div className="model-spec-grid">
               {specFields.slice(0, 3).map(([key, label, kind]) => (
                 <div key={key}>
@@ -491,23 +496,21 @@ export function ModelEditor({ initial = {}, onClose, onSave }) {
                     <input
                       aria-label={`覆盖${label}`}
                       value={(specs[key] || []).join(",")}
-                      onChange={(e) =>
-                        set(
-                          key,
-                          e.target.value
-                            ? [
-                                ...new Set(
-                                  e.target.value
-                                    .split(",")
-                                    .map((v) => v.trim())
-                                    .filter(Boolean),
-                                ),
-                              ]
-                            : null,
-                        )
-                      }
-                      placeholder="text,image,audio,video,pdf,file,embedding"
+                      onChange={(e) => set(key, e.target.value ? [...new Set(e.target.value.split(",").map((v) => v.trim()).filter(Boolean))] : null)}
+                      placeholder={key === "reasoningEfforts" ? "none,minimal,low,medium,high,xhigh,max,ultra" : "text,image,audio,video,pdf,file,embedding"}
                     />
+                  ) : kind === "effort" ? (
+                    <>
+                    <input
+                      aria-label={`覆盖${label}`}
+                      value={specs[key] ?? ""}
+                      maxLength={32}
+                      list={effortListId}
+                      onChange={(e) => set(key, e.target.value || null)}
+                      placeholder="采用工具返回的默认值"
+                    />
+                    <datalist id={effortListId}>{effortOptions.map((effort) => <option key={effort} value={effort} />)}</datalist>
+                    </>
                   ) : (
                     <input
                       aria-label={`覆盖${label}`}

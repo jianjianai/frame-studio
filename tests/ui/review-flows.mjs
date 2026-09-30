@@ -209,16 +209,16 @@ export async function libraryChecks(h) {
   await check("搜索无结果与错误分离，首次使用可添加仓库", async () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await page.goto(uiUrl + "/#/recent");
-    await page.getByRole("textbox", { name: "搜索作品" }).fill("不存在的作品");
+    await page.getByLabel("搜索作品", { exact: true }).fill("不存在的作品");
     await expect(page.locator(".empty")).toContainText(/没有.*(匹配|符合)/);
     assert(
       !(await page.locator(".empty").innerText()).includes("还没有最近打开"),
     );
     state.failList = true;
-    await page.getByRole("textbox", { name: "搜索作品" }).fill("错误验证");
+    await page.getByLabel("搜索作品", { exact: true }).fill("错误验证");
     await expect(page.getByRole("alert")).toContainText("目录暂时不可读");
     state.failList = false;
-    await page.getByRole("textbox", { name: "搜索作品" }).fill("");
+    await page.getByLabel("搜索作品", { exact: true }).fill("");
     state.repos = [];
     await page.getByRole("button", { name: "新建作品", exact: true }).click();
     await expect(
