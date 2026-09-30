@@ -17,7 +17,7 @@ const watched = {
   works_exports: ["tasks"],
   auth_state: ["auth_flows"],
   task_get: ["events", "tasks"],
-  tools_info: ["settings"],
+  tools_info: ["settings", "tasks"],
   works_sync_status: ["work_sync"],
   works_scm_status: ["works", "work_sync", "tasks", "work_undos"],
 };
