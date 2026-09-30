@@ -34,8 +34,13 @@ child.on("close", (code) => {
   const skips = tail.split(/\r?\n/).filter((line) => /^\s*ok \d+\b.*# SKIP/i.test(line));
   if (release) {
     // A licensed user-supplied soundfont is an explicitly optional content fixture.
-    // The generated soundfont regression always runs. No integration skips are allowed.
-    const unexpected = skips.filter((line) => !line.includes("preserve GeneralUser synthesis"));
+    // The generated soundfont regression always runs. Windows native execution is
+    // required by release.yml on windows-latest and cannot execute on Linux.
+    // All server integrations, including real CLI protocol fixtures, must run.
+    const unexpected = skips.filter((line) => {
+      if (line.includes("preserve GeneralUser synthesis")) return false;
+      return !(process.platform !== "win32" && /^\s*ok \d+ - Windows local mode creates a work and renders a frame without Docker or a password # SKIP\s*$/.test(line));
+    });
     const count = Number(tail.match(/# skipped (\d+)\s*$/m)?.[1] ?? -1);
     if (unexpected.length || count < 0 || count !== skips.length) {
       console.error("Release verification rejected missing/unknown skipped tests:", unexpected.join("\n"));

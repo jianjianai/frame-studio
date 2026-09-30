@@ -33,7 +33,7 @@ jobs:
           node-version: "24"
       - name: Install pinned tools and browser prerequisites
         run: |
-          npm install --global pnpm@12.4.2
+          npm install --global pnpm@12.4.2 @openai/codex@0.158.0 @anthropic-ai/claude-code@2.1.283
           pnpm install --frozen-lockfile
           sudo apt-get update
           sudo apt-get install -y ffmpeg git-lfs fonts-noto-cjk
