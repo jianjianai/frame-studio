@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { randomUUID } from "node:crypto";
 import { sqliteDatabase } from "../../server/sqlite.mjs";
 import { createApp } from "../../server/app.mjs";
 import { launchBrowser } from "../../scripts/browser.mjs";
@@ -43,7 +44,8 @@ test(
     let app, browser;
     try {
       const db = await sqliteDatabase(path.join(data, "db.sqlite"));
-      const origin = "http://127.0.0.1:57823";
+      const port = Number(process.env.FRAME_TEST_PORT || 57823);
+      const origin = `http://127.0.0.1:${port}`;
       const f = await createApp({
         db,
         data,
@@ -65,7 +67,7 @@ test(
           voice,
           url: `http://127.0.0.1:${service.address().port}/v1`,
         });
-      await app.listen({ host: "127.0.0.1", port: 57823 });
+      await app.listen({ host: "127.0.0.1", port });
       browser = await launchBrowser();
       const page = await browser.newPage({
           viewport: { width: 1100, height: 900 },
@@ -156,7 +158,7 @@ test(
   { timeout: 60000 },
   async () => {
     const root = path.resolve(import.meta.dirname, "../.."),
-      cache = path.join(root, ".cache/tts-ui-audit");
+      cache = path.join(root, ".cache/tts-ui-audit", randomUUID());
     fs.mkdirSync(cache, { recursive: true });
     const engines = ["A", "B"].map((name, index) => ({
       id: "12345678-1234-4123-8123-00000000000" + (index + 1),
@@ -179,7 +181,10 @@ test(
       root,
       cacheDir: path.join(cache, "vite"),
       logLevel: "warn",
-      optimizeDeps: { include: ["react", "react-dom/client", "react/jsx-runtime"] },
+      optimizeDeps: {
+        noDiscovery: true,
+        include: ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "lucide-react"],
+      },
       server: {
         host: "127.0.0.1",
         port: 0,
@@ -231,6 +236,7 @@ test(
       ],
     });
     let browser;
+    const loading = new Set();
     const pending = [],
       saves = [],
       errors = [];
@@ -239,6 +245,9 @@ test(
       browser = await launchBrowser();
       const page = await browser.newPage();
       page.setDefaultTimeout(10000);
+      page.on("request", request => loading.add(request.url().split("?")[0]));
+      page.on("requestfinished", request => loading.delete(request.url().split("?")[0]));
+      page.on("requestfailed", request => loading.delete(request.url().split("?")[0]));
       page.on("pageerror", (error) => errors.push(error.message));
       await page.routeWebSocket("**/api/ws", (socket) =>
         socket.onMessage((raw) => {
@@ -366,9 +375,15 @@ test(
       await expect(existing).toHaveCount(0);
       assert.deepEqual(errors, []);
       await page.close();
+    } catch (error) {
+      console.error("Speech fixture pending resources:", [...loading]);
+      console.error("Speech fixture page errors:", errors);
+      throw error;
     } finally {
       await browser?.close();
       await server.close();
+      if (!cache.startsWith(path.join(root, ".cache/tts-ui-audit") + path.sep)) throw Error("Unexpected speech fixture cleanup path");
+      fs.rmSync(cache, { recursive: true, force: true });
     }
   },
 );

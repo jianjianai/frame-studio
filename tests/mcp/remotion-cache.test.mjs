@@ -7,6 +7,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { acquireRemotionBundle } from "../../scripts/remotion-bundle-cache.mjs";
+import { createTestLink } from "../links.mjs";
 
 const key = (value) => createHash("sha256").update(value).digest("hex");
 async function fixture() {
@@ -216,7 +217,7 @@ test("cache lock database and SQLite sidecars reject links without touching outs
     for (const suffix of ["", "-journal", "-wal", "-shm"]) {
       const file = path.join(f.base, ".control.sqlite" + suffix);
       for (const kind of ["symbolic", "hard"]) {
-        if (kind === "symbolic") await fs.symlink(outside, file);
+        if (kind === "symbolic") createTestLink(outside, file);
         else await fs.link(outside, file);
         await assert.rejects(
           acquireRemotionBundle({
@@ -356,7 +357,7 @@ test("linked cache bytes are rejected and an aborted cache waiter leaves the act
     await fs.unlink(outside);
     await lease.close();
     await fs.unlink(file);
-    await fs.symlink(outside, file);
+    createTestLink(outside, file);
     await assert.rejects(
       acquireRemotionBundle(options),
       /links are not allowed/,
