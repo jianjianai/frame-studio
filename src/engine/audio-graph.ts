@@ -5,6 +5,7 @@ import {
   type GeneratedAudioModule,
 } from "./types";
 import { preparePreviewAudio } from "./preview-audio";
+import { PreviewBuffering, LIVE_BUFFER_SECONDS, LIVE_LOOKAHEAD_SECONDS } from "./media-buffering";
 import { audioSegments } from "./audio-document.mjs";
 import { AudioSourcePool } from "./audio-source-pool";
 import {
@@ -119,6 +120,15 @@ export async function prepareAudioSegment(
 ) {
   signal?.throwIfAborted();
   const offline = "startRendering" in context;
+  if (prepared.preview && !offline) {
+    await Promise.all(prepared.tracks.map(async track => {
+      const control = overrides.get(track.id) ?? track;
+      if (control.muted || control.gain === 0) return;
+      await prepared.generated?.prepareSegment?.({ trackId: track.id, context,
+        offset: from, duration: length, rate, signal });
+    }));
+    return;
+  }
   if (!offline && prepared.files && !prepared.progressive) {
     const needed = new Set<string>(),
       budget = prepared.files.diagnostics().budgetBytes;
@@ -130,7 +140,7 @@ export async function prepareAudioSegment(
         track,
         projectDuration,
         from,
-        Math.min(length, 1.5 * rate),
+        Math.min(length, LIVE_BUFFER_SECONDS * rate),
       )) {
         for (
           let i = Math.floor(segment.offset * 2);
@@ -155,7 +165,7 @@ export async function prepareAudioSegment(
       (track.kind === "file" && prepared.progressive)
     )
       continue;
-    const countLength = offline ? length : Math.min(length, 1.5 * rate);
+    const countLength = offline ? length : Math.min(length, LIVE_BUFFER_SECONDS * rate);
     for (const segment of audioSegments(
       track,
       projectDuration,
@@ -256,7 +266,7 @@ export function scheduleAudio(
       ) => {
         const at = when + (base - from + segment.delay) / rate;
         if (!offline && at < context.currentTime - 0.04)
-          throw Error("音频准备超时，已暂停");
+          throw new PreviewBuffering("正在缓冲音频");
         const options = {
           context,
           destination: gain,
@@ -305,7 +315,7 @@ export function scheduleAudio(
       const limit =
         offline || selfScheduled
           ? trackEnd
-          : Math.min(trackEnd, from + 1.5 * rate);
+          : Math.min(trackEnd, from + LIVE_BUFFER_SECONDS * rate);
       for (const s of audioSegments(track, projectDuration, from, limit - from))
         schedule(s, from);
       cursor = limit;
@@ -319,7 +329,7 @@ export function scheduleAudio(
         try {
           const until = Math.min(
             trackEnd,
-            from + Math.max(0, context.currentTime - when) * rate + 1.5 * rate,
+            from + Math.max(0, context.currentTime - when) * rate + LIVE_LOOKAHEAD_SECONDS * rate,
           );
           if (until <= cursor + 1e-7) return;
           // Fixed scheduling windows preserve loops while keeping node counts bounded.

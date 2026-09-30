@@ -1,5 +1,6 @@
 import { Input, UrlSource, ALL_FORMATS, AudioBufferSink } from "mediabunny";
 import { assetUrl } from "./types";
+import { PreviewBuffering, LIVE_BUFFER_SECONDS, LIVE_LOOKAHEAD_SECONDS } from "./media-buffering";
 
 const RATE = 48000,
   FRAMES = 24000;
@@ -260,7 +261,7 @@ export class AudioSourcePool {
         last = Math.min(end, ((index + 1) * FRAMES) / RATE),
         at = when + (first - offset) / rate;
       if (!offline && at < context.currentTime - 0.04)
-        throw Error("音频解码未及时完成，已暂停播放");
+        throw new PreviewBuffering("正在缓冲音频");
       const node = context.createBufferSource();
       node.buffer = buffer;
       node.playbackRate.value = rate;
@@ -280,7 +281,7 @@ export class AudioSourcePool {
       try {
         const until = Math.min(
           end,
-          offset + Math.max(0, context.currentTime - when) * rate + 1.5 * rate,
+          offset + Math.max(0, context.currentTime - when) * rate + LIVE_LOOKAHEAD_SECONDS * rate,
         );
         while ((next * FRAMES) / RATE < until - 1e-8) {
           const index = next++;
@@ -306,7 +307,7 @@ export class AudioSourcePool {
         })();
         return { dispose, ready };
       }
-      const until = Math.min(end, offset + 1.5 * rate);
+      const until = Math.min(end, offset + LIVE_BUFFER_SECONDS * rate);
       while ((next * FRAMES) / RATE < until - 1e-8) {
         const index = next++,
           buffer = this.cache.get(src + ":" + index);

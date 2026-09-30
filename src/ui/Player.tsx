@@ -619,7 +619,7 @@ export function Player({
                 })()}{" "}
                 <b>·</b>{" "}
                 {view.buffering
-                  ? "正在准备声音"
+                  ? "正在缓冲，稍后自动继续"
                   : fps
                     ? fps + " FPS"
                     : "已暂停"}
