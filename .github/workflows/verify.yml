@@ -59,11 +59,18 @@ jobs:
           GRAPHICS_DIAGNOSTIC: ${{ inputs.graphics_diagnostic }}
         run: |
           BROWSER=$(node --input-type=module -e "import {chromium} from '@playwright/test'; console.log(chromium.executablePath())")
+          # Match the production executor identity. Root breaks Vulkan driver loading.
+          TEST_USER=$(getent passwd 1000 | cut -d: -f1)
+          test -n "$TEST_USER"
+          sudo usermod -aG docker "$TEST_USER"
+          TEST_HOME="$RUNNER_TEMP/frame-test-home"
+          mkdir -p "$TEST_HOME"
+          sudo chown -R 1000:1000 "$GITHUB_WORKSPACE" "$TEST_HOME"
           # Only trusted repository fixtures run here; hosted runners have no GPU.
           BROWSER_WRAPPER="$RUNNER_TEMP/frame-chromium"
           printf '#!/bin/sh\nexec "%s" "$@" --use-gl=angle --use-angle=swiftshader-webgl --enable-unsafe-swiftshader\n' "$BROWSER" > "$BROWSER_WRAPPER"
           chmod +x "$BROWSER_WRAPPER"
-          FRAME_BROWSER="$BROWSER_WRAPPER" node --input-type=module <<'JS'
+          sudo -u '#1000' -g '#1000' env PATH="$PATH" HOME="$TEST_HOME" FRAME_BROWSER="$BROWSER_WRAPPER" node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
           import { launchBrowser } from './scripts/browser.mjs';
           const browser = await launchBrowser();
@@ -81,13 +88,15 @@ jobs:
           } finally { await browser.close(); }
           JS
           if [ "$GRAPHICS_DIAGNOSTIC" = true ]; then
-            sudo env PATH="$PATH" FRAME_BROWSER="$BROWSER_WRAPPER" DEBUG=pw:browser \
+            sudo -u '#1000' -g '#1000' env PATH="$PATH" HOME="$TEST_HOME" FRAME_BROWSER="$BROWSER_WRAPPER" DEBUG=pw:browser \
               node --test tests/server/mixed-composition.test.mjs
             exit
           fi
-          sudo git config --global --add safe.directory "$GITHUB_WORKSPACE"
-          sudo env PATH="$PATH" FRAME_BROWSER="$BROWSER_WRAPPER" \
+          sudo -u '#1000' -g '#1000' env PATH="$PATH" HOME="$TEST_HOME" FRAME_BROWSER="$BROWSER_WRAPPER" \
             FRAME_TEST_DATABASE_URL="$FRAME_TEST_DATABASE_URL" \
             FRAME_TEST_EXECUTOR="$FRAME_TEST_EXECUTOR" \
             FRAME_TEST_HOST_ROOT="$FRAME_TEST_HOST_ROOT" \
             FRAME_EXECUTOR_IMAGE="$FRAME_EXECUTOR_IMAGE" pnpm verify:release
+      - name: Restore checkout ownership for Actions cleanup
+        if: always()
+        run: sudo chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE"
