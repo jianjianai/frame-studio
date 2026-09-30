@@ -96,14 +96,21 @@ export class Works {
     recent = false,
     limit = 60,
     offset = 0,
+    sort = "",
   } = {}) {
     if (!this.discovered) await this.discover();
+    // Fixed expressions only; order the whole result before applying pagination.
+    const ordering = sort === "title"
+      ? "lower(w.title) ASC,modified DESC"
+      : sort === "created" ? "w.created DESC"
+      : sort === "opened" || (!sort && recent) ? "w.opened DESC NULLS LAST"
+      : "modified DESC";
     const rows = await this.db.all(
       `SELECT w.*, r.name AS storage_name, r.url AS remote,
       (SELECT jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'finished',t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.input->>'version' IS NULL ORDER BY (t.state IN ('queued','running','cancelling','publishing','publish_failed')) DESC,t.created DESC LIMIT 1) AS activity,
       greatest(w.updated,COALESCE((SELECT max(t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.kind IN ('agent','new') AND t.state='succeeded'),w.updated)) AS modified
       FROM works w JOIN repos r ON r.id=w.repo WHERE w.deleted=$1 AND (w.title ILIKE $2 OR w.description ILIKE $2) AND ($3='' OR w.category=$3) AND ($4='' OR w.status=$4) AND ($5::uuid IS NULL OR w.repo=$5) AND (NOT $6 OR w.opened IS NOT NULL)
-      ORDER BY CASE WHEN $6 THEN w.opened ELSE w.updated END DESC,w.id LIMIT $7 OFFSET $8`,
+      ORDER BY ${ordering},w.id LIMIT $7 OFFSET $8`,
       [
         deleted,
         "%" + search + "%",
@@ -116,6 +123,7 @@ export class Works {
       ],
     );
     for (const row of rows) {
+      row.metadataRevision = hash(JSON.stringify(this.info(row)));
       try {
         const { dir } = await this.repos.project(row.repo, row.project);
         const { meta } = readProject(confined(dir, "project.ts"));
