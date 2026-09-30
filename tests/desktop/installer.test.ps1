@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 $version = (Get-Content -Raw (Join-Path $repo 'package.json') | ConvertFrom-Json).version
 $fixture = Join-Path $repo '.cache\installer-smoke'
-$application = Join-Path $fixture 'Application'
+$application = Join-Path $fixture 'Application-安装'
 if (-not $DataRoot) { $DataRoot = Join-Path $fixture 'Data' }
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
 $bundle = if ($BundleDirectory) { [IO.Path]::GetFullPath($BundleDirectory) } else { Join-Path $repo ".cache\release\FrameStudio-v$version-win-x64" }
@@ -52,6 +52,27 @@ try {
   if ((Run-Setup $installer) -ne 0) { throw 'Real installer failed; see installer.log.' }
   $installed = Join-Path $application "versions\$version"
   if ((Get-ItemProperty $registry).DisplayVersion -ne $version -or -not (Test-Path (Join-Path $shortcuts 'FRAME Studio Test.lnk'))) { throw 'Installer registration or shortcut missing.' }
+  $shell = New-Object -ComObject Shell.Application
+  $folder = $shell.Namespace($shortcuts)
+  try {
+    foreach ($name in @('FRAME Studio Test.lnk','Windows 控制中心.lnk','卸载 FRAME Studio.lnk')) {
+      $file = Join-Path $shortcuts $name
+      if (-not (Test-Path -LiteralPath $file)) { throw "Localized shortcut missing: $name" }
+      $item = $folder.ParseName($name)
+      $shortcut = $item.GetLink
+      try {
+        $target = if ($name -eq '卸载 FRAME Studio.lnk') { Join-Path $application 'Uninstall.exe' } else { Join-Path $installed 'FrameStudio.exe' }
+        if ($shortcut.Path -ne $target) { throw "Localized shortcut target corrupted: $name" }
+        if ($name -eq 'Windows 控制中心.lnk' -and $shortcut.Arguments -ne '--control-center') { throw 'Control center shortcut arguments missing.' }
+      } finally {
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shortcut) | Out-Null
+        [Runtime.InteropServices.Marshal]::FinalReleaseComObject($item) | Out-Null
+      }
+    }
+  } finally {
+    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($folder) | Out-Null
+    [Runtime.InteropServices.Marshal]::FinalReleaseComObject($shell) | Out-Null
+  }
   $selection = Get-Content -Raw (Join-Path $DataRoot 'runtime-selection.json') | ConvertFrom-Json
   $marker = Join-Path $selection.dependencies 'FRAME-RUNTIME.json'
   $before = (Get-Item $marker).LastWriteTimeUtc

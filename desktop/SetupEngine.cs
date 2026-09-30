@@ -2,12 +2,38 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Runtime.InteropServices.ComTypes;
+using System.Text;
 using System.Threading.Tasks;
 using Microsoft.Win32;
 
 namespace FrameStudioDesktop {
+  [ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+  sealed class ShellLinkObject { }
+  // Use the Unicode Shell API; WScript.Shell can lose localized filenames on
+  // Windows installations whose active ANSI code page cannot represent them.
+  [ComImport, Guid("000214F9-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface UnicodeShellLink {
+    void GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder file, int size, IntPtr findData, int flags);
+    void GetIDList(out IntPtr list);
+    void SetIDList(IntPtr list);
+    void GetDescription([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder description, int size);
+    void SetDescription([MarshalAs(UnmanagedType.LPWStr)] string description);
+    void GetWorkingDirectory([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder directory, int size);
+    void SetWorkingDirectory([MarshalAs(UnmanagedType.LPWStr)] string directory);
+    void GetArguments([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder arguments, int size);
+    void SetArguments([MarshalAs(UnmanagedType.LPWStr)] string arguments);
+    void GetHotkey(out short hotkey);
+    void SetHotkey(short hotkey);
+    void GetShowCmd(out int command);
+    void SetShowCmd(int command);
+    void GetIconLocation([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder icon, int size, out int index);
+    void SetIconLocation([MarshalAs(UnmanagedType.LPWStr)] string icon, int index);
+    void SetRelativePath([MarshalAs(UnmanagedType.LPWStr)] string path, int reserved);
+    void Resolve(IntPtr window, int flags);
+    void SetPath([MarshalAs(UnmanagedType.LPWStr)] string path);
+  }
   sealed class SetupOptions {
     public string Source="",Root="",Data="",Version="",Uninstaller="";
     public bool Shortcut=true,Restart=false,Silent=false;
@@ -101,11 +127,15 @@ namespace FrameStudioDesktop {
       if(movedOld) RemoveTree(displaced,Path.Combine(root,"versions"));
     }
     public static void Shortcut(string file,string target,string arguments) {
-      var shell=Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell")); object shortcut=null;
+      object shell=new ShellLinkObject();
       try {
-        shortcut=shell.GetType().InvokeMember("CreateShortcut",BindingFlags.InvokeMethod,null,shell,new object[]{file});
-        var type=shortcut.GetType(); type.InvokeMember("TargetPath",BindingFlags.SetProperty,null,shortcut,new object[]{target});type.InvokeMember("Arguments",BindingFlags.SetProperty,null,shortcut,new object[]{arguments});type.InvokeMember("WorkingDirectory",BindingFlags.SetProperty,null,shortcut,new object[]{Path.GetDirectoryName(target)});type.InvokeMember("IconLocation",BindingFlags.SetProperty,null,shortcut,new object[]{target+",0"}); type.InvokeMember("Save",BindingFlags.InvokeMethod,null,shortcut,null);
-      } finally { if(shortcut!=null) Marshal.FinalReleaseComObject(shortcut); Marshal.FinalReleaseComObject(shell); }
+        var shortcut=(UnicodeShellLink)shell;
+        shortcut.SetPath(Path.GetFullPath(target));
+        shortcut.SetArguments(arguments);
+        shortcut.SetWorkingDirectory(Path.GetDirectoryName(target));
+        shortcut.SetIconLocation(target,0);
+        ((IPersistFile)shell).Save(Path.GetFullPath(file),true);
+      } finally { Marshal.FinalReleaseComObject(shell); }
     }
     public static void RemoveTree(string target,string boundary) {
       if(!DesktopFiles.Within(target,boundary)) throw new Exception("程序清理目录不在安装版本目录内");
