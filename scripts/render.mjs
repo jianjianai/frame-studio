@@ -102,8 +102,8 @@ const height = selected ? frameDimensions(selected, width).height : undefined;
 let session, encoder, temporary, audioTemporary;
 let stderr = "";
 try {
-  session = await createRenderSession({ root, width });
-  const renderPage = (projectId) => session.page(projectId);
+  session = await createRenderSession({ root, width, cacheRoot: process.env.FRAME_RENDER_CACHE_ROOT || root });
+  const renderPage = (projectId, purpose = "media") => session.page(projectId, { purpose });
   if (posters) {
     const folders = (
       await fs.readdir("projects", { withFileTypes: true })
@@ -119,10 +119,8 @@ try {
     for (const folder of folders.filter(
       (folder) => !posterProject || folder.name === posterProject,
     )) {
-      const page = await renderPage(folder.name);
-      const duration = await page.evaluate(
-        () => window.__FRAME_STUDIO__.duration,
-      );
+      const page = await renderPage(folder.name, "visual");
+      const duration = page.metadata.duration;
       const at =
         catalog.find((entry) => entry.directory === folder.name)?.meta
           .posterTime ?? duration * 0.5;
@@ -140,7 +138,7 @@ try {
       args.includes("--frame-mode") ||
       args.includes("--frame") ||
       args.includes("--time");
-    const page = await renderPage(id);
+    const page = await renderPage(id, singleFrame ? "visual" : "media");
     const meta = selected;
     if (!meta) throw new Error("Unknown project: " + id);
     const scopedOutput = (fallback, extension) => {

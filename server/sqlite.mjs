@@ -68,7 +68,11 @@ function decode(row) {
   const result = { ...row };
   for (const [key, value] of Object.entries(result)) {
     if (value == null) continue;
-    if (jsonColumns.has(key) && typeof value === "string") {
+    if (typeof value === "bigint") {
+      const number = Number(value);
+      result[key] = booleanColumns.has(key) ? !!value
+        : Number.isSafeInteger(number) ? number : String(value);
+    } else if (jsonColumns.has(key) && typeof value === "string") {
       try { result[key] = JSON.parse(value); } catch { /* SQL scalar or older data. */ }
     } else if (booleanColumns.has(key)) result[key] = !!value;
   }
@@ -180,6 +184,7 @@ export async function sqliteDatabase(file) {
     if (!values.length && /;\s*\S/.test(text)) { raw.exec(text); return { rows: [], rowCount: 0 }; }
     if (/^(BEGIN|COMMIT|ROLLBACK)$/i.test(text)) { raw.exec(text); return { rows: [], rowCount: 0 }; }
     const statement = raw.prepare(text);
+    statement.setReadBigInts(true);
     if (/^\s*(SELECT|WITH|PRAGMA)\b|\bRETURNING\b/i.test(text)) {
       const rows = statement.all(...values).map(decode);
       return { rows, rowCount: rows.length };

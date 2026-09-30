@@ -37,13 +37,13 @@ export async function exportAudio(
     temporary = projectPath(root, id, ".cache/audio-export/" + key),
     output = projectPath(root, id, "exports/audio-" + key);
   fs.mkdirSync(temporary, { recursive: true });
-  const session = await createRenderSession({ root, width: 320 });
+  const session = await createRenderSession({ root, width: 320, signal });
   let page;
   const abort = () => { void page?.close().catch(() => {}); void page?.remotion?.close().catch(() => {}); };
   signal?.addEventListener("abort", abort, { once: true });
   try {
     signal?.throwIfAborted();
-    page = await session.page(id);
+    page = await session.page(id, { purpose: "media" });
     signal?.throwIfAborted();
     const channels =
       meta.audioDocument?.tracks ??

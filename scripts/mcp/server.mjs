@@ -1,7 +1,7 @@
 import {exportAudio} from "../audio-export.mjs";
 import {inspectAudio} from "../audio-inspect.mjs";
 import {transcodeAudio} from "../audio-media.mjs";
-import {audioContext,audioEdit} from "../audio-service.mjs";
+import {audioContext} from "../audio-service.mjs";
 import {audioEngines,audioProcessors} from "../../src/engine/audio-document.mjs";
 import fs from "node:fs";
 import { projectCreationShape, creationArguments, projectDefaults, authoringReferences, authoringModes } from "../../src/contracts/authoring.mjs";
@@ -12,7 +12,8 @@ import { readAuthoringReference, referenceCatalog } from "../authoring-reference
 import { errorRecovery } from "../tool-errors.mjs";
 import { rendererIds, adapters } from "../../src/engine/adapters.mjs";
 import { probeMedia,transcodeMedia } from "../media-probe.mjs";
-import { visualContext, visualEdit } from "../visual-service.mjs";
+import { visualContext } from "../visual-service.mjs";
+import { projectOperationAsync } from "../project-io.mjs";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
@@ -136,9 +137,9 @@ export function createFrameServer({
   register("frame_audio_transcode","Convert a project audio source to a separate WAV FLAC MP3 Ogg or M4A copy",{project,src:z.string(),out:z.string()},async({project:id,...request})=>{workspace.writable();workspace.project(id);const release=workspace.lock(id,"audio-transcode");try{return jsonResult(await transcodeAudio(workspace.root,id,request));}finally{release();}},{write:true});
   register("frame_audio_engines","List audio source frameworks and processor capabilities",{},()=>jsonResult({engines:audioEngines,processors:audioProcessors}));
   register("frame_audio","Read audio document and revision, or an editable legacy migration",{project},({project:id})=>jsonResult(audioContext(workspace,id)));
-  register("frame_audio_edit","Edit audio sources tracks clips buses and processors atomically",{project,...audioEditRequestSchema.shape},({project:id,...request})=>jsonResult(audioEdit(workspace,id,request)),{write:true});
+  register("frame_audio_edit","Edit audio sources tracks clips buses and processors atomically",{project,...audioEditRequestSchema.shape},async({project:id,...request})=>jsonResult(await projectOperationAsync(workspace,"audioEdit",id,request)),{write:true});
   register("frame_composition", "Read authoritative visual.json clips and edit revision", {project}, ({project:id}) => jsonResult(visualContext(workspace,id)));
-  register("frame_composition_edit", "Add, trim, split, move, reorder, replace or keyframe visual clips atomically", {project,...visualEditRequestSchema.shape}, ({project:id,...request}) => jsonResult(visualEdit(workspace,id,request)), {write:true});
+  register("frame_composition_edit", "Add, trim, split, move, reorder, replace or keyframe visual clips atomically", {project,...visualEditRequestSchema.shape}, async({project:id,...request}) => jsonResult(await projectOperationAsync(workspace,"visualEdit",id,request)), {write:true});
   register(
     "frame_list_projects",
     "Discover allowed projects using static metadata without executing scene code. Broken projects are reported individually.",
@@ -215,22 +216,22 @@ export function createFrameServer({
     "frame_patch_files",
     "Apply exact text replacements to hashed files. Match count must agree. Creates a checkpoint; strict validation failure rolls back.",
     { project, ...sourcePatchRequestSchema.shape },
-    ({ project: id, changes, dryRun }) =>
-      jsonResult(workspace.patch(id, changes, { dryRun })),
+    async ({ project: id, changes, dryRun }) =>
+      jsonResult(await projectOperationAsync(workspace, "patch", id, changes, { dryRun })),
     { write: true, destructive: true },
   );
   register(
     "frame_checkpoint",
     "Save the current editable project text as a recoverable checkpoint.",
     { project, label: z.string().max(200).optional() },
-    ({ project: id, label }) => jsonResult(workspace.checkpoint(id, label)),
+    async ({ project: id, label }) => jsonResult(await projectOperationAsync(workspace, "checkpoint", id, label)),
     { write: true },
   );
   register(
     "frame_history",
     "List checkpoints and current input fingerprint, including binary assets.",
     { project },
-    ({ project: id }) => jsonResult(workspace.history(id)),
+    async ({ project: id }) => jsonResult(await projectOperationAsync(workspace, "history", id)),
   );
   register(
     "frame_restore",
@@ -241,9 +242,9 @@ export function createFrameServer({
       expectedFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
       dryRun: z.boolean().default(true),
     },
-    ({ project: id, checkpoint, expectedFingerprint, dryRun }) =>
+    async ({ project: id, checkpoint, expectedFingerprint, dryRun }) =>
       jsonResult(
-        workspace.restore(id, checkpoint, expectedFingerprint, dryRun),
+        await projectOperationAsync(workspace, "restore", id, checkpoint, expectedFingerprint, dryRun),
       ),
     { write: true, destructive: true },
   );
@@ -251,8 +252,8 @@ export function createFrameServer({
     "frame_edit_files",
     "Batch create/replace/delete text files inside one project. Pass the last full-file SHA-256; null means new file. content:null deletes. Strict validation failure rolls back the batch. dryRun checks paths/hashes only.",
     { project, ...sourceEditRequestSchema.shape },
-    ({ project: id, changes, dryRun }) =>
-      jsonResult(workspace.edit(id, changes, { dryRun })),
+    async ({ project: id, changes, dryRun }) =>
+      jsonResult(await projectOperationAsync(workspace, "edit", id, changes, { dryRun })),
     { write: true, destructive: true },
   );
   register(
@@ -303,7 +304,7 @@ export function createFrameServer({
         .enum(["validate", "typecheck", "test", "test-e2e", "build"])
         .default("validate"),
     },
-    ({ project: id, action }) => jsonResult(jobs.start(id, action, {})),
+    async ({ project: id, action }) => jsonResult(await jobs.start(id, action, {})),
     { write: true, openWorld: true },
   );
   register(
@@ -316,18 +317,18 @@ export function createFrameServer({
       width: width.default(640),
       fps: z.number().int().min(12).max(60).optional(),
     },
-    ({ project: id, ...options }) =>
-      jsonResult(jobs.start(id, "review", options)),
+    async ({ project: id, ...options }) =>
+      jsonResult(await jobs.start(id, "review", options)),
     { write: true, openWorld: true },
   );
   register(
     "frame_verify_delivery",
     "Fully decode and count frames of an existing project media file, analyze audio, extract final frames and check input provenance asynchronously.",
     { project, path: filePath },
-    ({ project: id, path }) => {
+    async ({ project: id, path }) => {
       workspace.file(id, path);
       return jsonResult(
-        jobs.start(id, "verify", { file: "projects/" + id + "/" + path }),
+        await jobs.start(id, "verify", { file: "projects/" + id + "/" + path }),
       );
     },
     { write: true, openWorld: true },
@@ -562,8 +563,8 @@ export function createFrameServer({
       segmentSeconds: z.number().min(0.25).max(60).default(10),
       resume: jobId.optional(),
     },
-    ({ project: id, ...options }) =>
-      jsonResult(jobs.start(id, "export", options)),
+    async ({ project: id, ...options }) =>
+      jsonResult(await jobs.start(id, "export", options)),
     { write: true, openWorld: true },
   );
   register(
@@ -577,7 +578,7 @@ export function createFrameServer({
       speaker: z.string().min(1).max(64).optional(),
       voice: z.string().min(1).max(200).optional(),
     },
-    ({ project: id, ...options }) => {
+    async ({ project: id, ...options }) => {
       if (Boolean(options.input) === (options.text !== undefined))
         fail("INVALID_ARGUMENT", "Provide exactly one of input or text");
       if (options.input) {
@@ -588,7 +589,7 @@ export function createFrameServer({
           );
         workspace.file(id, options.input);
       }
-      return jsonResult(jobs.start(id, "narrate", options));
+      return jsonResult(await jobs.start(id, "narrate", options));
     },
     { write: true, openWorld: true },
   );
@@ -662,8 +663,8 @@ export function createFrameServer({
       start: seconds.default(0),
       duration: z.number().positive().max(3600).default(2),
     },
-    ({ project: id, ...options }) =>
-      jsonResult(jobs.start(id, "playback", options)),
+    async ({ project: id, ...options }) =>
+      jsonResult(await jobs.start(id, "playback", options)),
     { write: true, openWorld: true },
   );
   register(
@@ -711,13 +712,13 @@ export function createFrameServer({
       width: width.default(640),
       subtitles: z.boolean().default(true),
     },
-    ({ project: id, mode, ...options }) => {
+    async ({ project: id, mode, ...options }) => {
       if (
         (mode === "frame" && options.times !== undefined) ||
         (mode === "storyboard" && options.time !== undefined)
       )
         fail("INVALID_OPTIONS", "Use time for frame or times for storyboard.");
-      return jsonResult(jobs.start(id, mode, options));
+      return jsonResult(await jobs.start(id, mode, options));
     },
     { write: true, openWorld: true },
   );
@@ -732,8 +733,8 @@ export function createFrameServer({
       width: width.default(1280),
       subtitles: z.boolean().default(true),
     },
-    ({ project: id, ...options }) =>
-      jsonResult(jobs.start(id, "render", options)),
+    async ({ project: id, ...options }) =>
+      jsonResult(await jobs.start(id, "render", options)),
     { write: true, openWorld: true },
   );
   register(
@@ -767,7 +768,7 @@ export function createFrameServer({
       ...imageOptions,
     },
     async ({ project: id, jobId, name, presentation, maxWidth }) => {
-      const { info, bytes } = jobs.artifact(id, jobId, name, {
+      const { info, bytes } = await jobs.artifact(id, jobId, name, {
         maxImageBytes: 32 * 1024 * 1024,
       });
       if (info.mimeType === "image/png")
@@ -814,8 +815,8 @@ export function createFrameServer({
       description:
         "Successful job artifacts; video returns local file metadata.",
     },
-    (uri, variables) => {
-      const { info, bytes } = jobs.artifact(
+    async (uri, variables) => {
+      const { info, bytes } = await jobs.artifact(
         String(variables.project),
         String(variables.jobId),
         String(variables.name),

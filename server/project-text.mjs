@@ -5,6 +5,13 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { confinedAsync } from "./project-files.mjs";
 import { hash, problem } from "./security.mjs";
+import {
+  sourceIndex,
+  sourcePage,
+  sourceCandidate,
+  invalidateSourceIndex,
+  verifySourceIndex,
+} from "./source-index.mjs";
 
 const MAX_FILE = 1024 * 1024;
 const extensions = new Set([
@@ -161,53 +168,8 @@ export async function readSource(dir, relativePath, { missing = false } = {}) {
 }
 
 export async function listSource(dir, directory = "") {
-  const start = directory
-    ? await confinedAsync(dir, authoringPath(directory))
-    : dir;
-  const files = [];
-  let visited = 0;
-  const walk = async (folder, prefix, depth) => {
-    if (depth > 32)
-      throw fileError(
-        400,
-        "TREE_TOO_DEEP",
-        "Select a narrower directory (maximum depth: 32).",
-      );
-    let names;
-    try {
-      names = (await fsp.readdir(folder)).sort();
-    } catch (error) {
-      if (["ENOENT", "ENOTDIR"].includes(error.code))
-        throw fileError(
-          404,
-          "DIRECTORY_NOT_FOUND",
-          "Project directory not found: " + directory,
-          "list-project-files",
-        );
-      throw error;
-    }
-    for (const name of names) {
-      if (name.startsWith(".") || ignored.has(name)) continue;
-      if (++visited > 20000 || files.length >= 10000)
-        throw fileError(
-          400,
-          "TREE_TOO_LARGE",
-          "Select a narrower directory (maximum: 10,000 files).",
-        );
-      const rel = prefix ? prefix + "/" + name : name;
-      const full = await confinedAsync(dir, rel),
-        stat = await fsp.lstat(full);
-      if (stat.isDirectory()) await walk(full, rel, depth + 1);
-      else
-        files.push({
-          path: rel,
-          bytes: stat.size,
-          editable: editable(rel) && stat.size <= MAX_FILE,
-        });
-    }
-  };
-  await walk(start, directory, 0);
-  return files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  if (directory) authoringPath(directory);
+  return (await sourcePage(dir, directory, 0, 10000)).files;
 }
 
 function sliceSource(source, { startLine, lineCount }) {
@@ -285,6 +247,7 @@ async function saveSource(dir, args, before, repos) {
         "read-current-file",
       );
     await fsp.rename(temporary, file);
+    invalidateSourceIndex(dir);
   } finally {
     await fsp.rm(temporary, { force: true });
   }
@@ -314,16 +277,13 @@ export function projectTextOperations({ add, db, repos, uuid, project }) {
       limit: z.number().int().min(1).max(200).default(60),
     },
     async (a) => {
-      const files = await listSource(
+      if (a.directory) authoringPath(a.directory);
+      return sourcePage(
         (await repos.project(a.repo, a.project)).dir,
         a.directory,
+        a.offset,
+        a.limit,
       );
-      return {
-        files: files.slice(a.offset, a.offset + a.limit),
-        total: files.length,
-        nextOffset:
-          a.offset + a.limit < files.length ? a.offset + a.limit : null,
-      };
     },
   );
   add(
@@ -405,6 +365,7 @@ export function projectTextOperations({ add, db, repos, uuid, project }) {
               "read-current-file",
             );
           await fsp.unlink(await sourcePath(dir, a.path));
+          invalidateSourceIndex(dir);
           await repos.revisions?.invalidate(a.repo, a.project);
         }
         return {
@@ -507,7 +468,11 @@ export function projectTextOperations({ add, db, repos, uuid, project }) {
     },
     async (a) => {
       const { dir } = await repos.project(a.repo, a.project),
-        files = await listSource(dir, a.directory);
+        index = await sourceIndex(
+          dir,
+          a.directory ? authoringPath(a.directory) : "",
+        ),
+        files = index.files;
       const matches = [],
         skipped = [];
       let scannedFiles = 0,
@@ -516,13 +481,13 @@ export function projectTextOperations({ add, db, repos, uuid, project }) {
       const query = a.caseSensitive ? a.query : a.query.toLowerCase();
       for (const file of files) {
         if (a.cursor && file.path < a.cursor.path) continue;
-        if (!file.editable) continue;
-        if (scannedFiles >= 500 || scannedBytes + file.bytes > 4 * MAX_FILE) {
+        if (!sourceCandidate(file)) continue;
+        if (scannedFiles >= 500 || scannedBytes >= 4 * MAX_FILE) {
           nextCursor = { path: file.path, line: 1 };
           break;
         }
         scannedFiles++;
-        scannedBytes += file.bytes;
+
         let source;
         try {
           source = await readSource(dir, file.path);
@@ -541,6 +506,11 @@ export function projectTextOperations({ add, db, repos, uuid, project }) {
           }
           throw error;
         }
+        if (scannedBytes + source.bytes > 4 * MAX_FILE) {
+          nextCursor = { path: file.path, line: 1 };
+          break;
+        }
+        scannedBytes += source.bytes;
         const lines = source.content.split("\n");
         for (
           let i = a.cursor?.path === file.path ? a.cursor.line - 1 : 0;
@@ -571,6 +541,7 @@ export function projectTextOperations({ add, db, repos, uuid, project }) {
         }
         if (nextCursor) break;
       }
+      await verifySourceIndex(index);
       return {
         matches,
         nextCursor,

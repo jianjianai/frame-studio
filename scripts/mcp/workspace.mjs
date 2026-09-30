@@ -3,6 +3,7 @@ import { referenceCatalog } from "../authoring-reference.mjs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { threadId } from "node:worker_threads";
 import { validProjectId, readProject } from "../project-metadata.mjs";
 import { inspectProject } from "../film.mjs";
 import { checkProjects } from "../check-projects.mjs";
@@ -87,12 +88,13 @@ export function safePath(base, relative, { internal = false } = {}) {
 export class Workspace {
   constructor(
     root,
-    { projects = [], readOnly = false, sessionId = randomUUID() } = {},
+    { projects = [], readOnly = false, sessionId = randomUUID(), ioWorkerId = null } = {},
   ) {
     this.root = fs.realpathSync(root);
     this.projects = new Set(projects);
     this.readOnly = readOnly;
     this.sessionId = sessionId;
+    this.ioWorkerId = ioWorkerId;
     for (const id of projects)
       if (!validProjectId(id))
         fail("INVALID_PROJECT", "Invalid project id: " + id);
@@ -442,6 +444,7 @@ export class Workspace {
       lockId: randomUUID(),
       ownerSession: this.sessionId,
       pid: process.pid,
+      ...(this.ioWorkerId ? { ownerWorkerId: this.ioWorkerId, ownerThreadId: threadId } : {}),
       purpose,
       jobId,
       childPid: null,

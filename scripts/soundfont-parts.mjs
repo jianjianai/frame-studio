@@ -3,10 +3,15 @@ import { BasicSoundBank, SoundBankLoader, SpessaLog } from "spessasynth_core";
 const sha = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 /** Lossless, independently verifiable preset files. Originals remain in the export. */
-export function splitSoundfont(bytes) {
+export function splitSoundfont(bytes, { onPart } = {}) {
   SpessaLog.setLogLevel(false, false, false);
   const source = SoundBankLoader.fromArrayBuffer(
-    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
+    bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength
+      ? bytes.buffer
+      : bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength,
+        ),
   );
   if (source.customDefaultModulators) return null;
   const parts = [],
@@ -26,7 +31,9 @@ export function splitSoundfont(bytes) {
         const binary = Buffer.from(bank.writeSF2()),
           digest = sha(binary);
         index = parts.length;
-        parts.push({ file: digest + ".sf2", sha256: digest, bytes: binary });
+        const part = { file: digest + ".sf2", sha256: digest, bytes: binary };
+        onPart?.(part);
+        parts.push(onPart ? { ...part, bytes: binary.length } : part);
         presets.set(preset, index);
       }
       keys[(drum ? "drum:" : "program:") + program] = index;
@@ -39,7 +46,7 @@ export function splitSoundfont(bytes) {
       parts: parts.map(({ file, sha256, bytes }) => ({
         file,
         sha256,
-        bytes: bytes.length,
+        bytes: typeof bytes === "number" ? bytes : bytes.length,
       })),
     },
     parts,

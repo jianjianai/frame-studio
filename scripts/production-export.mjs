@@ -141,7 +141,7 @@ async function runExport(root, id, options, renderId) {
         file,
         ...(!config.subtitles ? ["--no-subtitles"] : []),
       ],
-      { root: snapshot.root, onLog: options.onLog },
+      { root: snapshot.root, onLog: options.onLog, env: { ...process.env, FRAME_RENDER_CACHE_ROOT: root } },
     );
     return file;
   };
@@ -239,8 +239,8 @@ async function runExport(root, id, options, renderId) {
     const args = ["-v", "error", "-f", "concat", "-safe", "1", "-i", concat];
     const hasAudio = Boolean(meta.renderer==='remotion' || meta.audio || meta.audioTracks?.length || meta.audioDocument || meta.visual?.clips?.some(c=>c.source.kind==='video'&&c.audio?.enabled&&!c.hidden));
     if (hasAudio) {
-      session = await createRenderSession({ root: snapshot.root, width: 320 });
-      const page = await session.page(id),
+      session = await createRenderSession({ root: snapshot.root, cacheRoot: root, width: 320 });
+      const page = await session.page(id, { purpose: "media" }),
         audio = path.join(directory, ".mix.wav");
       if (fs.existsSync(audio)) fs.unlinkSync(audio);
       await writeAudio(page, audio, plan.start, plan.duration);

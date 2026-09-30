@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
+import { constants } from "node:fs";
 import path from "node:path";
 import { bundle } from "@remotion/bundler";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
+import { acquireRemotionBundle } from "./remotion-bundle-cache.mjs";
 const require = createRequire(import.meta.url);
 const webpack = require(
   createRequire(require.resolve("@remotion/bundler")).resolve("webpack"),
@@ -11,14 +14,74 @@ import {
   selectComposition,
   renderStill,
   renderMedia,
+  makeCancelSignal,
 } from "@remotion/renderer";
 import { browserOptions } from "./browser.mjs";
 import { compositionSize } from "../src/engine/dimensions.mjs";
 
-/** Native Remotion bundle lives inside the caller's frozen, project-owned snapshot. */
-export async function createRemotionRender({ root, id, meta, width }) {
-  const entry = path.join(root, "remotion-entry.tsx"),
-    outDir = path.join(root, "remotion-bundle");
+async function runtimeIdentity(root) {
+  const resolve = createRequire(path.join(root, "package.json"));
+  const packages = [];
+  for (const name of [
+    "@remotion/bundler",
+    "@remotion/renderer",
+    "remotion",
+    "webpack",
+    "react",
+    "react-dom",
+  ]) {
+    const resolver =
+      name === "webpack"
+        ? createRequire(resolve.resolve("@remotion/bundler"))
+        : resolve;
+    const packageFile = await fs.realpath(
+      resolver.resolve(name + "/package.json"),
+    );
+    packages.push({
+      name,
+      path: packageFile,
+      version: JSON.parse(await fs.readFile(packageFile, "utf8")).version,
+    });
+  }
+  return {
+    node: process.versions.node,
+    platform: process.platform,
+    arch: process.arch,
+    packages,
+  };
+}
+async function aliasPublic(directory, outDir, id, relative = "") {
+  for (const entry of await fs.readdir(path.join(directory, relative), {
+    withFileTypes: true,
+  })) {
+    const name = relative ? relative + "/" + entry.name : entry.name;
+    if (entry.isDirectory()) await aliasPublic(directory, outDir, id, name);
+    else if (entry.isFile()) {
+      const target = path.join(outDir, "films", id, name);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      // Both native staticFile and Frame assetUrl address the same frozen bytes.
+      await fs.copyFile(
+        path.join(directory, name),
+        target,
+        constants.COPYFILE_FICLONE,
+      );
+    } else throw Error("Unsupported frozen Remotion public asset");
+  }
+}
+
+/** Compile once per frozen input/runtime; each renderer owns its browser and cache lease. */
+export async function createRemotionRender({
+  root,
+  id,
+  meta,
+  width,
+  input,
+  cacheRoot = root,
+  signal,
+}) {
+  if (!input?.fingerprint)
+    throw Error("Remotion renderer requires its frozen input manifest");
+  const entry = path.join(root, "remotion-entry.tsx");
   await fs.writeFile(
     entry,
     'import React from "react"; import {Composition,registerRoot} from "remotion";\n' +
@@ -36,34 +99,54 @@ export async function createRemotionRender({ root, id, meta, width }) {
       Math.ceil(meta.duration * meta.fps) +
       ",defaultProps:{captions:true,filmProps:project.remotion?.inputProps??{}}})); });",
   );
-  const serveUrl = await bundle({
-    entryPoint: entry,
-    rootDir: root,
-    outDir,
-    publicDir: path.join(root, "projects", id, "public"),
-    enableCaching: false,
-    logLevel: "error",
-    webpackOverride(config) {
-      // Frame assetUrl() and web workers keep the same URL conventions in native bundles.
-      config.plugins = [
-        ...(config.plugins ?? []),
-        new webpack.DefinePlugin({
-          "import.meta.env.BASE_URL": JSON.stringify("/"),
-        }),
-      ];
-      return config;
+  const key = createHash("sha256")
+    .update(
+      JSON.stringify({
+        schemaVersion: 2,
+        project: id,
+        fingerprint: input.fingerprint,
+        runtime: await runtimeIdentity(root),
+        baseUrl: "/",
+        publicAliases: true,
+      }),
+    )
+    .digest("hex");
+  const cache = await acquireRemotionBundle({
+    root: cacheRoot,
+    id,
+    key,
+    signal,
+    async build(outDir) {
+      await bundle({
+        entryPoint: entry,
+        rootDir: root,
+        outDir,
+        publicDir: path.join(root, "projects", id, "public"),
+        enableCaching: false,
+        logLevel: "error",
+        webpackOverride(config) {
+          // Frame assetUrl() and web workers keep the same URL conventions in native bundles.
+          config.plugins = [
+            ...(config.plugins ?? []),
+            new webpack.DefinePlugin({
+              "import.meta.env.BASE_URL": JSON.stringify("/"),
+            }),
+          ];
+          return config;
+        },
+      });
+      await aliasPublic(path.join(root, "projects", id, "public"), outDir, id);
     },
   });
-  await fs.mkdir(path.join(outDir, "films"), { recursive: true });
-  await fs.cp(
-    path.join(root, "projects", id, "public"),
-    path.join(outDir, "films", id),
-    { recursive: true },
-  );
+  const serveUrl = cache.directory;
   const browserExecutable = browserOptions().executablePath;
   const chromiumOptions = { gl: "angle", enableMultiProcessOnLinux: true };
   let browser;
+  const cancellation = makeCancelSignal();
+  const abort = () => cancellation.cancel();
+  signal?.addEventListener("abort", abort, { once: true });
   try {
+    signal?.throwIfAborted();
     browser = await openBrowser("chrome", {
       browserExecutable,
       chromiumOptions,
@@ -74,6 +157,7 @@ export async function createRemotionRender({ root, id, meta, width }) {
       puppeteerInstance: browser,
       chromiumOptions,
       logLevel: "error",
+      cancelSignal: cancellation.cancelSignal,
     };
     const composition = await selectComposition({
       ...base,
@@ -83,20 +167,36 @@ export async function createRemotionRender({ root, id, meta, width }) {
       captions,
       filmProps: meta.remotion?.inputProps ?? {},
     });
-    let closed = false;
+    let closed = false,
+      closing;
+    const operations = new Set();
+    function run(operation) {
+      if (closed) throw Error("Remotion renderer is closed");
+      const pending = Promise.resolve().then(() => {
+        if (closed) throw Error("Remotion renderer is closed");
+        signal?.throwIfAborted();
+        return operation();
+      });
+      operations.add(pending);
+      pending.finally(() => operations.delete(pending)).catch(() => {});
+      return pending;
+    }
     return {
+      cache: { reused: cache.reused, key: cache.key },
       async still(time, captions = true) {
-        const { buffer } = await renderStill({
-          ...base,
-          composition: { ...composition, props: props(captions) },
-          inputProps: props(captions),
-          frame: Math.min(
-            composition.durationInFrames - 1,
-            Math.floor(time * meta.fps + 1e-7),
-          ),
-          scale: width / composition.width,
-          imageFormat: "png",
-        });
+        const { buffer } = await run(() =>
+          renderStill({
+            ...base,
+            composition: { ...composition, props: props(captions) },
+            inputProps: props(captions),
+            frame: Math.min(
+              composition.durationInFrames - 1,
+              Math.floor(time * meta.fps + 1e-7),
+            ),
+            scale: width / composition.width,
+            imageFormat: "png",
+          }),
+        );
         if (!buffer) throw Error("Remotion returned no still image");
         return buffer;
       },
@@ -106,25 +206,27 @@ export async function createRemotionRender({ root, id, meta, width }) {
             composition.durationInFrames - 1,
             Math.ceil(end * meta.fps - 1e-7) - 1,
           );
-        await renderMedia({
-          ...base,
-          composition: { ...composition, props: props(subtitles) },
-          inputProps: props(subtitles),
-          outputLocation: output,
-          frameRange: [first, last],
-          scale: width / composition.width,
-          codec: "h264",
-          crf: 18,
-          pixelFormat: "yuv420p",
-          audioCodec: "pcm-16",
-          separateAudioTo: output + ".wav",
-          enforceAudioTrack: true,
-          concurrency: 2,
-          onProgress,
-          onBrowserLog: (log) => {
-            if (log.type === "error") console.error(log.text);
-          },
-        });
+        await run(() =>
+          renderMedia({
+            ...base,
+            composition: { ...composition, props: props(subtitles) },
+            inputProps: props(subtitles),
+            outputLocation: output,
+            frameRange: [first, last],
+            scale: width / composition.width,
+            codec: "h264",
+            crf: 18,
+            pixelFormat: "yuv420p",
+            audioCodec: "pcm-16",
+            separateAudioTo: output + ".wav",
+            enforceAudioTrack: true,
+            concurrency: 2,
+            onProgress,
+            onBrowserLog: (log) => {
+              if (log.type === "error") console.error(log.text);
+            },
+          }),
+        );
         return { start: first / meta.fps, audio: output + ".wav" };
       },
       async audio({ output, start, end }) {
@@ -133,26 +235,43 @@ export async function createRemotionRender({ root, id, meta, width }) {
             composition.durationInFrames - 1,
             Math.ceil(end * meta.fps - 1e-7) - 1,
           );
-        await renderMedia({
-          ...base,
-          composition,
-          inputProps: props(false),
-          outputLocation: output,
-          frameRange: [first, last],
-          codec: "wav",
-          enforceAudioTrack: true,
-          concurrency: 2,
-        });
+        await run(() =>
+          renderMedia({
+            ...base,
+            composition,
+            inputProps: props(false),
+            outputLocation: output,
+            frameRange: [first, last],
+            codec: "wav",
+            enforceAudioTrack: true,
+            concurrency: 2,
+          }),
+        );
         return { start: first / meta.fps };
       },
-      close: async () => {
-        if (closed) return;
+      close() {
+        if (closing) return closing;
         closed = true;
-        await browser.close({ silent: true });
+        cancellation.cancel();
+        signal?.removeEventListener("abort", abort);
+        closing = (async () => {
+          await Promise.allSettled([...operations]);
+          try {
+            await browser.close({ silent: true });
+          } finally {
+            await cache.close();
+          }
+        })();
+        return closing;
       },
     };
   } catch (error) {
-    await browser?.close({ silent: true });
+    signal?.removeEventListener("abort", abort);
+    try {
+      await browser?.close({ silent: true });
+    } finally {
+      await cache.close();
+    }
     throw error;
   }
 }

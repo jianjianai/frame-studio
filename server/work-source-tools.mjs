@@ -1,32 +1,18 @@
 import {inspectAudio} from "../scripts/audio-inspect.mjs";
 import {transcodeAudio} from "../scripts/audio-media.mjs";
 import {probeMedia} from "../scripts/media-probe.mjs";
-import {audioContext,audioEdit} from "../scripts/audio-service.mjs";
+import {audioContext} from "../scripts/audio-service.mjs";
 import {audioEditRequestSchema,visualEditRequestSchema} from "../src/engine/document-edit.mjs";
-import {visualContext,visualEdit} from "../scripts/visual-service.mjs";
+import {visualContext} from "../scripts/visual-service.mjs";
 import {setTimeout as sleep} from "node:timers/promises";
 import { z } from "zod";
 import { sourceEditRequestSchema, sourcePatchRequestSchema } from "../src/contracts/source-edit.mjs";
 import { fileURLToPath } from "node:url";
-import { checkProjects } from "../scripts/check-projects.mjs";
+import { projectOperationAsync } from "../scripts/project-io.mjs";
 import { ProjectService } from "../scripts/project-service.mjs";
 import { FrameError } from "../scripts/mcp/workspace.mjs";
 import { problem } from "./security.mjs";
 
-// A content branch has no private copy of the installed shared engine.
-class WorkSource extends ProjectService {
-  check(id) {
-    this.project(id);
-    this.assertTree(id);
-    return checkProjects(this.root, {
-      ids: [id],
-      strict: true,
-      sharedEngineRoot: fileURLToPath(
-        new URL("../src/engine", import.meta.url),
-      ),
-    });
-  }
-}
 const filePath = z.string().min(1).max(512);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
 const changes = sourceEditRequestSchema.shape.changes;
@@ -41,9 +27,10 @@ export function workSourceTools({ add, works, repos, db, registry }) {
       await works.get(id, { active: true });
       if (write && !dryRun) await repos.writable(work.repo, work.project);
       const { repo } = await repos.project(work.repo, work.project);
-      const workspace = new WorkSource(repo.root, {
+      const workspace = new ProjectService(repo.root, {
         projects: [work.project],
         readOnly: !write,
+        checkOptions: { sharedEngineRoot: fileURLToPath(new URL("../src/engine", import.meta.url)) },
       });
       try {
         // Invalidate before AND after a mutation, including a failed/rolled-back proposal.
@@ -100,12 +87,12 @@ export function workSourceTools({ add, works, repos, db, registry }) {
   const id = z.string().uuid();
   add("works_media_probe","Read dimensions, duration and codecs of a project-owned media source",{id,src:z.string()},({id,src})=>source(id,(workspace,project)=>probeMedia(workspace.root,project,src)));
   add("works_composition","Read authoritative visual clips and renderer capabilities with an edit revision",{id},({id})=>source(id,(workspace,project)=>visualContext(workspace,project)));
-  add("works_composition_edit","Atomically edit visual clips with revision protection and optional dry run",{id,...visualEditRequestSchema.shape},({id,...request})=>source(id,(workspace,project)=>visualEdit(workspace,project,request),{write:true,dryRun:request.dryRun}));
+  add("works_composition_edit","Atomically edit visual clips with revision protection and optional dry run",{id,...visualEditRequestSchema.shape},({id,...request})=>source(id,(workspace,project)=>projectOperationAsync(workspace,"visualEdit",project,request),{write:true,dryRun:request.dryRun}));
   add("works_audio_inspect","Read streamed source waveform and peak/RMS levels",{id,src:z.string()},({id,src})=>source(id,(workspace,project)=>inspectAudio(workspace.root,project,src)));
   add("works_audio_media_probe","Inspect audio streams and codecs",{id,src:z.string()},({id,src})=>source(id,(workspace,project)=>probeMedia(workspace.root,project,src)));
   add("works_audio_transcode","Create a compatible audio copy without replacing source or destination",{id,src:z.string(),out:z.string()},({id,src,out})=>source(id,(workspace,project)=>transcodeAudio(workspace.root,project,{src,out}),{write:true}));
   add("works_audio","Read authoritative audio document and capabilities",{id},({id})=>source(id,(workspace,project)=>audioContext(workspace,project)));
-  add("works_audio_edit","Atomically edit multitrack audio with revision protection",{id,...audioEditRequestSchema.shape},({id,...request})=>source(id,(workspace,project)=>audioEdit(workspace,project,request),{write:true,dryRun:request.dryRun}));
+  add("works_audio_edit","Atomically edit multitrack audio with revision protection",{id,...audioEditRequestSchema.shape},({id,...request})=>source(id,(workspace,project)=>projectOperationAsync(workspace,"audioEdit",project,request),{write:true,dryRun:request.dryRun}));
   add(
     "works_read_lines",
     "Read a UTF-8 line slice; sha256 covers the ENTIRE file, not just the slice. Follow nextLine until null.",
@@ -128,7 +115,7 @@ export function workSourceTools({ add, works, repos, db, registry }) {
     ({ id, changes, dryRun }) =>
       source(
         id,
-        (workspace, project) => workspace.edit(project, changes, { dryRun }),
+        (workspace, project) => projectOperationAsync(workspace, "edit", project, changes, { dryRun }),
         { write: true, dryRun },
       ),
   );
@@ -143,7 +130,7 @@ export function workSourceTools({ add, works, repos, db, registry }) {
     ({ id, changes, dryRun }) =>
       source(
         id,
-        (workspace, project) => workspace.patch(project, changes, { dryRun }),
+        (workspace, project) => projectOperationAsync(workspace, "patch", project, changes, { dryRun }),
         { write: true, dryRun },
       ),
   );

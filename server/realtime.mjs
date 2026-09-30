@@ -2,6 +2,7 @@ import { WebSocketServer } from "ws";
 import { hash } from "./security.mjs";
 import { operationError } from "../src/contracts/errors.mjs";
 import { decodeNotification, notificationMatches } from "../src/contracts/realtime-scope.mjs";
+import { notifyTaskStatus } from "./task-status-wait.mjs";
 
 const watched = {
   agent_questions: ["agent_questions", "tasks"],
@@ -32,24 +33,35 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
     closed = false;
   const changed = (payload) => {
     const change = decodeNotification(payload);
+    notifyTaskStatus(db, change);
     for (const ws of wss.clients) ws.refresh?.(change);
   };
   const listen = async () => {
     if (closed) return;
-    try {
-      listener = await db.pool.connect();
-      listener.on("notification", ({ payload }) => changed(payload));
-      listener.once("error", () => {
-        listener.release(true);
+    let client, stopped = false;
+    const failed = () => {
+      if (stopped) return;
+      stopped = true;
+      if (client && listener === client) {
         listener = undefined;
-        for (const ws of wss.clients)
-          ws.close(1013, "State stream reconnecting");
-        if (!closed) reconnect = setTimeout(listen, 1000);
-      });
-      await listener.query("LISTEN frame_changes");
+        client.release(true);
+      }
+      for (const ws of wss.clients)
+        ws.close(1013, "State stream reconnecting");
+      notifyTaskStatus(db, null);
+      clearTimeout(reconnect);
+      if (!closed) reconnect = setTimeout(listen, 1000);
+    };
+    try {
+      client = await db.pool.connect();
+      if (closed) { client.release(); return; }
+      listener = client;
+      client.on("notification", ({ payload }) => changed(payload));
+      client.once("error", failed);
+      await client.query("LISTEN frame_changes");
       changed(null);
     } catch {
-      if (!closed) reconnect = setTimeout(listen, 2000);
+      failed();
     }
   };
   if (!localMode) await listen();
@@ -231,9 +243,11 @@ export async function installRealtime(app, db, actions, origin, { localMode = fa
     for (const ws of wss.clients) ws.terminate();
     wss.close();
     if (listener) {
-      await listener.query("UNLISTEN frame_changes").catch(() => {});
-      listener.release();
+      const client = listener;
       listener = undefined;
+      let broken = false;
+      await client.query("UNLISTEN frame_changes").catch(() => { broken = true; });
+      client.release(broken);
     }
   });
 }

@@ -1,3 +1,4 @@
+import { acquireDatabaseClient } from "./scoped-pool.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { hash, problem } from "./security.mjs";
@@ -39,7 +40,8 @@ export async function deleteProvider(
       );
     if (usage.pendingLogins)
       throw problem(409, "此提供商正在授权，请先完成或等待授权结束后删除");
-    const client = await db.pool.connect();
+    const client = await acquireDatabaseClient(db);
+    let broken = false;
     try {
       await client.query("BEGIN");
       const result = await client.query(
@@ -62,10 +64,12 @@ export async function deleteProvider(
       ]);
       await client.query("COMMIT");
     } catch (error) {
-      await client.query("ROLLBACK").catch(() => {});
+      await client.query("ROLLBACK").catch(() => {
+        broken = true;
+      });
       throw error;
     } finally {
-      client.release();
+      client.release(broken);
     }
     let warning;
     try {

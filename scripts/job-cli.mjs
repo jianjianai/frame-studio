@@ -32,7 +32,7 @@ try {
     );
     const request = JSON.parse(fs.readFileSync(launch, "utf8"));
     try {
-      const state = jobs.start(project, request.kind, request.options);
+      const state = await jobs.start(project, request.kind, request.options);
       fs.writeFileSync(launch, JSON.stringify({ jobId: state.id }));
       await jobs.running.get(state.id).done;
     } catch (error) {
@@ -101,15 +101,15 @@ try {
     if (!result?.jobId)
       throw new Error("Worker startup did not confirm; inspect " + launch);
     fs.unlinkSync(launch);
-    console.log(JSON.stringify(jobs.status(project, result.jobId)));
+    console.log(JSON.stringify(await jobs.status(project, result.jobId)));
   } else if (["status", "wait", "cancel"].includes(command)) {
-    let state = jobs.status(project, values.id);
+    let state = await jobs.status(project, values.id);
     const active = () => ["running", "cancelling"].includes(state.status);
     const waitMs = command === "wait" ? Number(values["deadline-seconds"] ?? 20) * 1000 : Number(values["wait-ms"] ?? 0);
     const deadline = Date.now() + waitMs;
     while (command !== "cancel" && active() && Date.now() < deadline) {
       await delay(Math.min(200, deadline - Date.now()));
-      state = jobs.status(project, values.id);
+      state = await jobs.status(project, values.id);
     }
     if (
       command === "cancel" &&
