@@ -9,6 +9,7 @@ import { Jobs } from "../../scripts/mcp/jobs.mjs";
 import { fixture, repo, memoryClient, call } from "./helpers.mjs";
 import { ProjectService } from "../../scripts/project-service.mjs";
 import { Workspace } from "../../scripts/mcp/workspace.mjs";
+import { createTestLink } from "../links.mjs";
 import {
   inputManifest,
   inputDigestMetrics,
@@ -50,7 +51,7 @@ test("input digests reuse verified bytes but reject modified, replaced and linke
     assert.throws(() => inputManifest(f.root, "test-film"), /links/);
     fs.unlinkSync(asset + ".link");
     fs.unlinkSync(asset);
-    fs.symlinkSync(path.join(f.root, "src/engine/types.ts"), asset);
+    createTestLink(path.join(f.root, "src/engine/types.ts"), asset);
     assert.throws(() => inputManifest(f.root, "test-film"), /links/);
     fs.unlinkSync(asset);
     const beforeShared = inputManifest(f.root, "test-film").fingerprint;
@@ -390,7 +391,7 @@ test("local MCP tree listing, literal search and complete Git scope checks leave
         "src/engine/types.ts",
       ),
     );
-    fs.symlinkSync(
+    createTestLink(
       path.join(f.root, "src/engine/types.ts"),
       path.join(directory, "unsafe.txt"),
     );

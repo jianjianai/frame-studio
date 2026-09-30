@@ -82,6 +82,13 @@ jobs:
       - name: Test actual installation, repair, failure and uninstall
         shell: pwsh
         run: ./tests/desktop/installer.test.ps1
+      - name: Test Windows speech UI and SQLite protocols
+        shell: pwsh
+        env:
+          FRAME_TEST_PORT: "57823"
+        run: |
+          node --test --test-concurrency=1 tests/desktop/tts-adapters.test.mjs tests/desktop/tts-expression-ui.test.mjs tests/server/sqlite-bindings.test.mjs tests/server/local-desktop.test.mjs tests/server/local-tools.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Windows speech and SQLite verification failed' }
       - name: Test native Windows center and browser workbench
         shell: pwsh
         run: ./tests/desktop/product.test.ps1 -CacheData .cache/installer-smoke/Data
