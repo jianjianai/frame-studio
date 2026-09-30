@@ -1,4 +1,4 @@
-# AI 创作工具链 7.1 验收记录（2026-09-30）
+# AI 创作工具链 7.1.1 验收记录（2026-09-30）
 
 ## 范围与基线
 
@@ -48,3 +48,26 @@
 既有作品预览验收发现 the-learning-machine 的大文件音频触发有界缓存回读失败：buildPreviewAudio 的本地静态服务器始终返回 200，未实现 Range。已用 3.84 MB WAV 在真实 Chromium 中“37 秒 → 0 秒 → 20 秒 → 1 秒”重现同一错误。修复为真正的流式 206 范围响应，支持开放/后缀范围、HEAD、长度及 416；取消请求释放文件流，同时限制方法和实际文件路径。没有放宽音频内存预算或把整个素材常驻内存。
 
 新增两个回归测试在修复前均失败，修复后连同音频 V7/压缩预览回归共 8/8 通过，0 跳过。日志为 .cache/toolchain-range-before.log 与 .cache/toolchain-range-after.log。版本升级至 7.1.1，最终冻结候选门禁和既有作品验收将继续完成。
+
+### 回退兼容性纠正
+
+等待 7.1.1 候选期间尝试回切原 8abdc08 镜像，以恢复旧作品预览；旧程序的迁移防护拒绝已有 0007-creation-workflow 等新迁移，造成短暂 HTTP 503。对“新增迁移即允许回退”的判断有误。随后终止本次回退进程并恢复 eb3d021（7.1.0），Studio/Controller 均重新健康，公开 healthz/readyz 恢复。数据库迁移记录、作品和凭据未作降级或删除。
+
+7.1.1 与 7.1.0 使用同一迁移清单，因此最终发布以 eb3d021 为兼容回退基线，不能再将 8abdc08 作为当前数据库的可运行回退镜像。已在 OVH 开发/发布说明中补充迁移清单核对与全作品媒体验收要求。
+
+## 最终交付：7.1.1
+
+- 功能提交：bdb27f4c09371a22bb010b2eae22264ee488f020，已推送 main；此前主优化提交为 eb3d021df1bd56378fef301808e99815115daf08。
+- 生产地址：https://frame.nerviloom.com 。运行版本 7.1.1，revision 与功能提交完全一致。
+- 不可变镜像：ghcr.io/jianjianai/frame-studio:sha-bdb27f4c09371a22bb010b2eae22264ee488f020；发布 digest：sha256:270cb9b55032e4c8ce9d11a0c84b38c994ebf3873e41367386b7808962ae7622。
+- 最终冻结源码候选执行 pnpm verify:release、pnpm test:workspace，均退出 0。Vitest 81 通过，MCP 83 通过，服务端 188 通过，合计 352 项通过、0 失败；另有 2 项依赖缺席可选 GeneralUser 音色包的测试跳过。工作台 27 项检查通过，errors 为 0；此套界面测试使用真实 UI/播放器/WebM 和模拟 API 状态。
+- 真实 Docker 内 Codex/Claude 执行、双向问答、校验与发布，以及 HTTP MCP → 源码批量安装 → Docker 帧图/视频渲染 → CLI 等待/下载链路通过。正式候选中的输出为 640×360、24 fps、48 帧、2 秒、立体声；完整 24 秒影片证据见前文。
+- 生产再次验证 87 个 MCP 工具、共享创建默认值、参考文档、当前全部作品上下文以及原生 Codex/Claude 版本；只读、无网络、UID 1000 镜像内 film doctor 通过。开发环境 UID 10001 的 doctor、help 与显式冻结依赖安装也通过。
+- 最终生产 healthz=ok、readyz=ready，未登录 /api/me=401；Studio/Controller 均健康。只切换这两个服务，数据库、Speech 和开发容器未重启；Compose 与凭据配置保持原状。
+- 当前 5 个活动作品（paper-wings、work-39d8b371、tiny-seed、the-learning-machine、sunny-rail）全部取得与当前源码/运行时匹配的预览，previewVersion=10，并在真实生产浏览器逐一通过就绪、跳转、播放/暂停检查。此前失败的 the-learning-machine 已通过重建与实际播放。
+- 生产桌面/390px 手机界面、模型选择器、素材面板、草稿保留、设置页面通过，pageerror 为 0。已查看最终大文件作品桌面画面与手机对话截图；画面、字幕、时间线和输入控件可见。
+- 最终部署前后 7 条作品记录及源码哈希、28 条素材记录完全一致，活动任务为 0。与最初基线相比，work-05636593 于验收期间被其他操作移入回收站；保留了该当前状态，其余 6 个作品源码与全部素材记录一致，没有擅自恢复被删除作品。
+- 官方 Codex 账户 20x 当前 expired、configured:false、enabled:false。用户需要重新登录并启用该提供商；原生协议夹具测试不等同于此生产账户已能调用在线模型。
+- 本次未创建生产数据库/内容备份，未降级数据库或删除迁移记录；保留现有镜像。两轮候选的专属容器、网络及测试口令文件已清理，验收证据保留。
+
+最终候选日志与构建证据位于主机 /opt/frame-toolchain-bdb27f4-20260930/；工作区证据为 .cache/toolchain-7.1.1-*、.cache/toolchain-production-rebuild.json 与 .cache/toolchain-production-preservation.json。功能镜像固定于上述提交，后续验收说明提交仅更新文档。
