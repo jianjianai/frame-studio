@@ -16,7 +16,7 @@ const help = `FRAME · 远程 MCP / HTTP 命令行
   pnpm --silent platform upload <file> --repo <UUID> --license "来源许可" [--mime image/png]
   pnpm --silent platform upload <file> --resume <upload-UUID>
 
-默认仅允许 HTTPS 或本机 HTTP；可信内网测试可显式使用 --allow-http。
+支持任意域名或 IP 的 HTTP(S) 地址；访问策略由反向代理管理。--allow-http 保留为兼容参数。
 FRAME_URL=https://frame.example FRAME_TOKEN=...；可用 FRAME_REPOSITORY、FRAME_ASSET_LICENSE。
 --request-timeout-ms 30000 控制单次 HTTP 请求；--timeout-ms 控制等待的总时长。
 操作参数可传 JSON、@文件或 - 从 stdin 读取。frame_ 前缀可省略。UUID 不是本地 project slug。

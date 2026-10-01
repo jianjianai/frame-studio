@@ -8,6 +8,28 @@ import { createApp } from "../../server/app.mjs";
 import { readWorkPreview } from "../../server/preview-state.mjs";
 import { PREVIEW_VERSION } from "../../server/preview-version.mjs";
 
+
+test("local mode accepts alternate hosts and missing or opaque origins", async () => {
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-local-origins-"));
+  const db = await sqliteDatabase(path.join(data, "frame.sqlite"));
+  let app;
+  try {
+    ({ app } = await createApp({ db, data, masterKey: "11".repeat(32),
+      origin: "http://local.frame.test", scheduler: false, localMode: true }));
+    for (const requestOrigin of [undefined, "null", "http://alias.test", "https://alias.test"]) {
+      const response = await app.inject({ method: "POST", url: "/api/action",
+        headers: { host: "192.168.1.25:43173",
+          ...(requestOrigin === undefined ? {} : { origin: requestOrigin }) },
+        payload: { name: "repositories_list", args: {} } });
+      assert.equal(response.statusCode, 200, response.body);
+    }
+  } finally {
+    if (app) await app.close();
+    else await db.pool.end();
+    fs.rmSync(data, { recursive: true, force: true });
+  }
+});
+
 test("SQLite keeps work revisions and agent interaction state", async () => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-sqlite-state-"));
   const db = await sqliteDatabase(path.join(data, "frame.sqlite"));
@@ -72,9 +94,9 @@ test("Windows local mode creates a work and renders a frame without Docker or a 
     const me = await app.inject({ url: "/api/me", headers });
     assert.equal(me.statusCode, 200);
     assert.equal(me.json().localMode, true);
-    const bad = await app.inject({ method: "POST", url: "/api/action",
-      headers: { ...headers, origin: "http://evil.test" }, payload: { name: "repositories_list", args: {} } });
-    assert.equal(bad.statusCode, 403);
+    const alternate = await app.inject({ method: "POST", url: "/api/action",
+      headers: { host: "local.frame.test", origin: "http://alias.test" }, payload: { name: "repositories_list", args: {} } });
+    assert.equal(alternate.statusCode, 200);
     const call = async (name, args) => {
       const response = await app.inject({ method: "POST", url: "/api/action", headers, payload: { name, args } });
       assert.equal(response.statusCode, 200, `${name}: ${response.body}`);

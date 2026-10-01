@@ -14,7 +14,6 @@ import { Readable } from "node:stream";
 import Fastify from "fastify";
 import cookie from "@fastify/cookie";
 import multipart from "@fastify/multipart";
-import rateLimit from "@fastify/rate-limit";
 import staticPlugin from "@fastify/static";
 import { publicStaticHeaders } from "./static-cache.mjs";
 import { createPreparedMcpHandler } from "./mcp-catalog.mjs";
@@ -46,8 +45,6 @@ export async function createApp({
   scheduler = process.env.FRAME_ROLE !== "api",
   localMode = process.env.FRAME_LOCAL_MODE === "1",
 } = {}) {
-  if (localMode && !/^http:\/\/127\.0\.0\.1:\d+$/.test(origin))
-    throw new Error("Local mode requires an exact 127.0.0.1 HTTP origin");
   if (process.env.FRAME_ROLE === "controller")
     throw new Error("The controller role must not expose the HTTP application");
   if (process.env.FRAME_ROLE === "api" && scheduler)
@@ -66,14 +63,14 @@ export async function createApp({
       ],
     },
     bodyLimit: 2 * 1024 * 1024,
-    trustProxy: false,
+    // The reverse proxy owns ingress policy and reports the client protocol.
+    trustProxy: true,
   });
   await app.register(cookie);
   await app.register(multipart, {
     limits: { fileSize: 1024 * 1024 * 1024, files: 1, fields: 8 },
   });
-  await app.register(rateLimit, { global: false });
-  await installRealtime(app, db, actions, origin, { localMode });
+  await installRealtime(app, db, actions, { localMode });
   const oauth = localMode ? { verify: async () => false, challenge: "" }
     : await installOAuth(app, db, actions, origin);
   app.setErrorHandler((err, req, res) => {
@@ -89,20 +86,14 @@ export async function createApp({
   });
   const cookieOptions = {
     httpOnly: true,
-    secure: origin.startsWith("https:"),
-    sameSite: "strict",
+    sameSite: "lax",
     path: "/",
     maxAge: 7 * 86400,
   };
   app.addHook("onRequest", async (req, res) => {
-    if (localMode && req.headers.host !== new URL(origin).host)
-      throw problem(403, "Local mode only accepts its loopback address");
-    res
-      .header("X-Content-Type-Options", "nosniff")
-      .header("Referrer-Policy", "no-referrer")
-      .header("Cache-Control", "no-store");
+    // Host, Origin, TLS, rate limiting and browser access policy belong to the proxy.
+    res.header("Cache-Control", "no-store");
     if (req.url.startsWith("/preview/") || req.url.startsWith("/preview-live/")) return;
-    res.header("X-Frame-Options", "DENY");
     if (!req.url.startsWith("/api/") && !req.url.startsWith("/mcp")) return;
     if (req.url === "/api/login") return;
     const bearer = req.headers.authorization?.startsWith("Bearer ")
@@ -118,11 +109,7 @@ export async function createApp({
       if (!req.agentTask) throw problem(401, "Active task credential required");
       return;
     }
-    if (localMode) {
-      if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && req.headers.origin !== origin)
-        throw problem(403, "Invalid request origin");
-      return;
-    }
+    if (localMode) return;
     if (bearer)
       authenticated = !!(await db.one("SELECT id FROM tokens WHERE hash=$1", [
         hash(bearer),
@@ -139,12 +126,6 @@ export async function createApp({
         res.header("WWW-Authenticate", oauth.challenge);
       throw problem(401, "Please sign in");
     }
-    if (
-      !bearer &&
-      !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
-      req.headers.origin !== origin
-    )
-      throw problem(403, "Invalid request origin");
   });
   app.get("/healthz", async () => {
     await db.one("SELECT 1");
@@ -163,11 +144,8 @@ export async function createApp({
   agentTools({ app, db, data, assets, actions, localMode });
   app.post(
     "/api/login",
-    { config: { rateLimit: { max: 8, timeWindow: "1 minute" } } },
     async (req, res) => {
       if (localMode) throw problem(404, "Password login is unavailable in local mode");
-      if (req.headers.origin !== origin)
-        throw problem(403, "Invalid request origin");
       const admin = await db.setting("admin");
       if (!passwordMatches(req.body?.password, admin.password))
         throw problem(401, "Incorrect password");
@@ -176,7 +154,7 @@ export async function createApp({
         "INSERT INTO sessions VALUES($1,now()+interval '7 days')",
         [hash(value)],
       );
-      res.setCookie("frame_session", value, cookieOptions);
+      res.setCookie("frame_session", value, { ...cookieOptions, secure: req.protocol === "https" });
       return { ok: true };
     },
   );
@@ -204,7 +182,6 @@ export async function createApp({
     res
       .type("image/webp")
       .header("Content-Security-Policy", "sandbox; default-src 'none'")
-      .header("Cross-Origin-Resource-Policy", "same-origin")
       .header("Cache-Control", "private, max-age=300, must-revalidate")
       .header("ETag", cover.etag);
     if (req.headers["if-none-match"] === cover.etag)

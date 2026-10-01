@@ -409,10 +409,9 @@ test("works_browser --wait returns the final preview URL and accepts already-rea
   );
 });
 
-test("remote plaintext HTTP requires explicit opt-in before sending credentials", () => {
-  assert.throws(
+test("HTTP and HTTPS support arbitrary domains and IPs without opt-in", () => {
+  assert.doesNotThrow(
     () => new PlatformClient({ url: "http://example.test", token: "fixture" }),
-    { code: "INSECURE_TRANSPORT" },
   );
   assert.doesNotThrow(
     () =>
@@ -425,6 +424,13 @@ test("remote plaintext HTTP requires explicit opt-in before sending credentials"
   assert.doesNotThrow(
     () => new PlatformClient({ url: "http://[::1]:5178", token: "fixture" }),
   );
+  for (const url of [
+    "http://10.0.0.2:5178",
+    "http://192.168.1.5",
+    "https://alternate.example",
+  ]) {
+    assert.equal(new PlatformClient({ url, token: "fixture" }).base, url + "/");
+  }
 });
 
 test("film platform delegates to the canonical offline CLI", async () => {

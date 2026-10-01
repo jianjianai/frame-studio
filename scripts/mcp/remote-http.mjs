@@ -23,25 +23,15 @@ const types = {
   ".html": "text/html",
 };
 const MAX_BODY = 4 * 1024 * 1024;
-const harden = (response, formOrigins = []) => {
+const noStore = (response) => {
   const headers = new Headers(response.headers);
-  headers.set("X-Content-Type-Options", "nosniff");
-  // Preserve the same-origin form POST Origin; no-referrer makes it null in Chromium.
-  // Cross-origin OAuth callbacks still receive no Referer.
-  headers.set("Referrer-Policy", "same-origin");
-  headers.set("X-Frame-Options", "DENY");
   headers.set("Cache-Control", "no-store");
-  headers.set(
-    "Content-Security-Policy",
-    `default-src 'none'; style-src 'unsafe-inline'; form-action 'self' ${formOrigins.join(" ")}; frame-ancestors 'none'; base-uri 'none'`,
-  );
   return new Response(response.body, { status: response.status, headers });
 };
 
 export async function startRemoteServer(config) {
   const auth = new RemoteAuth(config),
-    principals = new Map(),
-    rates = new Map();
+    principals = new Map();
   const workspace = new ProjectService(config.root, {
     projects: config.projects,
     readOnly: true,
@@ -51,14 +41,6 @@ export async function startRemoteServer(config) {
   const writeTools = template.writeTools;
   let closing = false,
     inFlight = 0;
-  const rate = (key, limit) => {
-    const now = Date.now(),
-      prior = rates.get(key);
-    const value =
-      prior && prior.until > now ? prior : { count: 0, until: now + 60000 };
-    rates.set(key, value);
-    return ++value.count <= limit;
-  };
   const artifactFile = (project, relative) => {
     const speech =
       /^public\/narration\/([a-f0-9]{64})\/(voice\.wav|captions\.srt|timeline\.json)$/.exec(
@@ -230,16 +212,11 @@ export async function startRemoteServer(config) {
       }
     }
     await Promise.allSettled(pending);
-    for (const [key, value] of rates)
-      if (value.until < Date.now()) rates.delete(key);
   };
   const timer = setInterval(() => void dropRevoked(), 10000);
   timer.unref();
   const route = async (request) => {
-    const url = new URL(request.url),
-      origin = request.headers.get("origin");
-    if (origin && !config.origins.includes(origin))
-      return json({ error: "origin_not_allowed" }, 403);
+    const url = new URL(request.url);
     if (request.method === "OPTIONS")
       return new Response(null, {
         status: 204,
@@ -265,14 +242,6 @@ export async function startRemoteServer(config) {
       } catch {
         return auth.challenge();
       }
-      if (
-        !rate(
-          identity.principal +
-            (url.pathname.startsWith("/uploads/") ? ":uploads" : ""),
-          url.pathname.startsWith("/uploads/") ? 2400 : 240,
-        )
-      )
-        return json({ error: "rate_limited" }, 429, { "Retry-After": "60" });
       if (url.searchParams.has("access_token") || url.searchParams.has("token"))
         return json({ error: "Tokens must use Authorization header" }, 400);
       if (url.pathname.startsWith("/uploads/")) {
@@ -421,8 +390,6 @@ export async function startRemoteServer(config) {
         },
       });
     }
-    if (!rate("oauth-public", 120))
-      return json({ error: "rate_limited" }, 429, { "Retry-After": "60" });
     const response = await auth.handle(request);
     await dropRevoked();
     return response || json({ error: "not_found" }, 404);
@@ -433,20 +400,9 @@ export async function startRemoteServer(config) {
       if (!res.writableFinished) controller.abort();
     });
     try {
-      const address = server.address();
-      const allowedHosts = [
-        new URL(config.publicUrl).host,
-        `127.0.0.1:${address.port}`,
-        `localhost:${address.port}`,
-        `[::1]:${address.port}`,
-      ];
-      if (
-        !allowedHosts.includes(req.headers.host) ||
-        !req.url?.startsWith("/") ||
-        req.url.startsWith("//")
-      ) {
-        res.writeHead(403);
-        res.end("Invalid host");
+      if (!req.url?.startsWith("/") || req.url.startsWith("//")) {
+        res.writeHead(400);
+        res.end("Invalid request target");
         return;
       }
       if (closing || inFlight >= 64) {
@@ -479,9 +435,16 @@ export async function startRemoteServer(config) {
           }
           chunks.push(chunk);
         }
+        const headers = new Headers(req.headers);
+        // The proxy reports transport; the public URL is only the canonical issuer.
+        if (!headers.has("x-forwarded-proto"))
+          headers.set(
+            "x-forwarded-proto",
+            req.socket.encrypted ? "https" : "http",
+          );
         const request = new Request(config.publicUrl + req.url, {
           method: req.method,
-          headers: req.headers,
+          headers,
           signal: controller.signal,
           ...(count ? { body: Buffer.concat(chunks) } : {}),
         });
@@ -531,19 +494,9 @@ export async function startRemoteServer(config) {
                       : 500,
                   );
         }
-        // Chromium also applies form-action to redirects after a form POST.
-        response = harden(
-          response,
-          new URL(request.url).pathname === "/oauth/authorize"
-            ? [
-                ...new Set(
-                  config.oauth.redirects.map((uri) => new URL(uri).origin),
-                ),
-              ]
-            : [],
-        );
+        response = noStore(response);
         const origin = request.headers.get("origin");
-        if (origin && config.origins.includes(origin)) {
+        if (origin) {
           response.headers.set("Access-Control-Allow-Origin", origin);
           response.headers.set("Vary", "Origin");
           response.headers.set(

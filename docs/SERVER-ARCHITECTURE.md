@@ -32,7 +32,7 @@ Git 拉取只允许干净分支和 fast-forward；推送前上传 LFS，绝不�
 
 ## 鉴权和数据布局
 
-平台目前为单管理员。密码由环境变量配置，变更时撤销旧会话；HttpOnly/Secure/SameSite Cookie、写请求 Origin 校验以及可撤销 API/MCP 令牌继续有效。平台连接凭据加密存储，任务只引用选中的连接。AI 保持直接执行能力，不新增讨论或逐次审批模式；这不取消容器和作品写入边界。预览在无同源权限的 sandbox iframe 中运行。
+平台目前为单管理员。密码由环境变量配置，变更时撤销旧会话；会话 Cookie 和可撤销 API/MCP 令牌用于身份认证。Host/Origin、TLS、CORS、浏览器安全头和入口限流由反向代理负责，见 [访问策略](ACCESS-POLICY.md)；Cookie 的 Secure 标记根据代理报告的实际请求协议生成。平台连接凭据加密存储，任务只引用选中的连接。AI 保持直接执行能力，不新增讨论或逐次审批模式；这不取消容器和作品写入边界。预览在无同源权限的 sandbox iframe 中运行。
 
 数据目录：`repos/<uuid>` 管理 Git 引用，`works/<uuid>` 保存作品 worktree，`libraries/<repo>` 保存素材分支；`runs/<task>` 为隔离运行及临时产物，`sessions/<chat>` 保存工具会话，`auth/<connection>` 保存官方凭据，`tools/<provider>/<version>` 保存工具版本。`restores/undo-<request>` 为撤销操作的临时恢复目录，成功后清理，失败时保留。不得把这些操作恢复目录误当成发布前全量备份。
 

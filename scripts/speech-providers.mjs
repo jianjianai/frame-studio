@@ -243,14 +243,10 @@ function endpoint(value) {
     url.password ||
     url.search ||
     url.hash ||
-    !(
-      url.protocol === "https:" ||
-      (url.protocol === "http:" &&
-        ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname))
-    )
+    !["http:", "https:"].includes(url.protocol)
   )
     throw new Error(
-      "Speech endpoint requires HTTPS or loopback HTTP, without credentials or query parameters",
+      "Speech endpoint must use HTTP(S), without credentials or query parameters",
     );
   return url.href.replace(/\/$/, "");
 }

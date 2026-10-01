@@ -10,7 +10,7 @@ import { launchBrowser } from "../../scripts/browser.mjs";
 
 const databaseUrl = process.env.FRAME_TEST_DATABASE_URL;
 test(
-  "OAuth browser form preserves origin and follows the permitted ChatGPT callback",
+  "OAuth browser form completes authorization and follows the registered callback",
   { skip: !databaseUrl, timeout: 60000 },
   async () => {
     assert.match(new URL(databaseUrl).pathname, /frame_test/);

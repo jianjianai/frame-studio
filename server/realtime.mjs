@@ -29,7 +29,6 @@ export async function installRealtime(
   app,
   db,
   actions,
-  origin,
   { localMode = false } = {},
 ) {
   const wss = new WebSocketServer({
@@ -92,10 +91,7 @@ export async function installRealtime(
     }
     try {
       const session = app.parseCookie(req.headers.cookie || "").frame_session;
-      if (
-        req.headers.origin !== origin ||
-        !(await authorized(session && hash(session)))
-      ) {
+      if (!(await authorized(session && hash(session)))) {
         socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
         socket.destroy();
         return;

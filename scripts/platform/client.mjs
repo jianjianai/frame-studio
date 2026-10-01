@@ -10,14 +10,7 @@ export const cliError = (code, message, details = {}) =>
   Object.assign(new Error(message), { code, ...details });
 const MAX_RESPONSE = 16 * 1024 * 1024;
 export class PlatformClient {
-  constructor({
-    url,
-    token,
-    timeoutMs = 30000,
-    allowHttp = false,
-    signal,
-    fetchImpl = fetch,
-  }) {
+  constructor({ url, token, timeoutMs = 30000, signal, fetchImpl = fetch }) {
     if (!url || !token)
       throw cliError(
         "CONFIG_REQUIRED",
@@ -42,15 +35,6 @@ export class PlatformClient {
       throw cliError(
         "INVALID_URL",
         "FRAME_URL must use HTTP(S), without credentials, query or fragment.",
-      );
-    if (
-      base.protocol === "http:" &&
-      !["localhost", "127.0.0.1", "[::1]"].includes(base.hostname) &&
-      !allowHttp
-    )
-      throw cliError(
-        "INSECURE_TRANSPORT",
-        "Use HTTPS; --allow-http is required for a trusted private test server.",
       );
     base.pathname = base.pathname.replace(/\/+$/, "") + "/";
     this.base = base.href;

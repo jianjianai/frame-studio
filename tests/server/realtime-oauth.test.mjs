@@ -50,14 +50,12 @@ test(
       assert.equal(
         (
           await post("/oauth/register", {
-            redirect_uris: [
-              "https://chatgpt.com.evil.test/connector_platform_oauth_redirect",
-            ],
+            redirect_uris: ["javascript:alert(1)"],
           })
         ).statusCode,
         400,
       );
-      const redirect = "https://chatgpt.com/connector_platform_oauth_redirect";
+      const redirect = "http://external-ai.test/oauth/callback?client=fixture";
       const registration = await post("/oauth/register", {
         client_name: "ChatGPT fixture",
         redirect_uris: [redirect],
@@ -95,18 +93,32 @@ test(
           .statusCode,
         403,
       );
-      for (const invalidOrigin of ["null", "https://evil.test"]) {
-        assert.equal(
-          (
-            await app.inject({
-              method: "POST",
-              url: "/oauth/authorize",
-              headers: { origin: invalidOrigin, cookie },
-              payload: form,
-            })
-          ).statusCode,
-          403,
-        );
+      for (const requestOrigin of [
+        undefined,
+        "null",
+        "http://alias.test",
+        "https://alias.test",
+      ]) {
+        const page = await app.inject({
+          url: "/oauth/authorize?" + new URLSearchParams(query),
+          headers: { host: "alias.test" },
+        });
+        const requestForm = {
+          ...form,
+          request: page.body.match(/name="request" value="([^"]+)"/)[1],
+          csrf: page.body.match(/name="csrf" value="([^"]+)"/)[1],
+        };
+        const result = await app.inject({
+          method: "POST",
+          url: "/oauth/authorize",
+          headers: {
+            ...(requestOrigin === undefined ? {} : { origin: requestOrigin }),
+            host: "alias.test",
+            cookie: page.headers["set-cookie"].split(";")[0],
+          },
+          payload: requestForm,
+        });
+        assert.equal(result.statusCode, 302, result.body);
       }
       const authorized = await post("/oauth/authorize", form, cookie);
       assert.equal(authorized.statusCode, 302);
@@ -233,10 +245,32 @@ test(
       await app.listen({ host: "127.0.0.1", port: 0 });
       const endpoint = `ws://127.0.0.1:${app.server.address().port}/api/ws`;
       const wrong = new WebSocket(endpoint, {
-        headers: { origin: "https://evil.test", cookie: session },
+        headers: {
+          origin: "https://alias.test",
+          cookie: "frame_session=invalid",
+        },
       });
       await once(wrong, "error");
-      ws = new WebSocket(endpoint, { headers: { origin, cookie: session } });
+      for (const requestOrigin of [
+        undefined,
+        "null",
+        "http://alias.test",
+        "https://alias.test",
+      ]) {
+        const socket = new WebSocket(endpoint, {
+          headers: {
+            host: "alias.test",
+            cookie: session,
+            ...(requestOrigin === undefined ? {} : { origin: requestOrigin }),
+          },
+        });
+        await once(socket, "open");
+        socket.close();
+        await once(socket, "close");
+      }
+      ws = new WebSocket(endpoint, {
+        headers: { origin: "null", cookie: session },
+      });
       await once(ws, "open");
       const queue = [];
       ws.on("message", (data) => queue.push(JSON.parse(data.toString())));

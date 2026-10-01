@@ -2,7 +2,7 @@
 
 ## 部署与更新
 
-`deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio/app:<版本>` 与 `ghcr.io/jianjianai/frame-studio/speech:<版本>`。服务器需要 Linux x86_64、Docker、HTTPS 反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
+`deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio/app:<版本>` 与 `ghcr.io/jianjianai/frame-studio/speech:<版本>`。服务器需要 Linux x86_64、Docker、反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
 
 从 7.4.1 起，镜像统一使用以上仓库命名空间，由仓库的 GitHub Actions 令牌发布。旧的 `frame-studio` 与 `frame-speech` 包和历史镜像保留；已有部署升级时需同步采用新版 Compose 中的镜像路径。推送 `v<版本>` 标签自动执行服务端门禁、Windows 安装验证、两个镜像发布与 GitHub Release 发布，均固定到同一源码提交。发布不会自动切换正在运行的服务器。
 
@@ -110,11 +110,15 @@ FRAME_ASSET_LICENSE=原创 pnpm platform upload ./image.png
 
 成功导出保留 7 天，失败任务产物保留 14 天，可手动删除；最新有效预览、有效审片链接、下载和 Releases 上传期间的文件受保护。清理每分钟执行有界批次，导出不会自动进入素材库。Releases 标签绑定导出所用的源提交，需先把该提交推送到作品分支。浏览器本地 WebM 导出需保持标签页打开，服务器 MP4 导出可后台继续。
 
-## ChatGPT 的 MCP OAuth
+## 访问策略
+
+域名、Host/Origin、TLS、CORS、浏览器安全头和入口限流统一由反向代理管理，配置见 [访问策略](ACCESS-POLICY.md)。平台支持任意域名或 IP 的 HTTP(S) 访问，不以 `FRAME_PUBLIC_URL` 拒绝请求。该配置只提供 OAuth 的规范地址和生成链接；反向代理通过 `X-Forwarded-Proto` 报告实际协议，登录和 OAuth Cookie 的 Secure 标记据此生成。
+
+## MCP OAuth
 
 ChatGPT 添加远程 MCP `https://frame.nerviloom.com/mcp`，认证选择 OAuth，客户端 ID/密钥留空。通过动态客户端注册（DCR）和授权码 + S256 PKCE，跳转 FRAME 输入管理员密码并明确授权。访问令牌仅用于 MCP，一小时过期；刷新令牌旋转，授权最长 30 天。可以在「设置 → 访问设置 → OAuth 连接」撤销。
 
-元数据：`/.well-known/oauth-protected-resource/mcp` 与 `/.well-known/oauth-authorization-server`。`resource` 必须精确为本站 `/mcp` URL。DCR 仅接受 ChatGPT 的 HTTPS 回调（稳定回调与 connector/oauth 的专属回调），不允许任意重定向。授权表单保留同源 Origin 校验，Referrer-Policy 使用 same-origin，CSP 只允许本站与当前已登记回调，避免浏览器将合法提交或回跳拦截。服务器保存令牌散列，拒绝代码重放、错误 PKCE、错误 audience、过期或撤销令牌；刷新令牌重复使用会撤销同一授权。修改环境变量中的管理员密码会撤销现有 OAuth 授权。原有 Bearer API Token 接入继续可用。
+元数据：`/.well-known/oauth-protected-resource/mcp` 与 `/.well-known/oauth-authorization-server`。`resource` 必须精确为本站 `/mcp` URL。DCR 接受任意域名或 IP 的 HTTP(S) 客户端回调，授权和换取令牌时按注册值精确匹配。授权表单按请求和 Cookie 中的随机令牌关联，不检查 Origin，也不由应用施加域名、TLS、CSP 或页面嵌入限制。服务器保存令牌散列，拒绝代码重放、错误 PKCE、错误 audience、过期或撤销令牌；刷新令牌重复使用会撤销同一授权。修改环境变量中的管理员密码会撤销现有 OAuth 授权。原有 Bearer API Token 接入继续可用。
 
 接口实现按 [OpenAI 官方认证文档](https://developers.openai.com/plugins/build/auth)；ChatGPT 账号侧最终添加连接需要用户在自己的 ChatGPT 界面完成。
 

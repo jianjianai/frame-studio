@@ -83,7 +83,6 @@ export class RemoteAuth {
     this.now = now;
     this.pending = new Map();
     this.codes = new Map();
-    this.failures = [];
     this.staticClients = validateOAuthClients(config);
     this.directory = config.stateDirectory;
     for (const dir of [path.dirname(this.directory), this.directory]) {
@@ -164,15 +163,11 @@ export class RemoteAuth {
       !Array.isArray(uris) ||
       !uris.length ||
       uris.length > 16 ||
-      uris.some(
-        (uri) =>
-          typeof uri !== "string" ||
-          !this.config.oauth.redirects.includes(redirectUri(uri)),
-      )
+      uris.some((uri) => typeof uri !== "string")
     )
       bad(
         "invalid_redirect_uri",
-        "Callback is not in FRAME_OAUTH_REDIRECT_URIS",
+        "Register one or more absolute HTTP(S) callback URLs",
       );
     const method = data.token_endpoint_auth_method ?? "client_secret_basic";
     if (!["none", "client_secret_post", "client_secret_basic"].includes(method))
@@ -198,7 +193,20 @@ export class RemoteAuth {
         0,
         120,
       ),
-      redirect_uris: [...new Set(uris.map(redirectUri))],
+      redirect_uris: [
+        ...new Set(
+          uris.map((uri) => {
+            try {
+              return redirectUri(uri);
+            } catch {
+              bad(
+                "invalid_redirect_uri",
+                "OAuth callbacks must use HTTP(S), without credentials or fragments",
+              );
+            }
+          }),
+        ),
+      ],
       token_endpoint_auth_method: method,
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
@@ -208,12 +216,6 @@ export class RemoteAuth {
     const client = this.staticClients.get(id) ?? this.state.clients[id];
     if (!client || client.client_id !== id)
       bad("invalid_client", "Unknown client", 401);
-    if (
-      client.redirect_uris.some(
-        (uri) => !this.config.oauth.redirects.includes(uri),
-      )
-    )
-      bad("invalid_client", "Client callbacks are no longer allowed", 401);
     return client;
   }
   scopes(value) {
@@ -475,7 +477,7 @@ export class RemoteAuth {
         headers: {
           "Content-Type": "text/html; charset=utf-8",
           "Cache-Control": "no-store",
-          "Set-Cookie": `frame_oauth=${csrf}; HttpOnly; SameSite=Lax; Path=/oauth/authorize; Max-Age=600${config.publicUrl.startsWith("https:") ? "; Secure" : ""}`,
+          "Set-Cookie": `frame_oauth=${csrf}; HttpOnly; SameSite=Lax; Path=/oauth/authorize; Max-Age=600${request.headers.get("x-forwarded-proto")?.split(",").at(-1).trim() === "https" ? "; Secure" : ""}`,
         },
       });
     }
@@ -492,8 +494,6 @@ export class RemoteAuth {
       bad("invalid_request", "Form body required");
     const params = unique(new URLSearchParams(await request.text()));
     if (route === "/oauth/authorize") {
-      if (request.headers.get("origin") !== config.publicUrl)
-        bad("invalid_request", "Authorization origin mismatch", 403);
       const id = params.get("request"),
         pending = this.pending.get(id),
         cookie = /(?:^|;\s*)frame_oauth=([^;]+)/.exec(
@@ -520,13 +520,6 @@ export class RemoteAuth {
       } else {
         if (params.get("decision") !== "allow")
           bad("invalid_request", "Explicit decision required");
-        this.failures = this.failures.filter((t) => t > this.now() - 600000);
-        if (this.failures.length >= 10)
-          bad(
-            "temporarily_unavailable",
-            "Too many failed logins; retry after ten minutes",
-            429,
-          );
         const password = params.get("password") || "";
         if (
           password.length > 256 ||
@@ -535,7 +528,6 @@ export class RemoteAuth {
             this.passwordHash,
           )
         ) {
-          this.failures.push(this.now());
           bad("access_denied", "Invalid authorization password", 403);
         }
         if (
@@ -553,7 +545,7 @@ export class RemoteAuth {
         headers: {
           Location: redirect.href,
           "Cache-Control": "no-store",
-          "Set-Cookie": `frame_oauth=; HttpOnly; SameSite=Lax; Path=/oauth/authorize; Max-Age=0${config.publicUrl.startsWith("https:") ? "; Secure" : ""}`,
+          "Set-Cookie": `frame_oauth=; HttpOnly; SameSite=Lax; Path=/oauth/authorize; Max-Age=0${request.headers.get("x-forwarded-proto")?.split(",").at(-1).trim() === "https" ? "; Secure" : ""}`,
         },
       });
     }

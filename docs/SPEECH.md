@@ -160,7 +160,7 @@ FILM_AZURE_SPEECH_REGION=填写资源区域
 
 优先级为进程环境变量 → 当前项目 `.env` → 仓库根 `.env`。只读取当前项目，不把值写回 `process.env`，因此多个项目可使用同名变量和不同账户。配置里只保存变量名，不接受明文 apiKey、Authorization、headers 或服务地址。服务端状态只返回变量名和是否已配置；`status` 不请求服务，不证明账户余额或在线可用性。
 
-兼容 OpenAI `/audio/speech` 的服务使用同一个 `openai` 提供器，额外设置 `baseUrlEnv: "FILM_TTS_BASE_URL"`，在项目 `.env` 中设置实际地址，例如 `FILM_TTS_BASE_URL=http://127.0.0.1:8880/v1`。地址支持 HTTPS 或本机 HTTP，不含 URL 用户名、密码或查询参数。旧 openai 配置保留原凭据规则；新的 `type: "compatible"` 无鉴权服务可以省略 apiKeyEnv。设置 baseUrlEnv 的旧 openai 配置按 compatible 能力执行，不推断服务支持 instructions。`model` 和 `voice` 必须使用该服务实际支持的标识。
+兼容 OpenAI `/audio/speech` 的服务使用同一个 `openai` 提供器，额外设置 `baseUrlEnv: "FILM_TTS_BASE_URL"`，在项目 `.env` 中设置实际地址，例如 `FILM_TTS_BASE_URL=http://127.0.0.1:8880/v1`。地址支持任意域名或 IP 的 HTTP(S)，不含 URL 用户名、密码或查询参数。旧 openai 配置保留原凭据规则；新的 `type: "compatible"` 无鉴权服务可以省略 apiKeyEnv。设置 baseUrlEnv 的旧 openai 配置按 compatible 能力执行，不推断服务支持 instructions。`model` 和 `voice` 必须使用该服务实际支持的标识。
 
 `init --provider openai|compatible|minimax|doubao|elevenlabs|qwen3|azure|custom` 可以生成对应模板。填写云端凭据后，执行 `say` 才会提交文本并可能产生服务费用；配置检查、初始化与缓存命中不会调用合成服务。合成失败没有隐式重试，避免请求已计费但响应丢失时重复提交；人工重试前先检查服务情况。
 

@@ -8,7 +8,7 @@
 
 异常退出后再次启动，会检查旧启动锁的进程：确认进程已经退出时自动恢复，启动结果中的 `recoveredLock.pid` 说明恢复了哪个旧进程的锁。已有进程仍运行时返回 `SERVER_ALREADY_RUNNING` 和 PID，请使用原窗口，或先在原窗口按 Ctrl+C 再启动；不会自动结束进程。配置检查通过只代表配置有效，不代表服务正在运行。
 
-首次没有 `.env` 时会生成随机私有凭据并停下来提示填写配置，不覆盖已有文件。域名、OAuth 回调和隧道 token 仍需按下文填写。需要使用 `.evn` 或其他配置文件时，在终端运行 `启动MCP.cmd .evn`；相对路径以脚本所在目录为准。已有依赖时无需 pnpm；启用隧道仍需安装 cloudflared。
+首次没有 `.env` 时会生成随机私有凭据并停下来提示填写配置，不覆盖已有文件。规范地址、项目列表和隧道 token 按下文填写，OAuth 回调由客户端登记。需要使用 `.evn` 或其他配置文件时，在终端运行 `启动MCP.cmd .evn`；相对路径以脚本所在目录为准。已有依赖时无需 pnpm；启用隧道仍需安装 cloudflared。
 
 ## 五步接入
 
@@ -22,16 +22,15 @@
 
    生成 `.env`，自动创建不同的随机 Bearer token 和 OAuth 授权密码，不在终端打印，不覆盖已有文件。参考模板是根目录的 `.env.example`。环境变量优先于文件；修改后重启服务。
 
-2. 编辑 `.env` 中的实际域名、项目列表和 OAuth 回调地址：
+2. 编辑 `.env` 中的规范地址和项目列表：
 
    ```dotenv
    FRAME_MCP_PUBLIC_URL=https://mcp.your-domain.com
    FRAME_MCP_PROJECTS=my-film,birth-of-a-frame,borrowed-light
    FRAME_MCP_AUTH_MODE=both
-   FRAME_OAUTH_REDIRECT_URIS=https://your-ai.example/oauth/callback
    ```
 
-   以上域名和回调只是示例，必须替换。回调地址取自要连接的 AI 客户端，必须精确匹配，不能填 MCP 服务地址，也不支持 `*`。需要让 AI 新建作品时，预先把新作品 id 加进项目列表；明确填写 `*` 才允许全部项目。初始模板只开放三个 Demo。
+   以上域名只是示例，必须替换；HTTP(S) 域名和 IP 均可使用。OAuth 客户端自行登记回调地址，服务不维护全局回调域名白名单。需要让 AI 新建作品时，预先把新作品 id 加进项目列表；明确填写 `*` 才允许全部项目。初始模板只开放三个 Demo。
 
 3. 在 Cloudflare 创建或选择已有的**远程管理命名隧道**，将公开主机名 `mcp.your-domain.com` 路由到 `http://127.0.0.1:8787`，不设置路径过滤。把该隧道的运行 token 写入 `.env`：
 
@@ -124,11 +123,15 @@ const frameTool = {
 
 OAuth 首次登录用于确认访问者身份，与每次工具操作的审批不同；远程身份认证保持有效，不开放匿名写入。
 
+## 访问策略
+
+远程 MCP 接受任意 Host 和 Origin，不要求 HTTPS；`FRAME_MCP_PUBLIC_URL` 用于 OAuth 元数据和生成链接。旧 `FRAME_MCP_ALLOWED_ORIGINS` 和 `FRAME_OAUTH_REDIRECT_URIS` 配置被忽略，现有部署无需修改即可启动。服务对浏览器 Origin 返回匹配的 CORS 响应，并处理 OPTIONS；反向代理可覆盖最终 CORS 策略。入口限流和浏览器访问头由反向代理配置，见 [访问策略](ACCESS-POLICY.md)。
+
 ## 配置表
 
 | 配置                                | 默认/要求                                                               |
 | ----------------------------------- | ----------------------------------------------------------------------- |
-| `FRAME_MCP_PUBLIC_URL`              | 公网 HTTPS 根地址，无 `/mcp`、查询串或尾部子路径；本地开发允许回环 HTTP |
+| `FRAME_MCP_PUBLIC_URL`              | 任意域名或 IP 的 HTTP(S) 规范根地址，无 `/mcp`、查询串或尾部子路径 |
 | `FRAME_MCP_HOST` / `FRAME_MCP_PORT` | `127.0.0.1` / `8787`；隧道转发到此处                                    |
 | `FRAME_MCP_PROJECTS`                | 必填项目 id 列表，空格或逗号分隔；显式 `*` 为全部                       |
 | `FRAME_MCP_READ_ONLY`               | `false`；`true` 对 OAuth 和 Bearer 都生效                               |
@@ -136,21 +139,19 @@ OAuth 首次登录用于确认访问者身份，与每次工具操作的审批�
 | `FRAME_MCP_BEARER_TOKEN`            | 随机值，至少 32 字符；init 自动生成                                     |
 | `FRAME_MCP_BEARER_SCOPES`           | 默认读写；全局只读时进一步收紧                                          |
 | `FRAME_OAUTH_ADMIN_PASSWORD`        | 20–256 字符的私有密码；init 自动生成                                    |
-| `FRAME_OAUTH_REDIRECT_URIS`         | OAuth 模式必填，精确 HTTPS 地址；仅回环地址可用 HTTP                    |
 | `FRAME_OAUTH_CLIENTS`               | 可选预注册客户端 JSON，最多 64 个                                       |
 | `FRAME_OAUTH_ACCESS_TTL`            | 900 秒；允许 60–3600                                                    |
 | `FRAME_OAUTH_REFRESH_TTL`           | 2592000 秒；允许 3600–7776000                                           |
-| `FRAME_MCP_ALLOWED_ORIGINS`         | 额外允许的精确浏览器 Origin，无通配符；普通服务端 AI 客户端通常不需要   |
 | `FRAME_MCP_JOB_TIMEOUT`             | 600 秒；允许 1–3600                                                     |
 | `FRAME_MCP_MAX_PRINCIPALS`          | 最多 32 个活跃授权作业管理器；每个最多 2 个后台作业                     |
-| `CLOUDFLARE_TUNNEL_ENABLED`         | `false`；启用时必须填 token 和固定 HTTPS 公网地址                       |
+| `CLOUDFLARE_TUNNEL_ENABLED`         | `false`；启用时必须填 token 和固定 HTTP(S) 规范地址                       |
 | `CLOUDFLARE_TUNNEL_TOKEN`           | Cloudflare 命名隧道的运行 token                                         |
 | `CLOUDFLARED_PATH`                  | `cloudflared` 或绝对可执行路径                                          |
 | `CLOUDFLARE_TUNNEL_PROTOCOL`        | `auto`；网络受限时可选 `http2` 或 `quic`                                |
 
 ## 外部 AI 读取产物
 
-现有 38 个制作工具与 stdio 共用实现。`frame_read_artifact` 等结果中的本机产物会附加 HTTPS `resource_link` 和 `structuredContent.remoteArtifacts`（纯图片模式不附加链接）。产物下载限于已授权项目的 `exports/`，以及 `public/narration/<version>/` 中清单确认的 voice.wav、captions.srt、timeline.json；素材下载限于已登记的 `public/imports/`。支持 Range、HEAD 和流式传输，不开放仓库根目录、源码配置或私有状态。PNG 原生图片回读、JSON 回读和显式的 WAV 内联音频仍可使用。
+现有 38 个制作工具与 stdio 共用实现。`frame_read_artifact` 等结果中的本机产物会附加 HTTP(S) `resource_link` 和 `structuredContent.remoteArtifacts`（纯图片模式不附加链接）。产物下载限于已授权项目的 `exports/`，以及 `public/narration/<version>/` 中清单确认的 voice.wav、captions.srt、timeline.json；素材下载限于已登记的 `public/imports/`。支持 Range、HEAD 和流式传输，不开放仓库根目录、源码配置或私有状态。PNG 原生图片回读、JSON 回读和显式的 WAV 内联音频仍可使用。
 
 素材上传使用 `/uploads/`，字节下载使用 `/assets/`，复用同一 OAuth/Bearer 验证。Cloudflare 应转发整个域名，原有配置不需要额外开放端口。每块最多 1 MiB，避免将大文件放进单次 JSON 请求；服务重启后同一授权可继续已确认的分块偏移。具体命令和 HTTP 请求格式见 [素材传输](ASSET-TRANSFER.md)。
 
@@ -164,8 +165,8 @@ OAuth 首次登录用于确认访问者身份，与每次工具操作的审批�
 
 - 公网地址、授权元数据、回调使用同一稳定域名；Cloudflare 应转发整个主机，不只 `/mcp`，并保留请求头和查询参数。不使用 Cloudflare Access 交互式登录挡住这些端点，除非 AI 客户端本身支持该额外认证层。
 - 不缓存 MCP、OAuth、产物下载；服务返回 `no-store`。不要在反向代理中记录 Authorization、授权码、表单密码或刷新令牌。cloudflared 使用 warn 级别，隧道 token 通过 `TUNNEL_TOKEN` 环境变量传入，不出现在启动参数中。[Cloudflare 参数说明](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/run-parameters/)
-- 401：检查当前 token、认证方式和过期时间；客户端可从 `WWW-Authenticate` 自动发现 OAuth。403：检查 Origin 或只读权限。400 `invalid_target`：检查 `resource` 是否精确为公网 `/mcp` 地址。回调错误：核对 AI 实际回调与允许列表。
-- 429：请求/授权容量或密码失败次数限制；按错误等待或清理旧授权。密码连续失败 10 次会临时限制 10 分钟。
+- 401：检查当前 token、认证方式和过期时间；客户端可从 `WWW-Authenticate` 自动发现 OAuth。403：检查授权范围或只读权限。400 `invalid_target`：检查 `resource` 是否精确为公网 `/mcp` 地址。回调错误：核对 AI 实际回调与其注册的完整地址。
+- 429：活动授权或待处理请求达到内部容量上限；清理旧授权或等待任务完成。入口请求速率和密码尝试策略由反向代理管理。
 - 隧道进程退出时整个服务退出并报告失败，便于托管程序重启。日志中的 `process_started` 只表示进程启动，公网可达性需要独立验证。
 - `.secrets/frame-mcp/server.lock` 防止双实例覆盖状态。启动时仅在操作系统明确报告原 PID 不存在时自动恢复，保留 OAuth 数据和配置。进程权限不足、PID 被其他进程复用、锁损坏、链接或锁变化时不会强行接管，错误会返回 `code`、`details.pid`（有效时）和 `details.lockPath`。Windows 文件权限还应按自己的系统账户管理；程序请求的 POSIX 文件模式不替代 Windows ACL。
 - 同一代旧锁的恢复通过独占恢复锁串行执行，避免两个重启操作误删对方的新锁。`SERVER_LOCK_RECOVERY_BUSY` 表示另一启动操作正在恢复；稍后重试即可。若恢复操作本身被强制结束而持续报错，需核对错误中恢复锁及 `server.lock` 的 PID，确认相关进程均已停止后再处理指定锁。不能确认归属的锁不会自动删除，尤其不要删除整个 `.secrets/frame-mcp/` 授权目录。
@@ -177,7 +178,7 @@ OAuth 首次登录用于确认访问者身份，与每次工具操作的审批�
 - OAuth：受保护资源发现、授权服务器发现、受限动态客户端注册、预注册客户端、S256 PKCE、人工登录授权、一次性授权码、短期访问令牌、轮换刷新令牌、重放撤销和令牌撤销。回调地址必须与本机允许列表精确匹配。
 - 权限：`frame:read` / `frame:write`；写权限包含编辑与执行可信项目代码。Bearer 与 OAuth 都不能越过本机项目范围和只读配置。每次 HTTP 请求重新认证。
 - 运行配置只来自 `.env` 或进程环境。支持 `--env-file .evn`，不自动猜测拼写。样例可提交；实际 `.env`、`.evn` 和 `.secrets/` 被 Git 忽略，并排除在制作快照之外。init/check/serve 输出不打印凭据。
-- Cloudflare：已有的命名隧道，token 通过子进程环境传给 cloudflared。本地服务默认只监听回环地址；外部地址必须使用 HTTPS。域名、隧道和回调由使用者填写，服务不擅自修改 Cloudflare 账户。
+- Cloudflare：已有的命名隧道，token 通过子进程环境传给 cloudflared。本地服务默认只监听回环地址；外部地址支持 HTTP(S)，域名和 TLS 策略由反向代理负责。域名、隧道和回调由使用者填写，服务不擅自修改 Cloudflare 账户。
 - OAuth 状态只保存令牌哈希，持久化于 `.secrets/frame-mcp/`；独占锁避免多个实例覆盖授权状态。可确认原进程已退出的普通崩溃锁会在下次启动时自动恢复，状态不明的锁保留并报告原因。
 
 协议依据：[MCP 授权规范](https://modelcontextprotocol.io/specification/2025-11-25/basic/authorization)、[官方 SDK](https://ts.sdk.modelcontextprotocol.io/v2/)。验证范围见 [本次记录](../records/2026-09-28-remote-mcp.md)。

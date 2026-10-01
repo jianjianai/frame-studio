@@ -25,7 +25,7 @@ test(
       db,
       data,
       masterKey: "11".repeat(32),
-      origin: "http://frame.test",
+      origin: "https://configured.frame.test",
       scheduler: false,
     });
     try {
@@ -39,7 +39,63 @@ test(
             headers: { origin: "http://evil.test" },
           })
         ).statusCode,
-        403,
+        200,
+      );
+      for (const requestOrigin of [
+        undefined,
+        "null",
+        "http://alias.test",
+        "https://alias.test",
+      ]) {
+        for (const protocol of ["http", "https"]) {
+          const headers = {
+            host: "alternate.frame.test",
+            "x-forwarded-proto": protocol,
+            ...(requestOrigin === undefined ? {} : { origin: requestOrigin }),
+          };
+          const response = await app.inject({
+            method: "POST",
+            url: "/api/login",
+            headers,
+            payload: { password: "test-password-at-least-14" },
+          });
+          assert.equal(response.statusCode, 200, response.body);
+          assert.equal(
+            /; Secure(?:;|$)/.test(response.headers["set-cookie"]),
+            protocol === "https",
+          );
+          const session = response.headers["set-cookie"].split(";")[0];
+          const action = await app.inject({
+            method: "POST",
+            url: "/api/action",
+            headers: { ...headers, cookie: session },
+            payload: { name: "repositories_list" },
+          });
+          assert.equal(action.statusCode, 200, action.body);
+          assert.equal(action.headers["x-frame-options"], undefined);
+          assert.equal(action.headers["content-security-policy"], undefined);
+        }
+      }
+      assert.equal(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/login",
+            payload: { password: "wrong" },
+          })
+        ).statusCode,
+        401,
+      );
+      assert.equal(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/api/action",
+            headers: { origin: "http://alias.test" },
+            payload: { name: "repositories_list" },
+          })
+        ).statusCode,
+        401,
       );
       const login = await app.inject({
         method: "POST",
@@ -50,6 +106,7 @@ test(
       assert.equal(login.statusCode, 200, login.body);
       const cookie = login.headers["set-cookie"].split(";")[0];
       assert.match(login.headers["set-cookie"], /HttpOnly/);
+      assert.doesNotMatch(login.headers["set-cookie"], /; Secure(?:;|$)/);
       const call = async (name, args = {}) => {
         const r = await app.inject({
           method: "POST",
@@ -69,7 +126,7 @@ test(
             payload: { name: "repositories_list" },
           })
         ).statusCode,
-        403,
+        200,
       );
       const repo = await call("repositories_add", { name: "Integration" });
       assert(repo.id);

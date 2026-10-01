@@ -22,7 +22,7 @@ try {
   if (positionals.length > 1) throw new Error("Unexpected arguments");
   if (values.help || command === "help")
     console.log(
-      "FRAME remote MCP: pnpm film mcp-remote init|check|serve|revoke [--env-file .env] [--json]\nConfigure the public origin, exact OAuth callbacks and optional Cloudflare tunnel in the private env file.",
+      "FRAME remote MCP: pnpm film mcp-remote init|check|serve|revoke [--env-file .env] [--json]\nConfigure the canonical HTTP(S) origin, project ids and optional Cloudflare tunnel in the private env file. OAuth clients register their own callbacks.",
     );
   else if (command === "init") {
     const file = path.resolve(root, values["env-file"] || ".env");
@@ -41,7 +41,7 @@ try {
       JSON.stringify({
         status: "created",
         file,
-        next: "Edit public URL, project ids and exact OAuth callbacks. Enable the tunnel only after configuring its hostname and token. Secrets were saved, not printed.",
+        next: "Edit public URL and project ids. OAuth clients register their own callbacks. Enable the tunnel only after configuring its hostname and token. Secrets were saved, not printed.",
       }),
     );
   } else {

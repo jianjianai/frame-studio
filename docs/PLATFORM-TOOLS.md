@@ -118,7 +118,7 @@ HTTP/MCP 错误包含 `error`、`status`、`code`、`recovery` 等机器可读�
 
 回归测试集中在 `tests/server/agent-toolkit.test.mjs`、`agent-toolkit-integration.test.mjs`、`platform-cli.test.mjs`，并纳入 `pnpm verify`。涉及 PostgreSQL 的测试必须使用专用 `frame_test` 数据库；发布执行器的额外门禁见 [VERIFICATION](VERIFICATION.md)。
 
-远程 CLI 默认要求 HTTPS；localhost、127.0.0.1、[::1] 可使用 HTTP。仅对明确可信的内网测试服务器传 `--allow-http`。
+远程 CLI 支持任意域名或 IP 的 HTTP(S) 地址，传输和访问策略由反向代理管理。`--allow-http` 保留为兼容参数，无需显式启用。
 
 ## 原子批量编辑与真实影片验收
 

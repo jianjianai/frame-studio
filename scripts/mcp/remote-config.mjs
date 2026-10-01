@@ -17,21 +17,16 @@ const integer = (value, fallback, min, max, name) => {
   return n;
 };
 export const SCOPES = ["frame:read", "frame:write"];
-export const loopback = (hostname) =>
-  ["127.0.0.1", "localhost", "[::1]", "::1"].includes(hostname);
 export function redirectUri(value) {
   const u = new URL(value);
   if (
     u.username ||
     u.password ||
     u.hash ||
-    !(
-      u.protocol === "https:" ||
-      (u.protocol === "http:" && loopback(u.hostname))
-    )
+    !["http:", "https:"].includes(u.protocol)
   )
     throw new Error(
-      "OAuth callbacks require HTTPS or loopback HTTP, without credentials or fragments",
+      "OAuth callbacks must use HTTP(S), without credentials or fragments",
     );
   return u.href;
 }
@@ -57,11 +52,8 @@ export function loadRemoteConfig(
     throw new Error(
       "FRAME_MCP_PUBLIC_URL must be an origin, e.g. https://mcp.example.com",
     );
-  if (
-    publicUrl.protocol !== "https:" &&
-    !(publicUrl.protocol === "http:" && loopback(publicUrl.hostname))
-  )
-    throw new Error("Remote public URL requires HTTPS");
+  if (!["http:", "https:"].includes(publicUrl.protocol))
+    throw new Error("Remote public URL must use HTTP(S)");
   const mode = values.FRAME_MCP_AUTH_MODE || "both";
   if (!["oauth", "bearer", "both"].includes(mode))
     throw new Error("FRAME_MCP_AUTH_MODE must be oauth, bearer or both");
@@ -105,9 +97,6 @@ export function loadRemoteConfig(
     throw new Error(
       "Set FRAME_OAUTH_ADMIN_PASSWORD to a strong private password of 20..256 characters",
     );
-  const redirects = list(values.FRAME_OAUTH_REDIRECT_URIS).map(redirectUri);
-  if (mode !== "bearer" && !redirects.length)
-    throw new Error("Set exact FRAME_OAUTH_REDIRECT_URIS from your AI client");
   let clients;
   try {
     clients = JSON.parse(values.FRAME_OAUTH_CLIENTS || "[]");
@@ -118,25 +107,11 @@ export function loadRemoteConfig(
     throw new Error(
       "FRAME_OAUTH_CLIENTS must be an array of at most 64 clients",
     );
-  const origins = list(values.FRAME_MCP_ALLOWED_ORIGINS).map((value) => {
-    const origin = new URL(value);
-    if (
-      origin.origin !== value ||
-      !(
-        origin.protocol === "https:" ||
-        (origin.protocol === "http:" && loopback(origin.hostname))
-      )
-    )
-      throw new Error("Use exact HTTPS or loopback CORS origins");
-    return value;
-  });
   const tunnelEnabled = bool(values.CLOUDFLARE_TUNNEL_ENABLED);
   const tunnelToken = values.CLOUDFLARE_TUNNEL_TOKEN || "";
   const port = integer(values.FRAME_MCP_PORT, 8787, 0, 65535, "FRAME_MCP_PORT");
-  if (tunnelEnabled && (!tunnelToken || publicUrl.protocol !== "https:"))
-    throw new Error(
-      "Tunnel requires CLOUDFLARE_TUNNEL_TOKEN and a stable HTTPS public URL",
-    );
+  if (tunnelEnabled && !tunnelToken)
+    throw new Error("Tunnel requires CLOUDFLARE_TUNNEL_TOKEN");
   if (tunnelEnabled && port === 0)
     throw new Error("Tunnel requires a fixed FRAME_MCP_PORT");
   if (
@@ -161,7 +136,6 @@ export function loadRemoteConfig(
     oauth: {
       enabled: mode !== "bearer",
       password,
-      redirects,
       clients,
       accessTtl: integer(
         values.FRAME_OAUTH_ACCESS_TTL,
@@ -178,7 +152,6 @@ export function loadRemoteConfig(
         "FRAME_OAUTH_REFRESH_TTL",
       ),
     },
-    origins: [...new Set([publicUrl.origin, ...origins])],
     stateDirectory: path.join(root, ".secrets/frame-mcp"),
     timeoutMs:
       integer(

@@ -40,7 +40,6 @@ function configuration(root, overrides = {}) {
       FRAME_MCP_AUTH_MODE: "both",
       FRAME_MCP_BEARER_TOKEN: secret(),
       FRAME_OAUTH_ADMIN_PASSWORD: secret(),
-      FRAME_OAUTH_REDIRECT_URIS: callback,
       ...overrides,
     },
   });
@@ -50,15 +49,16 @@ async function running(f, overrides = {}) {
     app = await startRemoteServer(config);
   config.publicUrl = app.url;
   config.resource = app.url + "/mcp";
-  config.origins = [app.url];
   return app;
 }
-async function connect(app, token = app.config.bearerToken) {
+async function connect(app, token = app.config.bearerToken, headers = {}) {
   const client = new Client({ name: "remote-test", version: "1.0.0" });
   await client.connect(
     new StreamableHTTPClientTransport(new URL(app.config.resource), {
       fetch,
-      requestInit: { headers: { Authorization: "Bearer " + token } },
+      requestInit: {
+        headers: { Authorization: "Bearer " + token, ...headers },
+      },
     }),
   );
   return client;
@@ -100,7 +100,9 @@ async function consent(
   const page = await fetch(authorizationUrl),
     text = await page.text();
   assert.equal(page.status, 200, text);
-  assert.equal(page.headers.get("x-frame-options"), "DENY");
+  assert.equal(page.headers.get("x-frame-options"), null);
+  assert.equal(page.headers.get("content-security-policy"), null);
+  assert.equal(page.headers.get("referrer-policy"), null);
   const id = /name="request" value="([^"]+)"/.exec(text)?.[1];
   assert.ok(id);
   const cookie = cookieOverride ?? page.headers.get("set-cookie").split(";")[0];
@@ -156,7 +158,7 @@ async function grant(app, client, options) {
   return response.json();
 }
 
-test("remote env init is private and non-overwriting; invalid authentication and public origins fail closed", () => {
+test("remote env init is private and non-overwriting; HTTP(S) access accepts arbitrary domains", () => {
   const f = fixture();
   try {
     const file = path.join(f.root, ".evn");
@@ -187,22 +189,40 @@ test("remote env init is private and non-overwriting; invalid authentication and
       () => configuration(f.root, { FRAME_MCP_BEARER_TOKEN: "weak" }),
       /random token/,
     );
+    for (const url of [
+      "http://remote.example",
+      "http://10.0.0.2:8787",
+      "https://alias.example",
+    ]) {
+      assert.equal(
+        configuration(f.root, { FRAME_MCP_PUBLIC_URL: url }).publicUrl,
+        url,
+      );
+    }
+    assert.doesNotThrow(() =>
+      configuration(f.root, {
+        FRAME_OAUTH_REDIRECT_URIS: "legacy-ignored-value",
+      }),
+    );
+    assert.doesNotThrow(() =>
+      configuration(f.root, {
+        FRAME_MCP_ALLOWED_ORIGINS: "legacy-ignored-value",
+      }),
+    );
     assert.throws(
       () =>
-        configuration(f.root, {
-          FRAME_MCP_PUBLIC_URL: "http://remote.example",
-        }),
-      /HTTPS/,
+        configuration(f.root, { FRAME_MCP_PUBLIC_URL: "ftp://remote.example" }),
+      /HTTP\(S\)/,
     );
     assert.throws(
       () => configuration(f.root, { FRAME_MCP_PROJECTS: "" }),
       /PROJECTS/,
     );
-    const invalid = configuration(f.root, {
+    const anyCallback = configuration(f.root, {
       FRAME_OAUTH_CLIENTS:
-        '[{"client_id":"ai","redirect_uris":["https://unapproved.example/callback"]}]',
+        '[{"client_id":"ai","redirect_uris":["http://client.example/callback"],"token_endpoint_auth_method":"none"}]',
     });
-    assert.throws(() => validateOAuthClients(invalid), /Callback/);
+    assert.doesNotThrow(() => validateOAuthClients(anyCallback));
     assert.throws(
       () =>
         configuration(f.root, {
@@ -212,18 +232,20 @@ test("remote env init is private and non-overwriting; invalid authentication and
     );
     assert.throws(
       () =>
-        configuration(f.root, {
-          FRAME_OAUTH_REDIRECT_URIS: "https://ai.example/#fragment",
-        }),
+        validateOAuthClients(
+          configuration(f.root, {
+            FRAME_OAUTH_CLIENTS:
+              '[{"client_id":"invalid","redirect_uris":["http://client.example/#fragment"],"token_endpoint_auth_method":"none"}]',
+          }),
+        ),
       /callbacks/,
     );
-    assert.throws(
-      () =>
-        configuration(f.root, {
-          CLOUDFLARE_TUNNEL_ENABLED: "true",
-          CLOUDFLARE_TUNNEL_TOKEN: "fake",
-        }),
-      /HTTPS/,
+    assert.doesNotThrow(() =>
+      configuration(f.root, {
+        CLOUDFLARE_TUNNEL_ENABLED: "true",
+        CLOUDFLARE_TUNNEL_TOKEN: "fake",
+        FRAME_MCP_PORT: "8787",
+      }),
     );
   } finally {
     f.close();
@@ -231,7 +253,92 @@ test("remote env init is private and non-overwriting; invalid authentication and
 });
 
 test(
-  "Bearer HTTP serves real SDK tools, rejects unauthenticated/origin/host access and protects downloads",
+  "remote OAuth accepts HTTP callbacks and cookies follow actual proxy transport",
+  { timeout: 10000 },
+  async () => {
+    const f = fixture();
+    let app;
+    const redirect = "http://client.example/callback?client=fixture";
+    try {
+      const config = configuration(f.root, {
+        FRAME_MCP_PUBLIC_URL: "https://canonical.example",
+      });
+      app = await startRemoteServer(config);
+      const client = await registration(app, "none", redirect);
+      const verifier = secret();
+      const query = new URLSearchParams({
+        client_id: client.client_id,
+        redirect_uri: redirect,
+        response_type: "code",
+        code_challenge: createHash("sha256")
+          .update(verifier)
+          .digest("base64url"),
+        code_challenge_method: "S256",
+        resource: config.resource,
+        state: "proxy-test",
+      });
+      for (const protocol of [undefined, "http", "https"]) {
+        const headers = {
+          Host: "alternate.example",
+          ...(protocol === undefined ? {} : { "X-Forwarded-Proto": protocol }),
+        };
+        const page = await fetch(app.url + "/oauth/authorize?" + query, {
+          headers,
+        });
+        assert.equal(page.status, 200, await page.clone().text());
+        assert.equal(
+          /; Secure(?:;|$)/.test(page.headers.get("set-cookie")),
+          protocol === "https",
+        );
+        const html = await page.text();
+        if (protocol === undefined) {
+          for (let attempt = 0; attempt < 12; attempt++) {
+            const denied = await form(
+              app,
+              "/oauth/authorize",
+              {
+                request: /name="request" value="([^"]+)"/.exec(html)[1],
+                password: "incorrect",
+                decision: "allow",
+              },
+              { Cookie: page.headers.get("set-cookie").split(";")[0] },
+            );
+            assert.equal(
+              denied.status,
+              403,
+              "Proxy owns password attempt limits",
+            );
+          }
+        }
+        const response = await form(
+          app,
+          "/oauth/authorize",
+          {
+            request: /name="request" value="([^"]+)"/.exec(html)[1],
+            password: config.oauth.password,
+            decision: "allow",
+          },
+          {
+            ...headers,
+            Origin: "null",
+            Cookie: page.headers.get("set-cookie").split(";")[0],
+          },
+        );
+        assert.equal(response.status, 303, await response.clone().text());
+        assert.equal(
+          new URL(response.headers.get("location")).origin,
+          "http://client.example",
+        );
+      }
+    } finally {
+      await app?.close();
+      f.close();
+    }
+  },
+);
+
+test(
+  "Bearer HTTP serves real SDK tools with arbitrary origins and hosts while authenticating downloads",
   { timeout: 30000 },
   async () => {
     const f = fixture({ browser: true });
@@ -262,17 +369,18 @@ test(
         );
         request.on("error", reject);
       });
-      assert.equal(hostStatus, 403);
+      assert.equal(hostStatus, 200);
       assert.equal(
         (
           await fetch(app.config.resource, {
+            method: "OPTIONS",
             headers: {
               Authorization: "Bearer " + app.config.bearerToken,
-              Origin: "https://evil.example",
+              Origin: "http://alias.example",
             },
           })
         ).status,
-        403,
+        204,
       );
       assert.equal(
         (
@@ -282,7 +390,9 @@ test(
         ).status,
         401,
       );
-      client = await connect(app);
+      client = await connect(app, app.config.bearerToken, {
+        Origin: "http://alias.example",
+      });
       assert.deepEqual(
         (await call(client, "frame_list_projects")).projects.map((p) => p.id),
         ["test-film"],
@@ -485,9 +595,9 @@ test(
         403,
       );
       assert.equal(
-        (await consent(app, issued.url, { origin: "https://evil.example" }))
+        (await consent(app, issued.url, { origin: "http://alias.example" }))
           .status,
-        403,
+        303,
       );
       const denied = await consent(app, issued.url, { decision: "deny" });
       assert.equal(
@@ -498,7 +608,7 @@ test(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          redirect_uris: ["https://evil.example/callback"],
+          redirect_uris: ["javascript:alert(1)"],
           token_endpoint_auth_method: "none",
         }),
       });
@@ -601,7 +711,9 @@ test(
     let app, client;
     try {
       app = await running(f);
-      client = await connect(app);
+      client = await connect(app, app.config.bearerToken, {
+        Origin: "http://alias.example",
+      });
       const otherTokens = await grant(app, await registration(app));
       const job = await call(client, "frame_start_validation", {
         project: "test-film",
@@ -628,7 +740,9 @@ test(
         await other.close();
       }
       await client.close();
-      client = await connect(app);
+      client = await connect(app, app.config.bearerToken, {
+        Origin: "http://alias.example",
+      });
       let state;
       for (let i = 0; i < 80; i++) {
         state = await call(client, "frame_job", {
@@ -914,7 +1028,7 @@ test(
     let app, browser, callbackServer, callbackUrl, callbackReferer;
     try {
       // A real second origin avoids depending on interception of redirect chains.
-      // Loopback HTTP is the OAuth exception; production callback configuration requires HTTPS.
+      // A second HTTP origin exercises the registered callback without TLS requirements.
       callbackServer = http.createServer((request, response) => {
         if (new URL(request.url, "http://localhost").pathname !== "/callback") {
           response.writeHead(404);
@@ -930,7 +1044,7 @@ test(
         callbackServer.listen(0, "127.0.0.1", resolve);
       });
       callbackUrl = `http://127.0.0.1:${callbackServer.address().port}/callback`;
-      app = await running(f, { FRAME_OAUTH_REDIRECT_URIS: callbackUrl });
+      app = await running(f);
       const registered = await registration(app, "none", callbackUrl),
         issued = await code(app, registered, { redirect: callbackUrl });
       browser = await launchBrowser();
@@ -973,7 +1087,11 @@ test(
         );
       }
       const redirected = new URL(page.url());
-      assert.equal(callbackReferer, undefined);
+      assert.equal(
+        callbackReferer,
+        app.url + "/",
+        "Browser referrer policy is supplied by the proxy",
+      );
       assert.ok(redirected.searchParams.get("code"));
       assert.equal(redirected.searchParams.get("iss"), app.url);
       const response = await form(app, "/oauth/token", {

@@ -66,20 +66,14 @@ try {
   if (endpoint) {
     const url = new URL(endpoint);
     if (
-      (url.protocol !== "https:" &&
-        !(
-          url.protocol === "http:" &&
-          ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-        )) ||
+      !["http:", "https:"].includes(url.protocol) ||
       url.username ||
       url.password ||
       url.search ||
       url.hash ||
       !["/", "/mcp"].includes(url.pathname)
     )
-      throw new Error(
-        "Use an HTTPS server origin or /mcp endpoint; local HTTP is allowed only on loopback.",
-      );
+      throw new Error("Use an HTTP(S) server origin or /mcp endpoint.");
     endpoint = url.origin;
     if (!token)
       throw new Error(
