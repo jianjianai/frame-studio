@@ -68,10 +68,10 @@ export function registerToolHelp(add, registry) {
             "frame_works_task (kind: validate)",
           ],
           review: [
-            "frame_works_browser",
-            "frame_task_status until terminal",
-            "frame_works_browser again",
+            "frame_works_live_preview (editable work or active task draft)",
+            "frame_works_browser (private live AI console)",
             "FRAME_AI.ready() / FRAME_AI.help()",
+            "frame_works_task kind:build only for an explicit immutable snapshot",
           ],
           export: [
             "frame_works_task (kind: render)",

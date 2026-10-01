@@ -1,5 +1,6 @@
 import type { GeneratedAudioModule, GeneratedAudioOptions } from "./types";
 import type * as ToneType from "tone";
+import type * as ToneClasses from "tone/build/esm/classes.js";
 /** Project-local registry: independent instances, no process-wide transport or shared mutable context. */
 export function createAudioRack(
   generators: Record<string, GeneratedAudioModule>,
@@ -26,12 +27,12 @@ export function createWebAudioGenerator(
 export function createToneAudio(
   build: (
     options: GeneratedAudioOptions & {
-      Tone: typeof ToneType;
+      Tone: typeof ToneClasses;
       toneContext: ToneType.BaseContext;
     },
   ) => { dispose(): void },
 ): GeneratedAudioModule {
-  let Tone: typeof ToneType | undefined;
+  let Tone: typeof ToneClasses | undefined;
   const contexts = new Map<BaseAudioContext, ToneType.BaseContext>();
   const users = new Map<BaseAudioContext, number>();
   const get = (raw: BaseAudioContext) => {
@@ -57,11 +58,13 @@ export function createToneAudio(
   };
   return {
     async prepareAudio(raw) {
-      Tone ??= await import("tone");
+      // The public index eagerly creates its global Transport/Destination and
+      // native AudioContext. Class modules remain idle until a voice is built.
+      Tone ??= await import("tone/build/esm/classes.js");
       get(raw);
     },
     async prepareSegment({ context }) {
-      Tone ??= await import("tone");
+      Tone ??= await import("tone/build/esm/classes.js");
       get(context);
     },
     createAudio(options) {

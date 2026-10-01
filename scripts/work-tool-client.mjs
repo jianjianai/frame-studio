@@ -1,6 +1,7 @@
 import fs from "node:fs";
 
 const remoteNames = [
+  "preview",
   "assets",
   "engines",
   "speech_providers",
@@ -37,6 +38,7 @@ export const workToolHelp = {
     },
   },
   remote: {
+    preview: { note: "No arguments; opens the current work and isolated active task draft with incremental live preview, without a full build." },
     ask: {
       title: "optional short creative clarification",
       questions:

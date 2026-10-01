@@ -47,12 +47,12 @@ export async function fileSha256(file) {
 }
 const ignored = new Set([".git", "node_modules", ".cache", ".history", "exports"]);
 /** Same canonical fingerprint as the legacy synchronous helper. */
-export async function treeHash(root, { includeExecutableMode = false } = {}) {
+export async function treeHash(root, { includeExecutableMode = false, includeIgnored = false } = {}) {
   const files = [];
   const walk = async (dir, relative = "") => {
     if (!(await exists(dir))) return;
     regular(await fsp.lstat(dir));
-    const names = (await fsp.readdir(dir)).filter(name => !ignored.has(name)).sort();
+    const names = (await fsp.readdir(dir)).filter(name => includeIgnored || !ignored.has(name)).sort();
     for (const name of names) {
       const rel = relative ? relative + "/" + name : name;
       const file = await confinedAsync(root, rel), stat = regular(await fsp.lstat(file));
@@ -64,18 +64,18 @@ export async function treeHash(root, { includeExecutableMode = false } = {}) {
         files.push(entry);
       }
     }
-    const after = (await fsp.readdir(dir)).filter(name => !ignored.has(name)).sort();
+    const after = (await fsp.readdir(dir)).filter(name => includeIgnored || !ignored.has(name)).sort();
     if (JSON.stringify(after) !== JSON.stringify(names)) throw problem(409, "Project changed while hashing");
   };
   await walk(root);
   return hash(JSON.stringify(files));
 }
-export async function copyTree(source, target) {
+export async function copyTree(source, target, { includeIgnored = false } = {}) {
   await fsp.cp(source, target, {
     recursive: true,
     filter: async file => {
       const name = path.basename(file);
-      if (ignored.has(name) || name === ".env" || name.startsWith(".env.")) return false;
+      if ((!includeIgnored && ignored.has(name)) || name === ".git" || name === "node_modules" || name === ".env" || name.startsWith(".env.")) return false;
       regular(await fsp.lstat(file));
       return true;
     },

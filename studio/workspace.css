@@ -453,3 +453,7 @@ button.inline-time {
 .sync-counts span {
   text-align: center;
 }
+
+.live-preview-note { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-height: 28%; overflow: auto; }
+.live-preview-note .error-note { margin: 0; flex: 1; min-width: 180px; }
+.live-preview-note > .btn { margin-left: auto; flex: none; }

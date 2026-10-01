@@ -57,17 +57,29 @@ interface Playback {
   muted: boolean;
 }
 export function Player({
-  project,
+  project: requestedProject,
   embedded = false,
+  liveUpdate,
+  onLiveUpdate,
 }: {
   project: AnimationProject;
   embedded?: boolean;
+  liveUpdate?: { revision: number; changes: { visual: boolean; audio: boolean; metadata: boolean }; signal?: AbortSignal };
+  onLiveUpdate?: (result: { revision: number; success: boolean; error?: string }) => void;
 }) {
+  const [project, setProject] = useState(requestedProject);
+  const playerSession = useRef<ReturnType<typeof createPlayerSession> | null>(null);
+  const applied = useRef({ project: requestedProject, quality: "" as string, revision: 0 });
+  const liveCallback = useRef(onLiveUpdate);
+  liveCallback.current = onLiveUpdate;
   const [workContext, setWorkContext] = useState<{
     title: string;
     compact: boolean;
     previewStatus: "ready" | "stale" | "building" | "unknown";
     updateDisabled: boolean;
+    previewMode?: "live" | "published";
+    previewSource?: "work" | "task";
+    liveState?: "starting" | "ready" | "updating" | "error" | "reconnecting";
   } | null>(null);
   const audioTracks = useMemo(()=>projectAudioTracks(project),[project]);
   const composition = compositionSize(project);
@@ -244,6 +256,9 @@ export function Player({
         );
     }
   };
+  const publishRef = useRef(publish);
+  publishRef.current = publish;
+  const restoreEpoch = useRef(0);
   const commandHandler = useRef<(data: Record<string, any>) => void>(() => {});
   commandHandler.current = (data) => {
     if (data.command === "export") setExportOpen(true);
@@ -292,6 +307,27 @@ export function Player({
       else updateSelection({});
       seek(data.time);
     }
+    if (data.command === "restore-session" && data.state) {
+      const state = data.state, session = playerSession.current;
+      const epoch = ++restoreEpoch.current;
+      if (session) void session.ready.then(async () => {
+        if (epoch !== restoreEpoch.current || playerSession.current !== session || !session.api.ready) return;
+        const a = session.audio;
+        a.pause();
+        a.setRate(state.rate);
+        a.setLoop(state.loop);
+        if (state.volume !== undefined) a.setVolume(state.volume);
+        if (state.muted !== undefined) a.setMuted(state.muted);
+        if (state.subtitles !== undefined) { subtitleRef.current = state.subtitles; setShowSubtitles(state.subtitles); }
+        if (state.selection) updateSelection(state.selection);
+        await session.api.seek(Math.min(session.api.duration, state.time));
+        if (epoch !== restoreEpoch.current || playerSession.current !== session) return;
+        if (state.playing) await a.play();
+        publishRef.current();
+      }).catch(error => {
+        if (epoch === restoreEpoch.current && playerSession.current === session) setError(String(error));
+      });
+    }
     if (data.command === "configure-work") setWorkContext(data.context);
     if (
       data.command === "configure-view" &&
@@ -308,8 +344,6 @@ export function Player({
         ["draft", "standard", "high"].includes(p.quality) &&
         p.quality !== qualityRef.current
       ) {
-        transport.current?.pause();
-        publish();
         setQuality(p.quality);
       }
     }
@@ -371,6 +405,13 @@ export function Player({
         .catch((e) => setError("全屏未能开启：" + String(e)));
   };
   useEffect(() => {
+    if (requestedProject.id !== project.id) {
+      setProject(requestedProject);
+      setTrackControls({}); setSoloTracks([]); updateSelection({});
+      saved.current = { ...saved.current, time: 0, playing: false, buffering: false };
+    }
+  }, [requestedProject.id, project.id]);
+  useEffect(() => {
     const session = createPlayerSession({
       canvas: canvas.current!,
       project,
@@ -386,7 +427,7 @@ export function Player({
       onSnapshot: (value) => {
         saved.current = value;
         setView(value);
-        publish();
+        publishRef.current();
       },
       onLoading: setLoading,
       onError: setError,
@@ -394,17 +435,46 @@ export function Player({
       onTrackControl: (id, control) =>
         setTrackControls((previous) => ({ ...previous, [id]: control })),
     });
+    playerSession.current = session;
+    applied.current = { project, quality, revision: liveUpdate?.revision ?? 0 };
     transport.current = session.audio;
     renderer.current = session.renderer;
+    void session.ready.then(() => {
+      if (playerSession.current === session)
+        liveCallback.current?.({ revision: applied.current.revision, success: session.api.ready, ...(!session.api.ready ? { error: "Scene initialization failed" } : {}) });
+    });
     return () => {
       exportAbort.current?.abort();
       const snapshot = session.snapshot();
       saved.current = { ...snapshot, playing: false, buffering: false };
       session.dispose();
+      if (playerSession.current === session) playerSession.current = null;
       if (transport.current === session.audio) transport.current = null;
       if (renderer.current === session.renderer) renderer.current = null;
     };
-  }, [project, quality, retry]);
+  }, [project.id, embedded, retry]);
+  useEffect(() => {
+    const session = playerSession.current;
+    if (!session || requestedProject.id !== project.id || (requestedProject === applied.current.project && quality === applied.current.quality)) return;
+    // An in-progress export owns a fixed source snapshot; apply the newest revision when it finishes.
+    if (exporting) return;
+    const cancel = new AbortController();
+    const projectChanged = requestedProject !== applied.current.project;
+    const revision = liveUpdate?.revision ?? applied.current.revision;
+    void session.updateProject(requestedProject, {
+      visualChanged: quality !== applied.current.quality || (projectChanged && (liveUpdate?.changes.visual ?? true)),
+      audioChanged: projectChanged && (liveUpdate?.changes.audio ?? true),
+      quality, revision, signal: liveUpdate?.signal ? AbortSignal.any([cancel.signal, liveUpdate.signal]) : cancel.signal,
+      onCommit: () => {
+        applied.current = { project: requestedProject, quality, revision };
+        setProject(requestedProject);
+        liveCallback.current?.({ revision, success: true });
+      },
+    }).catch(error => {
+      if (!cancel.signal.aborted) liveCallback.current?.({ revision, success: false, error: String(error) });
+    });
+    return () => cancel.abort();
+  }, [requestedProject, quality, liveUpdate, exporting, retry]);
   useEffect(() => {
     for (const [id, control] of Object.entries(trackControlsRef.current))
       transport.current?.setTrack(id, control);
@@ -452,7 +522,7 @@ export function Player({
   async function renderWebm(options?: Parameters<typeof exportPlayerVideo>[1]) {
     return exportPlayerVideo(
       {
-        project,
+        project: applied.current.project,
         transport,
         exportAbort,
         publish,
@@ -556,8 +626,6 @@ export function Player({
                   disabled={loading || exporting}
                   onChange={(event) => {
                     viewConfigured.current = true;
-                    transport.current?.pause();
-                    publish();
                     setQuality(event.target.value as Quality);
                   }}
                 >
@@ -575,18 +643,20 @@ export function Player({
                     role="status"
                   >
                     {
-                      {
-                        ready: "预览最新",
-                        stale: "预览待更新",
-                        building: "正在更新预览",
-                        unknown: "版本核对失败",
-                      }[workContext.previewStatus]
+                      workContext.previewMode === "live"
+                        ? ({ starting: "正在连接", ready: workContext.previewSource === "task" ? "当前 AI 草稿" : "实时预览", updating: "正在更新", error: "保留当前预览", reconnecting: "断线重连" }[workContext.liveState ?? "ready"])
+                        : {
+                            ready: "预览最新",
+                            stale: "预览待更新",
+                            building: "正在更新预览",
+                            unknown: "版本核对失败",
+                          }[workContext.previewStatus]
                     }
                   </span>
                   <button
                     type="button"
                     className="preview-update-button"
-                    aria-label="更新预览"
+                    aria-label={workContext.previewMode === "live" ? "重新连接" : "更新预览"}
                     title="根据最新作品代码重新生成预览，不改变保存或远端同步状态"
                     disabled={workContext.updateDisabled || exporting}
                     onClick={() =>
@@ -601,7 +671,7 @@ export function Player({
                     ) : (
                       <RefreshCw size={13} />
                     )}
-                    <span>更新预览</span>
+                    <span>{workContext.previewMode === "live" ? "重新连接" : "更新预览"}</span>
                   </button>
                 </div>
               )}

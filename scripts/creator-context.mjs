@@ -156,10 +156,18 @@ export function readCreatorContext(root, options = {}, env = process.env) {
     "assets",
     "previewTask",
     "sourceCommit",
+    "liveSessionId",
+    "sourceRevision",
+    "draftTask",
     "shotId",
   ]);
   const reference = pick(task?.reviewReference, [
     "status",
+    "mode",
+    "source",
+    "liveSessionId",
+    "sourceRevision",
+    "draftTask",
     "previewTask",
     "sourceCommit",
     "fingerprint",

@@ -24,15 +24,19 @@ const redact = (value) => {
   );
 };
 let actualRuntime = null;
-let reportCommands = false, commandSerial = 0;
+let reportCommands = false,
+  commandSerial = 0;
 const abortController = new AbortController();
 process.once("SIGTERM", () => abortController.abort(new Error("创作已停止")));
 const emitAgentEvent = (event) => {
   const line = redact(JSON.stringify(event));
-  if (Buffer.byteLength(line) > 768 * 1024) throw Error("Agent event exceeds the bounded event store");
+  if (Buffer.byteLength(line) > 768 * 1024)
+    throw Error("Agent event exceeds the bounded event store");
   fs.appendFileSync(work + "/events.ndjson", line + "\n");
 };
-const executorStarted = performance.now(), validation = [], executorMetrics = {};
+const executorStarted = performance.now(),
+  validation = [],
+  executorMetrics = {};
 const measured = async (name, fn, { check = false } = {}) => {
   const started = performance.now();
   try {
@@ -49,7 +53,19 @@ const measured = async (name, fn, { check = false } = {}) => {
   }
 };
 const result = (value) =>
-  fs.writeFileSync(work + "/result.json", JSON.stringify({ ...value, validation, executorMetrics: { ...executorMetrics, totalMs: Math.round(performance.now() - executorStarted) }, runtime: actualRuntime, runtimeFingerprint: actualRuntime?.fingerprint || null }));
+  fs.writeFileSync(
+    work + "/result.json",
+    JSON.stringify({
+      ...value,
+      validation,
+      executorMetrics: {
+        ...executorMetrics,
+        totalMs: Math.round(performance.now() - executorStarted),
+      },
+      runtime: actualRuntime,
+      runtimeFingerprint: actualRuntime?.fingerprint || null,
+    }),
+  );
 const run = (bin, args, options = {}) =>
   new Promise((resolve, reject) => {
     const launch = processLaunch(bin, args);
@@ -64,16 +80,41 @@ const run = (bin, args, options = {}) =>
       stdio: ["pipe", "pipe", "pipe"],
       ...options,
     });
-    const commandId = reportCommands ? `platform-command:${++commandSerial}` : null, commandStarted = Date.now();
-    if (commandId) emitAgentEvent({ type: "agent-item", version: 1, id: commandId, kind: "command", phase: "running", at: commandStarted,
-      title: "验证与构建", command: [bin, ...args].map((part) => /\s/.test(part) ? JSON.stringify(part) : part).join(" "), cwd: work });
-    let output = "", errors = "", lineOutput = "";
+    const commandId = reportCommands
+        ? `platform-command:${++commandSerial}`
+        : null,
+      commandStarted = Date.now();
+    if (commandId)
+      emitAgentEvent({
+        type: "agent-item",
+        version: 1,
+        id: commandId,
+        kind: "command",
+        phase: "running",
+        at: commandStarted,
+        title: "验证与构建",
+        command: [bin, ...args]
+          .map((part) => (/\s/.test(part) ? JSON.stringify(part) : part))
+          .join(" "),
+        cwd: work,
+      });
+    let output = "",
+      errors = "",
+      lineOutput = "";
     const showOutput = (v) => {
       if (!commandId) return;
       lineOutput += v.toString();
       const end = lineOutput.lastIndexOf("\n");
       if (end >= 0) {
-        emitAgentEvent({ type: "agent-item", version: 1, id: commandId, kind: "command", phase: "running", at: Date.now(), outputDelta: redact(lineOutput.slice(0, end + 1)).slice(-32000) });
+        emitAgentEvent({
+          type: "agent-item",
+          version: 1,
+          id: commandId,
+          kind: "command",
+          phase: "running",
+          at: Date.now(),
+          outputDelta: redact(lineOutput.slice(0, end + 1)).slice(-32000),
+        });
         lineOutput = lineOutput.slice(end + 1);
       }
       if (lineOutput.length > 32000) lineOutput = lineOutput.slice(-32000);
@@ -108,22 +149,54 @@ const run = (bin, args, options = {}) =>
     });
     child.once("error", reject);
     child.once("close", (code) => {
-      if (commandId) emitAgentEvent({ type: "agent-item", version: 1, id: commandId, kind: "command", phase: code === 0 ? "completed" : "failed", at: Date.now(),
-        exitCode: code, durationMs: Date.now() - commandStarted, output: redact(output + (errors ? "\n" + errors : "")).slice(-32000), outputTruncated: output.length + errors.length > 32000 });
-      code === 0 ? resolve(output) : reject(new Error(`${path.basename(bin)} exited ${code}\n${errors.trim() || redact(output).slice(-6000).trim()}`));
+      if (commandId)
+        emitAgentEvent({
+          type: "agent-item",
+          version: 1,
+          id: commandId,
+          kind: "command",
+          phase: code === 0 ? "completed" : "failed",
+          at: Date.now(),
+          exitCode: code,
+          durationMs: Date.now() - commandStarted,
+          output: redact(output + (errors ? "\n" + errors : "")).slice(-32000),
+          outputTruncated: output.length + errors.length > 32000,
+        });
+      code === 0
+        ? resolve(output)
+        : reject(
+            new Error(
+              `${path.basename(bin)} exited ${code}\n${errors.trim() || redact(output).slice(-6000).trim()}`,
+            ),
+          );
     });
     child.stdin.end(options.input);
   });
 try {
-  actualRuntime = { ...(await runtimeIdentity(core)), image: process.env.FRAME_RUNTIME_IMAGE || null, sourceCommit: task.sourceCommit || null };
-  if (task.runtime?.fingerprint && task.runtime.fingerprint !== actualRuntime.fingerprint)
-    throw Error("Executor runtime differs from the controller; deploy matching platform and executor images");
+  actualRuntime = {
+    ...(await runtimeIdentity(core)),
+    image: process.env.FRAME_RUNTIME_IMAGE || null,
+    sourceCommit: task.sourceCommit || null,
+  };
+  if (
+    task.runtime?.fingerprint &&
+    task.runtime.fingerprint !== actualRuntime.fingerprint
+  )
+    throw Error(
+      "Executor runtime differs from the controller; deploy matching platform and executor images",
+    );
   if (task.runtime?.image && task.runtime.image !== actualRuntime.image)
     throw Error("Executor image does not match the frozen task runtime");
   if (task.kind === "tools-update") {
-    result(await installToolVersion({ provider: task.input.provider, version: task.input.version, run,
-      onProgress: stage => fs.writeFileSync(work + "/progress.json", JSON.stringify({ stage })),
-    }));
+    result(
+      await installToolVersion({
+        provider: task.input.provider,
+        version: task.input.version,
+        run,
+        onProgress: (stage) =>
+          fs.writeFileSync(work + "/progress.json", JSON.stringify({ stage })),
+      }),
+    );
   } else {
     for (const name of [
       "src",
@@ -143,7 +216,11 @@ try {
     ])
       if (fs.existsSync(core + "/" + name))
         fs.cpSync(core + "/" + name, work + "/" + name, { recursive: true });
-    fs.symlinkSync(core + "/node_modules", work + "/node_modules", process.platform === "win32" ? "junction" : "dir");
+    fs.symlinkSync(
+      core + "/node_modules",
+      work + "/node_modules",
+      process.platform === "win32" ? "junction" : "dir",
+    );
     await run("git", ["init", "-b", "frame-task"]);
     await run("git", ["config", "user.name", "FRAME"]);
     await run("git", ["config", "user.email", "frame@localhost"]);
@@ -171,7 +248,9 @@ try {
     await run("git", ["add", "--", ...baseline]);
     await run("git", ["commit", "-qm", "Initialize isolated task workspace"]);
     const baselineCommit = (await run("git", ["rev-parse", "HEAD"])).trim();
-    actualRuntime.ffmpeg = (await run(process.env.FFMPEG_PATH || "ffmpeg", ["-version"])).split("\n")[0];
+    actualRuntime.ffmpeg = (
+      await run(process.env.FFMPEG_PATH || "ffmpeg", ["-version"])
+    ).split("\n")[0];
     actualRuntime.browser = await browserVersion();
     let value = { status: "passed" };
     if (task.kind === "agent") {
@@ -179,28 +258,60 @@ try {
       let bin = p === "codex" ? "codex" : "claude";
       if (process.env.FRAME_LOCAL_MODE === "1") bin = localToolBinary(bin);
       const pinned = task.runtime?.tool;
-      if (pinned?.provider && pinned.provider !== p) throw Error("Pinned tool/provider mismatch");
+      if (pinned?.provider && pinned.provider !== p)
+        throw Error("Pinned tool/provider mismatch");
       if (pinned?.version) {
-        if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(pinned.version)) throw Error("Invalid pinned tool version");
+        if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(pinned.version))
+          throw Error("Invalid pinned tool version");
         bin = `/tools/${p}/${pinned.version}/node_modules/.bin/${bin}`;
       }
-      actualRuntime.tool = { provider: p, pinnedVersion: pinned?.version || null, actualVersion: (await run(bin, ["--version"])).trim(), model: task.model, authMode: task.authMode };
+      actualRuntime.tool = {
+        provider: p,
+        pinnedVersion: pinned?.version || null,
+        actualVersion: (await run(bin, ["--version"])).trim(),
+        model: task.model,
+        authMode: task.authMode,
+      };
       const prompt = creatorPrompt(task.project) + "\n\n" + task.input.prompt;
       const context = task.input.context
-        ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}` : "";
+        ? `\n\nReview context (seconds, selected range, material ids): ${JSON.stringify(task.input.context)}`
+        : "";
       const reference = task.reviewReference
         ? `\n\nVersion-bound review reference: ${JSON.stringify(task.reviewReference)}. Timecodes and shot ids belong to this reference, not automatically to the current work. If disposition is compare-to-latest, inspect the read-only reference source at the supplied path and compare it with projects/${task.project} before mapping the user's request. Never overwrite the current work with the old reference. Do not modify review/; continue editing the latest work directly with the available tools. If a mapping is ambiguous, explain that limitation rather than claiming an exact unaffected range.`
         : "";
-      const inspectFiles = createAgentFileInspector({ cwd: work, project: task.project, baseline: baselineCommit, emit: emitAgentEvent });
-      const outcome = await measured("agentMs", () => runAgentTurn({
-        provider: p, bin, task, cwd: work,
-        prompt: prompt + context + reference + (task.previousTurns?.length ? `\n\nPersisted context from earlier turns (new execution session; current instruction above takes precedence):\n${JSON.stringify(task.previousTurns)}` : "") + "\n\nWhen a creative decision genuinely requires human input, ask through " +
-          (p === "codex" ? "frame_ask_user" : "AskUserQuestion") +
-          ". The question is presented directly in the FRAME chat and its answer continues this same task. Do not end the turn with an unanswered question. For a tool-independent fallback use node scripts/work-tool.mjs ask with JSON questions. Never request credentials through chat. Share concise progress and a plan for complex work; do not invent progress or validation results.",
-        env: { ...process.env, FRAME_PROJECT: task.project, FRAME_TASK_PROGRESS_FILE: work + "/progress.json" },
-        emit: emitAgentEvent, signal: abortController.signal, onToolComplete: inspectFiles,
-        onStderr: (value) => process.stderr.write(redact(value)),
-      }));
+      const inspectFiles = createAgentFileInspector({
+        cwd: work,
+        project: task.project,
+        baseline: baselineCommit,
+        emit: emitAgentEvent,
+      });
+      const outcome = await measured("agentMs", () =>
+        runAgentTurn({
+          provider: p,
+          bin,
+          task,
+          cwd: work,
+          prompt:
+            prompt +
+            context +
+            reference +
+            (task.previousTurns?.length
+              ? `\n\nPersisted context from earlier turns (new execution session; current instruction above takes precedence):\n${JSON.stringify(task.previousTurns)}`
+              : "") +
+            "\n\nWhen a creative decision genuinely requires human input, ask through " +
+            (p === "codex" ? "frame_ask_user" : "AskUserQuestion") +
+            ". The question is presented directly in the FRAME chat and its answer continues this same task. Do not end the turn with an unanswered question. For a tool-independent fallback use node scripts/work-tool.mjs ask with JSON questions. Never request credentials through chat. Share concise progress and a plan for complex work; do not invent progress or validation results.",
+          env: {
+            ...process.env,
+            FRAME_PROJECT: task.project,
+            FRAME_TASK_PROGRESS_FILE: work + "/progress.json",
+          },
+          emit: emitAgentEvent,
+          signal: abortController.signal,
+          onToolComplete: inspectFiles,
+          onStderr: (value) => process.stderr.write(redact(value)),
+        }),
+      );
       value.upstream = outcome.upstream;
       await inspectFiles();
       reportCommands = true;
@@ -211,65 +322,60 @@ try {
           id: "validation",
           tool: "validation",
           phase: "running",
-          text: "正在验证作品并准备预览",
+          text: "正在验证作品",
         }) + "\n",
       );
-      await measured("scope", () => run("node", [
-        core + "/scripts/project-scope.mjs",
-        task.project,
-        "--base",
-        baselineCommit,
-      ]), { check: true });
-      await measured("structure", () => run("node", [
-        core + "/scripts/check-projects.mjs",
-        task.project,
-        "--strict",
-      ]), { check: true });
-      await measured("project-tests", () => run("node", [
-        core + "/scripts/film.mjs",
-        "test",
-        task.project,
-        "--json",
-      ]), { check: true });
-      const { base, file } = await measured("preview-build", async () => {
-        const built = await run(
-        "node",
-        [work + "/scripts/film.mjs", "build", task.project, "--json"],
-        {
-          env: {
-            ...process.env,
-            FRAME_PROJECT: task.project,
-            FRAME_WORK_PREVIEW: "1",
-          },
-        },
+      await measured(
+        "scope",
+        () =>
+          run("node", [
+            core + "/scripts/project-scope.mjs",
+            task.project,
+            "--base",
+            baselineCommit,
+          ]),
+        { check: true },
       );
-      let buildResult;
-      try {
-        buildResult = JSON.parse(built);
-      } catch {
-        throw new Error("Preview build did not return a valid result");
-      }
-      if (buildResult.status === "failed" || buildResult.passed === false)
-        throw new Error("Preview build failed");
-      value.buildMetrics = buildResult.buildMetrics || null;
-      const base = path.join(work, "projects", task.project, "exports");
-      const file = path.resolve(buildResult.output || "", "index.html");
-      if (
-        !file.startsWith(base + path.sep) ||
-        !fs.existsSync(file) ||
-        fs.lstatSync(file).isSymbolicLink()
-      )
-        throw new Error("Preview entry missing or outside work output");
-        return { base, file };
-      }, { check: true });
-      value.previewVersion = PREVIEW_VERSION;
-      value.previewArtifacts = [
-        {
-          name: path.relative(base, file).replaceAll("\\", "/"),
-          path: path.relative(work, file).replaceAll("\\", "/"),
-          bytes: fs.statSync(file).size,
+      await measured(
+        "structure",
+        () =>
+          run("node", [
+            core + "/scripts/check-projects.mjs",
+            task.project,
+            "--strict",
+          ]),
+        { check: true },
+      );
+      await measured(
+        "project-tests",
+        () =>
+          run("node", [
+            core + "/scripts/film.mjs",
+            "test",
+            task.project,
+            "--json",
+          ]),
+        { check: true },
+      );
+      await measured(
+        "project-types",
+        async () => {
+          const checked = JSON.parse(
+            await run("node", [
+              work + "/scripts/film.mjs",
+              "typecheck",
+              task.project,
+              "--json",
+            ]),
+          );
+          if (checked.status !== "passed")
+            throw new Error("Work type validation failed");
         },
-      ];
+        { check: true },
+      );
+      // Editing previews watch the isolated source continuously. Full bundles and
+      // audio proxies are prepared only by explicit immutable preview/export jobs.
+      value.previewMode = "live";
       fs.appendFileSync(
         work + "/events.ndjson",
         JSON.stringify({
@@ -277,7 +383,7 @@ try {
           id: "validation",
           tool: "validation",
           phase: "done",
-          text: "作品验证通过，预览已准备",
+          text: "作品验证通过，实时预览已更新",
         }) + "\n",
       );
     } else {

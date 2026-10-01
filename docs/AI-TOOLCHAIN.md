@@ -1,16 +1,18 @@
 # AI 制作工具链
 
+V8 创作页默认使用增量实时预览，保存源码后更新；音频不再先整片生成并切块。弱网播放、不可变版本与正式导出规则见 [V8 实时预览](V8-LIVE-PREVIEW.md)。
+
 本地 CLI、MCP、远程作品工具与 Codex／Claude 任务使用同一套创建及编辑契约和能力目录。默认创建空白 composition、24 秒、30 fps、静音；composition 只是基础容器，框架、素材和动画/音频能力由 AI 按任务自主选择，模板和目录顺序不表示推荐。画幅可用 width／height 成对传入，或通过 MCP 的 composition 对象传入。不能同时传两种画幅形式，脚手架拒绝覆盖已有项目。
 
 ## 接手与发现
 
-| 入口 | 身份 | 先读上下文 | 能力发现 | 参数发现 |
-| --- | --- | --- | --- | --- |
-| 本地 CLI | 工程 slug | film context <project> --json | film capabilities --json | film describe <command> [action] --json |
-| 本地 MCP | 工程 slug | frame_workspace_context → frame_project_context | frame_capabilities | frame_help → frame_tool_describe |
-| 平台 CLI | 作品 UUID id | platform workspace_context → platform works_context - | platform capabilities - | platform describe <operation> |
-| 平台 MCP | 作品 UUID id | frame_workspace_context → frame_works_context | frame_capabilities | frame_tool_describe |
-| Codex／Claude 任务 | 当前任务绑定的工程 | node scripts/work-tool.mjs context | work-tool capabilities | work-tool help --json 与 film describe |
+| 入口               | 身份               | 先读上下文                                            | 能力发现                 | 参数发现                                |
+| ------------------ | ------------------ | ----------------------------------------------------- | ------------------------ | --------------------------------------- |
+| 本地 CLI           | 工程 slug          | film context <project> --json                         | film capabilities --json | film describe <command> [action] --json |
+| 本地 MCP           | 工程 slug          | frame_workspace_context → frame_project_context       | frame_capabilities       | frame_help → frame_tool_describe        |
+| 平台 CLI           | 作品 UUID id       | platform workspace_context → platform works_context - | platform capabilities -  | platform describe <operation>           |
+| 平台 MCP           | 作品 UUID id       | frame_workspace_context → frame_works_context         | frame_capabilities       | frame_tool_describe                     |
+| Codex／Claude 任务 | 当前任务绑定的工程 | node scripts/work-tool.mjs context                    | work-tool capabilities   | work-tool help --json 与 film describe  |
 
 能力查询只读，无需先创建工程。本地与平台 MCP 的 `frame_capabilities`、CLI 的 `film capabilities` 和 Agent 的 `work-tool capabilities` 共用目录，包含 visual、media、animation、audio 四类；可以用 category/query/id 筛选并直接取得接入与限制信息，完整指南见 [CAPABILITIES.md](CAPABILITIES.md)。
 

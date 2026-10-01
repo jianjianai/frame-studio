@@ -177,6 +177,7 @@ export function ReviewContext({ context, onRecall, onRemove }) {
                 reviewTime(context.end)
               : "时间 " + reviewTime(context.time)}
             {context.sourceCommit && <small className="reference-version">版本 {context.sourceCommit.slice(0, 7)}</small>}
+            {context.liveSessionId && context.sourceRevision && <small className="reference-version">{context.draftTask ? "AI 草稿" : "实时版本"} {context.sourceRevision.slice(0, 7)}</small>}
           </button>
           {onRemove && (
             <button type="button" aria-label="移除时间引用" onClick={onRemove}>

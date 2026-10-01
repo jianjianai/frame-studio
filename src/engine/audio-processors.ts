@@ -1,4 +1,5 @@
 import type { AudioTrack } from "./types";
+import { smoothAudioParam } from "./live-audio-update";
 export type Processor = { type: string; bypass?: boolean; [key: string]: any };
 export type Channel = {
   id: string;
@@ -70,23 +71,63 @@ export function buildMixGraph(
 ) {
   const owned: AudioNode[] = [],
     nodes = new Map<string, GainNode>();
+  const updates: ((next: AudioMixDocument | undefined) => void)[] = [];
+  const shape = (value?: AudioMixDocument) =>
+    JSON.stringify([
+      value?.master.processors.map((p) => processorShape(p)) ?? [],
+      [...(value?.tracks ?? []), ...(value?.buses ?? [])].map((c) => [
+        c.id,
+        c.output,
+        c.sends.map((s) => s.bus),
+        c.processors.map((p) => processorShape(p)),
+      ]),
+      [
+        ...(value?.master.processors ?? []),
+        ...[...(value?.tracks ?? []), ...(value?.buses ?? [])].flatMap(
+          (c) => c.processors,
+        ),
+      ].some((p) => p.type === "duck")
+        ? [value?.clips, value?.tracks.map((c) => [c.id, c.muted])]
+        : null,
+    ]);
+  const processorShape = (p: Processor) => [
+    p.type,
+    !!p.bypass,
+    ...(["reverb", "distortion", "duck", "limiter"].includes(p.type)
+      ? [p]
+      : []),
+  ];
+  const oldShape = shape(doc);
+  const register = (
+    getter: (next: AudioMixDocument | undefined) => Processor[],
+    index: number,
+    apply: (p: Processor) => void,
+  ) => updates.push((next) => apply(getter(next)[index]));
   const make = <T extends AudioNode>(n: T) => {
     owned.push(n);
     return n;
   };
-  const series = (input: AudioNode, processors: Processor[]) => {
+  const series = (
+    input: AudioNode,
+    processors: Processor[],
+    getter: (next: AudioMixDocument | undefined) => Processor[],
+  ) => {
     let current = input;
-    for (const p of processors) {
+    for (const [index, p] of processors.entries()) {
       if (p.bypass) continue;
       let output: AudioNode;
       if (p.type === "gain") {
         const n = make(context.createGain());
         n.gain.value = p.gain;
+        register(getter, index, (p) =>
+          smoothAudioParam(n.gain, p.gain, context),
+        );
         current.connect(n);
         output = n;
       } else if (p.type === "pan") {
         const n = make(context.createStereoPanner());
         n.pan.value = p.pan;
+        register(getter, index, (p) => smoothAudioParam(n.pan, p.pan, context));
         current.connect(n);
         output = n;
       } else if (p.type === "filter") {
@@ -95,6 +136,12 @@ export function buildMixGraph(
         n.frequency.value = p.frequency;
         n.Q.value = p.q;
         n.gain.value = p.gain;
+        register(getter, index, (p) => {
+          n.type = p.mode;
+          smoothAudioParam(n.frequency, p.frequency, context);
+          smoothAudioParam(n.Q, p.q, context);
+          smoothAudioParam(n.gain, p.gain, context);
+        });
         current.connect(n);
         output = n;
       } else if (p.type === "compressor" || p.type === "limiter") {
@@ -104,6 +151,25 @@ export function buildMixGraph(
         n.ratio.value = p.type === "limiter" ? 20 : p.ratio;
         n.attack.value = p.type === "limiter" ? 0.001 : p.attack;
         n.release.value = p.release;
+        register(getter, index, (p) => {
+          smoothAudioParam(
+            n.threshold,
+            p.type === "limiter" ? p.ceiling : p.threshold,
+            context,
+          );
+          smoothAudioParam(n.knee, p.type === "limiter" ? 0 : p.knee, context);
+          smoothAudioParam(
+            n.ratio,
+            p.type === "limiter" ? 20 : p.ratio,
+            context,
+          );
+          smoothAudioParam(
+            n.attack,
+            p.type === "limiter" ? 0.001 : p.attack,
+            context,
+          );
+          smoothAudioParam(n.release, p.release, context);
+        });
         current.connect(n);
         output = n;
         if (p.type === "limiter") {
@@ -164,6 +230,13 @@ export function buildMixGraph(
           for (let output = 0; output < 2; output++) {
             const g = make(context.createGain());
             g.gain.value = (input === output ? 1 + p.width : 1 - p.width) / 2;
+            register(getter, index, (p) =>
+              smoothAudioParam(
+                g.gain,
+                (input === output ? 1 + p.width : 1 - p.width) / 2,
+                context,
+              ),
+            );
             split.connect(g, input);
             g.connect(merge, 0, output);
           }
@@ -174,6 +247,10 @@ export function buildMixGraph(
           wet = make(context.createGain());
         dry.gain.value = 1 - p.mix;
         wet.gain.value = p.mix;
+        register(getter, index, (p) => {
+          smoothAudioParam(dry.gain, 1 - p.mix, context);
+          smoothAudioParam(wet.gain, p.mix, context);
+        });
         current.connect(dry);
         dry.connect(sum);
         wet.connect(sum);
@@ -182,6 +259,10 @@ export function buildMixGraph(
             feedback = make(context.createGain());
           delay.delayTime.value = p.time;
           feedback.gain.value = p.feedback;
+          register(getter, index, (p) => {
+            smoothAudioParam(delay.delayTime, p.time, context);
+            smoothAudioParam(feedback.gain, p.feedback, context);
+          });
           current.connect(delay);
           delay.connect(wet);
           delay.connect(feedback);
@@ -221,9 +302,18 @@ export function buildMixGraph(
     return current;
   };
   try {
+    const output = make(context.createGain());
+    output.connect(destination);
     const master = make(context.createGain());
     master.gain.value = doc?.master.gain ?? 1;
-    series(master, doc?.master.processors ?? []).connect(destination);
+    updates.push((next) =>
+      smoothAudioParam(master.gain, next?.master.gain ?? 1, context),
+    );
+    series(
+      master,
+      doc?.master.processors ?? [],
+      (next) => next?.master.processors ?? [],
+    ).connect(output);
     nodes.set("master", master);
     for (const c of [...(doc?.tracks ?? []), ...(doc?.buses ?? [])])
       nodes.set(c.id, make(context.createGain()));
@@ -235,16 +325,44 @@ export function buildMixGraph(
       pan.pan.value = c.pan;
       input.connect(gain);
       gain.connect(pan);
-      const out = series(pan, c.processors);
+      const channel = (next: AudioMixDocument | undefined) =>
+        [...(next?.tracks ?? []), ...(next?.buses ?? [])].find(
+          (v) => v.id === c.id,
+        )!;
+      updates.push((next) => {
+        const value = channel(next);
+        smoothAudioParam(gain.gain, value.muted ? 0 : value.gain, context);
+        smoothAudioParam(pan.pan, value.pan, context);
+      });
+      const out = series(pan, c.processors, (next) => channel(next).processors);
       out.connect(nodes.get(c.output)!);
-      for (const s of c.sends) {
+      for (const [sendIndex, s] of c.sends.entries()) {
         const g = make(context.createGain());
         g.gain.value = s.gain;
+        updates.push((next) =>
+          smoothAudioParam(
+            g.gain,
+            channel(next).sends[sendIndex].gain,
+            context,
+          ),
+        );
         out.connect(g);
         g.connect(nodes.get(s.bus)!);
       }
     }
     return {
+      setOutput(value: number, immediate = false) {
+        if (immediate) output.gain.value = value;
+        else smoothAudioParam(output.gain, value, context);
+      },
+      canUpdateDocument(next: AudioMixDocument | undefined) {
+        return shape(next) === oldShape;
+      },
+      updateDocument(next: AudioMixDocument | undefined) {
+        if (shape(next) !== oldShape) return false;
+        for (const update of updates) update(next);
+        return true;
+      },
       destination: (track: AudioTrack) =>
         nodes.get(track.channel ?? "master") ?? master,
       dispose: () => {

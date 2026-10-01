@@ -1,3 +1,5 @@
+import { useContext, useLayoutEffect, type ContextType } from "react";
+import { Internals } from "remotion";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Player, type PlayerRef } from "@remotion/player";
@@ -8,6 +10,9 @@ import type {
   ScenePlayback,
 } from "./types";
 import { remotionConfig, withFrameSubtitles } from "./remotion-composition";
+import { retireRemotionAudio } from "./remotion-audio-lifetime";
+
+type NativeAudioOwner = NonNullable<ContextType<typeof Internals.SharedAudioContext>>;
 
 /** DOM stays native: no lossy HTML-to-canvas emulation in the live preview. */
 export async function createRemotionScene(
@@ -42,6 +47,24 @@ export async function createRemotionScene(
     muted: false,
   };
   let Content = withFrameSubtitles(component, project, captions);
+  const nativeAudio = new Map<AudioContext, NativeAudioOwner>();
+  const retireAudio = (context: AudioContext, owner: NativeAudioOwner) => {
+    // Cancel Remotion's pending resume attempts, then guard late native transitions.
+    void owner.suspend().catch(() => {});
+    retireRemotionAudio(context);
+  };
+  const withOwnedAudio = (Component: typeof Content) =>
+    function OwnedComposition(props: Record<string, unknown>) {
+      // This context belongs to this pinned Remotion Player, never Frame's transport.
+      const owner = useContext(Internals.SharedAudioContext);
+      useLayoutEffect(() => {
+        if (!owner?.audioContext) return;
+        if (disposed) retireAudio(owner.audioContext, owner);
+        else nativeAudio.set(owner.audioContext, owner);
+      }, [owner]);
+      return <Component {...props} />;
+    };
+  let PlaybackContent = withOwnedAudio(Content);
   const waiting = () => {
     buffering = true;
     options.onBuffering?.(true);
@@ -63,7 +86,7 @@ export async function createRemotionScene(
       root.render(
         <Player
           ref={bindPlayer}
-          component={Content}
+          component={PlaybackContent}
           inputProps={project.remotion?.inputProps ?? {}}
           compositionWidth={config.width}
           compositionHeight={config.height}
@@ -74,6 +97,9 @@ export async function createRemotionScene(
           clickToPlay={false}
           moveToBeginningWhenEnded={false}
           playbackRate={state.rate}
+          // Frame owns persisted preferences; opaque previews cannot use localStorage.
+          initialVolume={state.volume}
+          initiallyMuted={state.muted}
           errorFallback={({ error }) => {
             failure = error;
             return <div role="alert">{error.message}</div>;
@@ -84,7 +110,10 @@ export async function createRemotionScene(
   try {
     mount();
   } catch (error) {
+    disposed = true;
     root.unmount();
+    for (const [context, owner] of nativeAudio) retireAudio(context, owner);
+    nativeAudio.clear();
     element.remove();
     throw error;
   }
@@ -96,10 +125,49 @@ export async function createRemotionScene(
   return {
     canvas,
     element,
+    async prepareFrame(time, { signal }) {
+      if (disposed) throw new Error("Remotion scene disposed");
+      if (failure) throw failure;
+      signal.throwIfAborted();
+      const frame = seek(time);
+      const needsSeek = !state.playing || Math.abs((ref.current?.getCurrentFrame() ?? -1) - frame) > 1;
+      if (needsSeek) {
+        lastFrame = frame;
+        flushSync(() => ref.current?.seekTo(frame));
+      } else if (!buffering) return;
+      // A connected DOM surface must commit React effects and finish media buffering before swapping/capture.
+      let stable = 0;
+      while (stable < (needsSeek ? 2 : 1)) {
+        await new Promise<void>((resolve, reject) => {
+          let handle = 0;
+          const abort = () => {
+            cancelAnimationFrame(handle);
+            signal.removeEventListener("abort", abort);
+            reject(signal.reason ?? new DOMException("Aborted frame", "AbortError"));
+          };
+          signal.addEventListener("abort", abort, { once: true });
+          if (signal.aborted) { abort(); return; }
+          handle = requestAnimationFrame(() => {
+            signal.removeEventListener("abort", abort);
+            resolve();
+          });
+        });
+        signal.throwIfAborted();
+        if (disposed) throw new Error("Remotion scene disposed");
+        if (failure) throw failure;
+        const media = [...element.querySelectorAll<HTMLMediaElement>("video,audio")];
+        const images = [...element.querySelectorAll<HTMLImageElement>("img")].filter(image => image.getAttribute("src"));
+        if (media.some(item => item.error) || images.some(image => image.complete && image.naturalWidth === 0))
+          throw new Error("Remotion media failed to load");
+        const ready = media.every(item => !item.currentSrc || item.readyState >= 2) && images.every(image => image.complete);
+        stable = ref.current && !buffering && ready ? stable + 1 : 0;
+      }
+    },
     setSubtitles(enabled) {
       if (enabled === captions) return;
       captions = enabled;
       Content = withFrameSubtitles(component, project, captions);
+      PlaybackContent = withOwnedAudio(Content);
       mount();
     },
     render(time) {
@@ -121,7 +189,7 @@ export async function createRemotionScene(
       ref.current?.setVolume(Math.min(1, Math.max(0, next.volume)));
       if (next.muted) ref.current?.mute();
       else ref.current?.unmute();
-      if (!next.playing) ref.current?.pause();
+      if (!next.playing) flushSync(() => ref.current?.pause());
       else if (!wasPlaying) {
         ref.current?.seekTo(seek(next.time));
         ref.current?.play();
@@ -146,8 +214,11 @@ export async function createRemotionScene(
     dispose() {
       if (disposed) return;
       disposed = true;
-      ref.current?.pause();
+      // Commit pause/seek cancellation while the Player and its suspend effect still exist.
+      flushSync(() => ref.current?.pause());
       root.unmount();
+      for (const [context, owner] of nativeAudio) retireAudio(context, owner);
+      nativeAudio.clear();
       element.remove();
       canvas.width = canvas.height = 1;
     },

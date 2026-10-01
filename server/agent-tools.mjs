@@ -104,6 +104,23 @@ export function agentTools({
         throw problem(400, "Invalid question id");
       return actions.interactions.poll(task.id, args.id);
     }
+    if (name === "preview") {
+      if (Object.keys(args).length)
+        throw problem(
+          400,
+          "preview takes no arguments; work and draft are scoped to this task",
+        );
+      const work = await db.one(
+        "SELECT id FROM works WHERE repo=$1 AND project=$2 AND NOT deleted",
+        [task.repo, task.project],
+      );
+      if (!work) throw problem(404, "Current work not found");
+      return actions.call("works_live_preview", {
+        id: work.id,
+        task: task.id,
+        ai: true,
+      });
+    }
     if (name === "assets") {
       const limit = args.limit ?? 60,
         offset = args.offset ?? 0;
@@ -254,7 +271,7 @@ export function agentTools({
     }
     throw problem(
       403,
-      "Allowed: assets, engines, speech_providers, engines_discover, speech_status, speech_cancel, engine_add, engine_test, use and speech",
+      "Allowed: preview, assets, engines, speech_providers, engines_discover, speech_status, speech_cancel, engine_add, engine_test, use and speech",
     );
   });
 }

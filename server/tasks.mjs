@@ -239,7 +239,7 @@ export class Tasks {
           t.kind === "agent" ? "AI 修改前自动保存" : "生成预览或导出前保存",
         );
     }
-    const reviewReference = await prepareReviewReference({ repos: this.repos, task: t, run, sourceCommit, fingerprint });
+    const reviewReference = await prepareReviewReference({ repos: this.repos, task: t, run, sourceCommit, fingerprint, data: this.data });
     await seedPreviewAudio({ db: this.db, data: this.data, task: t, run });
     let config = {};
     if (t.kind === "agent") {

@@ -12,7 +12,7 @@ export function decodeExportMessage(value, requestId) {
   return result.success && result.data.id === requestId ? result.data : null;
 }
 
-/** Coordinates are attached to the immutable preview the user actually saw. @param {{time?: number, selection?: {start?: number, end?: number}, shotId?: string}} position @param {{previewTask?: string, sourceCommit?: string}} reference @param {boolean} [range] */
+/** Coordinates are attached to the applied live revision or immutable preview the user actually saw. @param {{time?: number, selection?: {start?: number, end?: number}, shotId?: string}} position @param {{previewTask?: string, sourceCommit?: string, liveSessionId?: string, sourceRevision?: string, draftTask?: string}} reference @param {boolean} [range] */
 export function positionReference(position, reference, range = false) {
   const selection = position.selection;
   const coordinates =

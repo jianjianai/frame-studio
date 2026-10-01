@@ -16,7 +16,7 @@ import { PREVIEW_VERSION } from "../../server/preview-version.mjs";
 
 const url = process.env.FRAME_TEST_DATABASE_URL;
 test(
-  "V5 browser: immutable references, visual before/after review, persistent drafts and conflict-safe inverse undo",
+  "V8 browser: live references, immutable before/after review, persistent drafts and conflict-safe inverse undo",
   { skip: !url, timeout: 180000 },
   async () => {
     assert.match(new URL(url).pathname, /frame_test/);
@@ -179,6 +179,32 @@ test(
         .elementHandle()
         .then((el) => el.contentFrame());
       await frame.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
+      await expect(page.locator(".preview-pane iframe")).toHaveAttribute(
+        "src",
+        /\/preview-live\//,
+      );
+      const liveSession = [...actions.livePreview.sessions.values()].find(
+        (session) =>
+          session.work === work.id &&
+          session.source === "work" &&
+          !session.closed,
+      );
+      assert(
+        liveSession,
+        "Creation must attach the current work's live session",
+      );
+      await frame.waitForFunction(
+        () =>
+          window.__FRAME_LIVE_STATUS__?.state === "ready" &&
+          /^[a-f0-9]{64}$/.test(
+            window.__FRAME_LIVE_STATUS__?.sourceRevision || "",
+          ),
+      );
+      const liveRevision = await frame.evaluate(
+        () => window.__FRAME_LIVE_STATUS__.sourceRevision,
+      );
+      assert.match(liveRevision, /^[a-f0-9]{64}$/);
+      assert.equal(liveRevision, liveSession.manifest?.sourceRevision);
       await frame.evaluate(() => window.__FRAME_STUDIO__.seek(0.75));
       await expect(
         page.getByRole("button", { name: "引用当前时间", exact: true }),
@@ -188,7 +214,7 @@ test(
         .click();
       await expect(
         page.locator(".chat-composer .reference-version"),
-      ).toContainText(after.slice(0, 7));
+      ).toContainText("实时版本 " + liveRevision.slice(0, 7));
       const composer = page.locator(".chat-composer textarea");
       await composer.fill("保留这个带版本的草稿");
       await page
@@ -199,7 +225,7 @@ test(
       await expect(composer).toHaveValue("保留这个带版本的草稿");
       await expect(
         page.locator(".chat-composer .reference-version"),
-      ).toContainText(after.slice(0, 7));
+      ).toContainText("实时版本 " + liveRevision.slice(0, 7));
       await page.screenshot({
         path: path.join(report, "workspace-desktop.png"),
       });
@@ -219,8 +245,19 @@ test(
         "SELECT * FROM tasks WHERE input->>'prompt'=$1",
         ["保留这个带版本的草稿"],
       );
-      assert.equal(sent.review_reference.sourceCommit, after);
-      assert.equal(sent.input.context.previewTask, afterPreview);
+      assert.equal(sent.review_reference.status, "versioned");
+      assert.equal(sent.review_reference.mode, "live");
+      assert.equal(sent.review_reference.source, "work");
+      assert.equal(sent.review_reference.liveSessionId, liveSession.id);
+      assert.equal(sent.review_reference.sourceRevision, liveRevision);
+      assert.match(sent.review_reference.fingerprint, /^[a-f0-9]{64}$/);
+      assert.equal(sent.input.context.liveSessionId, liveSession.id);
+      assert.equal(sent.input.context.sourceRevision, liveRevision);
+      assert.equal(sent.review_reference.sourceCommit, undefined);
+      assert.equal(sent.review_reference.previewTask, undefined);
+      assert.equal(sent.input.context.sourceCommit, undefined);
+      assert.equal(sent.input.context.previewTask, undefined);
+      assert.equal(sent.input.context.draftTask, undefined);
       assert.equal(sent.execution.model, "fixture-model");
       await tasks.cancel(sent.id);
       await page

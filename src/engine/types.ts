@@ -130,6 +130,13 @@ export interface SceneModule {
   createScene(options: SceneOptions): Promise<Scene> | Scene;
 }
 export interface AnimationProject extends ProjectMeta {
+  /** Live sessions run source/generators without whole-film preencoding. */
+  livePreview?: boolean;
+  previewAudioGeneratorRevision?: string;
+  previewAudioSources?: Record<string, {
+    revision: string; url?: string; originalUrl?: string;
+    renditions?: Record<string, string>;
+  }>;
   load: () => Promise<SceneModule>;
   loadRemotion?: () => Promise<import('./remotion-composition').RemotionModule>;
   loadAudio?: () => Promise<GeneratedAudioModule>;
@@ -180,3 +187,8 @@ export function projectAudioTracks(
 }
 export const assetUrl = (relative: string): string =>
   import.meta.env.BASE_URL + relative.replace(/^\//, "");
+
+/** Live bundles select a cached preview rendition; offline rendering keeps the original. */
+export function previewAssetUrl(relative: string, _quality: Quality = "standard"): string {
+  return assetUrl(relative);
+}

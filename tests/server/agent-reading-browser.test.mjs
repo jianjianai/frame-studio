@@ -234,11 +234,14 @@ test(
       const second = await context.newPage();
       second.on("pageerror", (e) => errors.push(e.message));
       await second.addInitScript(
-        ({ work, chat }) =>
+        ({ work, chat }) => {
+          // This fixture selects the Studio chat, not opaque project iframes.
+          if (window !== window.top) return;
           sessionStorage.setItem(
             "frame.active-chat:" + work,
             JSON.stringify({ id: chat }),
-          ),
+          );
+        },
         { work: work.id, chat: chat.id },
       );
       await second.goto(origin + "/#/work/" + work.id);

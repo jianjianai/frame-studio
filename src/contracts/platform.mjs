@@ -66,8 +66,17 @@ export const reviewContextSchema = z
     assets: z.array(uuid).max(20).optional(),
     previewTask: uuid.optional(),
     sourceCommit: commitSchema.optional(),
+    liveSessionId: uuid.optional(),
+    sourceRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    draftTask: uuid.optional(),
     shotId: shotIdSchema.optional(),
   })
+  .refine(
+    (a) => Boolean(a.liveSessionId) === Boolean(a.sourceRevision) &&
+      (!a.liveSessionId || (!a.previewTask && !a.sourceCommit)) &&
+      (!a.draftTask || Boolean(a.liveSessionId)),
+    "Use one complete live or immutable review reference",
+  )
   .refine(
     (a) =>
       (a.start === undefined && a.end === undefined) ||
@@ -352,6 +361,13 @@ export const previewMessageSchema = z.discriminatedUnion("type", [
     message: z.string().max(4000),
   }),
   z.strictObject({ type: z.literal("frame-preview-update-request") }),
+  z.strictObject({
+    type: z.literal("frame-live-preview"),
+    state: z.enum(["ready", "updating", "error", "reconnecting"]),
+    sourceRevision: z.string().max(200).optional(),
+    revision: z.number().int().nonnegative().optional(),
+    error: z.string().max(6000).optional(),
+  }),
   playerStateSchema,
   z.looseObject({
     type: z.literal("frame-preview-loading"),
@@ -367,6 +383,9 @@ export const workContextSchema = z.strictObject({
   compact: z.boolean(),
   previewStatus: z.enum(["ready", "stale", "building", "unknown"]),
   updateDisabled: z.boolean(),
+  previewMode: z.enum(["live", "published"]).optional(),
+  previewSource: z.enum(["work", "task"]).optional(),
+  liveState: z.enum(["starting", "ready", "updating", "error", "reconnecting"]).optional(),
 });
 const playerType = z.literal("frame-player-command");
 export const playerCommandSchema = z.discriminatedUnion("command", [
@@ -374,6 +393,20 @@ export const playerCommandSchema = z.discriminatedUnion("command", [
     type: playerType,
     command: z.literal("configure-work"),
     context: workContextSchema,
+  }),
+  z.strictObject({
+    type: playerType,
+    command: z.literal("restore-session"),
+    state: z.strictObject({
+      time: z.number().finite().min(0).max(3600),
+      playing: z.boolean(),
+      rate: z.number().finite().positive().max(8),
+      loop: z.boolean(),
+      volume: z.number().finite().min(0).max(4).optional(),
+      muted: z.boolean().optional(),
+      subtitles: z.boolean().optional(),
+      selection: z.strictObject({ start: z.number().finite().nonnegative().optional(), end: z.number().finite().nonnegative().optional() }).optional(),
+    }),
   }),
   z.strictObject({ type: playerType, command: z.literal("export") }),
   z.strictObject({ type: playerType, command: z.literal("pause") }),

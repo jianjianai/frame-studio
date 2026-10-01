@@ -18,7 +18,7 @@ export default defineConfig({
       },
     },
   ],
-  optimizeDeps: { include: ["tone", "remotion", "@remotion/player", "@remotion/media", "@remotion/web-renderer"] },
+  optimizeDeps: { include: ["tone", "tone/build/esm/classes.js", "remotion", "@remotion/player", "@remotion/media", "@remotion/web-renderer"] },
   worker: { format: "iife" },
   server: {
     host: "127.0.0.1",

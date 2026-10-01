@@ -1,3 +1,4 @@
+import { beginPreviewSnapshot } from "../engine/live-preview-lock";
 import type { AudioTransport } from "../engine/audio";
 import type { AnimationProject } from "../engine/types";
 import type { ExportProgress } from "../engine/browser-export";
@@ -75,6 +76,7 @@ export async function exportPlayerVideo(
     });
     return;
   }
+  const releaseSnapshot = beginPreviewSnapshot();
   lastExport.current = null;
   const abort = new AbortController();
   exportAbort.current = abort;
@@ -158,6 +160,7 @@ export async function exportPlayerVideo(
       ...(!abort.signal.aborted ? { error: String(error) } : {}),
     });
   } finally {
+    releaseSnapshot();
     if (exportAbort.current === abort) {
       exportAbort.current = null;
       setExporting(false);

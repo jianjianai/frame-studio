@@ -1,3 +1,4 @@
+import { beginPreviewSnapshot } from "./live-preview-lock";
 import { type AnimationProject, projectAudioTracks } from "./types";
 import { waitForStudio } from "./debug";
 import { FrameRenderer } from "./renderer";
@@ -72,6 +73,11 @@ export function installAiBrowser(project: AnimationProject) {
   };
   const control = {
     version: 1,
+    updateProject(next: AnimationProject) {
+      if (next.id !== project.id) throw new Error("Cannot change AI console project identity");
+      project = next;
+    },
+    isExporting: () => [...jobs.values()].some(job => job.state === "running"),
     help: () => ({
       ready: "await FRAME_AI.ready()",
       info: "FRAME_AI.info()",
@@ -289,6 +295,7 @@ export function installAiBrowser(project: AnimationProject) {
           filename: project.id + ".webm",
         };
       jobs.set(id, job);
+      const releaseSnapshot = beginPreviewSnapshot();
       void exportWebm(project, {
         width: options.width ?? fitComposition(project, 1280).width,
         fps: options.fps ?? project.fps,
@@ -313,7 +320,7 @@ export function installAiBrowser(project: AnimationProject) {
             state: job.controller.signal.aborted ? "cancelled" : "failed",
             error: String(error),
           }),
-        );
+        ).finally(releaseSnapshot);
       return { id };
     },
     exportStatus: publicJob,

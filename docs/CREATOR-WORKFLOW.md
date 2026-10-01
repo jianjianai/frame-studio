@@ -24,6 +24,12 @@ node scripts/work-tool.mjs help --json
 
 独立 checkout 无任务环境时传入 `{"project":"my-film"}`；本地 context/check 不需要平台登录。活动任务不允许切换为其他作品。所有临时请求 JSON、专用脚本、素材、记录和导出均放在 `projects/<id>/`，不要在根目录创建 scratch 文件。
 
+## 实时预览
+
+V8 在创作页持续预览当前作品或当前 AI 的隔离草稿。保存源码后增量更新，不需要每次 `film build`。任务内可运行 `node scripts/work-tool.mjs preview` 获取当前草稿播放器；不传作品或任务参数，权限由任务凭据限定。已有稳定画面在编译或初始化错误时继续显示。审片引用记录实际已显示的源码版本，不代表当前工作目录最新版本；修改引用的旧片段时先比较引用源码与最新源码。
+
+详细行为、缓存、弱网代理和导出区别见 [V8 实时预览](V8-LIVE-PREVIEW.md)。
+
 ## 编辑与检查
 
 ```sh
@@ -70,4 +76,4 @@ pnpm --silent film export my-film --json
 pnpm --silent film verify my-film --file projects/my-film/exports/renders/<id>/film.mp4 --json
 ```
 
-任务成功后的自动构建只说明预览准备完成。需要正式成片时使用分段导出和媒体验证，并报告实际版本、检查结果、文件路径以及尚未核对的内容。长期说明保留在 README；本次修改和验收记录放作品 records/。
+任务成功前执行范围、结构、作品测试和类型检查；发布后实时预览自动跟随源码。预览能够播放不等于整片内容已验收。需要正式成片时使用分段导出和媒体验证，并报告实际版本、检查结果、文件路径以及尚未核对的内容。长期说明保留在 README；本次修改和验收记录放作品 records/。
