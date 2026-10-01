@@ -21,6 +21,8 @@ services:
       FRAME_HOST_DATA: ${FRAME_HOST_DATA:-/opt/stacks/frame/data}
       FRAME_TASK_CONCURRENCY: ${FRAME_TASK_CONCURRENCY:-2}
       FRAME_MIN_FREE_BYTES: ${FRAME_MIN_FREE_BYTES:-1073741824}
+      # AI publication atomically replaces the project directory on this Docker volume.
+      FRAME_LIVE_PREVIEW_POLLING: ${FRAME_LIVE_PREVIEW_POLLING:-1}
       FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.3}
       FRAME_TASK_TIMEOUT_SECONDS: ${FRAME_TASK_TIMEOUT_SECONDS:-21600}
       FRAME_SPEECH_URL: http://speech:8000
