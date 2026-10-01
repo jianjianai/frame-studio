@@ -451,6 +451,42 @@ test(
         "retry prepares newest revision rather than previously displayed version",
       );
       assert.deepEqual(errors, []);
+      // Download completion must not be mistaken for successful scene preparation.
+      await fsp.writeFile(
+        path.join(projectDir, "scene.ts"),
+        "export function createScene(){throw Error('intentional scene preparation failure')}",
+      );
+      await page.waitForFunction(
+        () =>
+          __FRAME_LIVE_STATUS__.state === "error" &&
+          FRAME_AI.preview().cache.state === "error",
+        undefined,
+        { timeout: 30000 },
+      );
+      const failed = await page.evaluate(() => FRAME_AI.preview().cache);
+      assert.equal(failed.completeFiles, failed.totalFiles);
+      assert.equal(failed.remaining.length, 0);
+      assert.equal(
+        failed.state,
+        "error",
+        "failed player must not become ready",
+      );
+      assert.match(
+        await page.locator(".preview-cache-summary").innerText(),
+        /素材已缓存，播放器准备失败/,
+      );
+      assert.equal(
+        await page
+          .locator(".preview-cache-actions")
+          .getByRole("button", { name: "重试准备播放", exact: true })
+          .count(),
+        1,
+      );
+      await page.locator(".live-preview-notice summary").click();
+      assert.match(
+        await page.locator(".live-preview-notice").innerText(),
+        /intentional scene preparation failure/,
+      );
     } finally {
       await browser?.close();
       await app.close();

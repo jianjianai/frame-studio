@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { audioEngines, audioProcessors, toneEffectNames } from "./audio-capabilities.mjs";
 export { audioEngines, audioProcessors } from "./audio-capabilities.mjs";
+import { toneOptionIssues } from "./tone-effect-options.mjs";
 import { assetReferenceSchema } from "./visual-document.mjs";
 const n = z.number().finite();
 const id = z
@@ -114,7 +115,11 @@ export const audioProcessorSchema = z.discriminatedUnion(
       ),
     }),
   ),
-);
+).superRefine((processor, ctx) => {
+  if (processor.type === "tone")
+    for (const issue of toneOptionIssues(processor.effect, processor.options))
+      ctx.addIssue({ code: "custom", path: ["options", ...issue.path], message: issue.message });
+});
 // The discovery registry and implemented schema must describe exactly the same
 // processor collection, in the same stable order; never advertise unsupported ids.
 if (

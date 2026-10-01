@@ -14,7 +14,6 @@ import {
   Settings2,
   Search,
   Cpu,
-  SlidersHorizontal,
   Terminal,
   Shield,
   AudioLines,
@@ -33,55 +32,100 @@ import {
   Loading,
   Empty,
 } from "./ui";
-import {
-  ProviderSettings,
-  GeneralAiSettings,
-  ToolSettings,
-} from "./model-settings";
+import { ProviderSettings, ToolSettings } from "./model-settings";
 import "./ai-workbench.css";
 import { SpeechSettings } from "./speech";
 import { SystemStatus } from "./system-status";
 import { AccessSettings } from "./access-settings";
 
 export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
-  const [flow, setFlow] = useState(null), [error, setError] = useState(""),
-    [code, setCode] = useState(""), [opened, setOpened] = useState(false),
-    [attempt, setAttempt] = useState(0), [copied, setCopied] = useState(false);
+  const [flow, setFlow] = useState(null),
+    [error, setError] = useState(""),
+    [code, setCode] = useState(""),
+    [opened, setOpened] = useState(false),
+    [attempt, setAttempt] = useState(0),
+    [copied, setCopied] = useState(false);
   const [run, busy] = useAction(notify);
   useEffect(() => {
-    let done = false, stop, successDelivered = false;
-    setFlow(null); setError(""); setCode(""); setOpened(false); setCopied(false);
-    api("auth_begin", { kind, ...(target ? { target } : {}) }).then((row) => {
-      if (done) return;
-      setFlow(row);
-      stop = subscribe("auth_state", { id: row.id }, ({ result: next, error: failure }) => {
+    let done = false,
+      stop,
+      successDelivered = false;
+    setFlow(null);
+    setError("");
+    setCode("");
+    setOpened(false);
+    setCopied(false);
+    api("auth_begin", { kind, ...(target ? { target } : {}) })
+      .then((row) => {
         if (done) return;
-        if (failure) { setError(failure); return; }
-        setFlow(next);
-        if (next.state === "succeeded" && !successDelivered) {
-          successDelivered = true;
-          onSuccess?.();
-        }
+        setFlow(row);
+        stop = subscribe(
+          "auth_state",
+          { id: row.id },
+          ({ result: next, error: failure }) => {
+            if (done) return;
+            if (failure) {
+              setError(failure);
+              return;
+            }
+            setFlow(next);
+            if (next.state === "succeeded" && !successDelivered) {
+              successDelivered = true;
+              onSuccess?.();
+            }
+          },
+        );
+      })
+      .catch((err) => {
+        if (!done) setError(err.message);
       });
-    }).catch((err) => { if (!done) setError(err.message); });
-    return () => { done = true; stop?.(); };
+    return () => {
+      done = true;
+      stop?.();
+    };
   }, [kind, target, attempt]);
-  const codex = kind === "codex", succeeded = flow?.state === "succeeded";
+  const codex = kind === "codex",
+    succeeded = flow?.state === "succeeded";
   const pending = flow?.state === "pending";
   const syncing = pending && flow.info.stage === "models";
   const catalogFailed = succeeded && flow.info.catalogSynced === false;
-  const step = succeeded ? catalogFailed ? 2 : 3 : syncing ? 2 : opened ? 1 : 0;
+  const step = succeeded
+    ? catalogFailed
+      ? 2
+      : 3
+    : syncing
+      ? 2
+      : opened
+        ? 1
+        : 0;
   const retry = () => setAttempt((old) => old + 1);
   return (
-    <Modal title={`连接 ${kind === "github" ? "GitHub" : codex ? "ChatGPT / Codex" : "Claude 官方账号"}`} onClose={onClose}>
-      {codex && <ol className="account-login-steps" aria-label="账号连接进度">
-        {["打开授权页", "确认账号", "同步模型"].map((label, index) => (
-          <li key={label} className={index < step ? "complete" : index === 2 && catalogFailed ? "attention" : index === step ? "current" : ""}
-            aria-current={index === step ? "step" : undefined}>
-            <span>{index < step ? <Check size={12} /> : index + 1}</span>{label}
-          </li>
-        ))}
-      </ol>}
+    <Modal
+      title={`连接 ${kind === "github" ? "GitHub" : codex ? "ChatGPT / Codex" : "Claude 官方账号"}`}
+      onClose={onClose}
+    >
+      {codex && (
+        <ol className="account-login-steps" aria-label="账号连接进度">
+          {["打开授权页", "确认账号", "同步模型"].map((label, index) => (
+            <li
+              key={label}
+              className={
+                index < step
+                  ? "complete"
+                  : index === 2 && catalogFailed
+                    ? "attention"
+                    : index === step
+                      ? "current"
+                      : ""
+              }
+              aria-current={index === step ? "step" : undefined}
+            >
+              <span>{index < step ? <Check size={12} /> : index + 1}</span>
+              {label}
+            </li>
+          ))}
+        </ol>
+      )}
       <ErrorNote error={error} />
       {!flow && !error && <Loading />}
       {pending && (
@@ -90,32 +134,72 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
             {syncing && <LoaderCircle size={18} className="catalog-spin" />}
             <p>{flow.info.message || "正在准备官方授权链接…"}</p>
           </div>
-          {flow.info.code && <div className="account-device-code">
-            <small>设备验证码</small>
-            <div><code>{flow.info.code}</code>
-              <Button icon={copied ? Check : Copy} aria-label="复制设备码" onClick={() => run(async () => {
-                await navigator.clipboard.writeText(flow.info.code);
-                setCopied(true); notify("设备码已复制");
-              })}>{copied ? "已复制" : "复制"}</Button>
+          {flow.info.code && (
+            <div className="account-device-code">
+              <small>设备验证码</small>
+              <div>
+                <code>{flow.info.code}</code>
+                <Button
+                  icon={copied ? Check : Copy}
+                  aria-label="复制设备码"
+                  onClick={() =>
+                    run(async () => {
+                      await navigator.clipboard.writeText(flow.info.code);
+                      setCopied(true);
+                      notify("设备码已复制");
+                    })
+                  }
+                >
+                  {copied ? "已复制" : "复制"}
+                </Button>
+              </div>
             </div>
-          </div>}
-          {flow.info.url && <a className="button primary account-authorize" href={flow.info.url} target="_blank"
-            rel="noreferrer" onClick={() => setOpened(true)}>前往官方页面授权 <ExternalLink size={16} /></a>}
-          {flow.info.needsCode && <form onSubmit={(event) => {
-            event.preventDefault(); run(() => api("auth_submit", { id: flow.id, code }));
-          }}>
-            <Field label="官方页面返回的验证码"><input value={code} onChange={(event) => setCode(event.target.value)}
-              autoComplete="off" required /></Field>
-            <Button className="primary" disabled={busy || !code.trim()}>完成授权</Button>
-          </form>}
+          )}
+          {flow.info.url && (
+            <a
+              className="button primary account-authorize"
+              href={flow.info.url}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => setOpened(true)}
+            >
+              前往官方页面授权 <ExternalLink size={16} />
+            </a>
+          )}
+          {flow.info.needsCode && (
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                run(() => api("auth_submit", { id: flow.id, code }));
+              }}
+            >
+              <Field label="官方页面返回的验证码">
+                <input
+                  value={code}
+                  onChange={(event) => setCode(event.target.value)}
+                  autoComplete="off"
+                  required
+                />
+              </Field>
+              <Button className="primary" disabled={busy || !code.trim()}>
+                完成授权
+              </Button>
+            </form>
+          )}
           <p className="settings-help account-login-hint">
-            {syncing ? "登录已经完成，正在准备模型目录。此时关闭窗口也会继续同步。"
+            {syncing
+              ? "登录已经完成，正在准备模型目录。此时关闭窗口也会继续同步。"
               : "授权完成后会自动更新，无需重复点击或刷新。关闭窗口后仍会继续等待授权。"}
           </p>
-          {codex && !syncing && <details className="account-login-help">
-            <summary>设备码登录提示</summary>
-            <p>若官方页面提示未启用设备码登录，请先在 ChatGPT 安全设置中启用，再继续授权。授权等待最长 15 分钟。</p>
-          </details>}
+          {codex && !syncing && (
+            <details className="account-login-help">
+              <summary>设备码登录提示</summary>
+              <p>
+                若官方页面提示未启用设备码登录，请先在 ChatGPT
+                安全设置中启用，再继续授权。授权等待最长 15 分钟。
+              </p>
+            </details>
+          )}
         </>
       )}
       {succeeded && (
@@ -125,13 +209,24 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
             <h3>{catalogFailed ? "登录成功，模型待同步" : "账号已连接"}</h3>
             <p>{flow.info.message || "可以开始创作。"}</p>
           </div>
-          <Button className="primary account-authorize" onClick={onClose}>{codex ? "查看模型" : "完成"}</Button>
+          <Button className="primary account-authorize" onClick={onClose}>
+            {codex ? "查看模型" : "完成"}
+          </Button>
         </>
       )}
-      {(error && !pending || flow && !pending && !succeeded) && (
+      {((error && !pending) || (flow && !pending && !succeeded)) && (
         <div className="account-login-failure">
-          {!error && <p role="alert">{flow.info.message || "授权已过期，请重新获取。"}</p>}
-          <div className="row"><Button className="primary" icon={RefreshCw} onClick={retry}>重新获取授权</Button><Button onClick={onClose}>关闭</Button></div>
+          {!error && (
+            <p role="alert">
+              {flow.info.message || "授权已过期，请重新获取。"}
+            </p>
+          )}
+          <div className="row">
+            <Button className="primary" icon={RefreshCw} onClick={retry}>
+              重新获取授权
+            </Button>
+            <Button onClick={onClose}>关闭</Button>
+          </div>
         </div>
       )}
     </Modal>
@@ -213,18 +308,17 @@ export function ModelConnections(props) {
 }
 
 const settingsSections = [
-  { id: "desktop", label: "Windows 控制中心", detail: "打开本机运行管理窗口", icon: Monitor },
+  {
+    id: "desktop",
+    label: "Windows 控制中心",
+    detail: "打开本机运行管理窗口",
+    icon: Monitor,
+  },
   {
     id: "ai",
     label: "AI 模型",
     detail: "提供商、模型目录与连接测试",
     icon: Cpu,
-  },
-  {
-    id: "general",
-    label: "创作偏好",
-    detail: "默认模型、快捷键与字体",
-    icon: SlidersHorizontal,
   },
   {
     id: "github",
@@ -269,8 +363,12 @@ export function Settings({ notify, localMode = false }) {
     window.addEventListener("hashchange", update);
     return () => window.removeEventListener("hashchange", update);
   }, []);
-  const sections = settingsSections.filter(section => localMode ? !["tools", "access", "system"].includes(section.id) : section.id !== "desktop");
-  const activeTab = sections.some(section => section.id === tab) ? tab : "ai";
+  const sections = settingsSections.filter((section) =>
+    localMode
+      ? !["tools", "access", "system"].includes(section.id)
+      : section.id !== "desktop",
+  );
+  const activeTab = sections.some((section) => section.id === tab) ? tab : "ai";
   const matches = sections.filter((section) =>
     `${section.label} ${section.detail}`
       .toLowerCase()
@@ -328,15 +426,17 @@ export function Settings({ notify, localMode = false }) {
                 </button>
               ))}
               {!matches.length && (
-                <Empty>没有匹配的设置，请尝试“模型”“快捷键”或“语音”。</Empty>
+                <Empty>没有匹配的设置，请尝试“模型”“GitHub”或“语音”。</Empty>
               )}
             </section>
           ) : activeTab === "desktop" ? (
             <WindowsCenterLink />
           ) : activeTab === "ai" ? (
-            localMode ? <LocalAiSettings notify={notify} /> : <ModelConnections notify={notify} />
-          ) : activeTab === "general" ? (
-            <GeneralAiSettings />
+            localMode ? (
+              <LocalAiSettings notify={notify} />
+            ) : (
+              <ModelConnections notify={notify} />
+            )
           ) : activeTab === "github" ? (
             <GitHubAccounts notify={notify} />
           ) : activeTab === "speech" ? (

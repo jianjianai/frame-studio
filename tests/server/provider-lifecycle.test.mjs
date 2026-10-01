@@ -1,4 +1,5 @@
 import test from "node:test";
+import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -56,7 +57,7 @@ test(
         repo: repo.id,
         title: "History fixture",
       });
-      const chat = await call("works_chat_create", {
+      const chat = await insertLegacyChat(db, work, {
         id: work.id,
         connection: provider.id,
         title: "Preserve me",
@@ -68,7 +69,7 @@ test(
         model: "example",
         requestKey: randomUUID(),
       };
-      const task = await call("works_chat_send", args);
+      const task = await legacyAgentTask(tasks, work, args);
       for (const state of [
         "queued",
         "running",
@@ -144,12 +145,12 @@ test(
         1,
       );
       assert.equal(
-        (await call("works_chat_send", args)).id,
+        (await legacyAgentTask(tasks, work, args)).id,
         task.id,
         "lost acknowledgements recover after deletion without resubmission",
       );
       await assert.rejects(
-        call("works_chat_send", { ...args, requestKey: randomUUID() }),
+        legacyAgentTask(tasks, work, { ...args, requestKey: randomUUID() }),
         /删除/,
       );
       await assert.rejects(

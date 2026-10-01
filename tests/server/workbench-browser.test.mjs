@@ -1,6 +1,7 @@
 import { sourceControlFlow } from "../ui/source-control-flow.mjs";
 import { runtimeIdentity } from "../../scripts/runtime-identity.mjs";
 import test from "node:test";
+import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -26,7 +27,7 @@ test(
     await db.pool.query(
       "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
     );
-    const { app, actions } = await createApp({
+    const { app, actions, tasks } = await createApp({
       db,
       data,
       masterKey: "33".repeat(32),
@@ -235,12 +236,12 @@ test(
           apiKey: "test-fixture-only",
           model: "fixture",
         }),
-        chat = await call("works_chat_create", {
+        chat = await insertLegacyChat(db, work, {
           id: work.id,
           connection: connection.id,
           title: "后台连续性",
         });
-      const queued = await call("works_chat_send", {
+      const queued = await legacyAgentTask(tasks, work, {
         id: work.id,
         chat: chat.id,
         prompt: "继续制作",

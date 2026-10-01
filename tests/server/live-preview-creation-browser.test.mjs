@@ -5,6 +5,10 @@ import { expect } from "@playwright/test";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
 import { launchBrowser } from "../../scripts/browser.mjs";
+import {
+  paseoBoundaryBootstrap,
+  paseoBoundaryHtml,
+} from "../ui/paseo-boundary-fixture.mjs";
 
 const workId = "e68a0b4b-0a63-463e-861b-7f3403220255";
 const taskId = "485dc032-fdb9-43e2-b8ec-e383d5bcb424";
@@ -84,7 +88,14 @@ test(
       browser = await launchBrowser();
       const page = await browser.newPage();
       const errors = [];
-      page.on("pageerror", (error) => errors.push(error.message));
+      page.on("pageerror", (error) => {
+        errors.push(error.message);
+        console.error("fixture-pageerror", error.message);
+      });
+      page.on("console", (message) => {
+        if (message.type() === "error")
+          console.error("fixture-console", message.text());
+      });
       await page.addInitScript(
         ({ workId, taskId, sessionWork, sessionTask }) => {
           const Native = WebSocket;
@@ -199,10 +210,57 @@ test(
         },
         { workId, taskId, sessionWork, sessionTask },
       );
-      await page.goto(
-        "http://127.0.0.1:" + server.httpServer.address().port + "/__creation",
-      );
-      await expect(page.locator('iframe[title="作品播放器"]')).toBeVisible();
+      const origin = "http://127.0.0.1:" + server.httpServer.address().port;
+      const paseo = paseoBoundaryBootstrap({ workId, origin });
+      await page.route("**/api/paseo/**", async (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname.endsWith("/session"))
+          return route.fulfill({
+            json: {
+              bootstrap: paseo,
+              uiUrl: paseo.basePath + "?frameNonce=" + paseo.nonce,
+            },
+          });
+        if (url.pathname.endsWith("/status"))
+          return route.fulfill({
+            json: {
+              version: 1,
+              workId,
+              native: {
+                state: "ready",
+                activeAgents: [],
+                activeTerminals: 0,
+                pendingPermissions: 0,
+                scheduled: 0,
+                incomplete: false,
+              },
+              candidate: null,
+            },
+          });
+        return route.fulfill({
+          status: 404,
+          json: { error: "Unexpected fixture request" },
+        });
+      });
+      await page.route("**/paseo/**", (route) => {
+        if (!new URL(route.request().url()).pathname.startsWith(paseo.basePath))
+          return route.fallback();
+        return route.fulfill({
+          contentType: "text/html",
+          body: paseoBoundaryHtml(paseo),
+        });
+      });
+      await page.goto(origin + "/__creation");
+      await expect(page.locator('iframe[title="作品播放器"]'))
+        .toBeVisible()
+        .catch(async (error) => {
+          console.error(
+            "initial-fixture-diagnostic",
+            await page.locator("body").innerText(),
+            await page.evaluate(() => window.fixtureCalls),
+          );
+          throw error;
+        });
       const currentFrame = () =>
         page
           .locator('iframe[title="作品播放器"]')
@@ -253,20 +311,12 @@ test(
       await page
         .getByRole("button", { name: "打开 AI 对话", exact: true })
         .click();
-      await page
-        .getByRole("button", { name: "引用当前时间", exact: true })
-        .click();
-      await expect(
-        page.locator(".review-context .reference-version"),
-      ).toHaveText("实时版本 ddddddd");
-      const reference = await page.evaluate(
-        (workId) =>
-          JSON.parse(
-            sessionStorage.getItem("frame.chat-draft:" + workId + ":new") ||
-              sessionStorage.getItem("frame.chat-draft:" + workId + ":") ||
-              "{}",
-          ).review,
-        workId,
+      const nativeElement = page.locator('iframe[title^="Paseo ·"]');
+      await expect(nativeElement).toBeVisible();
+      const native = await (await nativeElement.elementHandle()).contentFrame();
+      await native.waitForFunction(() => window.__FRAME_REVIEW_PASEO__?.ready);
+      const reference = await native.evaluate(() =>
+        window.__FRAME_REVIEW_PASEO__.context(),
       );
       assert.equal(reference.liveSessionId, sessionWork);
       assert.equal(reference.sourceRevision, "d".repeat(64));

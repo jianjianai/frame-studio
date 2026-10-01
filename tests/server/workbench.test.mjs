@@ -1,4 +1,5 @@
 import test from "node:test";
+import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -203,7 +204,7 @@ test(
       assert(
         !JSON.stringify(await call("connections_list")).includes("test-secret"),
       );
-      const chat = await call("works_chat_create", {
+      const chat = await insertLegacyChat(db, a, {
           id: a.id,
           connection: connection.id,
           title: "Creation",
@@ -216,8 +217,8 @@ test(
         requestKey,
         context: { time: 1 },
       };
-      const first = await call("works_chat_send", args),
-        retry = await call("works_chat_send", args);
+      const first = await legacyAgentTask(tasks, a, args),
+        retry = await legacyAgentTask(tasks, a, args);
       assert.equal(first.id, retry.id);
       assert.equal((await call("works_background")).length, 1);
       assert.equal((await call("works_stop", { id: a.id })).stopped, 1);

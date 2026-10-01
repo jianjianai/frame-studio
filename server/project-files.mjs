@@ -47,7 +47,7 @@ export async function fileSha256(file) {
 }
 const ignored = new Set([".git", "node_modules", ".cache", ".history", "exports"]);
 /** Same canonical fingerprint as the legacy synchronous helper. */
-export async function treeHash(root, { includeExecutableMode = false, includeIgnored = false } = {}) {
+export async function projectInventory(root, { includeExecutableMode = false, includeIgnored = false } = {}) {
   const files = [];
   const walk = async (dir, relative = "") => {
     if (!(await exists(dir))) return;
@@ -68,7 +68,10 @@ export async function treeHash(root, { includeExecutableMode = false, includeIgn
     if (JSON.stringify(after) !== JSON.stringify(names)) throw problem(409, "Project changed while hashing");
   };
   await walk(root);
-  return hash(JSON.stringify(files));
+  return files;
+}
+export async function treeHash(root, options) {
+  return hash(JSON.stringify(await projectInventory(root, options)));
 }
 export async function copyTree(source, target, { includeIgnored = false } = {}) {
   await fsp.cp(source, target, {

@@ -8,20 +8,30 @@ import { liveResourceType } from "./live-preview-resources.mjs";
 
 export function livePreviewOperations({ add, works, livePreview }) {
   add("works_live_preview",
-    "Open or renew an automatically updated source preview; optional task selects this work's isolated AI draft. Modes: original bypasses media conversion; compressed lazily uses proxies; cached downloads and verifies originals in the browser. No full build or audio pre-encoding.",
-    { id: z.string().uuid(), task: z.string().uuid().optional(), ai: z.boolean().default(false), mediaMode: livePreviewMediaModeSchema.default("compressed") },
-    async ({ id, task, ai, mediaMode }) => livePreview.start({ work: await works.get(id, { active: true }), task, ai, mediaMode }));
+    "Open or renew an automatically updated source preview; optional task selects this work's isolated AI draft; source=paseo with paseoAgent selects that owned native checkout. Modes: original bypasses media conversion; compressed lazily uses proxies; cached downloads and verifies originals in the browser. No full build or audio pre-encoding.",
+    { id: z.string().uuid(), task: z.string().uuid().optional(), source: z.enum(["work", "paseo"]).default("work"), paseoAgent: z.string().min(1).max(256).optional(), ai: z.boolean().default(false), mediaMode: livePreviewMediaModeSchema.default("compressed") },
+    async ({ id, task, source, paseoAgent, ai, mediaMode }) => livePreview.start({ work: await works.get(id, { active: true }), task, source, paseoAgent, ai, mediaMode }));
 }
 
 export function installLivePreview(app, livePreview) {
+  // SSE belongs to this route installation. End it before HTTP close waits for open responses.
+  const streams = new Set();
+  let closing = false;
+  app.addHook("preClose", async () => {
+    closing = true;
+    for (const close of [...streams]) close();
+  });
   app.get("/preview-live/:token/events", async (req, reply) => {
+    if (closing) throw problem(503, "Live preview server is closing");
     const session = livePreview.getByCapability(req.params.token);
-    let disposed = false, detach, heartbeat;
+    let disposed = false, detach, heartbeat, heartbeatPending = false;
     const close = () => {
       if (disposed) return;
-      disposed = true; clearInterval(heartbeat);
+      disposed = true; streams.delete(close); clearInterval(heartbeat);
+      req.raw.off("close", close); req.raw.off("aborted", close); reply.raw.off("close", close);
       session.emitter.off("revision", revision); session.emitter.off("error-state", failed); session.emitter.off("state", state);
-      detach?.(); reply.raw.end();
+      try { detach?.(); }
+      finally { if (!reply.raw.writableEnded && !reply.raw.destroyed) reply.raw.end(); }
     };
     let sentRevision = Number(req.headers["last-event-id"] || 0);
     const send = (event, value, id) => {
@@ -37,6 +47,8 @@ export function installLivePreview(app, livePreview) {
     const failed = value => send("error", value);
     const state = value => send("state", value);
     detach = livePreview.attach(session, close);
+    streams.add(close);
+    req.raw.once("close", close); req.raw.once("aborted", close); reply.raw.once("close", close);
     reply.hijack();
     reply.raw.writeHead(200, {
       ...reply.getHeaders(), "Content-Type": "text/event-stream", "Cache-Control": "no-store",
@@ -47,16 +59,18 @@ export function installLivePreview(app, livePreview) {
     if (session.manifest) revision(session.manifest);
     if (session.error) failed(session.error);
     heartbeat = setInterval(async () => {
-      if (disposed) return;
+      if (disposed || heartbeatPending) return;
+      heartbeatPending = true;
       try {
         livePreview.getByCapability(req.params.token);
         const work = await livePreview.db.one("SELECT deleted FROM works WHERE id=$1", [session.work]);
+        if (disposed || closing || reply.raw.destroyed || reply.raw.writableEnded) return;
         if (!work || work.deleted) { send("expired", { message: "This work is unavailable" }); close(); return; }
         reply.raw.write(": heartbeat\n\n");
       } catch { send("expired", { message: "Live preview expired; reopen the work" }); close(); }
+      finally { heartbeatPending = false; }
     }, 15000);
     heartbeat.unref();
-    req.raw.once("close", close);
     return reply;
   });
   app.get("/preview-live/:token/manifest.json", async (req, reply) => {

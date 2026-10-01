@@ -72,9 +72,9 @@ export async function flowChecks(h) {
       dialog.getByRole("button", { name: "上传素材", exact: true }),
     ).toHaveCount(0);
     await dialog.getByRole("button", { name: /返回对话/ }).click();
-    await expect(page.locator(".selected-assets")).toContainText(
-      "节奏参考.wav",
-    );
+    await expect(
+      page.getByRole("button", { name: "节奏参考.wav ×", exact: true }),
+    ).toBeVisible();
   });
   await check("先试听再采用原音频，编排只写入AI草稿", async () => {
     await more("配音");
@@ -123,19 +123,20 @@ export async function flowChecks(h) {
       state.calls.filter((c) => c.name === "speech_test").length,
       before,
     );
-    const sends = state.calls.filter(
-      (c) => c.name === "works_chat_send",
-    ).length;
     await dialog.getByLabel("配音编排位置").selectOption("range");
     await dialog
       .getByRole("button", { name: "带入 AI 对话，填写编排要求", exact: true })
       .click();
-    await expect(page.getByRole("textbox", { name: "创作要求" })).toHaveValue(
-      /配音资源/,
+    const native = page.frames().find((f) => f.url().includes("/paseo/"));
+    await native.waitForFunction(() =>
+      window.__FRAME_REVIEW_PASEO__?.attachments.some((item) =>
+        item.text.includes("配音资源"),
+      ),
     );
     assert.equal(
-      state.calls.filter((c) => c.name === "works_chat_send").length,
-      sends,
+      state.calls.filter((c) => c.name.startsWith("works_chat_")).length,
+      0,
+      "Voice adoption only attaches context, without obsolete chat writes",
     );
   });
   await check("版本先比较预览，不触发恢复", async () => {

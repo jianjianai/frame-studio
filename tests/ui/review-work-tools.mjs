@@ -49,8 +49,11 @@ export async function workToolsChecks(h) {
     "共用非阻断工作面板，草稿、配音结果、素材搜索及审片位置保留",
     async () => {
       await ai();
-      const input = page.getByRole("textbox", { name: "创作要求" });
-      await input.fill("切换工具后仍保留的创作要求");
+      const native = page.locator('iframe[title^="Paseo ·"]');
+      await expect(native).toBeVisible();
+      await native.evaluate((el) => {
+        el.dataset.retained = "same-native-iframe";
+      });
       await frame().evaluate(() => window.__FRAME_STUDIO__.frame(0.75));
       const before = await frame().evaluate(() =>
         window.__FRAME_STUDIO__.getState(),
@@ -73,7 +76,10 @@ export async function workToolsChecks(h) {
         "请听这段旁白",
       );
       await tool("打开 AI 对话").click();
-      await expect(input).toHaveValue("切换工具后仍保留的创作要求");
+      await expect(native).toHaveAttribute(
+        "data-retained",
+        "same-native-iframe",
+      );
       await tool("素材").click();
       await expect(search).toHaveValue("节奏");
       await expect(
@@ -90,48 +96,56 @@ export async function workToolsChecks(h) {
       await screenshot("10-materials-dock");
       await search.fill("");
       await dock.getByRole("button", { name: /返回对话/ }).click();
-      await expect(input).toHaveValue("切换工具后仍保留的创作要求");
-    },
-  );
-  await check(
-    "AI 输入区与工具面板衔接：素材引用、局部展开和分层 Escape",
-    async () => {
-      await ai();
-      const input = page.getByRole("textbox", { name: "创作要求" });
-      const draft = await input.inputValue();
-      await page.getByRole("button", { name: "引用素材", exact: true }).click();
-      await expect(dock).toHaveAttribute("aria-label", "素材");
-      await expect(page.locator("dialog[open]")).toHaveCount(0);
-      await dock.getByRole("button", { name: /返回对话/ }).click();
-      await expect(input).toHaveValue(draft);
-      const assertInsideDock = async (element) => {
-        const bounds = await dock.boundingBox();
-        const box = await element.boundingBox();
-        assert(
-          box.x >= bounds.x - 1 &&
-            box.x + box.width <= bounds.x + bounds.width + 1,
-        );
-        assert(
-          box.y >= bounds.y - 1 &&
-            box.y + box.height <= bounds.y + bounds.height + 1,
-        );
-      };
-      await page.getByRole("button", { name: "对话历史", exact: true }).click();
-      await assertInsideDock(
-        page.getByRole("dialog", { name: "选择创作对话" }),
+      await expect(native).toHaveAttribute(
+        "data-retained",
+        "same-native-iframe",
       );
-      await page.getByRole("textbox", { name: "搜索对话" }).press("Escape");
-      await expect(dock).toBeVisible();
-      await page
-        .getByRole("button", { name: "展开输入框", exact: true })
-        .click();
-      await assertInsideDock(page.locator(".composer-expanded .chat-composer"));
-      await input.press("Escape");
-      await expect(page.locator(".composer-expanded")).toHaveCount(0);
-      await expect(dock).toBeVisible();
-      await expect(input).toHaveValue(draft);
     },
   );
+  await check("完整Paseo作品面板入口：素材、旧版记录与展开恢复", async () => {
+    await ai();
+    const native = page.locator('iframe[title^="Paseo ·"]');
+    await expect(native).toBeVisible();
+    await page.getByRole("button", { name: /^选择素材/ }).click();
+    await expect(dock).toHaveAttribute("aria-label", "素材");
+    await expect(page.locator("dialog[open]")).toHaveCount(0);
+    await dock.getByRole("button", { name: /返回对话/ }).click();
+    await expect(native).toHaveAttribute("data-retained", "same-native-iframe");
+    await page.getByRole("button", { name: "旧版记录", exact: true }).click();
+    await expect(
+      page.getByRole("region", { name: "旧版创作记录" }),
+    ).toBeVisible();
+    await page.getByRole("button", { name: "Paseo", exact: true }).click();
+    await page
+      .getByRole("button", { name: "展开 AI 面板", exact: true })
+      .click();
+    await expect(dock).toHaveClass(/paseo-expanded/);
+    await expect(native).toBeVisible();
+    const bounds = await dock.boundingBox(),
+      box = await native.boundingBox();
+    assert(
+      box.x >= bounds.x && box.x + box.width <= bounds.x + bounds.width + 1,
+    );
+    assert(
+      box.y >= bounds.y && box.y + box.height <= bounds.y + bounds.height + 1,
+    );
+    await page
+      .getByRole("button", { name: "还原 AI 面板", exact: true })
+      .click();
+    await expect(dock).not.toHaveClass(/paseo-expanded/);
+    await expect(native).toHaveAttribute("data-retained", "same-native-iframe");
+    const child = await (await native.elementHandle()).contentFrame();
+    await child.evaluate(() =>
+      window.__FRAME_REVIEW_PASEO__.request("results.open", {}),
+    );
+    const results = page.getByRole("region", {
+      name: "作品校验与应用",
+      exact: true,
+    });
+    await expect(results).toContainText("主工作区尚未产生作品校验结果");
+    await expect(results).toBeFocused();
+    await expect(native).toBeVisible();
+  });
   await check("任务/同步是可收起面板，点击画面不误关或中断任务", async () => {
     const cancellations = state.calls.filter(
       (c) => c.name === "task_cancel",
@@ -220,6 +234,7 @@ export async function workToolsChecks(h) {
       );
       await type.selectOption("Chorus");
       await wet.fill("0.4");
+      await wet.press("Tab");
       await expect.poll(async () => (await processor()).options.wet).toBe(0.4);
       await effect.getByText("完整官方参数 JSON", { exact: true }).click();
       const json = effect.getByLabel("Tone 参数 JSON 1", { exact: true });
@@ -237,6 +252,7 @@ export async function workToolsChecks(h) {
         .click();
       await expect(effect.getByRole("alert")).toHaveCount(0);
       await wet.fill("0.55");
+      await wet.press("Tab");
       await expect.poll(async () => (await processor()).options.wet).toBe(0.55);
       assert.equal(
         (await processor()).options.frequency,
@@ -247,6 +263,7 @@ export async function workToolsChecks(h) {
       await type.selectOption("PitchShift");
       await effect.getByLabel("Tone 移调半音 1", { exact: true }).fill("7");
       await wet.fill("0.35");
+      await wet.press("Tab");
       await expect.poll(async () => (await processor()).options.pitch).toBe(7);
       await expect.poll(async () => (await processor()).options.wet).toBe(0.35);
       assert.equal((await processor()).effect, "PitchShift");
@@ -261,10 +278,10 @@ export async function workToolsChecks(h) {
         good,
         "Invalid JSON leaves the last valid processor options unchanged",
       );
-      await json.fill(JSON.stringify(good));
       await effect
-        .getByRole("button", { name: "应用 JSON 参数", exact: true })
+        .getByRole("button", { name: "恢复当前参数", exact: true })
         .click();
+      await expect(json).toHaveValue(JSON.stringify(good, null, 2));
       await expect(effect.getByRole("alert")).toHaveCount(0);
       const saves = state.calls.filter(
         (c) => c.name === "works_audio_edit",
@@ -365,33 +382,19 @@ export async function workToolsChecks(h) {
       };
       await state.sendLive(originalFrame, updated);
       await expect(status).toHaveText("实时预览");
-      const input = page.getByRole("textbox", { name: "创作要求" }),
-        draft = await input.inputValue();
-      await page
-        .getByRole("button", { name: "引用当前时间", exact: true })
-        .click();
-      await input.fill("核对已应用的新实时版本");
-      const sends = state.calls.filter(
-        (c) => c.name === "works_chat_send",
-      ).length;
-      await page.getByRole("button", { name: "排队发送", exact: true }).click();
-      await expect
-        .poll(
-          () => state.calls.filter((c) => c.name === "works_chat_send").length,
-        )
-        .toBe(sends + 1);
-      const reference = state.calls
-        .filter((c) => c.name === "works_chat_send")
-        .at(-1).args.context;
+      const native = page.frames().find((f) => f.url().includes("/paseo/"));
+      assert(native, "Paseo protocol boundary is mounted");
+      const reference = await native.evaluate(() =>
+        window.__FRAME_REVIEW_PASEO__.context(),
+      );
       assert.equal(reference.liveSessionId, state.live.sessionId);
       assert.equal(
         reference.sourceRevision,
         updated.sourceRevision,
-        "AI references the applied revision, not the initial link revision",
+        "Frame bridge references the actually applied live revision",
       );
       assert.equal(reference.previewTask, undefined);
       assert.equal(reference.sourceCommit, undefined);
-      await input.fill(draft);
       const beforeDuplicates = liveCalls(),
         contexts = await originalFrame.evaluate(
           () => window.__FRAME_REVIEW_LIVE__.contexts.length,
@@ -453,7 +456,8 @@ export async function workToolsChecks(h) {
     "窄屏单行工具栏、44px目标、抽屉焦点约束和关闭回到入口",
     async () => {
       await page.setViewportSize({ width: 390, height: 844 });
-      await page.getByRole("textbox", { name: "创作要求" }).press("Escape");
+      await dock.focus();
+      await page.keyboard.press("Escape");
       assert.equal((await rail.boundingBox()).height, 52);
       await expect(
         rail.locator(".work-menu-trigger .work-tool-label"),
@@ -482,8 +486,9 @@ export async function workToolsChecks(h) {
       await expect(dock).toBeHidden();
       await screenshot("11-rail-mobile");
       await tool("打开 AI 对话").click();
-      await expect(page.getByRole("textbox", { name: "创作要求" })).toHaveValue(
-        "切换工具后仍保留的创作要求",
+      await expect(page.locator('iframe[title^="Paseo ·"]')).toHaveAttribute(
+        "data-retained",
+        "same-native-iframe",
       );
       await page.setViewportSize({ width: 1440, height: 900 });
       await expect(dock).toHaveAttribute("role", "complementary");

@@ -1,4 +1,5 @@
 import test from "node:test";
+import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -235,7 +236,7 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           connection.baseUrl,
           `http://172.17.0.1:${modelPort}${provider === "codex" ? "/v1" : ""}`,
         );
-        const chat = await platform.actions.call("works_chat_create", {
+        const chat = await insertLegacyChat(db, work, {
           id: work.id,
           connection: connection.id,
           title: "Durable turn",
@@ -244,7 +245,7 @@ for (const scenario of ["codex", "claude", "codex-invalid"])
           (await platform.repos.project(work.repo, work.project)).repo.root,
           ["rev-parse", "HEAD"],
         );
-        task = await platform.actions.call("works_chat_send", {
+        task = await legacyAgentTask(platform.tasks, work, {
           id: work.id,
           chat: chat.id,
           prompt: "Append the fixture comment to the scene, then finish.",

@@ -122,17 +122,14 @@ test("Windows local mode creates a work and renders a frame without Docker or a 
     assert.deepEqual(await call("works_chats", { id: work.id }), []);
     await call("works_versions", { id: work.id });
     await call("works_context", { id: work.id });
-    if (providers[0].configured) {
-      const chat = await call("works_chat_create", { id: work.id, connection: providers[0].id, title: "Local CLI" });
-      assert.equal(chat.provider, "codex");
-      assert.equal((await call("works_chats", { id: work.id })).length, 1);
-    } else {
+    if (!providers[0].configured)
       assert.ok(["unavailable", "unconfigured"].includes(providers[0].state));
-      const unavailable = await app.inject({ method: "POST", url: "/api/action", headers,
-        payload: { name: "works_chat_create", args: { id: work.id, connection: providers[0].id, title: "Unavailable CLI" } } });
-      assert.equal(unavailable.statusCode, 409);
-      assert.match(unavailable.body, /CLI/);
-    }
+    // FRAME no longer admits old chat writes, even when native CLI credentials are configured.
+    const retired = await app.inject({ method: "POST", url: "/api/action", headers,
+      payload: { name: "works_chat_create", args: { id: work.id, connection: providers[0].id, title: "Retired API" } } });
+    assert.notEqual(retired.statusCode, 200);
+    assert.match(retired.body, /Unknown/);
+    assert.deepEqual(await call("works_chats", { id: work.id }), []);
     const task = await call("works_task", { id: work.id, kind: "frame", input: { time: 0, width: 640 } });
     assert.ok(Array.isArray(await call("works_background", {})));
     assert.equal((await call("works_page", {})).items[0].activity?.id, task.id);

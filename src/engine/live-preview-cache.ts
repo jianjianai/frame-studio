@@ -25,6 +25,27 @@ export interface PreviewCacheState {
   error?: string;
   storage?: { usage?: number; quota?: number; persistent?: boolean };
 }
+/** Byte readiness is distinct from successful scene/audio preparation. */
+export function previewCachePresentation(cache: PreviewCacheState) {
+  const resourcesComplete =
+    cache.totalFiles > 0 &&
+    cache.completeFiles === cache.totalFiles &&
+    cache.remaining.length === 0 &&
+    cache.downloadedBytes >= cache.totalBytes;
+  const title = {
+    idle: "等待缓存",
+    downloading: "正在缓存",
+    preparing: "素材已缓存，正在准备播放",
+    ready: "缓存与画面已就绪",
+    cancelled: resourcesComplete ? "素材已缓存，播放准备已取消" : "缓存已取消",
+    error: resourcesComplete ? "素材已缓存，播放器准备失败" : "缓存未完成",
+  }[cache.state];
+  return {
+    resourcesComplete,
+    title,
+    retryLabel: resourcesComplete ? "重试准备播放" : "继续缓存",
+  };
+}
 type Resource = LivePreviewManifest["resources"][number];
 type Entry = { blob: Blob; url: string; persistent: boolean };
 type BrokerResult = { blob: Blob; persistent: boolean; warning?: string };
@@ -76,14 +97,16 @@ export function createLivePreviewCache(
   onState: (state: PreviewCacheState) => void,
 ) {
   const nativeFetch = globalThis.fetch.bind(globalThis),
-    NativeWorker = globalThis.Worker;
+    NativeWorker = globalThis.Worker,
+    NativeFontFace = globalThis.FontFace;
   const pendingResources = new Map<
     string,
     { task: Promise<Entry>; signal: AbortSignal }
   >();
   const byHash = new Map<string, Entry>(),
     byUrl = new Map<string, Entry>(),
-    scripts = new Map<string, string>();
+    scripts = new Map<string, string>(),
+    semanticUrls = new Map<string, string>();
   const originals = new Map<string, string>(),
     workerUrls = new Map<string, string>(),
     ownedUrls = new Set<string>();
@@ -123,17 +146,29 @@ export function createLivePreviewCache(
     absolute(resource.originalUrl),
     absolute(resource.path),
   ];
+  // Libraries choose loaders using the original filename (for example Pixi Assets).
+  // Keep that semantic URL; only the API which actually consumes bytes gets a Blob URL.
   const resolve = (url: string) => {
-    const key = absolute(url),
-      entry = byUrl.get(key);
-    return mode === "cached" && entry ? entry.url : url;
+    if (mode !== "cached") return url;
+    const original = new URL(url, location.href),
+      canonical =
+        semanticUrls.get(original.href) ??
+        semanticUrls.get(original.href.split("#")[0]);
+    if (!canonical || original.search) return url;
+    // A versioned semantic URL also keeps the SDK's own asset cache fresh on updates.
+    const current = new URL(canonical);
+    current.hash = original.hash;
+    return current.href;
+  };
+  const lookup = (url: string) => {
+    const key = absolute(url);
+    return byUrl.get(key) ?? byUrl.get(key.split("#")[0]);
   };
   const blobUrl = (blob: Blob) => {
     const url = URL.createObjectURL(blob);
     ownedUrls.add(url);
     return url;
   };
-  const lookup = (url: string) => byUrl.get(absolute(url));
   globalThis.fetch = async (request, init) => {
     const url = absolute(
       request instanceof Request ? request.url : String(request),
@@ -142,7 +177,7 @@ export function createLivePreviewCache(
       init?.signal ?? (request instanceof Request ? request.signal : undefined);
     signal?.throwIfAborted();
     if (mode === "cached") {
-      const entry = byUrl.get(url);
+      const entry = lookup(url);
       if (entry) {
         const response = cachedBlobResponse(entry.blob, request, init);
         Object.defineProperty(response, "url", { value: url });
@@ -166,9 +201,13 @@ export function createLivePreviewCache(
   const nativeUrl = (value: string, code = false) => {
     if (mode !== "cached") return value;
     try {
-      return (
-        (code ? scripts.get(absolute(value)) : undefined) ?? resolve(value)
-      );
+      const key = absolute(value),
+        hash = new URL(key).hash;
+      const mapped =
+        (code
+          ? (scripts.get(key) ?? scripts.get(key.split("#")[0]))
+          : undefined) ?? lookup(key)?.url;
+      return mapped ? mapped + hash : value;
     } catch {
       return value;
     }
@@ -200,7 +239,7 @@ export function createLivePreviewCache(
   const nativeSetAttribute = Element.prototype.setAttribute;
   Element.prototype.setAttribute = function (name, value) {
     const attr = name.toLowerCase(),
-      tag = this.tagName;
+      tag = this.tagName.toUpperCase();
     const mapped =
       attr === "src" && /^(IMG|AUDIO|VIDEO|SOURCE|SCRIPT)$/.test(tag)
         ? nativeUrl(String(value), tag === "SCRIPT")
@@ -208,47 +247,248 @@ export function createLivePreviewCache(
             tag === "LINK" &&
             /\.(?:m?js)(?:[?#]|$)/.test(String(value))
           ? nativeUrl(String(value), true)
-          : value;
+          : (attr === "href" || attr === "xlink:href") &&
+              /^(IMAGE|USE)$/.test(tag)
+            ? nativeUrl(String(value))
+            : attr === "style"
+              ? cssUrl(String(value))
+              : value;
     return nativeSetAttribute.call(this, name, mapped);
   };
   restoredProperties.push(() => {
     Element.prototype.setAttribute = nativeSetAttribute;
   });
-  const workerPrefix = () => {
-    const mappings = Object.fromEntries(
-      [...byUrl].map(([key, entry]) => [key, entry.url]),
+  const cssUrl = (value: string) =>
+    mode !== "cached" || disposed
+      ? value
+      : value.replace(
+          /url\(\s*(['"]?)([^)'"\s]+)\1\s*\)/g,
+          (full, _quote, url: string) => {
+            try {
+              const entry = lookup(url);
+              return entry ? `url("${nativeUrl(url)}")` : full;
+            } catch {
+              return full;
+            }
+          },
+        );
+  // FontFace and dynamic CSS use native networking, outside window.fetch.
+  if (NativeFontFace) {
+    globalThis.FontFace = class extends NativeFontFace {
+      constructor(
+        family: string,
+        source: string | BufferSource,
+        descriptors?: FontFaceDescriptors,
+      ) {
+        super(
+          family,
+          typeof source === "string" ? cssUrl(source) : source,
+          descriptors,
+        );
+      }
+    };
+    restoredProperties.push(() => {
+      globalThis.FontFace = NativeFontFace;
+    });
+  }
+  const nativeSetProperty = CSSStyleDeclaration.prototype.setProperty;
+  CSSStyleDeclaration.prototype.setProperty = function (name, value, priority) {
+    return nativeSetProperty.call(
+      this,
+      name,
+      value == null ? value : cssUrl(value),
+      priority,
     );
+  };
+  restoredProperties.push(() => {
+    CSSStyleDeclaration.prototype.setProperty = nativeSetProperty;
+  });
+  // Chromium exposes individual CSS properties on each style instance, so
+  // prototype setters cannot intercept `element.style.backgroundImage = ...`.
+  const styleViews = new WeakMap<CSSStyleDeclaration, CSSStyleDeclaration>();
+  for (const prototype of [HTMLElement.prototype, SVGElement.prototype]) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "style");
+    if (!descriptor?.get || !descriptor.configurable) continue;
+    Object.defineProperty(prototype, "style", {
+      ...descriptor,
+      get() {
+        const style: CSSStyleDeclaration = descriptor.get!.call(this);
+        let view = styleViews.get(style);
+        if (!view) {
+          const methods = new Map<PropertyKey, unknown>();
+          view = new Proxy(style, {
+            get(target, key) {
+              const value = Reflect.get(target, key, target);
+              if (typeof value !== "function") return value;
+              if (!methods.has(key)) methods.set(key, value.bind(target));
+              return methods.get(key);
+            },
+            set(target, key, value) {
+              return Reflect.set(
+                target,
+                key,
+                typeof value === "string" ? cssUrl(value) : value,
+                target,
+              );
+            },
+          });
+          styleViews.set(style, view);
+        }
+        return view;
+      },
+      ...(descriptor.set
+        ? {
+            set(value: string) {
+              descriptor.set!.call(this, cssUrl(String(value)));
+            },
+          }
+        : {}),
+    });
+    restoredProperties.push(() =>
+      Object.defineProperty(prototype, "style", descriptor),
+    );
+  }
+  // SVG href is an SVGAnimatedString rather than an HTML src property.
+  const svgViews = new WeakMap<SVGAnimatedString, SVGAnimatedString>();
+  for (const prototype of [
+    SVGImageElement.prototype,
+    SVGUseElement.prototype,
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "href");
+    if (!descriptor?.get || !descriptor.configurable) continue;
+    Object.defineProperty(prototype, "href", {
+      ...descriptor,
+      get() {
+        const href: SVGAnimatedString = descriptor.get!.call(this);
+        let view = svgViews.get(href);
+        if (!view) {
+          view = new Proxy(href, {
+            get(target, key) {
+              const value = Reflect.get(target, key, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+            set(target, key, value) {
+              return Reflect.set(
+                target,
+                key,
+                key === "baseVal" ? nativeUrl(String(value)) : value,
+                target,
+              );
+            },
+          });
+          svgViews.set(href, view);
+        }
+        return view;
+      },
+    });
+    restoredProperties.push(() =>
+      Object.defineProperty(prototype, "href", descriptor),
+    );
+  }
+  const workerControl = "frame-preview-cache-" + crypto.randomUUID();
+  const activeWorkers = new Set<Worker>();
+  const workerMappings = () =>
+    Object.fromEntries([...byUrl].map(([key, entry]) => [key, entry.url]));
+  const updateWorkers = () => {
+    const message = {
+      [workerControl]: true,
+      cached: mode === "cached",
+      mappings: workerMappings(),
+      semantics: Object.fromEntries(semanticUrls),
+    };
+    for (const worker of activeWorkers) worker.postMessage(message);
+  };
+  const workerPrefix = () => {
+    const mappings = workerMappings();
     return (
       "self.__FRAME_LIVE_ASSET_BASE__=" +
       JSON.stringify(new URL(".", location.href).href) +
       ";" +
-      "self.__FRAME_PREVIEW_MEDIA_MODE__='cached';const __frameCache=" +
+      "let __frameCached=" +
+      JSON.stringify(mode === "cached") +
+      ";let __frameCache=" +
       JSON.stringify(mappings) +
-      ";" +
-      "const __frameResolve=u=>__frameCache[new URL(String(u),self.__FRAME_LIVE_ASSET_BASE__).href]||u;" +
-      'self.__FRAME_PREVIEW_ASSET_URL__=__frameResolve;const __frameFetch=self.fetch.bind(self);self.fetch=(u,o)=>{const key=new URL(String(u instanceof Request?u.url:u),self.__FRAME_LIVE_ASSET_BASE__).href;if(!__frameCache[key]&&key.startsWith(self.__FRAME_LIVE_ASSET_BASE__)&&/\\/(films|vendor|fonts|assets)\\//.test(new URL(key).pathname))return Promise.resolve(new Response("素材不在当前版本缓存中",{status:404}));return __frameFetch(__frameResolve(key),o);};' +
+      ";let __frameSemantics=" +
+      JSON.stringify(Object.fromEntries(semanticUrls)) +
+      ";self.__FRAME_PREVIEW_MEDIA_MODE__=__frameCached?'cached':'original';" +
+      "self.addEventListener('message',e=>{if(e.data?.[" +
+      JSON.stringify(workerControl) +
+      "]!==true)return;e.stopImmediatePropagation();__frameCached=e.data.cached;__frameCache=e.data.mappings;__frameSemantics=e.data.semantics;self.__FRAME_PREVIEW_MEDIA_MODE__=__frameCached?'cached':'original';});" +
+      "const __frameResolve=u=>{const key=new URL(String(u),self.__FRAME_LIVE_ASSET_BASE__).href;return (__frameCached&&(__frameCache[key]||__frameCache[key.split('#')[0]]))||u;};" +
+      'self.__FRAME_PREVIEW_ASSET_URL__=u=>{if(!__frameCached)return u;const original=new URL(String(u),self.__FRAME_LIVE_ASSET_BASE__),canonical=__frameSemantics[original.href]||__frameSemantics[original.href.split("#")[0]];if(!canonical||original.search)return u;const current=new URL(canonical);current.hash=original.hash;return current.href;};const __frameFetch=self.fetch.bind(self);self.fetch=(u,o)=>{if(!__frameCached)return __frameFetch(u,o);const key=new URL(String(u instanceof Request?u.url:u),self.__FRAME_LIVE_ASSET_BASE__).href,mapped=__frameResolve(key);if(mapped===key&&key.startsWith(self.__FRAME_LIVE_ASSET_BASE__)&&/\\/(films|vendor|fonts|assets)\\//.test(new URL(key).pathname))return Promise.resolve(new Response("素材不在当前版本缓存中",{status:404}));return __frameFetch(u instanceof Request?new Request(mapped,u):mapped,o);};' +
       "const __frameScripts=self.importScripts.bind(self);self.importScripts=(...u)=>__frameScripts(...u.map(__frameResolve));"
     );
   };
-  const createWorker = (url: string | URL, options?: WorkerOptions): Worker => {
-    const key = absolute(String(url)),
-      cached = workerUrls.get(key);
-    if (mode !== "cached" || !cached) return new NativeWorker(url, options);
-    return new NativeWorker(cached, options);
+  const workerTarget = (url: string | URL, options?: WorkerOptions) => {
+    const key = absolute(String(url));
+    const cached =
+      mode === "cached"
+        ? (workerUrls.get(key) ?? workerUrls.get(key.split("#")[0]))
+        : undefined;
+    if (cached) return { url: cached, owned: false };
+    // Wrap this preview's workers before a mode switch too: SDK worker pools survive scenes.
+    if (
+      !key.startsWith("blob:") &&
+      !key.startsWith(new URL(".", location.href).href)
+    )
+      return { url, owned: false };
+    // SDKs such as Pixi generate workers from Blob source, outside the module manifest.
+    // Install the same cache resolver before loading their original worker code.
+    const source =
+      workerPrefix() +
+      (options?.type === "module"
+        ? "const __frameMessages=[];const __frameQueue=e=>{e.stopImmediatePropagation();__frameMessages.push(e);};self.addEventListener('message',__frameQueue);await import(" +
+          JSON.stringify(String(url)) +
+          ");self.removeEventListener('message',__frameQueue);for(const e of __frameMessages)self.dispatchEvent(new MessageEvent('message',{data:e.data,ports:e.ports,origin:e.origin}));"
+        : "importScripts(" + JSON.stringify(String(url)) + ");");
+    return {
+      url: blobUrl(new Blob([source], { type: "application/javascript" })),
+      owned: true,
+    };
   };
   globalThis.Worker = class extends NativeWorker {
+    private cachedBootstrap?: string;
     constructor(url: string | URL, options?: WorkerOptions) {
-      super(
-        mode === "cached"
-          ? (workerUrls.get(absolute(String(url))) ?? url)
-          : url,
-        options,
-      );
+      const target = workerTarget(url, options);
+      try {
+        super(target.url, options);
+      } catch (error) {
+        if (target.owned) {
+          URL.revokeObjectURL(String(target.url));
+          ownedUrls.delete(String(target.url));
+        }
+        throw error;
+      }
+      if (target.owned) this.cachedBootstrap = String(target.url);
+      if (
+        target.owned ||
+        (mode === "cached" && workerUrls.has(absolute(String(url))))
+      ) {
+        activeWorkers.add(this);
+        this.postMessage({
+          [workerControl]: true,
+          cached: mode === "cached",
+          mappings: workerMappings(),
+          semantics: Object.fromEntries(semanticUrls),
+        });
+      }
+    }
+    terminate() {
+      activeWorkers.delete(this);
+      super.terminate();
+      if (this.cachedBootstrap) {
+        URL.revokeObjectURL(this.cachedBootstrap);
+        ownedUrls.delete(this.cachedBootstrap);
+        this.cachedBootstrap = undefined;
+      }
     }
   };
   window.__FRAME_PREVIEW_WORKER__ = (url, options) =>
-    mode === "cached" && workerUrls.has(absolute(String(url)))
-      ? createWorker(url, options)
+    mode === "cached" &&
+    (workerUrls.has(absolute(String(url))) ||
+      lookup(String(url)) ||
+      new URL(String(url), location.href).protocol === "blob:")
+      ? new globalThis.Worker(url, options)
       : undefined;
   // The bundler delegate must distinguish a cached worker from an unavailable mapping.
   const workletPrototype =
@@ -258,9 +498,7 @@ export function createLivePreviewCache(
     workletPrototype.addModule = function (url, options) {
       return addModule.call(
         this,
-        mode === "cached"
-          ? (scripts.get(absolute(String(url))) ?? resolve(String(url)))
-          : url,
+        mode === "cached" ? nativeUrl(String(url), true) : url,
         options,
       );
     };
@@ -340,8 +578,9 @@ export function createLivePreviewCache(
     return rewritePreviewCode(code, original, (url: string) => {
       const entry = lookup(url);
       if (!entry) return undefined;
-      // Module imports retain already loaded React/engine singletons through import maps.
-      return /\.(?:m?js)$/.test(new URL(url).pathname) ? url : entry.url;
+      // Imports retain singleton modules through import maps. Other resources retain
+      // their filename/query/hash so SDKs can select the correct loader.
+      return /\.(?:m?js)$/.test(new URL(url).pathname) ? url : resolve(url);
     });
   };
   const prepareCode = async (resources: Resource[], signal: AbortSignal) => {
@@ -426,6 +665,7 @@ export function createLivePreviewCache(
     setMode(value: PreviewMediaMode) {
       if (!validPreviewMode(value)) throw Error("未知预览模式");
       mode = value;
+      updateWorkers();
       window.__FRAME_PREVIEW_MEDIA_MODE__ = value;
       abort?.abort();
       abort = undefined;
@@ -515,7 +755,10 @@ export function createLivePreviewCache(
               );
             });
             combined.throwIfAborted();
-            for (const key of aliases(resource)) byUrl.set(key, entry);
+            for (const key of aliases(resource)) {
+              byUrl.set(key, entry);
+              semanticUrls.set(key, absolute(resource.originalUrl));
+            }
             byUrl.set(entry.url, entry);
             done.add(resource.path);
             if (entry.persistent) persistent++;
@@ -551,6 +794,7 @@ export function createLivePreviewCache(
         );
         combined.throwIfAborted();
         await prepareCode(resources, combined);
+        updateWorkers();
         emit({
           state: "preparing",
           downloadedBytes: state.totalBytes,
@@ -599,7 +843,7 @@ export function createLivePreviewCache(
             URL.revokeObjectURL(value.url);
             ownedUrls.delete(value.url);
           }
-      for (const store of [scripts, originals, workerUrls])
+      for (const store of [scripts, originals, workerUrls, semanticUrls])
         for (const key of store.keys()) if (!byUrl.has(key)) store.delete(key);
       for (let index = retiredUrls.length - 1; index >= 0; index--)
         if (retiredUrls[index].revision < (manifest?.revision ?? 0) - 1) {
@@ -669,6 +913,8 @@ export function createLivePreviewCache(
       if (workletPrototype && addModule) workletPrototype.addModule = addModule;
       delete window.__FRAME_PREVIEW_ASSET_URL__;
       delete window.__FRAME_PREVIEW_WORKER__;
+      for (const worker of activeWorkers) worker.terminate();
+      activeWorkers.clear();
       for (const url of ownedUrls) URL.revokeObjectURL(url);
       activeStyles.forEach((style) => style.remove());
     },

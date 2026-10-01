@@ -1,4 +1,5 @@
 import test from "node:test";
+import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -55,7 +56,7 @@ test(
         baseUrl: "https://fixture.example/v1",
         apiKey: "fixture-key-not-real",
       });
-      const chat = await actions.call("works_chat_create", {
+      const chat = await insertLegacyChat(db, work, {
         id: work.id,
         connection: connection.id,
       });
@@ -71,7 +72,7 @@ test(
           sourceCommit: before,
         },
       };
-      const first = await actions.call("works_chat_send", request);
+      const first = await legacyAgentTask(tasks, work, request);
       assert.equal(first.execution.model, "initial-model");
       assert.equal(first.review_reference.sourceCommit, before);
       assert(!JSON.stringify(first).includes("fixture-key-not-real"));
@@ -83,11 +84,11 @@ test(
         model: "later-model",
         baseUrl: "https://fixture.example/v1",
       });
-      const repeated = await actions.call("works_chat_send", request);
+      const repeated = await legacyAgentTask(tasks, work, request);
       assert.equal(repeated.id, first.id);
       assert.equal(repeated.execution.model, "initial-model");
       await assert.rejects(
-        actions.call("works_chat_send", {
+        legacyAgentTask(tasks, work, {
           ...request,
           prompt: "Different request",
         }),
@@ -96,16 +97,16 @@ test(
       await tasks.cancel(first.id);
       // Legacy provider endpoints must obey the same credential-identity boundary.
       await actions.call("settings_save", { provider: "claude", secret: "legacy-fixture-key-a", model: "legacy-model" });
-      const legacyChat = await actions.call("works_chat_create", { id: work.id, provider: "claude" });
+      const legacyChat = await insertLegacyChat(db, work, { id: work.id, provider: "claude" });
       const legacySend = { id: work.id, chat: legacyChat.id, prompt: "Legacy queued turn", requestKey: randomUUID() };
-      const queuedLegacy = await actions.call("works_chat_send", legacySend);
+      const queuedLegacy = await legacyAgentTask(tasks, work, legacySend);
       const legacyConfig = async () => tasks.secrets.decrypt((await db.setting("claude")).encrypted);
       await actions.call("settings_save", { provider: "claude", model: "another-default" });
       assert.equal(resolveExecution(queuedLegacy.execution, await legacyConfig(), "claude").model, "legacy-model");
       await actions.call("settings_save", { provider: "claude", secret: "legacy-fixture-key-b", model: "legacy-model" });
       const rotatedLegacy = await legacyConfig();
       assert.throws(() => resolveExecution(queuedLegacy.execution, rotatedLegacy, "claude"), (error) => error.code === "EXECUTION_SELECTION_CHANGED");
-      assert.equal((await actions.call("works_chat_send", legacySend)).id, queuedLegacy.id);
+      assert.equal((await legacyAgentTask(tasks, work, legacySend)).id, queuedLegacy.id);
       await tasks.cancel(queuedLegacy.id);
       // V4 persisted enriched execution input, not the caller's original request.
       const legacyId = randomUUID(), legacyKey = randomUUID();
@@ -115,10 +116,10 @@ test(
         [legacyId, repo.id, work.project, { provider: "codex", connection: connection.id, model: "initial-model", prompt: legacyRequest.prompt, context: { time: 1, assetNames: {} } }, chat.id, legacyKey],
       );
       await db.pool.query("UPDATE connections SET state='expired' WHERE id=$1", [connection.id]);
-      assert.equal((await actions.call("works_chat_send", legacyRequest)).id, legacyId);
-      assert.equal((await actions.call("works_chat_send", { ...legacyRequest, model: "initial-model" })).id, legacyId);
+      assert.equal((await legacyAgentTask(tasks, work, legacyRequest)).id, legacyId);
+      assert.equal((await legacyAgentTask(tasks, work, { ...legacyRequest, model: "initial-model" })).id, legacyId);
       for (const patch of [{ prompt: "Changed" }, { model: "other" }, { context: { time: 2 } }])
-        await assert.rejects(actions.call("works_chat_send", { ...legacyRequest, ...patch }), /key already used/);
+        await assert.rejects(legacyAgentTask(tasks, work, { ...legacyRequest, ...patch }), /key already used/);
       assert.equal((await db.one("SELECT count(*)::int AS n FROM tasks WHERE request_key=$1", [legacyKey])).n, 1);
 
       fs.appendFileSync(

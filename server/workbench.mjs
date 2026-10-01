@@ -107,11 +107,17 @@ export function workbenchOperations({
       };
     },
   );
-  add("works_background", "Active projects, grouped by work", {}, () =>
-    db.all(
+  add("works_background", "Active projects, grouped by work", {}, async () => {
+    const result = await db.all(
       `SELECT w.*,r.name AS storage_name,jsonb_agg(jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'created',t.created,'started',t.started) ORDER BY t.created) AS tasks FROM tasks t JOIN works w ON w.repo=t.repo AND w.project=t.project JOIN repos r ON r.id=w.repo WHERE t.state IN ('queued','running','cancelling','publishing','publish_failed') GROUP BY w.id,r.name ORDER BY min(t.created)`,
-    ),
-  );
+    );
+    for (const native of await tasks.externalActivity?.() || []) {
+      let row = result.find(work => work.id === native.workId);
+      if (!row) { row = { ...(await works.get(native.workId)), tasks: [] }; result.push(row); }
+      row.nativeActivity = native;
+    }
+    return result;
+  });
   add(
     "works_stop",
     "Stop all queued and running tasks for this work",
@@ -123,7 +129,8 @@ export function workbenchOperations({
         [w.repo, w.project],
       );
       for (const row of rows) await tasks.cancel(row.id);
-      return { stopped: rows.length };
+      const native = await works.paseo?.manager.cancelWork(a.id);
+      return { stopped: rows.length + (native?.stopped || 0) };
     },
   );
   add(
@@ -321,7 +328,7 @@ export function workbenchOperations({
     async (a) => {
       const w = await works.get(a.id);
       return db.all(
-        "SELECT id,state,error,result,input,progress,created,expires,cleaned FROM tasks WHERE repo=$1 AND project=$2 AND (kind='render' OR (kind='agent' AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(result->'artifacts','[]'::jsonb)) artifact WHERE lower(right(artifact->>'path',4))='.mp4' OR lower(right(artifact->>'path',5))='.webm'))) ORDER BY created DESC LIMIT 50",
+        "SELECT id,state,error,result,input,progress,created,expires,cleaned FROM tasks WHERE repo=$1 AND project=$2 AND (kind='render' OR (kind IN ('agent','paseo') AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(result->'artifacts','[]'::jsonb)) artifact WHERE lower(right(artifact->>'path',4))='.mp4' OR lower(right(artifact->>'path',5))='.webm'))) ORDER BY created DESC LIMIT 50",
         [w.repo, w.project],
       );
     },

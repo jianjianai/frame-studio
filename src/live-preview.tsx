@@ -9,6 +9,7 @@ import {
 import type { AnimationProject } from "./engine/types";
 import {
   validPreviewMode,
+  previewCachePresentation,
   type PreviewCacheState,
   type PreviewMediaMode,
 } from "./engine/live-preview-cache";
@@ -183,6 +184,7 @@ function LivePreview() {
     if (parent !== window)
       parent.postMessage({ type: "frame-preview-media-mode", mode }, "*");
   };
+  const cachePresentation = cache ? previewCachePresentation(cache) : null;
   const previewDiagnostic = String(status?.error || "")
     .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
     .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
@@ -216,18 +218,7 @@ function LivePreview() {
         {mediaMode === "cached" && cache && (
           <div className="preview-cache-panel" aria-live="polite">
             <div className="preview-cache-summary">
-              <strong>
-                {
-                  {
-                    idle: "等待缓存",
-                    downloading: "正在缓存",
-                    preparing: "素材已缓存，正在准备播放",
-                    ready: "缓存与画面已就绪",
-                    cancelled: "缓存已取消",
-                    error: "缓存未完成",
-                  }[cache.state]
-                }
-              </strong>
+              <strong>{cachePresentation?.title}</strong>
               <span>
                 {cache.completeFiles} / {cache.totalFiles} 个文件 ·{" "}
                 {bytes(cache.downloadedBytes)} / {bytes(cache.totalBytes)}
@@ -241,7 +232,7 @@ function LivePreview() {
                 )}
                 {(cache.state === "error" || cache.state === "cancelled") && (
                   <button onClick={() => void client.current?.retry()}>
-                    继续缓存
+                    {cachePresentation?.retryLabel}
                   </button>
                 )}
                 <button
@@ -334,7 +325,13 @@ function LivePreview() {
             <summary>实时预览更新失败 · 查看错误</summary>
             <pre>{previewDiagnostic}</pre>
           </details>
-          <button onClick={() => void client.current?.retry()}>重试连接</button>
+          <button onClick={() => void client.current?.retry()}>
+            {mediaMode === "cached" &&
+            cache?.state === "error" &&
+            cachePresentation?.resourcesComplete
+              ? "重试准备播放"
+              : "重试连接"}
+          </button>
         </div>
       )}
       {candidate ? (

@@ -1,4 +1,5 @@
 import test from "node:test";
+import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -272,7 +273,7 @@ test(
         repo: repo.id,
         title: "模型测试",
       });
-      const chat = await call("works_chat_create", {
+      const chat = await insertLegacyChat(db, work, {
         id: work.id,
         connection: connection.id,
         title: "多模型同一提供商",
@@ -285,10 +286,10 @@ test(
         requestKey: randomUUID(),
         context: { time: 2 },
       };
-      const first = await call("works_chat_send", args);
+      const first = await legacyAgentTask(tasks, work, args);
       assert.equal(first.input.model, models[1].id);
       assert.equal(first.input.connection, connection.id);
-      const second = await call("works_chat_send", {
+      const second = await legacyAgentTask(tasks, work, {
         ...args,
         model: models[0].id,
         requestKey: randomUUID(),
@@ -304,7 +305,7 @@ test(
       assert.equal((await tasks.get(first.id)).input.model, models[1].id);
       assert.equal((await tasks.get(second.id)).input.model, models[0].id);
       await assert.rejects(
-        call("works_chat_send", {
+        legacyAgentTask(tasks, work, {
           ...args,
           requestKey: randomUUID(),
           model: "foreign-model",
@@ -313,20 +314,20 @@ test(
       );
       await call("connections_enabled", { id: connection.id, enabled: false });
       await assert.rejects(
-        call("works_chat_send", { ...args, requestKey: randomUUID() }),
+        legacyAgentTask(tasks, work, { ...args, requestKey: randomUUID() }),
         /停用/,
       );
       assert.equal(
-        (await call("works_chat_send", args)).id,
+        (await legacyAgentTask(tasks, work, args)).id,
         first.id,
         "lost acknowledgement remains recoverable after provider disable",
       );
       await assert.rejects(
-        call("works_chat_send", { ...args, prompt: "different" }),
+        legacyAgentTask(tasks, work, { ...args, prompt: "different" }),
         /request key/,
       );
       await assert.rejects(
-        call("works_chat_send", { ...args, model: models[0].id }),
+        legacyAgentTask(tasks, work, { ...args, model: models[0].id }),
         /request key/,
       );
       await call("connections_enabled", { id: connection.id, enabled: true });

@@ -93,10 +93,12 @@ export function agentTools({
 }) {
   app.post("/api/agent/action", async (req) => {
     const task = req.agentTask;
+    const runRoot = task?.runRoot || path.join(data, "runs", task?.id || "");
     if (!task) throw problem(403, "Task credential required");
     const { name, args = {} } = req.body || {};
     if (!args || typeof args !== "object" || Array.isArray(args))
       throw problem(400, "Tool args must be a JSON object");
+    if (task.kind === "paseo" && ["question_create", "question_poll"].includes(name)) throw problem(400, "Use the native Paseo question and permission tools");
     if (name === "question_create")
       return actions.interactions.create(task.id, args);
     if (name === "question_poll") {
@@ -117,7 +119,7 @@ export function agentTools({
       if (!work) throw problem(404, "Current work not found");
       return actions.call("works_live_preview", {
         id: work.id,
-        task: task.id,
+        ...(task.kind === "paseo" ? { source: "paseo", paseoAgent: task.paseoAgent } : { task: task.id }),
         ai: true,
       });
     }
@@ -163,7 +165,7 @@ export function agentTools({
     if (name === "engine_test") {
       const preview = await actions.call("speech_test", args);
       const relative = `projects/${task.project}/.cache/speech/${preview.task}.${preview.mime === "audio/wav" ? "wav" : "mp3"}`;
-      const target = confined(path.join(data, "runs", task.id), relative);
+      const target = confined(runRoot, relative);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       await fs.promises.copyFile(
         confined(path.join(data, "runs", preview.task), preview.path),
@@ -199,7 +201,7 @@ export function agentTools({
       )
         throw problem(403, "Material does not belong to this repository");
       if (asset.deleted) throw problem(409, "Material is in recycle bin");
-      const root = path.join(data, "runs", task.id, "projects", task.project),
+      const root = path.join(runRoot, "projects", task.project),
         ext = path
           .extname(asset.name)
           .replace(/[^.a-zA-Z0-9]/g, "")

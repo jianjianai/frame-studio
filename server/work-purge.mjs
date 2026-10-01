@@ -44,6 +44,12 @@ export async function purgeWork(works, id, confirm) {
     )
       throw problem(409, "作品预览或导出正在读取，请关闭后重试");
 
+    if (works.paseo) {
+      await works.paseo.drafts.stop(id);
+      // A deleted work cannot admit a new native session; its daemon is stopped by the controller.
+      const native = await works.paseo.store.getWork(id);
+      if (native?.container) throw problem(409, "Paseo 正在关闭此作品环境，请稍后重试永久删除。");
+    }
     const repository = await repos.get(work.repo);
     if (work.branch === repository.branch)
       throw problem(409, "作品分支不能是仓库主分支，请先修复分支配置");
@@ -67,6 +73,7 @@ export async function purgeWork(works, id, confirm) {
         ownedPath(data, "sessions", id),
       ]),
       ...chats.map(({ id }) => ownedPath(data, "sessions", id)),
+      ...(works.paseo ? [ownedPath(data, "paseo", id)] : []),
       ...versions.map(({ id }) => ownedPath(data, "versions", id)),
       ...undos.map(({ id }) => path.join(data, "restores", "undo-" + id)),
     ];

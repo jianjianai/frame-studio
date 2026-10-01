@@ -1,0 +1,302 @@
+diff --git a/packages/server/src/server/agent/agent-manager.ts b/packages/server/src/server/agent/agent-manager.ts
+index 87d3b29..f8e569f 100644
+--- a/packages/server/src/server/agent/agent-manager.ts
++++ b/packages/server/src/server/agent/agent-manager.ts
+@@ -1930,6 +1930,10 @@ export class AgentManager {
+   }
+ 
+   async setAgentModel(agentId: string, modelId: string | null): Promise<void> {
++    return this.withAgentSelectionMutation(agentId, () => this.setAgentModelUnlocked(agentId, modelId));
++  }
++
++  private async setAgentModelUnlocked(agentId: string, modelId: string | null): Promise<void> {
+     const agent = this.requireSessionAgent(agentId);
+     const normalizedModelId =
+       typeof modelId === "string" && modelId.trim().length > 0 ? modelId : null;
+@@ -2287,6 +2291,20 @@ export class AgentManager {
+     await this.writeStoredMetadata(agentId, updates);
+   }
+ 
++  private readonly selectionMutationTails = new Map<string, Promise<void>>();
++
++  /** Serializes model changes with a frozen message's receipt preparation and send. */
++  async withAgentSelectionMutation<T>(agentId: string, mutation: () => Promise<T>): Promise<T> {
++    const previous = this.selectionMutationTails.get(agentId) ?? Promise.resolve();
++    const result = previous.catch(() => undefined).then(mutation);
++    const tail = result.then(() => undefined, () => undefined);
++    this.selectionMutationTails.set(agentId, tail);
++    void tail.finally(() => {
++      if (this.selectionMutationTails.get(agentId) === tail) this.selectionMutationTails.delete(agentId);
++    });
++    return result;
++  }
++
+   private async runLifecycleMutation<T>(agentId: string, mutation: () => Promise<T>): Promise<T> {
+     // Parent cascade classifies a child inside the same lane used by open-tab
+     // label writes, so a received ownership update cannot be overtaken.
+diff --git a/packages/server/src/server/agent/providers/codex-app-server-agent.test.ts b/packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
+index 1fac9e0..be6dfd7 100644
+--- a/packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
++++ b/packages/server/src/server/agent/providers/codex-app-server-agent.test.ts
+@@ -534,6 +534,8 @@ type CapturedFakeCodexRecord = Record<string, unknown>;
+ async function runCustomCodexProviderTurn(
+   providerId: string,
+   baseUrl: string,
++  launchEnv?: Record<string, string>,
++  opening: "create" | "resume" = "create",
+ ): Promise<CapturedFakeCodexRecord[]> {
+   const tempDir = await mkdtemp(path.join(tmpdir(), "codex-custom-provider-"));
+   const fakeAppServerPath = path.join(tempDir, "fake-codex-app-server.cjs");
+@@ -591,19 +593,24 @@ process.stdin.on("data", (chunk) => {
+         label: "Custom Codex",
+         command: [process.execPath, fakeAppServerPath],
+         env: {
+-          OPENAI_API_KEY: "sk-custom",
++          ...(launchEnv ? {} : { OPENAI_API_KEY: "sk-custom" }),
+           OPENAI_BASE_URL: baseUrl,
+           PASEO_FAKE_CODEX_CAPTURE: capturedRequestsPath,
+         },
+       },
+     },
+   });
+-  const session = await registry[providerId].createClient(createTestLogger()).createSession({
++  const client = registry[providerId].createClient(createTestLogger());
++  const config = {
+     provider: providerId,
+     cwd: "/workspace/project",
+     modeId: "auto",
+     model: "custom-model",
+-  });
++  };
++  const context = launchEnv ? { agentId: "frame-session-env-test", env: launchEnv } : undefined;
++  const session = opening === "resume"
++    ? await client.resumeSession({ sessionId: "thread-1" }, config, context)
++    : await client.createSession(config, context);
+ 
+   try {
+     await session.startTurn("use the custom endpoint");
+@@ -2067,6 +2074,35 @@ describe("Codex app-server provider", () => {
+     });
+   });
+ 
++  test.each(["create", "resume"] as const)(
++    "uses only fresh session-open credentials for a custom Codex %s without persisting them",
++    async (opening) => {
++      const captured = await runCustomCodexProviderTurn(
++        "frame-session-env",
++        "https://public-profile.example.com",
++        { OPENAI_API_KEY: "session-only-key", OPENAI_BASE_URL: "https://current-selection.example.com" },
++        opening,
++      );
++      expect(captured[0]).toEqual({
++        kind: "env",
++        OPENAI_API_KEY: "session-only-key",
++        OPENAI_BASE_URL: "https://current-selection.example.com",
++      });
++      const request = captured.find((row) => row.kind === "request" &&
++        row.method === (opening === "resume" ? "thread/resume" : "thread/start"));
++      expect(request?.params).toMatchObject({
++        config: {
++          model_provider: "frame-session-env",
++          model_providers: { "frame-session-env": {
++            name: "Custom Codex", base_url: "https://current-selection.example.com/v1",
++            env_key: "OPENAI_API_KEY", requires_openai_auth: false, wire_api: "responses",
++          } },
++        },
++      });
++      expect(JSON.stringify(request?.params)).not.toContain("session-only-key");
++    },
++  );
++
+   test("does not append v1 twice for custom Codex provider base URLs", async () => {
+     const capturedRequests = await runCustomCodexProviderTurn(
+       "codex-custom",
+diff --git a/packages/server/src/server/agent/providers/codex-app-server-agent.ts b/packages/server/src/server/agent/providers/codex-app-server-agent.ts
+index b713de0..943cdaf 100644
+--- a/packages/server/src/server/agent/providers/codex-app-server-agent.ts
++++ b/packages/server/src/server/agent/providers/codex-app-server-agent.ts
+@@ -7032,12 +7032,17 @@ export class CodexAppServerAgentClient implements AgentClient {
+     return {
+       ...this.deps,
+       codexHome: resolveCodexHomeDir(buildCodexAppServerEnv(this.runtimeSettings, launchEnv)),
+-      customCodexConfig: this.customProviderConfig(),
++      customCodexConfig: this.customProviderConfig(launchEnv),
+     };
+   }
+ 
+-  private customProviderConfig(): CodexCustomProviderConfig | null {
+-    return buildCodexCustomProviderConfig(this.runtimeSettings, this.deps.customProvider);
++  private customProviderConfig(launchEnv?: Record<string, string>): CodexCustomProviderConfig | null {
++    // Session hooks may supply revocable credentials without persisting them in daemon config.
++    // Match the environment actually passed to this app-server process.
++    return buildCodexCustomProviderConfig(
++      { ...this.runtimeSettings, env: { ...this.runtimeSettings?.env, ...launchEnv } },
++      this.deps.customProvider,
++    );
+   }
+ 
+   private resolveGoalsEnabled(): Promise<boolean> {
+diff --git a/packages/server/src/server/session.ts b/packages/server/src/server/session.ts
+index c69033a..7144650 100644
+--- a/packages/server/src/server/session.ts
++++ b/packages/server/src/server/session.ts
+@@ -1,3 +1,4 @@
++import { guardFrameMessageSelection } from "./frame-message-selection.js";
+ import { searchTimeline } from "./agent/chat-search/index.js";
+ import type { BrowserToolsBroker } from "./browser-tools/broker.js";
+ import { BrowserAutomationHostCapabilitySchema } from "@getpaseo/protocol/browser-automation/capabilities";
+@@ -8081,15 +8082,23 @@ export class Session {
+         }
+       };
+       if (msg.messageId) {
+-        await this.messageReceipts.send({
++        await this.agentManager.withAgentSelectionMutation(agentId, () => this.messageReceipts.send({
+           agentId,
+-          messageId: msg.messageId,
++          messageId: msg.messageId!,
+           request: { prompt, activeTurnBehavior: msg.activeTurnBehavior ?? "interrupt" },
+           prepare: async () => {
+             await this.prepareAgentMessage(agentId, msg.text);
++            await guardFrameMessageSelection({
++              agentId, messageId: msg.messageId!, signal: this.delivery.requestSignal,
++              selection: () => {
++                const agent = this.agentManager.getAgent(agentId);
++                if (!agent) throw new Error("Agent disappeared before frozen submission");
++                return { provider: agent.config.provider, model: agent.config.model };
++              },
++            });
+           },
+           send,
+-        });
++        }));
+       } else {
+         await send();
+       }
+diff --git a/packages/server/src/server/frame-message-selection.ts b/packages/server/src/server/frame-message-selection.ts
+new file mode 100644
+index 0000000..623dc58
+--- /dev/null
++++ b/packages/server/src/server/frame-message-selection.ts
+@@ -0,0 +1,29 @@
++import { z } from "zod";
++
++const SelectionResponse = z.discriminatedUnion("frozen", [
++  z.object({ version: z.literal(1), frozen: z.literal(false) }),
++  z.object({ version: z.literal(1), frozen: z.literal(true),
++    selection: z.object({ provider: z.string().min(1), model: z.string().nullable() }) }),
++]);
++
++/** Runs only after native receipt recovery, before the pending receipt and provider send. */
++export async function guardFrameMessageSelection(input: {
++  agentId: string; messageId: string;
++  selection: () => { provider: string; model?: string | null };
++  signal?: AbortSignal;
++}): Promise<void> {
++  const base = process.env.FRAME_PASEO_URL;
++  if (!base) return;
++  const url = new URL(base.replace(/\/$/, "") + "/messages/" + encodeURIComponent(input.messageId) + "/selection");
++  url.searchParams.set("agentId", input.agentId);
++  const response = await fetch(url, {
++    headers: { authorization: "Bearer " + process.env.FRAME_PASEO_TOKEN },
++    signal: input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(10000)]) : AbortSignal.timeout(10000),
++  });
++  if (!response.ok) throw new Error("FRAME 冻结选择暂时无法确认，请保持原消息并重试。");
++  const frozen = SelectionResponse.parse(await response.json());
++  if (!frozen.frozen) return; // Official CLI/API messages can use native delivery without a FRAME attachment.
++  const current = input.selection();
++  if (frozen.selection.provider !== current.provider || frozen.selection.model !== (current.model ?? null))
++    throw new Error("这条消息冻结后模型或提供商已改变，请恢复原选择重试，或明确创建一条新消息。");
++}
+diff --git a/packages/server/src/server/frame-message-selection.test.ts b/packages/server/src/server/frame-message-selection.test.ts
+new file mode 100644
+index 0000000..a1db4a4
+--- /dev/null
++++ b/packages/server/src/server/frame-message-selection.test.ts
+@@ -0,0 +1,87 @@
++import http from "node:http";
++import fs from "node:fs/promises";
++import path from "node:path";
++import { tmpdir } from "node:os";
++import { afterEach, expect, test } from "vitest";
++import { guardFrameMessageSelection } from "./frame-message-selection.js";
++import { MessageReceipts } from "./message-receipts/index.js";
++import { AgentManager } from "./agent/agent-manager.js";
++
++const cleanups: Array<() => Promise<void>> = [];
++afterEach(async () => { for (const cleanup of cleanups.splice(0).reverse()) await cleanup(); });
++async function fixture() {
++  const directory = await fs.mkdtemp(path.join(tmpdir(), "frame-native-selection-"));
++  cleanups.push(() => fs.rm(directory, { recursive: true, force: true }));
++  let frozen = true, requests = 0;
++  const server = http.createServer((req, res) => {
++    requests++;
++    expect(req.headers.authorization).toBe("Bearer work-private-test");
++    expect(req.url).toBe("/work/messages/message/selection?agentId=agent");
++    res.setHeader("content-type", "application/json");
++    res.end(JSON.stringify(frozen ? { version: 1, frozen: true,
++      selection: { provider: "frame-profile", model: "original" } } : { version: 1, frozen: false }));
++  });
++  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
++  cleanups.push(() => new Promise<void>(resolve => server.close(() => resolve())));
++  const previous = { url: process.env.FRAME_PASEO_URL, token: process.env.FRAME_PASEO_TOKEN };
++  process.env.FRAME_PASEO_URL = "http://127.0.0.1:" + (server.address() as { port: number }).port + "/work";
++  process.env.FRAME_PASEO_TOKEN = "work-private-test";
++  cleanups.push(async () => {
++    if (previous.url === undefined) delete process.env.FRAME_PASEO_URL; else process.env.FRAME_PASEO_URL = previous.url;
++    if (previous.token === undefined) delete process.env.FRAME_PASEO_TOKEN; else process.env.FRAME_PASEO_TOKEN = previous.token;
++  });
++  let model = "changed", deliveries = 0;
++  const receipts = new MessageReceipts(directory);
++  const input = { agentId: "agent", messageId: "message", request: { text: "frozen message" },
++    prepare: () => guardFrameMessageSelection({ agentId: "agent", messageId: "message",
++      selection: () => ({ provider: "frame-profile", model }) }),
++    send: async () => { deliveries++; } };
++  return { receipts, input, requests: () => requests, deliveries: () => deliveries,
++    setModel: (value: string) => { model = value; }, setFrozen: (value: boolean) => { frozen = value; } };
++}
++test("Changed frozen selection is rejected before pending receipt; completed lost-ack replay still succeeds", async () => {
++  const f = await fixture();
++  await expect(f.receipts.send(f.input)).rejects.toThrow("模型或提供商已改变");
++  expect(f.deliveries()).toBe(0);
++  f.setModel("original");
++  await f.receipts.send(f.input);
++  expect(f.deliveries()).toBe(1);
++  f.setModel("changed");
++  await f.receipts.send(f.input);
++  expect(f.requests()).toBe(2);
++  expect(f.deliveries()).toBe(1);
++});
++test("Unknown native delivery outcome is preserved ahead of selection checks; unfrozen CLI messages remain native", async () => {
++  const f = await fixture();
++  f.setModel("original");
++  await expect(f.receipts.send({ ...f.input, send: async () => { throw Error("lost provider ack"); } })).rejects.toThrow("lost provider ack");
++  f.setModel("changed");
++  await expect(f.receipts.send(f.input)).rejects.toThrow("agent_request_outcome_unknown");
++  expect(f.requests()).toBe(1);
++  f.setFrozen(false);
++  await f.receipts.send({ ...f.input, messageId: "cli-message" });
++  expect(f.deliveries()).toBe(1);
++});
++test("Native model mutation waits until the frozen receipt prepare and send lane completes", async () => {
++  const f = await fixture(); f.setModel("original");
++  const manager = Object.create(AgentManager.prototype) as AgentManager;
++  const agent = { config: { model: "original" }, runtimeInfo: null,
++    session: { setModel: async (value: string) => { f.setModel(value); } } };
++  Object.assign(manager, { selectionMutationTails: new Map(), requireSessionAgent: () => agent,
++    drainSessionEvents: async () => {}, refreshSessionPersistence: () => {}, touchUpdatedAt: () => {}, emitState: () => {} });
++  let release!: () => void;
++  const blocked = new Promise<void>(resolve => { release = resolve; });
++  let entered!: () => void;
++  const preparing = new Promise<void>(resolve => { entered = resolve; });
++  const sending = manager.withAgentSelectionMutation("agent", () => f.receipts.send({
++    ...f.input, prepare: async () => { entered(); await blocked; await f.input.prepare(); },
++  }));
++  await preparing;
++  const changing = manager.setAgentModel("agent", "changed");
++  await Promise.resolve();
++  expect(agent.config.model).toBe("original");
++  release();
++  await Promise.all([sending, changing]);
++  expect(f.deliveries()).toBe(1);
++  expect(agent.config.model).toBe("changed");
++});

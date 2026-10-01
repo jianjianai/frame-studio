@@ -3,7 +3,7 @@ import { activePreviewTask } from "./live-preview-session.mjs";
 import { readAgentTarget } from "./agent/agent-navigation";
 import { useBrowserExport } from "./browser-export-session";
 import { RevisionPreview } from "./revision-preview";
-import { WorkChat } from "./work-chat";
+import { PaseoChat } from "./paseo-chat";
 import { WorkTools } from "./work-tools";
 import { WorkDock } from "./work-dock";
 const AudioEditor = lazy(() =>
@@ -15,7 +15,14 @@ const CompositionEditor = lazy(() =>
   })),
 );
 import { ExportProgress, exportState } from "./exports";
-import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  lazy,
+  Suspense,
+} from "react";
 import { previewCacheBridge } from "./preview-cache";
 import { liveAudioInputBridge } from "./live-audio-input";
 import { ResizeHandle } from "../src/ui/ResizeHandle";
@@ -57,6 +64,9 @@ export function Creation({ id, notify }) {
     iframe = useRef(null),
     split = useRef(null);
   const [playerElement, setPlayerElement] = useState(null);
+  const [paseoAgent, setPaseoAgent] = useState(null);
+  const [previewSource, setPreviewSource] = useState(undefined);
+  const [paseoExpanded, setPaseoExpanded] = useState(false);
   const bindPlayer = useCallback((element) => {
     iframe.current = element;
     setPlayerElement(element);
@@ -115,6 +125,11 @@ export function Creation({ id, notify }) {
     [suggestion, setSuggestion] = useState(null),
     [run, busy] = useAction(notify);
   useEffect(() => {
+    setPaseoAgent(null);
+    setPreviewSource(undefined);
+    setPaseoExpanded(false);
+  }, [id]);
+  useEffect(() => {
     try {
       sessionStorage.setItem(
         "frame.assets:" + id,
@@ -153,7 +168,9 @@ export function Creation({ id, notify }) {
     workId: id,
     latest,
     mode: "live",
-    taskId: activePreviewTask(tasks, id),
+    taskId: paseoAgent ? undefined : activePreviewTask(tasks, id),
+    source: previewSource,
+    paseoAgent,
     blocked: browserBusy,
     notify,
   });
@@ -524,6 +541,29 @@ export function Creation({ id, notify }) {
           className="preview-pane"
           inert={compact && dockOpen ? true : undefined}
         >
+          {previewSource === "paseo" && (
+            <div
+              className="preview-version-note live-preview-note paseo-preview-source"
+              role="status"
+            >
+              <span>
+                {paseoAgent ? "当前对话工作区预览" : "Paseo 主工作区预览"}
+              </span>
+              <Button
+                onClick={() => {
+                  setPreviewSource(undefined);
+                  setPaseoAgent(null);
+                }}
+              >
+                返回作品预览
+              </Button>
+              {paseoAgent && (
+                <Button onClick={() => setPaseoAgent(null)}>
+                  主工作区预览
+                </Button>
+              )}
+            </div>
+          )}
           {(previewError || preview?.fallback) && (
             <div
               className="preview-version-note live-preview-note"
@@ -606,14 +646,21 @@ export function Creation({ id, notify }) {
             tabIndex={-1}
           />
         )}
-        <WorkDock tool={tool} compact={compact} onClose={closeTool}>
+        <WorkDock
+          tool={tool}
+          compact={compact}
+          expanded={tool === "ai" && paseoExpanded}
+          onClose={() => {
+            setPaseoExpanded(false);
+            closeTool();
+          }}
+        >
           <div
             className="work-tool-pane chat-tool-pane"
             data-dock-pane="ai"
             hidden={!chatOpen}
           >
-            <WorkChat
-              embedded
+            <PaseoChat
               key={id}
               work={work}
               tasks={tasks}
@@ -626,8 +673,18 @@ export function Creation({ id, notify }) {
               onPausePreview={() => sendPlayer("pause")}
               suggestion={suggestion}
               visible={chatOpen}
-              onClose={closeChat}
+              onClose={() => {
+                setPaseoExpanded(false);
+                closeChat();
+              }}
               compact={compact}
+              expanded={paseoExpanded}
+              onExpand={() => setPaseoExpanded((value) => !value)}
+              onPreviewAgent={(agentId) => {
+                setPreviewSource("paseo");
+                setPaseoAgent(agentId || null);
+                setPaseoExpanded(false);
+              }}
               onRecall={(context) => {
                 if (
                   context.liveSessionId &&

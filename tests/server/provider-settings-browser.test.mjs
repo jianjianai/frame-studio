@@ -1,4 +1,5 @@
 import test from "node:test";
+import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -288,12 +289,12 @@ test(
         repo: repo.id,
         title: "History",
       });
-      const chat = await call("works_chat_create", {
+      const chat = await insertLegacyChat(db, work, {
         id: work.id,
         connection: provider.id,
         title: "Keep this conversation",
       });
-      const task = await call("works_chat_send", {
+      const task = await legacyAgentTask(tasks, work, {
         id: work.id,
         chat: chat.id,
         prompt: "Deletion guard fixture",
@@ -352,10 +353,17 @@ test(
       const preferences = await page.evaluate(() =>
         JSON.parse(localStorage.getItem("frame.ai-preferences.v1")),
       );
-      assert.equal(preferences.defaultSelection, null);
-      assert.deepEqual(preferences.favorites, [
-        JSON.stringify(["other-provider", "keep"]),
-      ]);
+      assert.deepEqual(
+        preferences,
+        {
+          defaultSelection: { connection: provider.id, model: "model-fast" },
+          favorites: [
+            JSON.stringify([provider.id, "model-fast"]),
+            JSON.stringify(["other-provider", "keep"]),
+          ],
+        },
+        "Retiring old chat controls must preserve historical browser preferences",
+      );
       assert.equal(
         requests.length,
         4,

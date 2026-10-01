@@ -33,7 +33,7 @@ API 发现模型不会直接写入目录，只有确认导入才保存。Codex �
 
 同步不移除上游未返回的旧模型，不重置启停状态，不改掉自定义显示名称，也不清除手动覆盖；未被选择的模型保持不变。已有默认模型保留，除非用户在导入确认中明确更换。
 
-模型列表可搜索、启停、查看参数和快捷设为默认；推荐模型与用户设置的默认模型分别标记。官方账号行不展示误导性的“测试模型”，登录检查位于连接操作区。聊天模型选择器显示已获取的上下文、默认推理档位和视觉能力，仍按提供商分组。登录弹窗区分授权、账号确认和模型同步，设备码可复制，失败可重新获取授权，成功后直接返回模型目录。
+模型列表可搜索、启停、查看参数和快捷设为默认；推荐模型与用户设置的默认模型分别标记。官方账号行不展示误导性的“测试模型”，登录检查位于连接操作区。FRAME 设置中的模型选择显示已获取的上下文、默认推理档位和视觉能力；Paseo 创作使用官方原生模型选择器，连接以对应 profile 显示。已打开作品会通过官方配置 RPC 同步名称、模型与启用状态，保留当前回合和原生自定义 profile。登录弹窗区分授权、账号确认和模型同步，设备码可复制，失败可重新获取授权，成功后直接返回模型目录。
 
 手动添加只需 ID，名称和规格均可省略。高级项会预填现有自动值；编辑后标为手动覆盖，未来同步保留。“恢复自动”移除对应覆盖值，重新采用自动规格。清空一个数值表示用户明确将它标记为未知。
 
@@ -63,6 +63,6 @@ API 发现只访问已配置端点，不跟随重定向或 API 提供的任意�
 - `tests/server/provider-metadata.test.mjs`：字段解析、单位、优先级、精确匹配、未知值、分页边界、脱敏和覆盖同步。
 - `tests/server/provider-lifecycle.test.mjs`：真实 PostgreSQL 的删除锁、活动任务阻断、历史及幂等保留、凭据清除、旧请求不能恢复连接。
 - `tests/server/provider-settings-browser.test.mjs`：真实页面与 WebSocket、模拟模型 API 的完整配置流程，含 1440/768/390/320 像素布局、错误重试、手动兜底、删除保护和偏好清理。
-- 原有 `ai-models`、`ai-workbench-browser` 回归继续覆盖旧连接、聊天选择与任务模型冻结。
+- `tests/server/ai-models.test.mjs` 保留连接与历史执行选择回归；`paseo-manager`、`paseo-credentials`、`paseo-work` 与原生浏览器回归覆盖配置热同步、实际 session 凭据、冻结选择及官方创作流程。
 
 协议依据：[OpenAI Models API](https://developers.openai.com/api/reference/resources/models)、[Claude Models API](https://platform.claude.com/docs/en/api/models/list)、[OpenRouter Models API](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties) 和 [models.dev](https://models.dev/) 的公开字段。接口未提供的规格不保证一定可以补齐。

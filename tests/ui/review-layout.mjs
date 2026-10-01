@@ -18,31 +18,39 @@ export async function layoutChecks(h) {
       state.work.title,
     );
     assert.equal(await page.locator(".navigation").count(), 0);
-    await expect(page.getByRole("button", { name: "查看本轮预览与修改", exact: true })).toBeVisible();
+    await expect(page.locator('iframe[title^="Paseo ·"]')).toBeVisible();
     assert(!library.url().includes("#/work/"));
     await player().getByTestId("play-toggle").waitFor();
     await frame().waitForFunction(() => window.__FRAME_STUDIO__?.ready);
     await screenshot("01-workspace-desktop");
   });
   const page = h.page;
-  await check("AI显隐保留草稿和后台任务，无上下布局切换", async () => {
-    const input = page.getByRole("textbox", { name: "创作要求" });
-    await input.fill("关闭对话后仍须保留的草稿");
-    await page
-      .locator(".creation-actions")
-      .getByRole("button", { name: "关闭 AI 对话", exact: true })
-      .click();
-    await expect(page.locator("#work-chat")).toBeHidden();
-    await page
-      .getByRole("button", { name: "打开 AI 对话", exact: true })
-      .click();
-    await expect(input).toHaveValue("关闭对话后仍须保留的草稿");
-    assert.equal(state.calls.filter((c) => c.name === "task_cancel").length, 0);
-    assert.equal(
-      await page.getByRole("button", { name: "切换左右或上下布局" }).count(),
-      0,
-    );
-  });
+  await check(
+    "AI显隐保留完整原生界面实例和后台任务，无上下布局切换",
+    async () => {
+      const native = page.locator('iframe[title^="Paseo ·"]');
+      await native.evaluate((el) => {
+        el.dataset.retained = "same-instance";
+      });
+      await page
+        .locator(".creation-actions")
+        .getByRole("button", { name: "关闭 AI 对话", exact: true })
+        .click();
+      await expect(page.locator("#work-dock")).toBeHidden();
+      await page
+        .getByRole("button", { name: "打开 AI 对话", exact: true })
+        .click();
+      await expect(native).toHaveAttribute("data-retained", "same-instance");
+      assert.equal(
+        state.calls.filter((c) => c.name === "task_cancel").length,
+        0,
+      );
+      assert.equal(
+        await page.getByRole("button", { name: "切换左右或上下布局" }).count(),
+        0,
+      );
+    },
+  );
   await check("细分割线鼠标与键盘调整AI宽度", async () => {
     const handle = page.getByRole("separator", {
         name: "调整播放器和工作面板大小",
@@ -127,32 +135,29 @@ export async function layoutChecks(h) {
       .getByRole("slider", { name: "时间轴可视范围", exact: true })
       .press("0");
   });
-  await check("选段引用、Markdown和安全链接", async () => {
-    await page.getByRole("button", { name: "引用选段", exact: true }).click();
-    await expect(page.locator(".chat-composer .context-chip")).toContainText(
-      "00:00.50—00:01.50",
+  await check("Frame选段上下文、旧记录Markdown和安全链接", async () => {
+    const native = page.frames().find((f) => f.url().includes("/paseo/"));
+    await native.waitForFunction(() => window.__FRAME_REVIEW_PASEO__?.ready);
+    const reference = await native.evaluate(() =>
+      window.__FRAME_REVIEW_PASEO__.context(),
     );
-    await expect(page.locator(".review-text h4").first()).toHaveText(
-      "修改结果",
-    );
-    await expect(page.locator(".review-text strong").first()).toHaveText(
+    assert.equal(reference.start, 0.5);
+    assert.equal(reference.end, 1.5);
+    await page.getByRole("button", { name: "旧版记录", exact: true }).click();
+    await expect(
+      page
+        .locator(".paseo-history-turn")
+        .getByRole("heading", { name: "修改结果", exact: true }),
+    ).toHaveText("修改结果");
+    await expect(page.locator(".paseo-history-turn strong").first()).toHaveText(
       "动作已调整",
     );
     assert.equal(
-      await page.locator('.review-text a[href^="javascript:"]').count(),
+      await page.locator('.paseo-history-turn a[href^="javascript:"]').count(),
       0,
     );
     assert.equal(await page.evaluate(() => window.INJECTED), undefined);
-    await page
-      .getByRole("textbox", { name: "创作要求" })
-      .fill("按当前选段调整");
-    await page.getByRole("button", { name: "排队发送", exact: true }).click();
-    await expect(page.getByRole("textbox", { name: "创作要求" })).toHaveValue(
-      "",
-    );
-    const sent = state.calls.filter((c) => c.name === "works_chat_send").at(-1);
-    assert.equal(sent.args.context.start, 0.5);
-    assert.equal(sent.args.context.end, 1.5);
+    await page.getByRole("button", { name: "Paseo", exact: true }).click();
   });
 }
 export async function responsiveChecks(h) {
@@ -161,7 +166,7 @@ export async function responsiveChecks(h) {
     for (const width of [1440, 1280, 1024, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 844 });
       const close = page
-        .locator("#work-chat")
+        .locator("#work-dock")
         .getByRole("button", { name: "关闭 AI 对话", exact: true });
       if (await close.count()) await close.click();
       await expect(
@@ -181,13 +186,12 @@ export async function responsiveChecks(h) {
         await page
           .getByRole("button", { name: "打开 AI 对话", exact: true })
           .click();
-        const r = await page
-          .getByRole("textbox", { name: "创作要求" })
-          .boundingBox();
+        const r = await page.locator('iframe[title^="Paseo ·"]').boundingBox();
         assert(r.y + r.height <= 844);
         await screenshot("05-chat-" + width);
-        await page.getByRole("textbox", { name: "创作要求" }).press("Escape");
-        await expect(page.locator("#work-chat")).toBeHidden();
+        await page.locator("#work-dock").focus();
+        await page.keyboard.press("Escape");
+        await expect(page.locator("#work-dock")).toBeHidden();
       }
       await screenshot("06-player-" + width);
     }

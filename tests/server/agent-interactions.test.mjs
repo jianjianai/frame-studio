@@ -1,4 +1,5 @@
 import test from "node:test";
+import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -76,11 +77,11 @@ test(
         model: "fixture-model",
         apiKey: "fixture-only-key",
       });
-      const chat = await call("works_chat_create", {
+      const chat = await insertLegacyChat(db, work, {
         id: work.id,
         connection: connection.id,
       });
-      const task = await call("works_chat_send", {
+      const task = await legacyAgentTask(tasks, work, {
         id: work.id,
         chat: chat.id,
         prompt: "制作开场",
@@ -287,7 +288,7 @@ test(
         actions.interactions.create(task.id, question("after-cancel")),
         { statusCode: 409 },
       );
-      const next = await call("works_chat_send", {
+      const next = await legacyAgentTask(tasks, work, {
         id: work.id,
         chat: chat.id,
         prompt: "继续",
@@ -373,7 +374,7 @@ test(
       assert(
         !JSON.stringify(await call("agent_notifications")).includes(token),
       );
-      const pageTask = await call("works_chat_send", {
+      const pageTask = await legacyAgentTask(tasks, work, {
         id: work.id,
         chat: chat.id,
         prompt: "有界事件页",

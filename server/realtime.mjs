@@ -85,10 +85,7 @@ export async function installRealtime(
         [session],
       )));
   const upgrade = async (req, socket, head) => {
-    if (req.url !== "/api/ws") {
-      socket.destroy();
-      return;
-    }
+    if (req.url !== "/api/ws") return;
     try {
       const session = app.parseCookie(req.headers.cookie || "").frame_session;
       if (!(await authorized(session && hash(session)))) {

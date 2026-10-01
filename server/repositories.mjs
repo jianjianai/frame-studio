@@ -188,6 +188,8 @@ export class Repositories {
       "SELECT w.id FROM works w JOIN settings s ON s.key='work-purge:'||w.id::text WHERE w.repo=$1 AND ($2::text IS NULL OR w.project=$2) LIMIT 1",
       [id, project],
     )) throw problem(409, "作品正在永久清理，请在回收站重试完成清理");
+    if (await this.nativeActivity?.(id, project))
+      throw problem(409, "Paseo 正在创作或等待响应，请先完成或停止当前作品的创作。");
     const undo = await this.db.one(
       "SELECT u.id FROM work_undos u JOIN works w ON w.id=u.work WHERE w.repo=$1 AND ($2::text IS NULL OR w.project=$2) AND u.state IN ('applying','failed') LIMIT 1", [id, project],
     );

@@ -68,6 +68,7 @@ export async function freezeReviewReference({
       sourceRevision: frozen.sourceRevision,
       source: frozen.source,
       liveSessionId: frozen.sessionId,
+      ...(frozen.paseoAgent ? { paseoAgent: frozen.paseoAgent } : {}),
       fingerprint: frozen.fingerprint,
       snapshotPath: path.relative(data, frozen.dir).replaceAll("\\", "/"),
       ...(context.draftTask ? { draftTask: context.draftTask } : {}),
@@ -109,10 +110,21 @@ export async function freezeReviewReference({
 
 /** A persisted task authenticates a frozen reference after its ephemeral session disappears. */
 async function savedLiveReviewReference({ db, data, repo, project, context }) {
-  const row = await db.one(
+  let row = await db.one(
     "SELECT review_reference FROM tasks WHERE repo=$1 AND project=$2 AND cleaned IS NULL AND review_reference->>'status'='versioned' AND review_reference->>'mode'='live' AND review_reference->>'liveSessionId'=$3 AND review_reference->>'sourceRevision'=$4 AND (state IN ('queued','running','cancelling','publishing','publish_failed') OR expires>now()) ORDER BY created DESC LIMIT 1",
     [repo, project, context.liveSessionId, context.sourceRevision],
   );
+  if (!row?.review_reference) {
+    try {
+      row = await db.one(
+        "SELECT m.review_reference FROM paseo_message_contexts m JOIN paseo_work_bindings b ON b.work_id=m.work_id JOIN works w ON w.id=b.work_id WHERE w.repo=$1 AND w.project=$2 AND NOT w.deleted AND m.review_reference->>'status'='versioned' AND m.review_reference->>'mode'='live' AND m.review_reference->>'liveSessionId'=$3 AND m.review_reference->>'sourceRevision'=$4 ORDER BY m.created DESC LIMIT 1",
+        [repo, project, context.liveSessionId, context.sourceRevision],
+      );
+    } catch (error) {
+      // The integration is optional in a local database created by an earlier FRAME version.
+      if (error.code !== "42P01" && !/no such table: paseo_(message_contexts|work_bindings)/.test(error.message)) throw error;
+    }
+  }
   const reference = row?.review_reference;
   if (!reference) return null;
   if (
@@ -125,14 +137,16 @@ async function savedLiveReviewReference({ db, data, repo, project, context }) {
     ) ||
     !/^[0-9a-f]{64}$/.test(reference.sourceRevision) ||
     !/^[0-9a-f]{64}$/.test(reference.fingerprint || "") ||
-    !["work", "task"].includes(reference.source)
+    !["work", "task", "paseo"].includes(reference.source) ||
+    reference.paseoAgent !== undefined && (reference.source !== "paseo" ||
+      typeof reference.paseoAgent !== "string" || !reference.paseoAgent.length || reference.paseoAgent.length > 256)
   )
     throw problem(400, "Invalid saved live review source");
   if (
     (reference.source === "task" &&
       (!reference.draftTask || !context.draftTask)) ||
     (reference.draftTask || undefined) !== context.draftTask ||
-    (reference.source === "work" && reference.draftTask)
+    (["work", "paseo"].includes(reference.source) && reference.draftTask)
   )
     throw problem(
       400,
@@ -163,6 +177,7 @@ async function savedLiveReviewReference({ db, data, repo, project, context }) {
     sessionId: reference.liveSessionId,
     source: reference.source,
     task: reference.draftTask || null,
+    ...(reference.paseoAgent ? { paseoAgent: reference.paseoAgent } : {}),
   };
 }
 

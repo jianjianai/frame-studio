@@ -56,7 +56,7 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
     if (!(await db.one("SELECT id FROM repos LIMIT 1"))) await services.repos.add({ name: "我的作品" });
     const editors = new Map();
     const unsaved = () => { for (const [id, entry] of editors) if (Date.now() - entry.at > 300000) editors.delete(id); return editors.size; };
-    const active = async () => Number((await db.one("SELECT count(*) AS n FROM tasks WHERE state IN ('queued','running','cancelling','publishing')")).n);
+    const active = async () => Number((await db.one("SELECT count(*) AS n FROM tasks WHERE state IN ('queued','running','cancelling','publishing')")).n) + (await services.paseoManager.active()).length;
     app.get("/api/desktop/status", async () => ({ active: await active(), pending: Number((await db.one("SELECT count(*) AS n FROM tasks WHERE state='publish_failed'")).n), unsaved: unsaved(), speech: speechState, data, version: (await import("../src/contracts/version.mjs")).PLATFORM_VERSION }));
     app.post("/api/desktop/activity", async (request, reply) => {
       const { session, dirty } = request.body || {};

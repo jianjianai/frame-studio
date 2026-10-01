@@ -11,3 +11,5 @@
 *.webp binary
 *.wav binary
 *.wasm binary
+# Keep native source patches byte-stable across Windows and Linux; blank context lines retain their prefix.
+integrations/paseo/patches/*.patch text eol=lf whitespace=-blank-at-eol

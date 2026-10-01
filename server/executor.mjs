@@ -10,6 +10,7 @@ import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { browserVersion } from "../scripts/browser.mjs";
 import { installToolVersion } from "./tool-installation.mjs";
 import { creatorTaskIgnores, creatorPrompt } from "./creator-workspace.mjs";
+import { validateProject } from "./project-validation.mjs";
 const work = process.env.FRAME_EXECUTOR_WORK || "/workspace",
   core = process.env.FRAME_EXECUTOR_CORE || "/opt/frame";
 const task = JSON.parse(fs.readFileSync(work + "/task.json", "utf8"));
@@ -325,54 +326,7 @@ try {
           text: "正在验证作品",
         }) + "\n",
       );
-      await measured(
-        "scope",
-        () =>
-          run("node", [
-            core + "/scripts/project-scope.mjs",
-            task.project,
-            "--base",
-            baselineCommit,
-          ]),
-        { check: true },
-      );
-      await measured(
-        "structure",
-        () =>
-          run("node", [
-            core + "/scripts/check-projects.mjs",
-            task.project,
-            "--strict",
-          ]),
-        { check: true },
-      );
-      await measured(
-        "project-tests",
-        () =>
-          run("node", [
-            core + "/scripts/film.mjs",
-            "test",
-            task.project,
-            "--json",
-          ]),
-        { check: true },
-      );
-      await measured(
-        "project-types",
-        async () => {
-          const checked = JSON.parse(
-            await run("node", [
-              work + "/scripts/film.mjs",
-              "typecheck",
-              task.project,
-              "--json",
-            ]),
-          );
-          if (checked.status !== "passed")
-            throw new Error("Work type validation failed");
-        },
-        { check: true },
-      );
+      await validateProject({ core, work, project: task.project, baselineCommit, run, measured });
       // Editing previews watch the isolated source continuously. Full bundles and
       // audio proxies are prepared only by explicit immutable preview/export jobs.
       value.previewMode = "live";

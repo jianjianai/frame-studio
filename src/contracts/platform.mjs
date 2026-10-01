@@ -35,6 +35,7 @@ export const executableTaskKindSchema = z.enum([
 export const taskKindSchema = z.enum([
   ...executableTaskKindSchema.options,
   "speech-test",
+  "paseo",
 ]);
 export const taskStates = Object.freeze(taskStateSchema.options);
 export const taskKinds = Object.freeze(taskKindSchema.options);

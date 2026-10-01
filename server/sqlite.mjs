@@ -7,9 +7,9 @@ const jsonColumns = new Set([
   "value", "input", "result", "data", "metadata", "sync_state", "progress",
   "monitor", "runtime", "request_input", "execution", "review_reference",
   "metrics", "interaction", "payload", "answers", "info", "redirects",
-  "blocker", "tasks", "activity", "refs",
+  "blocker", "tasks", "activity", "refs", "envelope", "native_summary",
 ]);
-const booleanColumns = new Set(["deleted", "enabled", "revoked", "ready", "ok"]);
+const booleanColumns = new Set(["deleted", "enabled", "revoked", "ready", "ok", "requested"]);
 
 export function sqliteQuery(sql) {
   let query = sql.replace(/\$([1-9]\d*)/g, "?$1")
@@ -44,7 +44,7 @@ export function sqliteQuery(sql) {
   return query;
 }
 
-function sqliteMigration(sql) {
+export function sqliteMigration(sql) {
   return sql.replace(/--[^\n]*/g, "")
     .replace(/CREATE(?: OR REPLACE)? FUNCTION[\s\S]*?\$\$;/gi, "")
     .replace(/DO \$\$[\s\S]*?\$\$;/gi, "")

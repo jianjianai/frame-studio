@@ -23,7 +23,7 @@ Windows 客户端见 [Windows 本地模式](docs/WINDOWS-LOCAL.md)；服务器�
 
 Windows 提供 Setup.exe 安装向导，安装时自动检查并下载工具与 Python 运行环境，Node 依赖由 pnpm 按锁文件安装并缓存，更新时复用。Windows 安装程序和服务器语音镜像均不携带语音权重；在设置中按需下载推荐模型或上传自定义 Kokoro 模型。
 
-首页显示最近打开。通过仓库进入作品列表，新建只填名称。每个作品使用同仓库内独立的 `works/<id>` 分支，素材库独立使用 `frame/materials`；作品历史和拉取/推送互不干扰。具体产品契约见 [AI 工作台](docs/AI-WORKBENCH.md)。
+首页显示最近打开。通过仓库进入作品列表，新建只填名称。每个作品使用同仓库内独立的 `works/<id>` 分支，素材库独立使用 `frame/materials`；作品历史和拉取/推送互不干扰。具体产品契约见 [AI 工作台](docs/AI-WORKBENCH.md)。 创作聊天使用 [完整官方 Paseo](docs/PASEO.md)，音频支持完整 Tone / Signalsmith API 和三种预览资源模式。
 
 作品在新标签页打开，无全局侧栏。AI 对话与时间轴均可显隐，播放器始终保留进度条；左右分栏及视频/时间轴高度可拖动，细分割线仅在交互时显示。素材、版本比较、统一导出和资料在弹窗操作。服务器设置支持多个模型提供商、官方账号登录、多 GitHub 账号、CLI 独立升级及语音模型。服务器管理员密码仅通过 `FRAME_ADMIN_PASSWORD` 配置。本地模式直接使用电脑上已安装并登录的 Codex 和 Claude CLI，使用 SQLite，无工作台登录密码。
 

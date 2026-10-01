@@ -90,21 +90,24 @@ export class TaskPublication {
   async publish(t) {
     const run = path.join(this.data, "runs", t.id);
     let result = { ...t.result };
-    if (t.repo && ["agent", "new"].includes(t.kind))
+    if (t.repo && ["agent", "new", "paseo"].includes(t.kind))
       await this.db.lock(`${t.repo}:${t.project}`, async () => {
         const { dir } = await this.repos.project(t.repo, t.project, {
           exists: false,
         });
         const source = confined(run, "projects/" + t.project);
+        const hashSource = t.kind === "paseo" ? file => treeHash(file, { includeExecutableMode: true }) : treeHash;
+        await this.beforeApply?.(t);
         // After a process restart, an already applied identical result is safe to finish publishing.
         await this.repos.revisions?.invalidate(t.repo, t.project);
-        if ((await treeHash(dir)) !== (await treeHash(source)))
+        if ((await hashSource(dir)) !== (await hashSource(source)))
           await applyProject({
             source,
             destination: dir,
             run,
             id: t.id,
             fingerprint: t.fingerprint,
+            hashTree: hashSource,
           });
         result.commit = await this.repos.checkpoint(
           t.repo,
@@ -141,7 +144,7 @@ export class TaskPublication {
         ? { readonlyVersion: t.input.version }
         : {}),
     };
-    if (t.repo && t.kind === "agent") {
+    if (t.repo && ["agent", "paseo"].includes(t.kind)) {
       await this.db.pool.query(
         "UPDATE works SET updated=now() WHERE repo=$1 AND project=$2",
         [t.repo, t.project],
@@ -184,7 +187,7 @@ export class TaskPublication {
             result.commit || t.source_commit,
           ],
         );
-      } else if (result.previewMode !== "live") {
+      } else if (t.kind === "agent" && result.previewMode !== "live") {
         // Compatibility for completed pre-V8 turns. V8 editing sessions already
         // observe source publication and must never enqueue a full audio build.
         await this.db.pool.query(
@@ -198,7 +201,7 @@ export class TaskPublication {
       t.repo &&
       !t.input.version &&
       (["new", "build"].includes(t.kind) ||
-        (t.kind === "agent" && !this.repos.onChange))
+        (["agent", "paseo"].includes(t.kind) && !this.repos.onChange))
     )
       await this.repos.revisions?.refresh(t.repo, t.project);
     await this.db.pool.query(

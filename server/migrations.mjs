@@ -11,14 +11,28 @@ export function migrationPlan(root = directory) {
   });
 }
 
-export async function migrate(pool, plan = migrationPlan()) {
+/** Only known integration ledgers may be selected; identifiers never come from SQL input. */
+export function migrationLedger(ledger = "frame_schema_migrations") {
+  if (!["frame_schema_migrations", "paseo_schema_migrations"].includes(ledger))
+    throw Error("Unsupported migration ledger");
+  return ledger;
+}
+
+export async function migrate(pool, plan = migrationPlan(), {
+  ledger = "frame_schema_migrations", dialect = "postgres", transformSql = (sql) => sql,
+} = {}) {
+  ledger = migrationLedger(ledger);
+  if (!["postgres", "sqlite"].includes(dialect)) throw Error("Unsupported migration dialect");
+  const lockKey = ledger.replaceAll("_", "-");
   const client = await pool.connect();
   let locked = false, broken = false;
   try {
-    await client.query("SELECT pg_advisory_lock(hashtext($1))", ["frame-schema-migrations"]);
-    locked = true;
-    await client.query("CREATE TABLE IF NOT EXISTS frame_schema_migrations (id text PRIMARY KEY, checksum text NOT NULL, applied timestamptz NOT NULL DEFAULT now())");
-    const rows = (await client.query("SELECT id,checksum FROM frame_schema_migrations ORDER BY id")).rows;
+    if (dialect === "postgres") {
+      await client.query("SELECT pg_advisory_lock(hashtext($1))", [lockKey]);
+      locked = true;
+    }
+    await client.query(transformSql(`CREATE TABLE IF NOT EXISTS ${ledger} (id text PRIMARY KEY, checksum text NOT NULL, applied timestamptz NOT NULL DEFAULT now())`));
+    const rows = (await client.query(`SELECT id,checksum FROM ${ledger} ORDER BY id`)).rows;
     const known = new Map(plan.map((item) => [item.id, item]));
     for (const row of rows) {
       if (!known.has(row.id)) throw Error("Database schema is newer than this application: " + row.id);
@@ -29,8 +43,8 @@ export async function migrate(pool, plan = migrationPlan()) {
       if (applied.has(item.id)) continue;
       await client.query("BEGIN");
       try {
-        await client.query(item.sql);
-        await client.query("INSERT INTO frame_schema_migrations(id,checksum) VALUES($1,$2)", [item.id, item.checksum]);
+        await client.query(transformSql(item.sql));
+        await client.query(`INSERT INTO ${ledger}(id,checksum) VALUES($1,$2)`, [item.id, item.checksum]);
         await client.query("COMMIT");
       } catch (error) {
         await client.query("ROLLBACK").catch(() => { broken = true; });
@@ -38,7 +52,7 @@ export async function migrate(pool, plan = migrationPlan()) {
       }
     }
   } finally {
-    if (locked) await client.query("SELECT pg_advisory_unlock(hashtext($1))", ["frame-schema-migrations"]).catch(() => { broken = true; });
+    if (locked) await client.query("SELECT pg_advisory_unlock(hashtext($1))", [lockKey]).catch(() => { broken = true; });
     client.release(broken);
   }
 }

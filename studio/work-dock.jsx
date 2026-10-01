@@ -5,7 +5,7 @@ import { Button } from "./ui";
 export const toolNames = {
   ai: "AI 创作对话",
   composition: "合成与片段",
-  audio:"音频工作台",
+  audio: "音频工作台",
   materials: "素材",
   voice: "配音",
   tasks: "后台任务",
@@ -13,30 +13,37 @@ export const toolNames = {
 };
 
 /** Keep tool children mounted; only one occupies the shared work area at a time. */
-export function WorkDock({ tool, compact, onClose, children }) {
+export function WorkDock({
+  tool,
+  compact,
+  expanded = false,
+  onClose,
+  children,
+}) {
   const dock = useRef(null);
   useEffect(() => {
     const root = dock.current;
     root
       ?.querySelectorAll("[hidden] audio, [hidden] video")
       .forEach((media) => media.pause());
-    if (tool && compact) {
+    if (tool && (compact || expanded)) {
       const pane = root?.querySelector(`[data-dock-pane="${tool}"]`);
       const first =
         pane?.querySelector("textarea:not(:disabled)") ||
         pane?.querySelector("input:not(:disabled)") ||
+        pane?.querySelector("iframe") ||
         pane?.querySelector("button:not(:disabled)");
       (first || root)?.focus();
     }
-  }, [tool, compact]);
+  }, [tool, compact, expanded]);
   return (
     <aside
       id="work-dock"
       ref={dock}
-      className="work-dock"
+      className={"work-dock" + (expanded ? " paseo-expanded" : "")}
       hidden={!tool}
-      role={compact ? "dialog" : "complementary"}
-      aria-modal={compact && tool ? true : undefined}
+      role={compact || expanded ? "dialog" : "complementary"}
+      aria-modal={(compact || expanded) && tool ? true : undefined}
       aria-label={toolNames[tool] || "作品工作面板"}
       tabIndex={-1}
       onKeyDown={(event) => {
@@ -48,10 +55,10 @@ export function WorkDock({ tool, compact, onClose, children }) {
           event.stopPropagation();
           onClose();
         }
-        if (event.key === "Tab" && compact) {
+        if (event.key === "Tab" && (compact || expanded)) {
           const items = [
             ...dock.current.querySelectorAll(
-              'button:not(:disabled),a[href],input:not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,[tabindex="0"]',
+              'button:not(:disabled),a[href],input:not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,iframe,[tabindex="0"]',
             ),
           ].filter(
             (el) => el.getClientRects().length && !el.closest("[inert]"),
@@ -79,12 +86,16 @@ export function WorkDock({ tool, compact, onClose, children }) {
         }
       }}
     >
-      {tool !== "ai" && (
+      {tool && (
         <header className="work-dock-heading">
           <h2>{toolNames[tool]}</h2>
           <Button
             icon={PanelRightClose}
-            aria-label={`关闭${toolNames[tool] || "工作面板"}`}
+            aria-label={
+              tool === "ai"
+                ? "关闭 AI 对话"
+                : `关闭${toolNames[tool] || "工作面板"}`
+            }
             title="收起面板，保留当前内容"
             onClick={onClose}
           />

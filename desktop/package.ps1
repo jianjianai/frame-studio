@@ -78,6 +78,13 @@ if ($PublishRuntimes) {
     }
   }
 }
+$paseoBundle = Join-Path $repo '.cache\paseo-generated'
+if (Test-Path -LiteralPath (Join-Path $paseoBundle 'source-proof.json')) {
+  & node (Join-Path $repo 'scripts/build-paseo.mjs') ("--prebuilt=" + $paseoBundle) --bundle-only
+} else {
+  & node (Join-Path $repo 'scripts/build-paseo.mjs') --bundle-only
+}
+if ($LASTEXITCODE -ne 0) { throw 'Paseo pinned WebUI build or integrity check failed.' }
 & pnpm build:studio
 if ($LASTEXITCODE -ne 0) { throw 'Studio build failed.' }
 & (Join-Path $PSScriptRoot 'build.ps1')
@@ -89,6 +96,7 @@ foreach ($name in (@($pack.files.path) + @('pnpm-lock.yaml','pnpm-workspace.yaml
   New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $target
 }
+Copy-Item -LiteralPath (Join-Path $repo '.cache/paseo-generated') -Destination (Join-Path $bundle 'integrations/paseo/generated') -Recurse
 Copy-Item -LiteralPath (Join-Path $repo 'studio-dist') -Destination (Join-Path $bundle 'studio-dist') -Recurse
 foreach ($name in @('FrameStudio.exe','FrameSetup.exe','FrameStudio.exe.config','FrameSetup.exe.config')) { Copy-Item -LiteralPath (Join-Path $repo ".cache\desktop\$name") -Destination (Join-Path $bundle $name) }
 Copy-Item (Join-Path $repo '.cache\desktop\FrameStudio.ico') (Join-Path $bundle 'desktop\FrameStudio.ico')

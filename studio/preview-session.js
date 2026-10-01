@@ -14,6 +14,8 @@ export function usePreviewSession({
   notify,
   mode = "immutable",
   taskId,
+  source,
+  paseoAgent,
 }) {
   const [state, setState] = useState({
     preview: null,
@@ -24,7 +26,15 @@ export function usePreviewSession({
   const [playerGeneration, restartPlayer] = useState(0);
   const controller = useRef(null),
     inputs = useRef(null);
-  inputs.current = { workId, latest, blocked, mode, taskId };
+  inputs.current = {
+    workId,
+    latest,
+    blocked,
+    mode,
+    taskId,
+    source,
+    paseoAgent,
+  };
   useEffect(() => {
     const owner = createPreviewSessionController({
       loadLive: (args) => api("works_live_preview", args),
@@ -65,7 +75,7 @@ export function usePreviewSession({
   }, []);
   useEffect(() => {
     controller.current?.update(inputs.current);
-  }, [workId, latest?.id, blocked, mode, taskId]);
+  }, [workId, latest?.id, blocked, mode, taskId, source, paseoAgent]);
   const { preview, stage, error, status } = state;
   const reference =
     preview?.live && /^[a-f0-9]{64}$/.test(preview.observedRevision || "")

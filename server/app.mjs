@@ -34,6 +34,7 @@ import { createServices } from "./services.mjs";
 import { rasterCover } from "./covers.mjs";
 import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
+import { installPaseoGateway } from "./paseo-gateway.mjs";
 import { operationError } from "../src/contracts/errors.mjs";
 import { PLATFORM_VERSION } from "../src/contracts/version.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -90,10 +91,21 @@ export async function createApp({
     path: "/",
     maxAge: 7 * 86400,
   };
+  const requirePlatformSession = async req => {
+    if (localMode) return;
+    const bearer = req.headers.authorization?.startsWith("Bearer ") ? req.headers.authorization.slice(7) : null;
+    const cookies = req.cookies || app.parseCookie(req.headers.cookie || "");
+    const authenticated = bearer
+      ? !!(await db.one("SELECT id FROM tokens WHERE hash=$1", [hash(bearer)]))
+      : !!cookies.frame_session && !!(await db.one("SELECT hash FROM sessions WHERE hash=$1 AND expires>now()", [hash(cookies.frame_session)]));
+    if (!authenticated) throw problem(401, "Please sign in");
+  };
   app.addHook("onRequest", async (req, res) => {
     // Host, Origin, TLS, rate limiting and browser access policy belong to the proxy.
     res.header("Cache-Control", "no-store");
     if (req.url.startsWith("/preview/") || req.url.startsWith("/preview-live/")) return;
+    if (req.url.startsWith("/api/paseo/internal/")) return; // The gateway verifies the work-scoped daemon capability.
+    if (req.url.startsWith("/paseo/")) { await requirePlatformSession(req); return; }
     if (!req.url.startsWith("/api/") && !req.url.startsWith("/mcp")) return;
     if (req.url === "/api/login") return;
     const bearer = req.headers.authorization?.startsWith("Bearer ")
@@ -106,6 +118,7 @@ export async function createApp({
           "SELECT t.* FROM agent_tokens a JOIN tasks t ON t.id=a.task WHERE a.hash=$1 AND t.kind='agent' AND t.state='running'",
           [hash(bearer)],
         );
+      if (!req.agentTask && bearer) req.agentTask = await services.paseoManager.agentContext(bearer);
       if (!req.agentTask) throw problem(401, "Active task credential required");
       return;
     }
@@ -141,6 +154,9 @@ export async function createApp({
       .code(state.ready ? 200 : 503)
       .send({ status: state.ready ? "ready" : "degraded" });
   });
+  await installPaseoGateway({ app, manager: services.paseoManager, workService: services.paseoWork,
+    store: services.paseoStore, drafts: services.paseoDrafts, authenticate: requirePlatformSession,
+    origin, connections: services.connections, db, data, secrets: services.secrets, localMode });
   agentTools({ app, db, data, assets, actions, localMode });
   app.post(
     "/api/login",
@@ -457,6 +473,7 @@ export async function createApp({
     app.setNotFoundHandler((req, res) => res.sendFile("index.html"));
   }
   if (scheduler) {
+    services.startPaseoLoop();
     tasks.startLoop({
       onLeadership: (leader) => (leader ? retention.start() : retention.stop()),
     });
@@ -465,7 +482,7 @@ export async function createApp({
     await mcp.close();
     await services.close();
   });
-  return { app, db, repos, assets, tasks, actions };
+  return { app, db, repos, assets, tasks, actions, paseo: { manager: services.paseoManager, work: services.paseoWork, store: services.paseoStore, drafts: services.paseoDrafts } };
 }
 if (
   process.argv[1] &&

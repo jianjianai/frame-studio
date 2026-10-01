@@ -33,6 +33,8 @@ export async function deleteProvider(
     if (expectedRevision !== hash(row.name + "\n" + row.config))
       throw problem(409, "提供商配置已更新，请关闭确认框并重新删除");
     const usage = await providerUsage(db, id);
+    if (await connections.nativeActivity?.(id))
+      throw problem(409, "Paseo 还有创作使用此提供商，请先完成或停止后删除。");
     if (usage.activeTasks)
       throw problem(
         409,

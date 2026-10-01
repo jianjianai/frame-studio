@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { promisify } from "node:util";
 import { brotliCompress, gzip, constants as zlibConstants } from "node:zlib";
 import { hash, token, confined, problem } from "./security.mjs";
-import { copyTree, treeHash } from "./project-files.mjs";
+import { confinedAsync, copyTree, treeHash } from "./project-files.mjs";
 import { createLivePreviewWorker } from "./live-preview-worker.mjs";
 import { LivePreviewMedia } from "./live-preview-media.mjs";
 import { liveSourceInventory } from "../scripts/live-preview-bundle.mjs";
@@ -25,7 +25,8 @@ const AUDIO = /\.(?:wav|mp3|ogg|opus|flac|m4a|aac|aiff?|pcm)$/i;
 export class LivePreviewSessions {
   constructor({ db, data, repos, root = runtimeRoot, bundleFactory = createLivePreviewWorker,
     idleMs = 10 * 60 * 1000, leaseMs = 60 * 60 * 1000, maxSessions = 4,
-    maxBundleBytes = 512 * 1024 * 1024, maxRuntimeBytes = 32 * 1024 * 1024, media } = {}) {
+    maxBundleBytes = 512 * 1024 * 1024, maxRuntimeBytes = 32 * 1024 * 1024, media, sourceResolver } = {}) {
+    this.sourceResolver = sourceResolver;
     this.db = db; this.data = data; this.repos = repos; this.root = root; this.bundleFactory = bundleFactory;
     this.idleMs = idleMs; this.leaseMs = leaseMs; this.maxSessions = maxSessions; this.maxBundleBytes = maxBundleBytes; this.maxRuntimeBytes = maxRuntimeBytes;
     this.sessions = new Map(); this.keys = new Map(); this.capabilities = new Map(); this.pending = new Map(); this.closed = false;
@@ -34,7 +35,26 @@ export class LivePreviewSessions {
     this.timer = setInterval(() => { void this.sweep(); }, Math.min(30000, Math.max(100, idleMs / 2)));
     this.timer.unref();
   }
-  async source(work, taskId) {
+  async source(work, taskId, kind = "work", agentId = null) {
+    if (kind === "paseo") {
+      if (taskId) throw problem(400, "Paseo source cannot mix a task draft");
+      if (!this.sourceResolver) throw problem(503, "Paseo draft source is unavailable");
+      const resolved = await this.sourceResolver(work, { agentId });
+      const main = await confinedAsync(this.data, "paseo/" + work.id + "/draft/projects/" + work.project);
+      const trees = await confinedAsync(this.data, "paseo/" + work.id + "/home/.paseo/worktrees");
+      if (!resolved?.projectDir || (resolved.agentId || null) !== agentId)
+        throw problem(500, "Invalid Paseo draft source identity");
+      const projectDir = path.resolve(resolved.projectDir);
+      const suffix = path.sep + "projects" + path.sep + work.project;
+      if (projectDir !== main && (!agentId || !projectDir.startsWith(trees + path.sep) || !projectDir.endsWith(suffix)))
+        throw problem(500, "Invalid Paseo draft source");
+      // The manager authenticates Git worktree registration; this boundary independently rejects links and other work roots.
+      if (await confinedAsync(this.data, path.relative(this.data, projectDir)) !== projectDir)
+        throw problem(500, "Invalid Paseo draft source");
+      if (!fs.existsSync(path.join(projectDir, "project.ts"))) throw problem(409, "Paseo draft source is not ready");
+      return { projectDir, source: "paseo", task: null, ...(agentId ? { paseoAgent: agentId } : {}) };
+    }
+    if (kind !== "work") throw problem(400, "Invalid live preview source");
     if (taskId) {
       const task = await this.db.one("SELECT * FROM tasks WHERE id=$1", [taskId]);
       if (!task || task.repo !== work.repo || task.project !== work.project || task.kind !== "agent")
@@ -49,24 +69,29 @@ export class LivePreviewSessions {
     const { dir } = await this.repos.project(work.repo, work.project);
     return { projectDir: dir, source: "work", task: null };
   }
-  async start({ work, task, ai = false, mediaMode = "compressed" }) {
+  async start({ work, task, paseoAgent, ai = false, mediaMode = "compressed", source = "work" }) {
     const checkedMode = livePreviewMediaModeSchema.safeParse(mediaMode);
     if (!checkedMode.success) throw problem(400, "Invalid preview media mode");
     if (this.closed) throw problem(503, "Live preview service stopped");
     if (work.deleted) throw problem(410, "Work is in the recycle bin");
-    const key = work.id + ":" + (task || "work");
+    if (!["work", "paseo"].includes(source) || source === "paseo" && task ||
+        paseoAgent !== undefined && (source !== "paseo" || typeof paseoAgent !== "string" || !paseoAgent.length || paseoAgent.length > 256))
+      throw problem(400, "Invalid live preview source");
+    // Resolve even when renewing: a native agent may have moved to another owned checkout.
+    const resolved = source === "paseo" ? await this.source(work, task, source, paseoAgent || null) : null;
+    const key = work.id + ":" + (task || source) + (resolved ? ":" + (paseoAgent || "main") + ":" + hash(resolved.projectDir) : "");
     const existing = this.sessions.get(this.keys.get(key));
     if (existing && !existing.closed) {
       existing.expires = Date.now() + this.leaseMs; existing.lastUsed = Date.now();
       return this.link(existing, ai, mediaMode);
     }
     if (this.pending.has(key)) return this.link(await this.pending.get(key), ai, mediaMode);
-    const creation = this.create(work, task, key);
+    const creation = this.create(work, task, key, source, resolved);
     this.pending.set(key, creation);
     try { return this.link(await creation, ai, mediaMode); } finally { this.pending.delete(key); }
   }
-  async create(work, task, key) {
-    const source = await this.source(work, task);
+  async create(work, task, key, sourceKind = "work", resolved = null) {
+    const source = resolved || await this.source(work, task, sourceKind);
     await this.sweep();
     if (this.sessions.size >= this.maxSessions) {
       const idle = [...this.sessions.values()].filter(s => s.clients === 0 && s.manifest)
@@ -196,7 +221,7 @@ export class LivePreviewSessions {
     ];
     if (resources.length > 20000) throw problem(413, "Live preview contains too many runtime resources");
     const manifest = {
-      workId: session.work, projectId: session.project,
+      workId: session.work, projectId: session.project, ...(session.paseoAgent ? { paseoAgent: session.paseoAgent } : {}),
       mediaModes: ["original", "compressed", "cached"], defaultMediaMode: "compressed", resources,
       schemaVersion: 1, sessionId: session.id, revision: session.revision + 1, source: session.source,
       sourceRevision: bundle.sourceRevision, projectUrl: bundle.projectUrl, fingerprints: bundle.fingerprints,
@@ -229,6 +254,7 @@ export class LivePreviewSessions {
     if (mediaMode !== "compressed") query.set("mediaMode", mediaMode);
     return { mediaMode, url: "/preview-live/" + session.secret + "/index.html" + (query.size ? "?" + query : ""),
       sessionId: session.id, sourceRevision: session.manifest?.sourceRevision || null, source: session.source,
+      ...(session.paseoAgent ? { paseoAgent: session.paseoAgent } : {}),
       expires: new Date(session.expires).toISOString(), state: session.manifest ? "ready" : session.state,
       revision: session.revision, ...(session.error ? { error: session.error.message } : {}) };
   }
@@ -267,6 +293,7 @@ export class LivePreviewSessions {
   }
   snapshot(session) {
     return session.manifest || { schemaVersion: 1, sessionId: session.id, revision: 0, source: session.source, state: session.state,
+      ...(session.paseoAgent ? { paseoAgent: session.paseoAgent } : {}),
       ...(session.error ? { error: session.error.message } : {}) };
   }
   attach(session, close) {
@@ -306,7 +333,8 @@ export class LivePreviewSessions {
         const fingerprint = await treeHash(temporaryDir, { includeIgnored: true });
         await fsp.rename(temporary, root);
         snapshot.frozen = { root, dir, fingerprint, sourceRevision, revision: snapshot.manifest.revision,
-          sessionId: session.id, source: session.source, task: session.task };
+          sessionId: session.id, source: session.source, task: session.task,
+          ...(session.paseoAgent ? { paseoAgent: session.paseoAgent } : {}) };
         return snapshot.frozen;
       } finally { await fsp.rm(temporary, { recursive: true, force: true }); }
     })();

@@ -27,7 +27,14 @@ const readDraft = (id) => {
     return {};
   }
 };
-export function AgentQuestion({ question, task, work, onStop, notify }) {
+export function AgentQuestion({
+  question,
+  task,
+  work,
+  onStop,
+  notify,
+  readOnly = false,
+}) {
   const saved = useRef(null);
   if (!saved.current) {
     const value = readDraft(question.id),
@@ -48,7 +55,8 @@ export function AgentQuestion({ question, task, work, onStop, notify }) {
   const key = useRef(saved.current.requestKey || null),
     mounted = useRef(true);
   const actual = receipt || question;
-  const pending = actual.state === "pending" && task.state === "running";
+  const pending =
+    !readOnly && actual.state === "pending" && task.state === "running";
   const questions = actual.payload.questions,
     current = questions[Math.min(index, questions.length - 1)];
   const value = answers[current.id] || { selected: [], text: "" };
@@ -59,6 +67,7 @@ export function AgentQuestion({ question, task, work, onStop, notify }) {
     };
   }, []);
   useEffect(() => {
+    if (readOnly) return;
     if (!pending) {
       try {
         sessionStorage.removeItem("frame.agent-answer:" + question.id);
@@ -71,7 +80,7 @@ export function AgentQuestion({ question, task, work, onStop, notify }) {
         JSON.stringify({ answers, requestKey: key.current }),
       );
     } catch {}
-  }, [answers, pending, question.id]);
+  }, [answers, pending, question.id, readOnly]);
   const change = (next) => {
     key.current = null;
     setError("");

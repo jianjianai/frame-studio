@@ -17,7 +17,6 @@ import { workOperations } from "./work-operations.mjs";
 import { livePreviewOperations } from "./live-preview-routes.mjs";
 import { workbenchOperations } from "./workbench.mjs";
 import { toolManagementOperations } from "./tool-management.mjs";
-import { chatOperations } from "./chat-operations.mjs";
 import { createOperationRegistry } from "./operation-registry.mjs";
 import { workResultOperations } from "./work-results.mjs";
 import { taskGetRequestSchema } from "../src/contracts/platform.mjs";
@@ -588,7 +587,6 @@ export function operations({
   });
   if (livePreview) livePreviewOperations({ add, works, livePreview });
   const interactions = agentInteractionOperations({ add, db, data });
-  chatOperations({ add, db, works, repos, tasks, connections, secrets, livePreview, data });
   workResultOperations({ add, db, data, works, repos, tasks });
   if (connections)
     workbenchOperations({

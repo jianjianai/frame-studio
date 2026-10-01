@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
   Save,
@@ -20,6 +20,8 @@ import {
 } from "../src/engine/audio-document.mjs";
 import "./audio-editor.css";
 import { ToneEffectEditor, defaultToneOptions } from "./tone-effect-editor";
+import { NumberInput } from "./editor-inputs";
+import { stretchPreset, stretchMode } from "./editor-drafts.mjs";
 const uid = (p) => p + "_" + crypto.randomUUID().slice(0, 8);
 const labels = {
   gain: "增益",
@@ -44,6 +46,28 @@ const labels = {
   track: "触发轨道",
   amount: "避让后音量",
 };
+const ClipWaveform = memo(function ClipWaveform({ clip: c, info }) {
+  if (!info) return null;
+  const points = Array.from({ length: 96 }, (_, i) => {
+    const t = (c.phase ?? 0) + (i / 95) * c.duration * c.rate,
+      offset = c.offset + (c.loop ? t % c.loop : t),
+      bin = Math.floor((offset / info.duration) * info.peaks.length);
+    return Math.min(1, info.peaks[bin] ?? 0);
+  });
+  return (
+    <svg
+      className="audio-waveform"
+      viewBox="0 0 96 40"
+      preserveAspectRatio="none"
+      aria-label="素材波形"
+    >
+      <path
+        d={points.map((v, i) => `M${i},${20 - v * 18}v${v * 36}`).join(" ")}
+      />
+    </svg>
+  );
+});
+
 export function AudioEditor({
   work,
   visible,
@@ -117,36 +141,27 @@ export function AudioEditor({
       setBusy(false);
     }
   };
-  const clipWave = (c) => {
-    const source = doc.sources.find((s) => s.id === c.source),
-      info = waveforms[source?.src];
-    if (!info) return null;
-    const points = Array.from({ length: 96 }, (_, i) => {
-      const t = (c.phase ?? 0) + (i / 95) * c.duration * c.rate,
-        offset = c.offset + (c.loop ? t % c.loop : t),
-        bin = Math.floor((offset / info.duration) * info.peaks.length);
-      return Math.min(1, info.peaks[bin] ?? 0);
-    });
-    return (
-      <svg
-        className="audio-waveform"
-        viewBox="0 0 96 40"
-        preserveAspectRatio="none"
-        aria-label="素材波形"
-      >
-        <path
-          d={points.map((v, i) => `M${i},${20 - v * 18}v${v * 36}`).join(" ")}
-        />
-      </svg>
-    );
-  };
+  const sourcesById = useMemo(
+    () => new Map(doc?.sources.map((source) => [source.id, source]) ?? []),
+    [doc?.sources],
+  );
+  const clipsByTrack = useMemo(() => {
+    const groups = new Map();
+    for (const clip of doc?.clips ?? []) {
+      if (!groups.has(clip.track)) groups.set(clip.track, []);
+      groups.get(clip.track).push(clip);
+    }
+    return groups;
+  }, [doc?.clips]);
   const drag = useRef(null),
     loadRequest = useRef(0),
     current = useRef(null);
   current.current = doc;
-  const dirty =
-      !!state && JSON.stringify(doc) !== JSON.stringify(state.document),
-    blocked = disabled || busy;
+  const dirty = useMemo(
+    () => !!state && JSON.stringify(doc) !== JSON.stringify(state.document),
+    [doc, state?.document],
+  );
+  const blocked = disabled || busy;
   const load = async (restoreDraft = false) => {
     const request = ++loadRequest.current;
     setBusy(true);
@@ -456,7 +471,9 @@ export function AudioEditor({
         {busy ? (
           <Loading />
         ) : (
-          <Button onClick={() => load(false)}>加载音频工程</Button>
+          <Button disabled={blocked} onClick={() => load(false)}>
+            加载音频工程
+          </Button>
         )}
       </div>
     );
@@ -504,20 +521,15 @@ export function AudioEditor({
   const numberField = (key, label, min, step = 0.01, max) => (
     <label key={key}>
       {label}
-      <input
+      <NumberInput
         aria-label={label}
-        type="number"
+        identity={`${selected.kind}:${selected.id ?? "master"}:${key}`}
         min={min}
         max={max}
         step={step}
         value={item[key] ?? 0}
         disabled={blocked}
-        onChange={(e) =>
-          editItem(
-            key,
-            Math.max(min, Math.min(max ?? Infinity, Number(e.target.value))),
-          )
-        }
+        onCommit={(value) => editItem(key, value)}
       />
     </label>
   );
@@ -606,6 +618,7 @@ export function AudioEditor({
         <label>
           缩放
           <input
+            disabled={blocked}
             aria-label="音频时间轴缩放"
             type="range"
             min="1"
@@ -644,6 +657,7 @@ export function AudioEditor({
               key={t.id}
             >
               <button
+                disabled={blocked}
                 className="audio-track-name"
                 onClick={() => setSelected({ kind: "tracks", id: t.id })}
               >
@@ -656,53 +670,55 @@ export function AudioEditor({
                   className="audio-playhead"
                   style={{ left: (position / state.duration) * 100 + "%" }}
                 />
-                {doc.clips
-                  .filter((c) => c.track === t.id)
-                  .map((c) => (
-                    <div
-                      key={c.id}
-                      role="button"
-                      tabIndex={0}
-                      aria-label={"音频片段 " + (c.name ?? c.id)}
-                      className={
-                        "audio-clip " +
-                        (selected.id === c.id ? "selected" : "") +
-                        (c.muted ? " muted" : "")
+                {(clipsByTrack.get(t.id) ?? []).map((c) => (
+                  <div
+                    key={c.id}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={"音频片段 " + (c.name ?? c.id)}
+                    className={
+                      "audio-clip " +
+                      (selected.id === c.id ? "selected" : "") +
+                      (c.muted ? " muted" : "")
+                    }
+                    style={{
+                      left: (c.start / state.duration) * 100 + "%",
+                      width: (c.duration / state.duration) * 100 + "%",
+                    }}
+                    onClick={() => setSelected({ kind: "clips", id: c.id })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        setSelected({ kind: "clips", id: c.id });
                       }
-                      style={{
-                        left: (c.start / state.duration) * 100 + "%",
-                        width: (c.duration / state.duration) * 100 + "%",
-                      }}
-                      onClick={() => setSelected({ kind: "clips", id: c.id })}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter")
-                          setSelected({ kind: "clips", id: c.id });
-                      }}
-                      onPointerDown={(e) => beginDrag(e, c, "move")}
-                      onPointerMove={moveDrag}
-                      onPointerUp={endDrag}
-                      onPointerCancel={endDrag}
-                    >
-                      {clipWave(c)}
-                      <span
-                        className="audio-trim left"
-                        onPointerDown={(e) => beginDrag(e, c, "start")}
+                    }}
+                    onPointerDown={(e) => beginDrag(e, c, "move")}
+                    onPointerMove={moveDrag}
+                    onPointerUp={endDrag}
+                    onPointerCancel={endDrag}
+                  >
+                    {
+                      <ClipWaveform
+                        clip={c}
+                        info={waveforms[sourcesById.get(c.source)?.src]}
                       />
-                      <span>
-                        {c.name ??
-                          doc.sources
-                            .find((s) => s.id === c.source)
-                            ?.src?.split("/")
-                            .at(-1) ??
-                          c.source}
-                      </span>
-                      <small>{c.rate}×</small>
-                      <span
-                        className="audio-trim right"
-                        onPointerDown={(e) => beginDrag(e, c, "end")}
-                      />
-                    </div>
-                  ))}
+                    }
+                    <span
+                      className="audio-trim left"
+                      onPointerDown={(e) => beginDrag(e, c, "start")}
+                    />
+                    <span>
+                      {c.name ??
+                        sourcesById.get(c.source)?.src?.split("/").at(-1) ??
+                        c.source}
+                    </span>
+                    <small>{c.rate}×</small>
+                    <span
+                      className="audio-trim right"
+                      onPointerDown={(e) => beginDrag(e, c, "end")}
+                    />
+                  </div>
+                ))}
               </div>
             </div>
           ))}
@@ -710,7 +726,9 @@ export function AudioEditor({
             <div className="audio-empty">
               <Music2 size={24} />
               <p>添加音轨，组合音乐、旁白、音效与程序生成的声音。</p>
-              <Button onClick={addTrack}>添加第一条音轨</Button>
+              <Button disabled={blocked} onClick={addTrack}>
+                添加第一条音轨
+              </Button>
             </div>
           )}
         </div>
@@ -722,6 +740,7 @@ export function AudioEditor({
             <label>
               来源
               <select
+                disabled={blocked}
                 value={sourceKind}
                 onChange={(e) => setSourceKind(e.target.value)}
               >
@@ -733,6 +752,7 @@ export function AudioEditor({
               <label>
                 项目素材
                 <select
+                  disabled={blocked}
                   aria-label="音频素材"
                   value={sourceFile}
                   onChange={(e) => setSourceFile(e.target.value)}
@@ -758,6 +778,7 @@ export function AudioEditor({
                 <label>
                   引擎
                   <select
+                    disabled={blocked}
                     value={engine}
                     onChange={(e) => setEngine(e.target.value)}
                   >
@@ -771,6 +792,7 @@ export function AudioEditor({
                 <label>
                   模块名
                   <input
+                    disabled={blocked}
                     value={module}
                     onChange={(e) => setModule(e.target.value)}
                     placeholder="audio.ts 注册的模块名"
@@ -779,6 +801,7 @@ export function AudioEditor({
                 <label>
                   生成器轨道
                   <input
+                    disabled={blocked}
                     value={sourceTrack}
                     onChange={(e) => setSourceTrack(e.target.value)}
                   />
@@ -792,6 +815,7 @@ export function AudioEditor({
             {sourceKind === "file" && (
               <div className="audio-wide audio-key">
                 <select
+                  disabled={blocked}
                   aria-label="音频转换格式"
                   value={conversion}
                   onChange={(e) => setConversion(e.target.value)}
@@ -809,6 +833,7 @@ export function AudioEditor({
           <div className="audio-source-list">
             {doc.sources.map((s) => (
               <button
+                disabled={blocked}
                 key={s.id}
                 className={chosenSource === s.id ? "selected" : ""}
                 onClick={() => setChosenSource(s.id)}
@@ -853,12 +878,16 @@ export function AudioEditor({
             })()}
           <h3>路由与主输出</h3>
           <div className="audio-source-list">
-            <button onClick={() => setSelected({ kind: "master" })}>
+            <button
+              disabled={blocked}
+              onClick={() => setSelected({ kind: "master" })}
+            >
               <SlidersHorizontal size={14} />
               主输出
             </button>
             {doc.buses.map((b) => (
               <button
+                disabled={blocked}
                 key={b.id}
                 onClick={() => setSelected({ kind: "buses", id: b.id })}
               >
@@ -918,10 +947,10 @@ export function AudioEditor({
                   />
                 </label>
               )}
-              {numberField("gain", "作品增益", 0)}
+              {numberField("gain", "作品增益", 0, 0.01, 4)}
               {selected.kind !== "master" && (
                 <>
-                  {numberField("pan", "声像", -1)}
+                  {numberField("pan", "声像", -1, 0.01, 1)}
                   <label className="audio-check">
                     <input
                       type="checkbox"
@@ -938,6 +967,7 @@ export function AudioEditor({
                   <label>
                     轨道
                     <select
+                      disabled={blocked}
                       value={item.track}
                       onChange={(e) => editItem("track", e.target.value)}
                     >
@@ -951,6 +981,7 @@ export function AudioEditor({
                   <label>
                     音源
                     <select
+                      disabled={blocked}
                       value={item.source}
                       onChange={(e) => editItem("source", e.target.value)}
                     >
@@ -965,7 +996,7 @@ export function AudioEditor({
                   {numberField("start", "开始秒", 0)}
                   {numberField("duration", "时长秒", 0.001)}
                   {numberField("offset", "素材入点秒", 0)}
-                  {numberField("rate", "速度倍率", 0.05)}
+                  {numberField("rate", "速度倍率", 0.05, 0.01, 16)}
                   {doc.sources.find((source) => source.id === item.source)
                     ?.kind === "file" && (
                     <>
@@ -1031,17 +1062,21 @@ export function AudioEditor({
                           <label>
                             处理预设
                             <select
-                              value={item.stretch?.preset ?? "default"}
+                              value={stretchMode(item.stretch)}
                               disabled={blocked}
                               onChange={(event) =>
-                                editItem("stretch", {
-                                  ...item.stretch,
-                                  preset: event.target.value,
-                                })
+                                editItem(
+                                  "stretch",
+                                  stretchPreset(
+                                    item.stretch,
+                                    event.target.value,
+                                  ),
+                                )
                               }
                             >
                               <option value="default">标准质量</option>
                               <option value="cheaper">节省计算</option>
+                              <option value="manual">手动窗口与间隔</option>
                             </select>
                           </label>
                           {[
@@ -1081,26 +1116,45 @@ export function AudioEditor({
                           ].map(([key, title, min, max, fallback, step]) => (
                             <label key={key}>
                               {title}
-                              <input
-                                type="number"
+                              <NumberInput
                                 aria-label={title}
+                                identity={`${item.id}:stretch:${key}`}
                                 min={min}
-                                max={max}
+                                max={
+                                  key === "intervalMs"
+                                    ? Math.min(
+                                        max,
+                                        item.stretch?.blockMs || max,
+                                      )
+                                    : max
+                                }
                                 step={step}
                                 value={item.stretch?.[key] ?? fallback}
-                                disabled={blocked}
-                                onChange={(event) =>
-                                  editItem("stretch", {
-                                    ...item.stretch,
-                                    [key]: Math.min(
-                                      max,
-                                      Math.max(min, Number(event.target.value)),
-                                    ),
-                                  })
+                                disabled={
+                                  blocked ||
+                                  (["blockMs", "intervalMs"].includes(key) &&
+                                    stretchMode(item.stretch) !== "manual")
                                 }
+                                onCommit={(value) => {
+                                  const next = {
+                                    ...item.stretch,
+                                    [key]: value,
+                                  };
+                                  if (key === "blockMs") {
+                                    if (!value) next.intervalMs = 0;
+                                    else if (next.intervalMs > value)
+                                      next.intervalMs = value;
+                                  }
+                                  editItem("stretch", next);
+                                }}
                               />
                             </label>
                           ))}
+                          <small className="audio-wide audio-hint">
+                            {stretchMode(item.stretch) === "manual"
+                              ? "手动窗口覆盖质量预设；处理间隔不能大于分析窗口。切换质量预设会清除这两个覆盖值。"
+                              : "质量预设自动设置分析窗口与处理间隔；选择手动模式后可调整。"}
+                          </small>
                           <label className="audio-check">
                             <input
                               type="checkbox"
@@ -1137,6 +1191,7 @@ export function AudioEditor({
                   {numberField("fadeOut", "淡出秒", 0)}
                   <label className="audio-check">
                     <input
+                      disabled={blocked}
                       type="checkbox"
                       checked={!!item.loop}
                       onChange={(e) => {
@@ -1154,32 +1209,35 @@ export function AudioEditor({
                     <h4>音量自动化</h4>
                     {(item.automation ?? []).map((k, i) => (
                       <div className="audio-key" key={i}>
-                        <input
+                        <NumberInput
+                          disabled={blocked}
                           aria-label={"关键帧 " + (i + 1) + " 时间"}
-                          type="number"
-                          min="0"
-                          step=".01"
+                          identity={`${item.id}:automation:${i}:at`}
+                          min={0}
+                          step={0.01}
                           value={k.at}
-                          onChange={(e) => {
+                          onCommit={(value) => {
                             const a = structuredClone(item.automation);
-                            a[i].at = Number(e.target.value);
+                            a[i].at = value;
                             editItem("automation", a);
                           }}
                         />
-                        <input
+                        <NumberInput
+                          disabled={blocked}
                           aria-label={"关键帧 " + (i + 1) + " 增益"}
-                          type="number"
-                          min="0"
-                          max="4"
-                          step=".01"
+                          identity={`${item.id}:automation:${i}:gain`}
+                          min={0}
+                          max={4}
+                          step={0.01}
                           value={k.value}
-                          onChange={(e) => {
+                          onCommit={(value) => {
                             const a = structuredClone(item.automation);
-                            a[i].value = Number(e.target.value);
+                            a[i].value = value;
                             editItem("automation", a);
                           }}
                         />
                         <Button
+                          disabled={blocked}
                           onClick={() =>
                             editItem(
                               "automation",
@@ -1193,6 +1251,7 @@ export function AudioEditor({
                       </div>
                     ))}
                     <Button
+                      disabled={blocked}
                       onClick={() =>
                         editItem(
                           "automation",
@@ -1220,6 +1279,7 @@ export function AudioEditor({
                   <label>
                     输出到
                     <select
+                      disabled={blocked}
                       value={item.output}
                       onChange={(e) => editItem("output", e.target.value)}
                     >
@@ -1238,6 +1298,7 @@ export function AudioEditor({
                     {(item.sends ?? []).map((s, i) => (
                       <div className="audio-key" key={i}>
                         <select
+                          disabled={blocked}
                           value={s.bus}
                           onChange={(e) => {
                             const a = structuredClone(item.sends);
@@ -1253,20 +1314,22 @@ export function AudioEditor({
                               </option>
                             ))}
                         </select>
-                        <input
+                        <NumberInput
+                          disabled={blocked}
                           aria-label="发送增益"
-                          type="number"
-                          min="0"
-                          max="2"
-                          step=".01"
+                          identity={`${item.id}:send:${i}:gain`}
+                          min={0}
+                          max={2}
+                          step={0.01}
                           value={s.gain}
-                          onChange={(e) => {
+                          onCommit={(value) => {
                             const a = structuredClone(item.sends);
-                            a[i].gain = Number(e.target.value);
+                            a[i].gain = value;
                             editItem("sends", a);
                           }}
                         />
                         <Button
+                          disabled={blocked}
                           onClick={() =>
                             editItem(
                               "sends",
@@ -1279,7 +1342,9 @@ export function AudioEditor({
                       </div>
                     ))}
                     <Button
-                      disabled={!doc.buses.some((b) => b.id !== item.id)}
+                      disabled={
+                        blocked || !doc.buses.some((b) => b.id !== item.id)
+                      }
                       onClick={() =>
                         editItem("sends", [
                           ...item.sends,
@@ -1309,6 +1374,7 @@ export function AudioEditor({
                     </strong>
                     <label>
                       <input
+                        disabled={blocked}
                         type="checkbox"
                         checked={!fx.bypass}
                         onChange={(e) =>
@@ -1318,7 +1384,7 @@ export function AudioEditor({
                       启用
                     </label>
                     <Button
-                      disabled={i === 0}
+                      disabled={blocked || i === 0}
                       onClick={() => {
                         const a = [...effectList];
                         [a[i - 1], a[i]] = [a[i], a[i - 1]];
@@ -1329,6 +1395,7 @@ export function AudioEditor({
                       ↑
                     </Button>
                     <Button
+                      disabled={blocked}
                       onClick={() =>
                         editItem(
                           "processors",
@@ -1360,6 +1427,7 @@ export function AudioEditor({
                             {labels[k] ?? k}
                             {k === "mode" ? (
                               <select
+                                disabled={blocked}
                                 value={v}
                                 onChange={(e) =>
                                   setEffect(i, k, e.target.value)
@@ -1380,6 +1448,7 @@ export function AudioEditor({
                               </select>
                             ) : k === "track" ? (
                               <select
+                                disabled={blocked}
                                 value={v}
                                 onChange={(e) =>
                                   setEffect(i, k, e.target.value)
@@ -1392,13 +1461,13 @@ export function AudioEditor({
                                 ))}
                               </select>
                             ) : (
-                              <input
-                                type="number"
-                                step=".01"
+                              <NumberInput
+                                disabled={blocked}
+                                aria-label={`${audioProcessors.find((p) => p.id === fx.type)?.name} ${labels[k] ?? k}`}
+                                identity={`${item.id}:${fx.id ?? i}:${k}`}
+                                step={0.01}
                                 value={v}
-                                onChange={(e) =>
-                                  setEffect(i, k, Number(e.target.value))
-                                }
+                                onCommit={(value) => setEffect(i, k, value)}
                               />
                             )}
                           </label>
@@ -1409,6 +1478,7 @@ export function AudioEditor({
               ))}
               <div className="audio-key">
                 <select
+                  disabled={blocked}
                   aria-label="选择音频处理器"
                   value={processor}
                   onChange={(e) => setProcessor(e.target.value)}

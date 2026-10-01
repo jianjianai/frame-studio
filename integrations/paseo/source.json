@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/getpaseo/paseo.git",
+  "version": "0.10.2",
+  "commit": "919c737c1948c5a16220307403a82e90d3e27ea0",
+  "patches": [
+    "0001-frame-embed.patch",
+    "0002-frame-session-env.patch"
+  ]
+}

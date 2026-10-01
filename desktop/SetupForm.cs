@@ -85,12 +85,12 @@ namespace FrameStudioDesktop {
       if(!line.StartsWith("FRAME_PROGRESS "))return;
       try {
         var value=DesktopFiles.Json.Deserialize<Dictionary<string,object>>(line.Substring(15));var component=DesktopFiles.String(value,"component");var phase=DesktopFiles.String(value,"phase");
-        var names=new Dictionary<string,string>{{"checking","检查电脑"},{"tools","工具环境"},{"speech","语音运行环境"},{"dependencies","工作台依赖"},{"browser","预览浏览器"},{"github","GitHub 授权工具"},{"application","安装工作台"}};
+        var names=new Dictionary<string,string>{{"checking","检查电脑"},{"tools","工具环境"},{"speech","语音运行环境"},{"dependencies","工作台依赖"},{"paseo","Paseo 创作环境"},{"browser","预览浏览器"},{"github","GitHub 授权工具"},{"application","安装工作台"}};
         status.Text=(names.ContainsKey(component)?names[component]:"准备环境")+" · "+DesktopFiles.String(value,"message");
         long received=value.ContainsKey("received")?Convert.ToInt64(value["received"]):0,total=value.ContainsKey("total")?Convert.ToInt64(value["total"]):0;
         double speed=value.ContainsKey("speed")?Convert.ToDouble(value["speed"]):0;
-        var basePercent=new Dictionary<string,int>{{"checking",2},{"tools",5},{"speech",30},{"dependencies",60},{"browser",85},{"github",91},{"application",96}};
-        var weights=new Dictionary<string,int>{{"tools",25},{"speech",30},{"dependencies",25},{"browser",6},{"github",5},{"application",4}};
+        var basePercent=new Dictionary<string,int>{{"checking",2},{"tools",5},{"speech",30},{"dependencies",60},{"paseo",77},{"browser",85},{"github",91},{"application",96}};
+        var weights=new Dictionary<string,int>{{"tools",25},{"speech",30},{"dependencies",17},{"paseo",8},{"browser",6},{"github",5},{"application",4}};
         int start=basePercent.ContainsKey(component)?basePercent[component]:0,weight=weights.ContainsKey(component)?weights[component]:0;
         progress.Value=Math.Max(progress.Value,Math.Min(100,start+((phase=="done"||phase=="cached")?weight:total>0?(int)(weight*received/total):0)));
         if(total>0) detail.Text=DesktopTheme.Bytes(received)+" / "+DesktopTheme.Bytes(total)+(speed>0?"  ·  "+DesktopTheme.Bytes((long)speed)+"/s":"");

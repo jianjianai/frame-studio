@@ -71,6 +71,7 @@ export function AgentTurn({
   onEdit,
   queue,
   search = "",
+  readOnly = false,
 }) {
   const reducer = useRef(null);
   reducer.current ||= createAgentTimeline();
@@ -86,7 +87,9 @@ export function AgentTurn({
     (item) => item.kind === "question" && item.question?.state === "pending",
   );
   const questions = useQuery(
-    hasWaiting && task.state === "running" && work ? "agent_questions" : null,
+    !readOnly && hasWaiting && task.state === "running" && work
+      ? "agent_questions"
+      : null,
     { work: work?.id, task: task.id },
     1,
   );
@@ -155,14 +158,16 @@ export function AgentTurn({
             label="复制要求"
             notify={notify}
           />
-          <button
-            type="button"
-            title="复制到输入框，修改后重新发送"
-            onClick={() => onEdit(task)}
-          >
-            <Pencil size={13} />
-            重新编辑要求
-          </button>
+          {!readOnly && (
+            <button
+              type="button"
+              title="复制到输入框，修改后重新发送"
+              onClick={() => onEdit(task)}
+            >
+              <Pencil size={13} />
+              重新编辑要求
+            </button>
+          )}
         </div>
       </div>
       <div className="assistant-message agent-assistant">
@@ -232,6 +237,7 @@ export function AgentTurn({
               group.item.question?.payload?.questions ? (
               <AgentQuestion
                 key={group.id}
+                readOnly={readOnly}
                 question={
                   questions.data?.find(
                     (q) => q.id === group.item.question.id,
@@ -292,7 +298,7 @@ export function AgentTurn({
                 notify={notify}
               />
             )}
-            {task.state === "failed" && (
+            {!readOnly && task.state === "failed" && (
               <button
                 type="button"
                 onClick={() =>
@@ -307,13 +313,13 @@ export function AgentTurn({
                 保留原引用重试
               </button>
             )}
-            {task.state === "publish_failed" && (
+            {!readOnly && task.state === "publish_failed" && (
               <button type="button" onClick={() => onRetryPublication(task.id)}>
                 <RotateCcw size={13} />
                 重试保存结果（不重跑 AI）
               </button>
             )}
-            {cancellable(task) && !hasWaiting && (
+            {!readOnly && cancellable(task) && !hasWaiting && (
               <button type="button" onClick={() => onStop(task.id)}>
                 <Square size={12} />
                 停止本次创作

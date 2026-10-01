@@ -18,7 +18,8 @@ export const livePreviewManifestSchema = z.object({
   projectId: z.string().regex(/^[a-z][a-z0-9-]*$/).max(64).optional(),
   revision: z.number().int().positive(),
   sourceRevision: hash,
-  source: z.enum(["work", "task"]),
+  source: z.enum(["work", "task", "paseo"]),
+  paseoAgent: z.string().min(1).max(256).optional(),
   projectUrl: chunkPath,
   mediaModes: z.array(livePreviewMediaModeSchema).max(3).default(["original", "compressed", "cached"]),
   defaultMediaMode: livePreviewMediaModeSchema.default("compressed"),
@@ -41,6 +42,7 @@ export const livePreviewManifestSchema = z.object({
 });
 export const livePreviewStartingSchema = z.object({
   schemaVersion: z.literal(1), sessionId: z.string().min(1).max(200),
-  revision: z.literal(0), state: z.literal("starting"), source: z.enum(["work", "task"]),
+  revision: z.literal(0), state: z.literal("starting"), source: z.enum(["work", "task", "paseo"]),
+  paseoAgent: z.string().min(1).max(256).optional(),
 });
 export const livePreviewErrorSchema = z.object({ message: z.string().max(6000), revision: z.number().int().nonnegative(), state: z.literal("error") });

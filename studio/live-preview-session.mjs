@@ -61,6 +61,8 @@ export function createPreviewSessionController({
         ? await loadLive({
             id: snapshot.workId,
             ...(snapshot.taskId ? { task: snapshot.taskId } : {}),
+            ...(snapshot.source ? { source: snapshot.source } : {}),
+            ...(snapshot.paseoAgent ? { paseoAgent: snapshot.paseoAgent } : {}),
           })
         : await loadStable(snapshot.latest);
       if (!current(version)) return;
@@ -168,6 +170,8 @@ export function createPreviewSessionController({
         next.workId,
         next.mode || "immutable",
         next.taskId || "",
+        next.source || "",
+        next.paseoAgent || "",
         next.mode === "live" ? "" : next.latest?.id || "",
       ].join(":");
       const changed = target !== key,

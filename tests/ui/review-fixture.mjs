@@ -1,5 +1,9 @@
 import { randomUUID, createHash } from "node:crypto";
 import {
+  paseoBoundaryBootstrap,
+  paseoBoundaryHtml,
+} from "./paseo-boundary-fixture.mjs";
+import {
   validateAudioDocument,
   audioEngines,
   audioProcessors,
@@ -379,20 +383,6 @@ export async function mockApi(context, playerUrl, uiUrl) {
         if (state.failSave) throw Error("验收：保存失败，输入已保留");
         Object.assign(work, args);
         return work;
-      case "works_chat_create":
-        return chat;
-      case "works_chat_send": {
-        const t = {
-          id: randomUUID(),
-          kind: "agent",
-          state: "queued",
-          chat: args.chat,
-          input: { prompt: args.prompt, context: args.context },
-          created: new Date().toISOString(),
-        };
-        state.tasks.push(t);
-        return t;
-      }
       case "task_cancel": {
         const t =
           state.tasks.find((t) => t.id === args.id) ||
@@ -524,8 +514,88 @@ export async function mockApi(context, playerUrl, uiUrl) {
       }
     }
   };
+  // This fixture verifies Frame's host boundary/layout. The complete official child UI and
+  // native send/model/history behavior are covered by the dedicated Paseo browser gates.
+  const paseoBootstrap = paseoBoundaryBootstrap({
+    workId: work.id,
+    origin: new URL(uiUrl).origin,
+    label: work.title,
+  });
+  await context.route("**/paseo/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (!url.pathname.startsWith(paseoBootstrap.basePath))
+      return route.fallback();
+    if (
+      url.pathname !== paseoBootstrap.basePath ||
+      url.searchParams.get("frameNonce") !== paseoBootstrap.nonce
+    )
+      return route.fulfill({ status: 403, body: "Invalid fixture scope" });
+    return route.fulfill({
+      contentType: "text/html",
+      body: paseoBoundaryHtml(paseoBootstrap),
+    });
+  });
   await context.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
+    const paseoPrefix = `/api/paseo/works/${work.id}`;
+    if (url.pathname === paseoPrefix + "/session")
+      return route.fulfill({
+        json: {
+          bootstrap: paseoBootstrap,
+          uiUrl:
+            paseoBootstrap.basePath + "?frameNonce=" + paseoBootstrap.nonce,
+        },
+      });
+    if (url.pathname === paseoPrefix + "/status")
+      return route.fulfill({
+        json: {
+          version: 1,
+          workId: work.id,
+          draftRevision: null,
+          generation: "0",
+          native: {
+            state: "ready",
+            activeAgents: [],
+            activeTerminals: 0,
+            pendingPermissions: 0,
+            scheduled: 0,
+            incomplete: false,
+          },
+          candidate: null,
+        },
+      });
+    if (url.pathname === paseoPrefix + "/history")
+      return route.fulfill({
+        json: [
+          {
+            id: chat.id,
+            title: chat.title,
+            provider: chat.provider,
+            created: chat.created,
+            readOnly: true,
+          },
+        ],
+      });
+    if (url.pathname === paseoPrefix + "/history/" + chat.id)
+      return route.fulfill({
+        json: {
+          version: 1,
+          chat,
+          turns: [
+            {
+              id: turn.id,
+              state: turn.state,
+              created: now,
+              prompt: turn.input.prompt,
+              response:
+                "## 修改结果\n**动作已调整**\n<script>window.INJECTED=true</script>\n[非法链接](javascript:alert)",
+              error: null,
+            },
+          ],
+          readOnly: true,
+          truncated: false,
+        },
+      });
     if (url.pathname === "/api/me")
       return route.fulfill({ json: { admin: true } });
     if (url.pathname.endsWith("/preview")) {
