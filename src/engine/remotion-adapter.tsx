@@ -1,3 +1,5 @@
+import { useContext, useLayoutEffect, type ContextType } from "react";
+import { Internals } from "remotion";
 import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Player, type PlayerRef } from "@remotion/player";
@@ -8,6 +10,9 @@ import type {
   ScenePlayback,
 } from "./types";
 import { remotionConfig, withFrameSubtitles } from "./remotion-composition";
+import { retireRemotionAudio } from "./remotion-audio-lifetime";
+
+type NativeAudioOwner = NonNullable<ContextType<typeof Internals.SharedAudioContext>>;
 
 /** DOM stays native: no lossy HTML-to-canvas emulation in the live preview. */
 export async function createRemotionScene(
@@ -42,6 +47,24 @@ export async function createRemotionScene(
     muted: false,
   };
   let Content = withFrameSubtitles(component, project, captions);
+  const nativeAudio = new Map<AudioContext, NativeAudioOwner>();
+  const retireAudio = (context: AudioContext, owner: NativeAudioOwner) => {
+    // Cancel Remotion's pending resume attempts, then guard late native transitions.
+    void owner.suspend().catch(() => {});
+    retireRemotionAudio(context);
+  };
+  const withOwnedAudio = (Component: typeof Content) =>
+    function OwnedComposition(props: Record<string, unknown>) {
+      // This context belongs to this pinned Remotion Player, never Frame's transport.
+      const owner = useContext(Internals.SharedAudioContext);
+      useLayoutEffect(() => {
+        if (!owner?.audioContext) return;
+        if (disposed) retireAudio(owner.audioContext, owner);
+        else nativeAudio.set(owner.audioContext, owner);
+      }, [owner]);
+      return <Component {...props} />;
+    };
+  let PlaybackContent = withOwnedAudio(Content);
   const waiting = () => {
     buffering = true;
     options.onBuffering?.(true);
@@ -63,7 +86,7 @@ export async function createRemotionScene(
       root.render(
         <Player
           ref={bindPlayer}
-          component={Content}
+          component={PlaybackContent}
           inputProps={project.remotion?.inputProps ?? {}}
           compositionWidth={config.width}
           compositionHeight={config.height}
@@ -87,7 +110,10 @@ export async function createRemotionScene(
   try {
     mount();
   } catch (error) {
+    disposed = true;
     root.unmount();
+    for (const [context, owner] of nativeAudio) retireAudio(context, owner);
+    nativeAudio.clear();
     element.remove();
     throw error;
   }
@@ -141,6 +167,7 @@ export async function createRemotionScene(
       if (enabled === captions) return;
       captions = enabled;
       Content = withFrameSubtitles(component, project, captions);
+      PlaybackContent = withOwnedAudio(Content);
       mount();
     },
     render(time) {
@@ -162,7 +189,7 @@ export async function createRemotionScene(
       ref.current?.setVolume(Math.min(1, Math.max(0, next.volume)));
       if (next.muted) ref.current?.mute();
       else ref.current?.unmute();
-      if (!next.playing) ref.current?.pause();
+      if (!next.playing) flushSync(() => ref.current?.pause());
       else if (!wasPlaying) {
         ref.current?.seekTo(seek(next.time));
         ref.current?.play();
@@ -187,8 +214,11 @@ export async function createRemotionScene(
     dispose() {
       if (disposed) return;
       disposed = true;
-      ref.current?.pause();
+      // Commit pause/seek cancellation while the Player and its suspend effect still exist.
+      flushSync(() => ref.current?.pause());
       root.unmount();
+      for (const [context, owner] of nativeAudio) retireAudio(context, owner);
+      nativeAudio.clear();
       element.remove();
       canvas.width = canvas.height = 1;
     },

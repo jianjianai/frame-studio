@@ -157,17 +157,38 @@ test(
         if (value.type() === "error") consoleErrors.push(value.text());
       });
       host.on("pageerror", (error) => pageErrors.push(error.message));
-      await host.addInitScript(() => {
+      await host.addInitScript((traceCalls) => {
         window.__V8_DOCUMENT__ = Math.random();
         window.__V8_CONTEXTS__ = [];
         const Native = window.AudioContext;
         window.AudioContext = class extends Native {
           constructor(...args) {
             super(...args);
-            window.__V8_CONTEXTS__.push({ context: this });
+            this.__V8_RECORD__ = { context: this, events: [] };
+            window.__V8_CONTEXTS__.push(this.__V8_RECORD__);
+            this.addEventListener("statechange", () =>
+              this.__V8_RECORD__.events.push({
+                op: "state",
+                state: this.state,
+                at: performance.now(),
+              }),
+            );
           }
         };
-      });
+        if (traceCalls) {
+          for (const method of ["resume", "suspend"]) {
+            window.AudioContext.prototype[method] = function (...args) {
+              this.__V8_RECORD__?.events.push({
+                op: method,
+                state: this.state,
+                at: performance.now(),
+                stack: new Error().stack,
+              });
+              return Native.prototype[method].apply(this, args);
+            };
+          }
+        }
+      }, process.env.FRAME_REMOTION_TRACE === "1");
       await host.goto(
         "http://127.0.0.1:" + app.server.address().port + "/__v8-remotion-host",
       );
@@ -341,16 +362,35 @@ test(
       await page.waitForFunction(
         () => document.querySelectorAll("[data-remotion-surface]").length === 1,
       );
-      await page.waitForFunction(
-        ({ count, frame }) =>
-          window.__V8_CONTEXTS__
-            .slice(0, count)
-            .every(
-              (item, index) =>
-                index === frame || item.context.state !== "running",
+      await page
+        .waitForFunction(
+          ({ count, frame }) =>
+            window.__V8_CONTEXTS__
+              .slice(0, count)
+              .every(
+                (item, index) =>
+                  index === frame || item.context.state !== "running",
+              ),
+          { count: failed.contexts, frame: playing.frameContext },
+        )
+        .catch(async (error) => {
+          const diagnostics = {
+            state: await state(page),
+            previousContexts: failed.contexts,
+            calls: await page.evaluate(() =>
+              window.__V8_CONTEXTS__.map((item, index) => ({
+                index,
+                state: item.context.state,
+                events: item.events,
+              })),
             ),
-        { count: failed.contexts, frame: playing.frameContext },
-      );
+          };
+          throw Error(
+            "Retired Remotion context wait failed: " +
+              JSON.stringify(diagnostics),
+            { cause: error },
+          );
+        });
       const recovered = await state(page);
       assert.equal(recovered.version, 4);
       assert.equal(recovered.color, "rgb(21, 128, 61)");
