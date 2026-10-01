@@ -11,7 +11,7 @@
 ## 实现
 
 - 常驻受限源码打包进程、内容哈希模块、压缩 HTTP 缓存、版本清单、SSE 与可取消更新；作品和 AI 任务草稿分别授权，不创建 durable build。
-- 同播放器事务更换场景与声音，保持时钟、AudioContext、位置与偏好；异步第一帧、Remotion、失败保留最后成功版本、连续保存合并。
+- 同播放器事务更换场景与声音，保持时钟、Frame 音轨上下文、位置与偏好；异步第一帧、Remotion、失败保留最后成功版本、连续保存合并。
 - V7 文档、旧文件音轨与生成器实时调度；平滑参数更新、局部声音替换、DSP 拓扑交叉渐变，直接使用有预算的源池。
 - 视频和图片共享源及缓存、单次绘制取消、顺序解码、重复帧合并、过期寻帧跳过；等待媒体时画面声音共同时钟一起缓冲。
 - 按内容和质量缓存音频、视频及静态图片代理；慢网自动 economy，high 和正式导出读取冻结原素材。源哈希由内容决定，重发布同素材不失效。
@@ -43,9 +43,33 @@
 
 合并审查还发现 works_browser 的错误分支缺少 problem 导入，以及无实时服务时草稿可能落到旧快照；已修复并增加 400/503 与准确草稿传递回归。
 
+## Remotion 实测补充
+
+额外真实 DOM 热更新回归发现并修复 Remotion 内置 data:audio/mp3 静音标签被 CSP 拒绝，导致隔离实时预览初始失败的问题。只为 media-src 增加 data:，保留无同源权限 sandbox、connect-src self 和 script-src 不允许 data:；资源权限 8/8 回归通过。使用官方支持 initialVolume/initiallyMuted，从 Frame 偏好初始化原生播放器，避免隔离页访问 localStorage。未修改第三方库或解除沙箱。
+
+Remotion 原生组件声音与 Frame 多音轨分别管理；原生 Player 创建自己的音频上下文是库的有效契约。新测试验证 Frame 生成器仅使用一个上下文且跨更新 identity 不变；原生旧/失败候选停止 running，活动上下文预算不超过原生播放器和 Frame 的两个。旧 Player 按库设计暂停并失去引用，测试不把强引用诊断造成的 context 留存当作生产泄漏。
+
+早期针对性测试在真实 opaque iframe 中两次稳定通过（1/1，0 skip；9.712 秒与 9.617 秒）：隐藏候选 delayRender 不改变旧 DOM/哈希/437Hz 生成器资源；接受第一帧与公共时间轴、源码版本一起改变；React 错误保留最后成功画面和声音；恢复后暂停 7.5 秒更新仍为 frame 180；iframe/document 保留，localStorage SecurityError 为 0。夹具需等待接受后异步旧 DOM 释放与 AudioContext.suspend，再检查退休状态；未降低资源断言。运行中新增真实场景验证时，已准确停止旧半程门禁，未把被停止输出计为验收。
+
+## 原生音频退休竞态
+
+完整服务端一次运行完成 348 项，345 通过、1 项新 Remotion 退休状态超时、2 项明确可选/平台跳过；没有把该失败门禁计为通过。进一步压力复现证明仅把 public pause 放进 flushSync 不充分（2 次通过、第 3 次失败）：旧 blue 原生 context 2 收到 dispose suspend 时仍 suspended，但先前请求的 native resume 在其后约 8 ms 才生效，30 秒后仍 running；Frame context 1、声音、已显示绿色 DOM/哈希保持正确。
+
+最终适配从锁定 Remotion 4.0.530 的 SharedAudioContext 注册本场景自身的 native owner。dispose 时取消库内恢复请求，再以此 context 自己的 statechange 监听暂停退休后的晚到 running；异步请求去重并重新检查，失败不形成微任务循环，closed 时移除监听。Map 清空后不保留 provider、场景或 React root；没有全局 hook/timer，没有关闭或重新创建 Frame 上下文。使用 suspend 而非 close，保证退休时钟停止，同时沿用库的引用释放和 GC 资源回收，并不宣称立即归还全部原生资源。升级 Remotion 版本时需要保留此真实生命周期回归。
+
+6/6 纯单元覆盖晚到恢复、并发暂停、完成后再恢复、关闭释放和拒绝/同步异常；严格类型验证通过。冻结实现 1c4e8aefe2e2364724fea747962483a226f1155b 的真实浏览器压力 6/6、0 fail/skip（64.369 秒）：3 次有调用 trace，3 次默认不覆写 resume/suspend；全部退休 native suspended、Frame context identity/count=1、声音持续、单 surface、首帧/哈希一起接受、失败恢复，以及暂停 7.5 秒/frame 180 保持。此为实测证据，不是任意第三方作者代码的保证。随后使用该最终实现重新构建候选镜像并运行完整门禁。
+
 ## 完整门禁
 
-核心门禁 `pnpm verify:core` 已完成：127 项单元、117 项 MCP（116 通过，1 项可选授权 GeneralUser 音色跳过），工程/平台/类型检查与播放器、Studio 构建全部通过；耗时 349 秒。候选 Docker 镜像已构建并通过 8.0.0、依赖导入与无凭据/缓存内容检查。正在执行 `pnpm test:server:release`，完成后补记服务端结果与提交。这两步合计覆盖 `pnpm verify:release`，没有重复已通过的核心门禁。隔离测试数据库仅为 frame-live-v8-postgres/frame_test_live_v8；候选容器带 Docker socket 只为运行真实 executor 夹具，不发布生产。
+最终核心门禁 `pnpm verify:core` 已完成（`.cache/v8-accepted-core.log`）：19 个单元文件、161/161 项单元；121 项 MCP，120 通过、1 项可选外部授权 SF2 夹具缺省跳过。工程/平台/类型检查与播放器、Studio 构建全部通过，退出码 0，总耗时 321.584 秒。实际双轨弱网回归在 1.8 秒请求延迟、786.432 kb/s 下启动 5.428 秒、后续采样 stallSamples=0、重复下载 0；断流回归 freezeDrift=0 且恢复成功。此为测试夹具测量，不能保证任意媒体或网络都零等待。
+
+最终运行代码与验收源码为 1c4e8aefe2e2364724fea747962483a226f1155b；验收后只收紧使用文档的缓存/原生资源边界并补充本记录，没有修改运行代码或测试。候选镜像 `frame-live-preview-v8:candidate` 从该提交构建成功（`.cache/v8-accepted-candidate-build.log`，117.421 秒），镜像 ID `sha256:fb57d3b7cb7cd892d37ccd2356401a821ed13574b777e8bab98e1fe8400544f1`。在 --network none 下验证 8.0.0、准确 REVISION、5 个核心/能力/原生音频生命周期模块导入，以及不含 .git/.env/.secrets/.credentials/私有缓存/records；退出码 0。首次旧版 smoke 脚本错写 capabilities 模块路径，改为真实 src/contracts/capabilities.mjs 后通过，不是产品源码错误。
+
+最终严格服务端门禁 `pnpm test:server:release` 已完成（`.cache/v8-accepted-server-release.log`）：348 项，346 通过、0 失败/取消，2 项明确跳过；严格 skip guard 通过，退出码 0。两个跳过项分别是 Linux 无法运行的 Windows 本地模式，以及缺省外部授权 GeneralUser 音色夹具；其余包括真实 PostgreSQL、Docker 执行器、Codex/Claude CLI 协议、浏览器、媒体与新 Remotion 回归全部通过。外层总耗时 687.025 秒，TAP 测试耗时 644.392 秒。核心与严格服务端两步合计覆盖 `pnpm verify:release`；隔离数据库仅为 frame-live-v8-postgres/frame_test_live_v8，Docker socket 只供真实执行器夹具使用，不发布生产。
+
+最终门禁的实际测量：450 ms RTT / 256 KiB/s 的 Three + 实时音频工程，冷启动 12.143 秒、暖画面更新 2.791 秒/6,186 B；保留同 iframe、Frame 音频资源、暂停 9.5 秒位置，并通过单次模块请求故障重试与离线恢复。编译微型工程冷 1.406 秒、三次暖 1.247/1.234/1.064 秒，gzip 增量 761/762/761 B，7 类 vendor 哈希不变；真实 Remotion 回归 7.893 秒通过。视频响应停顿时共同时钟冻结/恢复均为 30.070294784580497 秒。代理测量为视频 1,646,363 B -> economy 61,819 B/320px、standard 240,338 B/640px；图片 8,656,584 B -> economy 161,326 B/480px、standard 1,648,602 B/1280px。以上均是指定测试影片和资源的观测值，不能外推为任意工程的时间上界。
+
+交付前再次 fetch，origin/main 仍为 d81ca39f890c1b13248c99a6ce65b9c2d509abae，且已包含于本升级分支。独立只读审查通过，文档明确 Frame 音轨上下文复用、Remotion 原生暂停后 GC 回收，以及未保留快照可能因 4 GiB 预算早于 7 天回收。
 
 全量测试发现 Tone 深层入口首次依赖优化导致页面导航，已在产品 root 和单项目 Vite 配置修复，并通过原测试原断言与不带测试专属预优化的新增测试。早期媒体质量接口并行写入导致临时类型检查失败，合并后针对性检查通过。完整门禁仅记录最终通过结果，不使用早期半程输出作为验收。
 
