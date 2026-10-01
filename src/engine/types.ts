@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { compileAudioTracks, audioDocumentSchema, automationSchema } from "./audio-document.mjs";
+import { compileAudioTracks, audioDocumentSchema, automationSchema, stretchOptionsSchema } from "./audio-document.mjs";
 export type AudioDocument = z.infer<typeof audioDocumentSchema>;
 import { rendererIds } from "./adapters.mjs";
 import { visualAudioTracks } from "./visual-audio.mjs";
@@ -22,6 +22,9 @@ const trackTiming = {
   duration: z.number().positive().optional(),
   gain: z.number().min(0).max(4).optional(),
   playbackRate: z.number().min(0.05).max(16).optional(),
+  pitch: z.number().min(-48).max(48).optional(),
+  preservePitch: z.boolean().optional(),
+  stretch: stretchOptionsSchema.optional(),
   phase: z.number().nonnegative().optional(),
   loop: z.number().positive().optional(),
   muted: z.boolean().optional(),
@@ -154,11 +157,15 @@ export interface GeneratedAudioOptions {
   offset: number;
   duration: number;
   rate: number;
+  /** Independent semitone transpose; generators should honor or explicitly reject. */
+  pitch?: number;
+  preservePitch?: boolean;
+  stretch?: z.infer<typeof stretchOptionsSchema>;
   onError?: (error: Error) => void;
 }
 export type GeneratedAudioSegmentOptions = Pick<
   GeneratedAudioOptions,
-  "trackId" | "context" | "offset" | "duration" | "rate"
+  "trackId" | "context" | "offset" | "duration" | "rate" | "pitch" | "preservePitch" | "stretch"
 > & { signal?: AbortSignal };
 export interface GeneratedAudioModule {
   /** Optional preparation before playback starts; never start nodes or a separate clock here. */

@@ -72,6 +72,8 @@ export function createAudio(options: GeneratedAudioOptions) {
 }
 ```
 
+完整 Tone / Signalsmith API、采样旋律便利层、音高和保调变速见 [AUDIO-CREATIVE.md](AUDIO-CREATIVE.md)。AI 用 film capabilities --category audio --json 查询实际入口与限制。
+
 createAudio 可返回可选的 ready: Promise<void>，表示本次调用的初始缓冲已就绪；播放器等待它完成后才启动共同声画时钟。准备期间所拥有的 AudioContext 暂停，ready 不能等待播放时间推进。暂停、跳转和变速会撤销旧等待，dispose 仍须停止该调用的节点与后台调度。
 
 可选导出 `prepareAudio(context): void | Promise<void>`，在播放时钟启动前加载素材并初始化生成器；此阶段不得启动声音节点或独立时钟。

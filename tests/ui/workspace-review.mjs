@@ -10,7 +10,11 @@ import { flowChecks, libraryChecks } from "./review-flows.mjs";
 import { populateTimelineFixture, timelineChecks } from "./review-timeline.mjs";
 import { persistenceChecks } from "./review-persistence.mjs";
 import { workToolsChecks } from "./review-work-tools.mjs";
-const reportDir = path.join(root, ".cache/frontend-validation/workspace");
+const reportDir = path.resolve(
+  root,
+  process.env.FRAME_UI_TEST_REPORT_DIR ||
+    ".cache/frontend-validation/workspace",
+);
 fs.mkdirSync(reportDir, { recursive: true });
 const results = [],
   errors = [],
@@ -54,10 +58,15 @@ try {
   });
   h.context.on("page", (p) => p.on("pageerror", (e) => errors.push(e.message)));
   // React error boundaries consume pageerror; retain console diagnostics to identify real render failures.
-  h.context.on("page", (p) => p.on("console", (message) => {
-    if (message.type() === "error" && !message.text().includes("Failed to load resource"))
-      console.error("BROWSER:", message.text());
-  }));
+  h.context.on("page", (p) =>
+    p.on("console", (message) => {
+      if (
+        message.type() === "error" &&
+        !message.text().includes("Failed to load resource")
+      )
+        console.error("BROWSER:", message.text());
+    }),
+  );
   h.state = await mockApi(h.context, h.playerUrl, h.uiUrl);
   h.page = await h.context.newPage();
   await h.page.goto(h.uiUrl);

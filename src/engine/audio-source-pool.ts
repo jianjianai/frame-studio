@@ -1,5 +1,7 @@
 import { Input, UrlSource, ALL_FORMATS, AudioBufferSink } from "mediabunny";
-import { assetUrl } from "./types";
+import { assetUrl, type GeneratedAudioOptions } from "./types";
+import { renderSignalsmithPcm, SignalsmithPcmCache, scheduleCanonicalPcm, signalsmithPadding } from "./signalsmith-pcm";
+import { createSignalsmithNode, resampleAudio, type SignalsmithNode } from "./signalsmith-audio";
 import {
   PreviewBuffering,
   LIVE_BUFFER_SECONDS,
@@ -17,6 +19,7 @@ type Entry = {
   duration: number;
 };
 export class AudioSourcePool {
+  private processed = new SignalsmithPcmCache();
   private inputs = new Map<string, Promise<Entry>>();
   private cache = new Map<string, AudioBuffer>();
   private pending = new Map<
@@ -455,9 +458,15 @@ export class AudioSourcePool {
       offset: number;
       duration: number;
       rate: number;
+      pitch?: number;
+      preservePitch?: boolean;
+      stretch?: GeneratedAudioOptions["stretch"];
+      loopStart?: number;
+      loopEnd?: number;
       onError?: (e: Error) => void;
     },
   ) {
+    if (options.pitch || options.preservePitch || options.stretch) return this.playStretched(src, options);
     const { context, destination, when, offset, duration, rate } = options,
       offline = "startRendering" in context,
       end = offset + duration;
@@ -553,9 +562,122 @@ export class AudioSourcePool {
       throw e;
     }
   }
+  private async copyRange(src: string, from: number, end: number, signal?: AbortSignal) {
+    const first = Math.max(0, Math.floor(from * RATE)), last = Math.max(first + 1, Math.ceil(end * RATE));
+    const output = [new Float32Array(last - first), new Float32Array(last - first)];
+    for (let index = Math.floor(first / FRAMES); index < Math.ceil(last / FRAMES); index++) {
+      const chunk = await this.chunk(src, index, signal);
+      const a = Math.max(first, index * FRAMES), b = Math.min(last, (index + 1) * FRAMES);
+      for (let c = 0; c < 2; c++) output[c].set(chunk.getChannelData(c % chunk.numberOfChannels).subarray(a - index * FRAMES, b - index * FRAMES), a - first);
+    }
+    return { channels: output, base: first / RATE };
+  }
+  private transformKey(src: string, options: { rate: number; pitch?: number; preservePitch?: boolean; stretch?: GeneratedAudioOptions["stretch"] }) {
+    return JSON.stringify([src, options.rate, options.pitch ?? 0, !!options.preservePitch, options.stretch ?? null]);
+  }
+  async prepareStretched(src: string, options: { rate: number; pitch?: number; preservePitch?: boolean; stretch?: GeneratedAudioOptions["stretch"]; loopEnd?: number }, signal?: AbortSignal) {
+    const entry = await this.open(src), duration = Math.max(entry.duration, options.loopEnd ?? 0);
+    if (duration > 30 || duration / options.rate * RATE * 8 > 16 * 1024 * 1024) return undefined;
+    return this.processed.get(this.transformKey(src, options) + ":whole:" + duration,
+      Math.max(1, Math.round(duration / options.rate * RATE)) * 8, async () => {
+        const input = await this.copyRange(src, 0, duration + options.rate * signalsmithPadding(options.stretch), signal);
+        return renderSignalsmithPcm({ ...input, sampleRate: RATE, offset: 0, duration, rate: options.rate,
+          pitch: (options.pitch ?? 0) + (options.preservePitch ? 0 : 12 * Math.log2(options.rate)),
+          configuration: options.stretch, schedule: options.stretch, signal });
+      });
+  }
+  private canonical(src: string, index: number, options: { rate: number; pitch?: number; preservePitch?: boolean; stretch?: GeneratedAudioOptions["stretch"] }, signal?: AbortSignal) {
+    const crossfade = 0.01, outputFrom = index * 2 - crossfade, outputDuration = 2 + 2 * crossfade;
+    const from = outputFrom * options.rate, padding = signalsmithPadding(options.stretch);
+    return this.processed.get(this.transformKey(src, options) + ":grid:" + index, Math.round(outputDuration * RATE) * 8, async () => {
+      const input = await this.copyRange(src, Math.max(0, from - options.rate * (padding + 0.25)), from + outputDuration * options.rate + options.rate * padding, signal);
+      return renderSignalsmithPcm({ ...input, sampleRate: RATE, offset: from - input.base, duration: outputDuration * options.rate, rate: options.rate,
+        pitch: (options.pitch ?? 0) + (options.preservePitch ? 0 : 12 * Math.log2(options.rate)), configuration: options.stretch, schedule: options.stretch, signal });
+    });
+  }
+  /** One continuous DSP instance per clip, with bounded incremental input buffers. */
+  private playStretched(src: string, options: {
+    context: BaseAudioContext; destination: AudioNode; when: number; offset: number; duration: number; rate: number;
+    pitch?: number; preservePitch?: boolean; stretch?: GeneratedAudioOptions["stretch"];
+    loopStart?: number; loopEnd?: number; onError?: (error: Error) => void;
+  }) {
+    const { context, when, offset, duration, rate } = options;
+    const padding = signalsmithPadding(options.stretch, context.sampleRate);
+    const abort = new AbortController(), gate = context.createGain();
+    const offline = "startRendering" in context;
+    const looping = options.loopEnd !== undefined && options.loopStart !== undefined && options.loopEnd > options.loopStart;
+    const base = Math.max(0, Math.floor((Math.min(offset, options.loopStart ?? offset) - padding * rate) * 2) / 2);
+    const end = looping ? options.loopEnd! + padding * rate : offset + duration + padding * rate;
+    const pcmNodes = new Set<AudioBufferSourceNode>(), pcmGains = new Set<GainNode>();
+    let canonicalVoice: { dispose(): void } | undefined;
+    let node: SignalsmithNode | undefined, next = Math.floor(base * 2), pumping = false;
+    let timer: ReturnType<typeof setInterval> | undefined;
+    gate.gain.value = 0;
+    gate.gain.setValueAtTime(1, when);
+    gate.gain.setValueAtTime(0, when + duration / rate);
+    gate.connect(options.destination);
+    const dispose = () => {
+      if (abort.signal.aborted) return;
+      abort.abort(); clearInterval(timer); node?.dispose(); gate.disconnect(); canonicalVoice?.dispose();
+      for (const source of pcmNodes) { try { source.stop(); } catch {} source.disconnect(); source.buffer = null; }
+      for (const gain of pcmGains) gain.disconnect(); pcmNodes.clear(); pcmGains.clear();
+    };
+    const append = async (until: number) => {
+      while (next / 2 < Math.min(end, until) - 1e-8) {
+        const index = next++, buffer = await this.chunk(src, index, abort.signal);
+        abort.signal.throwIfAborted();
+        const channels = Array.from({ length: buffer.numberOfChannels }, (_, c) => resampleAudio(buffer.getChannelData(c), RATE, context.sampleRate));
+        await node!.addBuffers(channels, channels.map(c => c.buffer as ArrayBuffer));
+      }
+    };
+    const pump = async () => {
+      if (pumping || abort.signal.aborted || !node) return;
+      pumping = true;
+      try {
+        const position = offset + Math.max(0, context.currentTime - when) * rate;
+        await append(position + (this.bufferSeconds(rate) + padding) * rate);
+        if (!looping) await node.dropBuffers(Math.max(0, position - base - (padding + 0.25) * rate));
+      } catch (e) {
+        if (!abort.signal.aborted) { dispose(); options.onError?.(e instanceof Error ? e : Error(String(e))); }
+      } finally { pumping = false; }
+    };
+    const ready = (async () => {
+      const whole = await this.prepareStretched(src, options, abort.signal);
+      if (whole) {
+        abort.signal.throwIfAborted();
+        const source = context.createBufferSource(); source.buffer = whole; source.connect(gate); pcmNodes.add(source);
+        if (looping) { source.loop = true; source.loopStart = options.loopStart! / rate; source.loopEnd = options.loopEnd! / rate; }
+        source.start(when, offset / rate); source.stop(when + duration / rate);
+        return;
+      }
+      if (offline) {
+        canonicalVoice = await scheduleCanonicalPcm({ ...options, destination: gate, signal: abort.signal,
+          get: index => this.canonical(src, index, options, abort.signal) });
+        return;
+      }
+      if (looping && (end - base) * RATE * 8 > this.budget)
+        throw Error("Stretch input exceeds 128 MiB; shorten the loop or export a stem");
+      node = await createSignalsmithNode(context, undefined, abort.signal);
+      if (options.stretch) await node.configure(options.stretch);
+      node.onprocessorerror = () => { dispose(); options.onError?.(Error("Signalsmith processor failed")); };
+      await append(offline || looping ? end : offset + (this.bufferSeconds(rate, true) + padding) * rate);
+      abort.signal.throwIfAborted();
+      node.connect(gate);
+      const preroll = Math.min(0.25, Math.max(0, when - context.currentTime), Math.max(0, offset - base) / rate);
+      await node.schedule({ ...options.stretch, active: true, output: when - preroll,
+        input: offset - base - preroll * rate, rate,
+        semitones: (options.pitch ?? 0) + (options.preservePitch ? 0 : 12 * Math.log2(rate)),
+        ...(looping ? { loopStart: options.loopStart! - base, loopEnd: options.loopEnd! - base } : {}),
+      });
+      await node.stop(when + duration / rate);
+      if (!offline && !looping) timer = setInterval(() => void pump(), 100);
+    })().catch(e => { dispose(); throw e; });
+    return { ready, dispose };
+  }
   diagnostics() {
     return {
       ...this.metrics,
+      processedPcm: this.processed.diagnostics(),
       budgetBytes: this.budget,
       cacheBytes: this.bytes,
       pending: this.pending.size,
@@ -567,6 +689,7 @@ export class AudioSourcePool {
     };
   }
   dispose() {
+    this.processed.clear();
     if (this.closed) return;
     this.closed = true;
     this.abort.abort();

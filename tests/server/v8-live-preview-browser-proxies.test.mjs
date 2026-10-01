@@ -31,12 +31,14 @@ const meta = {
 };
 const scene = `import {assetUrl,previewAssetUrl} from '../../src/engine/types';
 import {openImageSource,videoSourceDiagnostics} from '../../src/engine/media-source';
+import {beginPreviewSnapshot} from '../../src/engine/live-preview-lock';
 export function createScene({width,height}){const canvas=document.createElement('canvas');canvas.width=width;canvas.height=height;return{canvas,render(){canvas.getContext('2d').fillRect(0,0,width,height);},dispose(){canvas.width=canvas.height=1;}};}
 export function probe(){const raw='films/test-film/source.mp4',image='films/test-film/image.png',pinned=assetUrl(raw);return{
   pinned,absolute:new URL(pinned,location.href).href,
   video:{economy:previewAssetUrl(raw,'draft'),standard:previewAssetUrl(raw,'standard'),high:previewAssetUrl(raw,'high'),pinned:previewAssetUrl(pinned,'standard'),absolute:previewAssetUrl(new URL(pinned,location.href).href,'standard')},
   image:{economy:previewAssetUrl(image,'draft'),standard:previewAssetUrl(image,'standard'),high:previewAssetUrl(image,'high')},
   svg:previewAssetUrl('films/test-film/vector.svg','draft'),animated:previewAssetUrl('films/test-film/animated.webp','draft')};}
+export function snapshotProbe(){const before=probe(),release=beginPreviewSnapshot();try{return{before,during:probe()};}finally{release();}}
 async function waitForWorker(worker){try{return await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Worker asset probe timed out')),12000);worker.onmessage=event=>{clearTimeout(timer);resolve(event.data);};worker.onerror=event=>{clearTimeout(timer);reject(Error(event.message));};});}finally{worker.terminate();}}
 export function workerProbe(){return waitForWorker(new Worker(new URL('./asset-worker.ts',import.meta.url),{name:'frozen-assets'}));}
 export function moduleWorkerProbe(){return waitForWorker(new Worker(new URL('./asset-worker.ts',import.meta.url),{type:'module',name:'frozen-module-assets'}));}
@@ -61,7 +63,7 @@ function ffprobe(file) {
 }
 
 test(
-  "V8 real frozen bundle chooses reusable economy/standard video and static image proxies and normalizes pinned source URLs",
+  "V8 frozen browsers separate original/compressed modes from visual quality, protect export sources and reuse lazy media proxies",
   { timeout: 180000 },
   async (t) => {
     const owned = path.join(root, ".cache/v8-proxy-browser", randomUUID()),
@@ -75,10 +77,12 @@ test(
         ',load:()=>import("./scene")};',
     );
     await fsp.writeFile(path.join(projectDir, "scene.ts"), scene);
-    await fsp.writeFile(path.join(projectDir, "asset-worker.ts"),
+    await fsp.writeFile(
+      path.join(projectDir, "asset-worker.ts"),
       "import {assetUrl,previewAssetUrl} from '../../src/engine/types';" +
-      "const raw='films/test-film/source.mp4',pinned=assetUrl(raw),proxy=previewAssetUrl(pinned,'standard');" +
-      "Promise.all([pinned,proxy].map(async url=>{const response=await fetch(url,{headers:{Range:'bytes=0-127'}});return{url,status:response.status,bytes:(await response.arrayBuffer()).byteLength};})).then(fetches=>self.postMessage({pinned,proxy,fetches,name:self.name})).catch(error=>{throw error;});");
+        "const raw='films/test-film/source.mp4',pinned=assetUrl(raw),proxy=previewAssetUrl(pinned,'standard');" +
+        "Promise.all([pinned,proxy].map(async url=>{const response=await fetch(url,{headers:{Range:'bytes=0-127'}});return{url,status:response.status,bytes:(await response.arrayBuffer()).byteLength};})).then(fetches=>self.postMessage({pinned,proxy,fetches,name:self.name})).catch(error=>{throw error;});",
+    );
     await fsp.writeFile(
       path.join(projectDir, "public/vector.svg"),
       '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="50"><path d="M0 0H100V50H0Z" fill="red"/></svg>',
@@ -161,10 +165,16 @@ test(
       await app.listen({ host: "127.0.0.1", port: 0 });
       const origin = "http://127.0.0.1:" + app.server.address().port,
         base = link.url.slice(0, -"index.html".length);
+      let converted = 0;
+      const convert = manager.media.transcode;
+      manager.media.transcode = (...args) => {
+        converted++;
+        return convert(...args);
+      };
       browser = await launchBrowser();
       const page = await browser.newPage();
       const requested = [];
-      page.on("request", request => requested.push(request.url()));
+      page.on("request", (request) => requested.push(request.url()));
       page.setDefaultTimeout(45000);
       await page.goto(origin + link.url);
       await page.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
@@ -199,9 +209,15 @@ test(
         result.video.standard,
         "resolved absolute asset URLs preserve the frozen proxy revision",
       );
-      assert.match(
+      assert.equal(
         result.video.high,
+        result.video.standard,
+        "explicit compressed mode uses the proxy even at high visual quality",
+      );
+      assert.match(
+        result.pinned,
         new RegExp("films/test-film/source\\.mp4\\?v=" + videoHash + "$"),
+        "assetUrl always retains the immutable original for exports",
       );
       assert.match(
         result.image.economy,
@@ -221,12 +237,118 @@ test(
         /animated\.webp\?v=/,
         "animated WebP retains original pages and timing",
       );
-      let converted = 0;
-      const convert = manager.media.transcode;
-      manager.media.transcode = (...args) => {
-        converted++;
-        return convert(...args);
-      };
+      assert.equal(
+        result.image.high,
+        result.image.standard,
+        "compressed image selection also remains independent of visual quality",
+      );
+      assert.equal(
+        converted,
+        0,
+        "compressed URLs alone must not start media processing",
+      );
+      const originalLink = await manager.start({ work, mediaMode: "original" });
+      assert.equal(
+        originalLink.sessionId,
+        link.sessionId,
+        "each viewer selects its own mode while reusing the immutable source session",
+      );
+      const originalPage = await browser.newPage();
+      originalPage.setDefaultTimeout(45000);
+      await originalPage.goto(origin + originalLink.url);
+      await originalPage.waitForFunction(
+        () =>
+          window.__FRAME_STUDIO__?.ready &&
+          window.__FRAME_LIVE_STATUS__?.state === "ready" &&
+          window.__FRAME_LIVE_STATUS__?.mediaMode === "original",
+      );
+      const originals = await originalPage.evaluate(async () => {
+        const manifest = await (
+          await fetch(window.__FRAME_LIVE_PREVIEW__.manifestUrl)
+        ).json();
+        const module = await import(
+          new URL(manifest.projectUrl, location.href).href
+        );
+        const probe = (await module.default.load()).probe(),
+          fetches = [];
+        for (const url of [probe.video.high, probe.image.high]) {
+          const response = await fetch(url, {
+            headers: { Range: "bytes=0-127" },
+          });
+          fetches.push({
+            status: response.status,
+            bytes: [...new Uint8Array(await response.arrayBuffer())],
+          });
+        }
+        return { probe, fetches };
+      });
+      for (const [kind, hash, suffix] of [
+        ["video", videoHash, "source.mp4"],
+        ["image", imageHash, "image.png"],
+      ]) {
+        const immutable = new URL(
+          base + "films/test-film/" + suffix + "?v=" + hash,
+          origin,
+        ).href;
+        for (const [quality, url] of Object.entries(originals.probe[kind]))
+          assert.equal(
+            url,
+            immutable,
+            `original ${kind}/${quality} preserves the frozen source`,
+          );
+      }
+      assert.deepEqual(
+        originals.fetches.map((item) => item.status),
+        [206, 206],
+      );
+      assert.deepEqual(
+        Buffer.from(originals.fetches[0].bytes),
+        fs.readFileSync(movie).subarray(0, 128),
+      );
+      assert.deepEqual(
+        Buffer.from(originals.fetches[1].bytes),
+        fs.readFileSync(image).subarray(0, 128),
+      );
+      assert.equal(
+        converted,
+        0,
+        "original media reads must not run FFmpeg or image compression",
+      );
+      await originalPage.close();
+      const snapshot = await page.evaluate(async () => {
+        const manifest = await (
+          await fetch(window.__FRAME_LIVE_PREVIEW__.manifestUrl)
+        ).json();
+        const module = await import(
+          new URL(manifest.projectUrl, location.href).href
+        );
+        const loaded = await module.default.load();
+        return {
+          ...loaded.snapshotProbe(),
+          after: loaded.probe(),
+          readers: window.__FRAME_PREVIEW_READERS__,
+        };
+      });
+      assert.equal(snapshot.before.video.high, result.video.standard);
+      for (const kind of ["video", "image"])
+        for (const quality of ["economy", "standard", "high"])
+          assert.equal(
+            snapshot.during[kind][quality],
+            originals.probe[kind][quality],
+            `active export readers must use original ${kind}/${quality} bytes`,
+          );
+      assert.equal(
+        snapshot.readers,
+        0,
+        "the real export snapshot helper releases its source lock",
+      );
+      assert.equal(snapshot.after.video.high, result.video.standard);
+      assert.equal(snapshot.after.image.high, result.image.standard);
+      assert.equal(
+        converted,
+        0,
+        "export source selection must not eagerly create any proxies",
+      );
       const profiles = {};
       for (const kind of ["video", "image"])
         for (const profile of ["economy", "preview"]) {
@@ -277,34 +399,80 @@ test(
       assert.ok(profiles["image-economy"].bytes < fs.statSync(image).size);
       assert.ok(profiles["image-preview"].bytes < fs.statSync(image).size);
       const workerResult = await page.evaluate(async () => {
-        const manifest = await (await fetch(window.__FRAME_LIVE_PREVIEW__.manifestUrl)).json();
-        const module = await import(new URL(manifest.projectUrl, location.href).href);
+        const manifest = await (
+          await fetch(window.__FRAME_LIVE_PREVIEW__.manifestUrl)
+        ).json();
+        const module = await import(
+          new URL(manifest.projectUrl, location.href).href
+        );
         return (await module.default.load()).workerProbe();
       });
-      assert.equal(workerResult.name, "frozen-assets", "authored worker options must retain their name");
+      assert.equal(
+        workerResult.name,
+        "frozen-assets",
+        "authored worker options must retain their name",
+      );
       const nativeModule = await page.evaluate(async () => {
-        const url = URL.createObjectURL(new Blob(["self.postMessage('module-ready');"], { type: "application/javascript" }));
+        const url = URL.createObjectURL(
+          new Blob(["self.postMessage('module-ready');"], {
+            type: "application/javascript",
+          }),
+        );
         const worker = new Worker(url, { type: "module" });
         try {
           return await new Promise((resolve, reject) => {
-            const timer = setTimeout(() => reject(Error("Native module Worker probe timed out")), 5000);
-            worker.onmessage = () => { clearTimeout(timer); resolve({ supported: true, origin: window.origin }); };
-            worker.onerror = () => { clearTimeout(timer); resolve({ supported: false, origin: window.origin }); };
+            const timer = setTimeout(
+              () => reject(Error("Native module Worker probe timed out")),
+              5000,
+            );
+            worker.onmessage = () => {
+              clearTimeout(timer);
+              resolve({ supported: true, origin: window.origin });
+            };
+            worker.onerror = () => {
+              clearTimeout(timer);
+              resolve({ supported: false, origin: window.origin });
+            };
           });
-        } finally { worker.terminate(); URL.revokeObjectURL(url); }
+        } finally {
+          worker.terminate();
+          URL.revokeObjectURL(url);
+        }
       });
-      assert.deepEqual(nativeModule, { supported: false, origin: "null" },
-        "the supported opaque Chromium sandbox must demonstrate its native module Worker restriction");
-      await assert.rejects(page.evaluate(async () => {
-        const manifest = await (await fetch(window.__FRAME_LIVE_PREVIEW__.manifestUrl)).json();
-        const module = await import(new URL(manifest.projectUrl, location.href).href);
-        return (await module.default.load()).moduleWorkerProbe();
-      }), /Opaque live preview supports classic bundled workers/,
-      "module worker requests must report the opaque sandbox limitation explicitly");
-      assert.equal(workerResult.pinned, result.pinned, "worker assetUrl must use the frozen session root and media revision");
-      assert.equal(workerResult.proxy, result.video.standard, "worker media proxies must preserve the same frozen content hash");
-      assert.ok(workerResult.fetches.every(item => item.status === 206 && item.bytes === 128),
-        "bundled browser workers must actually fetch both frozen original media and the lazy reusable proxy");
+      assert.deepEqual(
+        nativeModule,
+        { supported: false, origin: "null" },
+        "the supported opaque Chromium sandbox must demonstrate its native module Worker restriction",
+      );
+      await assert.rejects(
+        page.evaluate(async () => {
+          const manifest = await (
+            await fetch(window.__FRAME_LIVE_PREVIEW__.manifestUrl)
+          ).json();
+          const module = await import(
+            new URL(manifest.projectUrl, location.href).href
+          );
+          return (await module.default.load()).moduleWorkerProbe();
+        }),
+        /Opaque live preview supports classic bundled workers/,
+        "module worker requests must report the opaque sandbox limitation explicitly",
+      );
+      assert.equal(
+        workerResult.pinned,
+        result.pinned,
+        "worker assetUrl must use the frozen session root and media revision",
+      );
+      assert.equal(
+        workerResult.proxy,
+        result.video.standard,
+        "worker media proxies must preserve the same frozen content hash",
+      );
+      assert.ok(
+        workerResult.fetches.every(
+          (item) => item.status === 206 && item.bytes === 128,
+        ),
+        "bundled browser workers must actually fetch both frozen original media and the lazy reusable proxy",
+      );
       const frames = await page.evaluate(async () => {
         const manifest = await (
           await fetch(window.__FRAME_LIVE_PREVIEW__.manifestUrl)
@@ -328,8 +496,13 @@ test(
         ),
         "native image bitmaps resize to the scene and release their owner reservation",
       );
-      assert.ok(!requested.some(url => /vendor-(?:babylon|pixi|lottie|remotion|tone|spessasynth)-/.test(url)),
-        "a canvas/media project must not download unused renderer or music framework vendors: " + JSON.stringify(requested));
+      assert.ok(
+        !requested.some((url) =>
+          /vendor-(?:babylon|pixi|lottie|remotion|tone|spessasynth)-/.test(url),
+        ),
+        "a canvas/media project must not download unused renderer or music framework vendors: " +
+          JSON.stringify(requested),
+      );
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("Network.enable");
       await cdp.send("Network.emulateNetworkConditions", {

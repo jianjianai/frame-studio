@@ -99,6 +99,12 @@ export async function createRemotionRender({
       Math.ceil(meta.duration * meta.fps) +
       ",defaultProps:{captions:true,filmProps:project.remotion?.inputProps??{}}})); });",
   );
+  const signalsmithEntry = createRequire(
+    path.join(root, "package.json"),
+  ).resolve("signalsmith-stretch");
+  const signalsmithRawRevision = createHash("sha256")
+    .update(await fs.readFile(signalsmithEntry))
+    .digest("hex");
   const key = createHash("sha256")
     .update(
       JSON.stringify({
@@ -108,6 +114,7 @@ export async function createRemotionRender({
         runtime: await runtimeIdentity(root),
         baseUrl: "/",
         publicAliases: true,
+        signalsmithRawRevision,
       }),
     )
     .digest("hex");
@@ -131,7 +138,31 @@ export async function createRemotionRender({
             new webpack.DefinePlugin({
               "import.meta.env.BASE_URL": JSON.stringify("/"),
             }),
+            // Package exports do not expose a ?raw subpath. Resolve the official
+            // entry explicitly, and preserve every worklet byte for our fixes.
+            new webpack.NormalModuleReplacementPlugin(
+              /^signalsmith-stretch\?raw$/,
+              (resource) => {
+                resource.request = signalsmithEntry + "?raw";
+              },
+            ),
           ];
+          config.module = {
+            ...config.module,
+            rules: [
+              {
+                oneOf: [
+                  {
+                    test: (resource) => resource === signalsmithEntry,
+                    resourceQuery: /^\?raw$/,
+                    type: "asset/source",
+                  },
+                  // A first matching raw branch must bypass JS loaders entirely.
+                  { rules: config.module?.rules ?? [] },
+                ],
+              },
+            ],
+          };
           return config;
         },
       });

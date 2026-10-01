@@ -76,6 +76,7 @@ export function createPlayerSession({
     frames = 0,
     fpsAt = performance.now();
   const output = new FrameRenderer(canvas, project);
+  const lifetime = new AbortController();
   let updateEpoch = 0, updating: AbortController | undefined, renderFailed = false;
   const livePreview = { revision: 0, updates: 0, lastError: "" };
   const publish = () => {
@@ -281,6 +282,9 @@ export function createPlayerSession({
     .then(async () => {
       if (canceled) return;
       await output.render(sound.clock.time(), subtitles());
+      if (window.__FRAME_PREVIEW_MEDIA_MODE__ === "cached")
+        await sound.warmPreview(lifetime.signal);
+      if (canceled) return;
       onLoading(false);
       api.ready = true;
       if (embedded && parent !== window)
@@ -399,6 +403,7 @@ export function createPlayerSession({
   const dispose = () => {
     if (canceled) return;
     canceled = true;
+    lifetime.abort();
     updating?.abort();
     ++updateEpoch;
     cancelAnimationFrame(raf);

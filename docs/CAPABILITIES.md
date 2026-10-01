@@ -30,8 +30,8 @@ MCP 参数例子：`{"category":"audio"}`、`{"id":"remotion"}`。Agent 对应 `
 | 动画资源 | Lottie Canvas | 自包含项目 JSON，按绝对时间定位；不冒充任意 AE 工程或表达式兼容 |
 | 素材源 | 图片/SVG、视频、图像序列、纯色图层 | visual.json 素材源、Remotion 组件媒体或程序场景资源 |
 | 动画辅助库 | GSAP、Flubber | 前者处理属性/时间线，后者处理路径形变；均不是独立 renderer |
-| 音频来源 | 文件、Web Audio、Tone.js、PCM Worker/WASM、SoundFont/MIDI、自定义生成器 | 文件需要素材；程序生成需要真实模块、函数、Worker/WASM 或采样库与乐谱 |
-| 音频处理 | 增益、声像、滤波/EQ、压缩、峰值保护、延迟、混响、失真、立体声宽度、旁白避让 | 配置在 audio.json 的轨道、总线、主输出链；限制见 audio-v7 |
+| 音频来源 | 文件、Web Audio、Tone.js、Signalsmith Stretch、PCM Worker/WASM、SoundFont/MIDI、自定义生成器 | 文件需要素材；程序生成需要真实模块、函数、Worker/WASM 或采样库与乐谱 |
+| 音频处理 | 增益、声像、滤波/EQ、压缩、峰值保护、延迟、混响、失真、立体声宽度、旁白避让、Tone 全部效果、独立移调和保调变速 | 配置在 audio.json 的轨道、总线、主输出链；限制见 audio-v7 |
 
 GLB/glTF、贴图和后处理可以在相应 3D 场景中使用，不是额外的根 renderer。Three 的 `src/engine/three-assets.ts` 提供 `loadGltf(url, renderer)`（Draco/Meshopt/KTX2 解码）、`setAnimationTime(mixer, seconds)` 与 `createPostPipeline(renderer, scene, camera, bloom)`。后处理需要场景显式使用返回的 composer 渲染；`createThreeScene` 的默认 render 仍直接调用 renderer.render，仅在 build 中创建 composer 不会自动接入。Remotion 包含 React/DOM/SVG/CSS 与官方 Player、Renderer、Media、Transitions、Web Renderer。源码中的帮助库与资源处理工具也可按其公开接口使用，不能仅凭 package.json 已安装就声称有任意插件、任意模型或全浏览器离线兼容。
 
@@ -65,3 +65,8 @@ GSAP/Flubber 控制所选 Scene 或组件的状态，不提供独立输出画布
 生成器通过项目 loadAudio 模块导出 generators 注册表。audio.json 的 module 标识选择实际生成器，engine 标签记录能力类型，不会安装库、创建乐谱、生成 WASM 或自动加载用户采样库。生成器接收宿主 context、destination、when、offset、duration、rate，按任意片段重建并清理本次声音节点；Tone 实例不能使用全局 Transport 或关闭宿主上下文。
 
 Frame 音频文档与 Remotion 组件音频分别管理并统一同步，正式导出混合一次。浏览器可播、独立音频导出和视频导出具有各自实测限制，见 [AUDIO-V7](AUDIO-V7.md)、[AUDIO](AUDIO.md)、[REMOTION](REMOTION.md)。旁白服务能力、音色和表达参数从配置服务实时发现，见 [SPEECH](SPEECH.md)，不从视觉目录推断。
+
+
+## 音频自由创作
+
+Tone 完整 API 按 tone-source/instrument/effect/event/component/signal/core 分组发现；Sampler、GrainPlayer、FFT 等类名可直接 query。Signalsmith 的完整原生接口、文件片段移调和保调变速、采样乐器与音符编排配方见 [音频创作](AUDIO-CREATIVE.md)，reference 为 audio-creative。既可用高层生成器快速演奏，也可自由组合全部底层类，遵守共享时间轴和资源释放协议。

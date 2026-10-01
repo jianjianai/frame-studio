@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { adapters } from "../engine/adapters.mjs";
+import { toneFeatureGroups } from "./audio-library-catalog.mjs";
 import {
   audioEngines,
   audioProcessors,
@@ -315,15 +316,77 @@ const audioDetails = {
   },
   tone: {
     package: "tone",
-    description: "Tone.js 适配器使用宿主上下文，支持实时和离线项目生成器。",
+    description:
+      "Tone.js 完整宿主绑定 API：采样乐器、合成器、粒子播放、包络、效果、信号、事件编排与分析；使用宿主上下文进行实时和离线创作。",
     integration: {
-      entry: "createToneAudio(build)",
+      entry: "createToneAudio(build, prepare)",
       module: "src/engine/audio-adapters.ts",
+      helpers: [
+        {
+          entry: "createSamplerAudio(options)",
+          module: "src/engine/audio-authoring.ts",
+          description:
+            "自动准备原音采样，按音符序列演奏；源时间切片、包络、力度、复音与取消。",
+        },
+        {
+          entry: "createToneSequence(options)",
+          module: "src/engine/audio-authoring.ts",
+          description:
+            "宿主绑定的 Tone 音符编排便利层，支持任意片段重建与离线导出。",
+        },
+        {
+          entry:
+            "createToneTimeline({duration, build, maxBufferBytes}) / renderBuffer(signal)",
+          module: "src/engine/audio-authoring.ts",
+          description:
+            "Part/Sequence/Loop/Transport 自由编排有限乐谱，一次生成浏览器 PCM 后支持精确跳转；默认 128MiB 预算，可交 Signalsmith 独立移调。",
+        },
+        {
+          entry:
+            "prepareTone / createToneContext / createToneFacade / HostTone",
+          module: "src/engine/audio-adapters.ts",
+          description:
+            "完整 Tone 类、Transport/Destination/Draw/Listener 和 getters 均绑定当前宿主，不初始化 Tone 全局上下文。",
+        },
+        {
+          entry: "noteToMidi / semitoneRate / notesInSegment",
+          module: "src/engine/audio-authoring.ts",
+          description: "音高换算与跨切点音符选择，避免重复手写时间与音高转换。",
+        },
+      ],
     },
     requirements: [
-      "项目提供 build 函数，并给 Tone 实例显式传入 toneContext；不使用全局 Transport、Tone.start()/setContext()。",
-      "跨切点延音等乐器状态由项目重建。",
+      "build 提供的 HostTone 自动绑定 toneContext；Tone.Transport 与 getters 可用，Tone.start 不启动宿主，setContext 拒绝替换宿主。不要导入全局 tone 命名空间。",
+      "build 的 ready 与 prepare 会被宿主等待；跨切点状态用 ToneTimeline 的有限 PCM 或 ToneSequence 的有界音符缓存重建；Timeline 初次准备有计算与内存成本，长乐谱使用 Sequence 便利层或流式生成器。",
     ],
+  },
+  signalsmith: {
+    package: "signalsmith-stretch",
+    description:
+      "Signalsmith Stretch 官方 WASM/AudioWorklet 完整接口：独立半音移调、保调变速、共振峰、循环、流式样本缓冲与处理配置；StretchSchedule 参数包含 rate、semitones、tonalityHz、formantSemitones、formantCompensation、formantBaseHz、loopStart、loopEnd。",
+    integration: {
+      entry: "createSignalsmithAudio(options)",
+      module: "src/engine/signalsmith-audio.ts",
+      helpers: [
+        {
+          entry: "createSignalsmithNode(context, channelOptions)",
+          module: "src/engine/signalsmith-audio.ts",
+          description:
+            "宿主绑定的官方节点：schedule/start/stop/addBuffers/dropBuffers/inputTime/setUpdateInterval/latency/configure；支持 AbortSignal 和 dispose。",
+        },
+        {
+          entry: "audio.json clips: pitch / preservePitch / stretch",
+          module: "src/engine/audio-document.mjs",
+          description:
+            "文件片段直接使用独立移调和保调变速，无需另写生成器；stretch 控制共振峰和算法窗口。",
+        },
+      ],
+    },
+    requirements: [
+      "声音素材通过项目 assetUrl 定位，实时预览与离线导出复用相同处理规则。",
+      "补偿算法延迟并按源时间准备历史，变化/跳转取消过期任务；不同倍率和素材需试听确认。",
+    ],
+    reference: reference("audio-creative", "docs/AUDIO-CREATIVE.md"),
   },
   "worker-pcm": {
     description:
@@ -443,7 +506,7 @@ const fileAudio = {
   supports: { realtime: true, offline: true, seek: "decoded", template: false },
   requirements: [
     "提供项目内素材；浏览器不支持的编码先转换副本。",
-    "混音/导出为 48 kHz 双声道；变速改变音高，不提供保调变速。",
+    "混音/导出为 48 kHz 双声道；默认变速仍改变音高，pitch 指定额外半音移调，preservePitch 使用 Signalsmith 保持原音高。",
   ],
   reference: reference("audio-v7", "docs/AUDIO-V7.md"),
   sources: [
@@ -480,12 +543,105 @@ const colorSource = {
   sources: ["src/engine/visual-document.mjs", "src/engine/compositor.ts"],
 };
 /** @type {AuthoringCapability[]} */
+const toneLibraryItems = toneFeatureGroups.map((group) => ({
+  id: "tone-" + group.id,
+  name: "Tone · " + group.name,
+  category: "audio",
+  kind: "helper-library",
+  package: "tone",
+  description: group.description,
+  integration: {
+    entry:
+      "createToneAudio(({ Tone, toneContext, destination, when, offset, duration, rate }) => ...)",
+    module: "src/engine/audio-adapters.ts",
+    projectEntry: "audio.ts + generators",
+    helpers: group.exports.map((name) => ({
+      entry: "Tone." + name,
+      module: "src/engine/tone-runtime.ts",
+      description:
+        "Tone 15.1.22 API 的 HostTone 包装；类、时间单位工厂与全局形状的 Transport/getters 均绑定本实例 toneContext。" +
+        (name === "UserMedia"
+          ? " 实时设备输入使用可信工作台授权桥，不能离线重放；具体能力见 tone-live-input。"
+          : name === "Recorder"
+            ? " 录制已有实时声音，不申请设备权限；不能在 OfflineContext 中直接录音。"
+            : name === "Context"
+              ? " 子上下文借用同一原生 AudioContext，并跟随宿主时钟推进。"
+              : ""),
+    })),
+  },
+  supports: { realtime: true, offline: true, seek: "author", template: false },
+  requirements: [
+    ...audioRequirements,
+    "可自由组合全部官方类；设备与浏览器限制见对应接口说明，正式导出使用可重建的项目素材。",
+    ...(group.exports.includes("UserMedia")
+      ? [
+          "UserMedia 经可信工作台显式授权的 PCM 桥接入麦克风；实时设备输入不能重放历史，正式导出前先固化为项目素材。",
+        ]
+      : []),
+    ...(group.exports.includes("Recorder")
+      ? [
+          "Recorder 录制已有实时输出，不申请麦克风；不能在 OfflineContext 中直接录音。",
+        ]
+      : []),
+    "使用 build 提供的 HostTone.Transport；事件按宿主绝对时间调度并支持取消、重建与释放。Tone.Offline 回调使用第二参数 offlineTone，防止外层命名空间路由到父上下文。",
+  ],
+  reference: reference("audio-creative", "docs/AUDIO-CREATIVE.md"),
+  sources: [
+    "src/contracts/audio-library-catalog.mjs",
+    "src/engine/audio-adapters.ts",
+    "package.json",
+  ],
+}));
+/** @type {AuthoringCapability} */
+const toneLiveInput = {
+  id: "tone-live-input",
+  name: "Tone 实时麦克风与录音",
+  category: "audio",
+  kind: "helper-library",
+  package: "tone",
+  description:
+    "Tone.UserMedia 在安全预览中通过可信工作台的受限 PCM 桥使用真实麦克风；支持设备选择、音量、静音、效果、Meter/Analyser 与 Recorder。",
+  integration: {
+    entry: "new Tone.UserMedia().open(deviceId?) inside createToneAudio build",
+    module: "src/engine/audio-adapters.ts",
+    projectEntry: "audio.ts + generators",
+    helpers: [
+      {
+        entry: "Tone.UserMedia.open / close / enumerateDevices",
+        module: "src/engine/tone-runtime.ts",
+        description:
+          "工作台显式允许后申请浏览器麦克风权限；取消、关闭预览与最后一个输入释放时关闭所有自有采集资源。",
+      },
+      {
+        entry: "Tone.Recorder / Meter / Analyser",
+        module: "src/engine/tone-runtime.ts",
+        description:
+          "连接已有声音进行录音或分析；Recorder 不会自行申请麦克风。",
+      },
+    ],
+  },
+  supports: { realtime: true, offline: false, seek: "author", template: false },
+  requirements: [
+    "使用 build 提供的 HostTone 和宿主上下文；返回 ready: input.open() 与本实例 dispose。",
+    "首次设备输入必须由用户在当前可信工作台预览中明确允许，再由浏览器授权；保持 opaque iframe 隔离。",
+    "实时输入代表当前声音，不能任意 seek 到过去或在离线导出重现；录成项目 public 素材后使用文件音源或采样器。",
+  ],
+  reference: reference("audio-creative", "docs/AUDIO-CREATIVE.md"),
+  sources: [
+    "src/engine/tone-runtime.ts",
+    "src/engine/live-audio-input.ts",
+    "studio/live-audio-input.js",
+  ],
+};
+/** @type {AuthoringCapability[]} */
 const items = [
   ...visualItems,
   colorSource,
   ...animationItems,
   fileAudio,
   ...audioItems,
+  ...toneLibraryItems,
+  toneLiveInput,
   ...processorItems,
 ];
 /** @type {CapabilityMixing[]} */
@@ -512,7 +668,7 @@ const mixing = [
   {
     id: "audio-rack",
     description:
-      "文件与 Web Audio/Tone.js/Worker PCM/WASM/SoundFont/自定义生成器可混用，audio.json 统一组织音源、轨道、片段、总线和效果。",
+      "文件与 Web Audio/Tone.js/Signalsmith Stretch/Worker PCM/WASM/SoundFont/自定义生成器可混用，audio.json 统一组织音源、轨道、片段、总线和效果。",
     requirements: [
       "每种生成器需要项目真实源代码/数据并注册到 generators；标签不表示自动接入任意第三方库。",
       "Remotion 组件音频与 Frame 音轨分别管理，正式导出统一混合一次。",
@@ -622,9 +778,12 @@ export function renderCapabilityOverview() {
     "| 音频 | 文件音频；" +
       names("audio", "generator-adapter") +
       " | 项目提供素材、合成函数、Worker/WASM 或 SoundFont/乐谱；在 loadAudio 加载的模块中导出 generators 注册生成器，标签不自动生成内容。 |",
+    "| 音频辅助库 | " +
+      names("audio", "helper-library") +
+      " | 完整 Tone 命名空间按功能查询；使用宿主上下文和绝对时间，支持准备、任意片段与释放。 |",
     "| 音频处理器 | " +
       names("audio", "processor") +
-      " | audio.json 的轨道、总线和主输出可配置处理链；支持片段、循环、淡化、变速和音量自动化。 |",
+      " | audio.json 的轨道、总线和主输出可配置处理链；支持片段、循环、淡化、变速、独立移调、保调变速、Tone 完整效果和音量自动化。 |",
     "",
     "visual.json 可混合输出 Canvas 的程序场景、Lottie 和媒体。原生 Remotion DOM 不能放入 Canvas 合成图层；使用 Remotion 为根，通过 FrameScene 嵌入其他 Frame 场景。Remotion 组件音频与 Frame 音轨分别管理，导出统一混合一次。",
     "",

@@ -184,79 +184,268 @@ export async function workToolsChecks(h) {
     await ai();
   });
   await check(
-    "画面内更新预览、拒绝其他窗口消息、真实状态与失败重试",
+    "Tone 实际混音 UI：18 种效果、湿声与移调、完整 JSON 校验及权威保存",
     async () => {
-      state.previewStale = true;
-      await state.broadcast();
-      await expect(player().locator(".work-preview-status")).toHaveText(
-        "预览待更新",
+      await tool("音频").click();
+      const editor = dock.getByRole("region", {
+        name: "多轨音频编辑器",
+        exact: true,
+      });
+      await expect(editor).toBeVisible();
+      await editor
+        .getByLabel("选择音频处理器", { exact: true })
+        .selectOption("tone");
+      await editor.getByRole("button", { name: "处理器", exact: true }).click();
+      const effect = editor.getByRole("region", {
+        name: "Tone 效果 1",
+        exact: true,
+      });
+      const type = effect.getByLabel("Tone 效果类型 1", { exact: true });
+      const wet = effect.getByLabel("Tone 湿声比例 1", { exact: true });
+      await expect(type).toHaveValue("Reverb");
+      assert.equal(await type.locator("option").count(), 18);
+      await expect(wet).toHaveValue("0.25");
+      const draft = () =>
+        page.evaluate(
+          (id) =>
+            JSON.parse(sessionStorage.getItem("frame-audio-draft:" + id))
+              .document,
+          state.work.id,
+        );
+      const processor = async () => (await draft()).master.processors[0];
+      assert.equal(
+        (await processor()).effect,
+        "Reverb",
+        "Add creates a valid required Tone effect",
       );
+      await type.selectOption("Chorus");
+      await wet.fill("0.4");
+      await expect.poll(async () => (await processor()).options.wet).toBe(0.4);
+      await effect.getByText("完整官方参数 JSON", { exact: true }).click();
+      const json = effect.getByLabel("Tone 参数 JSON 1", { exact: true });
+      await json.fill(
+        JSON.stringify({
+          wet: 0.4,
+          frequency: 2.5,
+          depth: 0.3,
+          delayTime: 3.5,
+          feedback: 0.12,
+        }),
+      );
+      await effect
+        .getByRole("button", { name: "应用 JSON 参数", exact: true })
+        .click();
+      await expect(effect.getByRole("alert")).toHaveCount(0);
+      await wet.fill("0.55");
+      await expect.poll(async () => (await processor()).options.wet).toBe(0.55);
+      assert.equal(
+        (await processor()).options.frequency,
+        2.5,
+        "Common control preserves other complete official options",
+      );
+      assert.equal((await processor()).options.feedback, 0.12);
+      await type.selectOption("PitchShift");
+      await effect.getByLabel("Tone 移调半音 1", { exact: true }).fill("7");
+      await wet.fill("0.35");
+      await expect.poll(async () => (await processor()).options.pitch).toBe(7);
+      await expect.poll(async () => (await processor()).options.wet).toBe(0.35);
+      assert.equal((await processor()).effect, "PitchShift");
+      const good = structuredClone((await processor()).options);
+      await json.fill('{"pitch":');
+      await effect
+        .getByRole("button", { name: "应用 JSON 参数", exact: true })
+        .click();
+      await expect(effect.getByRole("alert")).toBeVisible();
+      assert.deepEqual(
+        (await processor()).options,
+        good,
+        "Invalid JSON leaves the last valid processor options unchanged",
+      );
+      await json.fill(JSON.stringify(good));
+      await effect
+        .getByRole("button", { name: "应用 JSON 参数", exact: true })
+        .click();
+      await expect(effect.getByRole("alert")).toHaveCount(0);
+      const saves = state.calls.filter(
+        (c) => c.name === "works_audio_edit",
+      ).length;
+      await editor
+        .getByRole("button", { name: "保存混音", exact: true })
+        .click();
+      await expect(editor.locator(".audio-status")).toHaveText("已保存");
+      assert.equal(
+        state.calls.filter((c) => c.name === "works_audio_edit").length,
+        saves + 1,
+      );
+      const stored = state.audio.document.master.processors[0];
+      assert.equal(stored.type, "tone");
+      assert.equal(stored.effect, "PitchShift");
+      assert.deepEqual(
+        stored.options,
+        good,
+        "Saving writes the same validated options to the authoritative audio document",
+      );
+      await dock
+        .getByRole("button", { name: "关闭音频工作台", exact: true })
+        .click();
+      await tool("音频").click();
+      await expect(
+        editor.getByLabel("Tone 效果类型 1", { exact: true }),
+      ).toHaveValue("PitchShift");
+      await expect(
+        editor.getByLabel("Tone 移调半音 1", { exact: true }),
+      ).toHaveValue("7");
+      await expect(
+        editor.getByLabel("Tone 湿声比例 1", { exact: true }),
+      ).toHaveValue("0.35");
+      await dock
+        .getByRole("button", { name: "关闭音频工作台", exact: true })
+        .click();
+      await ai();
+    },
+  );
+  await check(
+    "实时预览可信状态、源码引用更新、重复状态去重与失败重连，不入构建队列",
+    async () => {
+      const status = player().locator(".work-preview-status");
+      const reconnect = player().getByRole("button", {
+        name: "重新连接",
+        exact: true,
+      });
+      const liveCalls = () =>
+        state.calls.filter((c) => c.name === "works_live_preview").length;
       const builds = () =>
         state.calls.filter(
           (c) => c.name === "works_task" && c.args.kind === "build",
         ).length;
-      const before = builds();
-      await page.evaluate(() =>
-        window.postMessage({ type: "frame-preview-update-request" }, "*"),
-      );
-      await page.waitForTimeout(80);
-      assert.equal(
-        builds(),
-        before,
-        "Only the current player's source window can request a rebuild",
-      );
-      await player()
-        .getByRole("button", { name: "更新预览", exact: true })
-        .click();
-      await expect.poll(builds).toBe(before + 1);
-      await expect(
-        player().getByRole("button", { name: "更新预览", exact: true }),
-      ).toBeDisabled();
-      await expect(player().locator(".work-preview-status")).toHaveText(
-        "正在更新预览",
-      );
-      await frame().evaluate(() => {
-        for (let i = 0; i < 5; i++)
-          parent.postMessage({ type: "frame-preview-update-request" }, "*");
+      const initialBuilds = builds(),
+        initialLiveCalls = liveCalls(),
+        originalFrame = frame();
+      await expect(status).toHaveText("实时预览");
+      assert(originalFrame.url().includes("fixtureLive="));
+      const retries = () =>
+        originalFrame.evaluate(() => window.__FRAME_REVIEW_LIVE__.retries);
+      const initialRetries = await retries();
+      // An actual foreign WindowProxy and the top-level window must both be ignored.
+      await page.evaluate(async () => {
+        window.postMessage({ type: "frame-preview-update-request" }, "*");
+        const foreign = document.createElement("iframe");
+        foreign.srcdoc =
+          '<script>parent.postMessage({type:"frame-live-preview",state:"error",error:"foreign iframe must be ignored"},"*");parent.postMessage({type:"frame-preview-update-request"},"*");<\/script>';
+        await new Promise((resolve) => {
+          foreign.onload = resolve;
+          document.body.append(foreign);
+        });
+        foreign.remove();
       });
       await page.waitForTimeout(80);
       assert.equal(
-        builds(),
-        before + 1,
-        "Repeated requests cannot enqueue concurrent builds",
+        liveCalls(),
+        initialLiveCalls,
+        "Foreign messages cannot renew the current session",
       );
-      for (const t of state.tasks)
-        if (t.kind === "build") t.state = "succeeded";
-      state.previewStale = false;
-      await state.broadcast();
-      await expect(player().locator(".work-preview-status")).toHaveText(
-        "预览最新",
+      assert.equal(await retries(), initialRetries);
+      await expect(status).toHaveText("实时预览");
+      await originalFrame.evaluate(() =>
+        parent.postMessage(
+          { type: "frame-live-preview", state: "invalid" },
+          "*",
+        ),
       );
-      state.failBuild = true;
-      await player()
-        .getByRole("button", { name: "更新预览", exact: true })
+      await expect(status).toHaveText("实时预览");
+      await state.sendLive(originalFrame, { state: "updating", revision: 1 });
+      await expect(status).toHaveText("正在更新");
+      await reconnect.click();
+      await expect.poll(liveCalls).toBe(initialLiveCalls + 1);
+      await expect.poll(retries).toBe(initialRetries + 1);
+      const updated = {
+        state: "ready",
+        revision: 2,
+        sourceRevision: "2".repeat(64),
+      };
+      await state.sendLive(originalFrame, updated);
+      await expect(status).toHaveText("实时预览");
+      const input = page.getByRole("textbox", { name: "创作要求" }),
+        draft = await input.inputValue();
+      await page
+        .getByRole("button", { name: "引用当前时间", exact: true })
         .click();
-      await expect(
-        page
-          .getByRole("status")
-          .filter({ hasText: "验收：预览更新失败" })
-          .or(
-            page.getByRole("alert").filter({ hasText: "验收：预览更新失败" }),
-          ),
-      ).toBeVisible();
-      await expect(
-        player().getByRole("button", { name: "更新预览", exact: true }),
-      ).toBeEnabled();
-      state.failBuild = false;
-      state.previewError = true;
-      await state.broadcast();
-      await expect(player().locator(".work-preview-status")).toHaveText(
-        "版本核对失败",
+      await input.fill("核对已应用的新实时版本");
+      const sends = state.calls.filter(
+        (c) => c.name === "works_chat_send",
+      ).length;
+      await page.getByRole("button", { name: "排队发送", exact: true }).click();
+      await expect
+        .poll(
+          () => state.calls.filter((c) => c.name === "works_chat_send").length,
+        )
+        .toBe(sends + 1);
+      const reference = state.calls
+        .filter((c) => c.name === "works_chat_send")
+        .at(-1).args.context;
+      assert.equal(reference.liveSessionId, state.live.sessionId);
+      assert.equal(
+        reference.sourceRevision,
+        updated.sourceRevision,
+        "AI references the applied revision, not the initial link revision",
       );
-      state.previewError = false;
-      await state.broadcast();
-      await expect(player().locator(".work-preview-status")).toHaveText(
-        "预览最新",
+      assert.equal(reference.previewTask, undefined);
+      assert.equal(reference.sourceCommit, undefined);
+      await input.fill(draft);
+      const beforeDuplicates = liveCalls(),
+        contexts = await originalFrame.evaluate(
+          () => window.__FRAME_REVIEW_LIVE__.contexts.length,
+        );
+      for (let i = 0; i < 5; i++) await state.sendLive(originalFrame, updated);
+      await page.waitForTimeout(80);
+      assert.equal(
+        frame(),
+        originalFrame,
+        "Duplicate applied revisions preserve the same player instance",
+      );
+      assert.equal(
+        liveCalls(),
+        beforeDuplicates,
+        "Duplicate state messages do not renew the session",
+      );
+      assert.equal(
+        await originalFrame.evaluate(
+          () => window.__FRAME_REVIEW_LIVE__.contexts.length,
+        ),
+        contexts,
+        "Identical live status does not reconfigure the player",
+      );
+      await state.sendLive(originalFrame, {
+        state: "error",
+        revision: 2,
+        error: "验收：实时源语法失败，保留当前画面",
+      });
+      await expect(status).toHaveText("保留当前预览");
+      await expect(page.locator(".live-preview-note")).toContainText(
+        "实时源语法失败",
+      );
+      assert.equal(frame(), originalFrame);
+      state.failLive = true;
+      await reconnect.click();
+      await expect(status).toHaveText("断线重连");
+      await expect(page.locator(".live-preview-note")).toContainText(
+        "实时预览连接失败",
+      );
+      await expect(reconnect).toBeEnabled();
+      state.failLive = false;
+      state.live.state = "ready";
+      await reconnect.click();
+      await expect(status).toHaveText("实时预览");
+      await expect(page.locator(".live-preview-note")).toHaveCount(0);
+      assert.equal(
+        frame(),
+        originalFrame,
+        "Reconnect resumes the retained player",
+      );
+      assert.equal(
+        builds(),
+        initialBuilds,
+        "Live revision/retry never enqueues an immutable build",
       );
     },
   );

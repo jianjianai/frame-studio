@@ -6,6 +6,7 @@ import {
   projectCreationShape,
   projectCreationOptions,
 } from "../src/contracts/authoring.mjs";
+import { livePreviewMediaModeSchema } from "../src/contracts/live-preview.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { problem } from "./security.mjs";
 import { z } from "zod";
@@ -387,9 +388,12 @@ export function workOperations({
       id: uuid,
       rebuild: z.boolean().default(false),
       mode: z.enum(["live", "snapshot"]).default("live"),
+      mediaMode: livePreviewMediaModeSchema.optional().describe("Live resource mode: original, compressed or fully cached in the browser."),
       task: uuid.optional(),
     },
     async (a) => {
+      if (a.mediaMode && (a.mode !== "live" || a.rebuild))
+        throw problem(400, "素材模式仅用于实时预览");
       if (a.task && (a.mode === "snapshot" || a.rebuild))
         throw problem(400, "AI draft selection requires live preview mode");
       if (a.task && !registry.works_live_preview)
@@ -397,7 +401,7 @@ export function workOperations({
       if (a.mode === "live" && !a.rebuild && registry.works_live_preview) {
         const op = registry.works_live_preview;
         const link = await op.fn(
-          op.schema.parse({ id: a.id, task: a.task, ai: true }),
+          op.schema.parse({ id: a.id, task: a.task, ai: true, mediaMode: a.mediaMode }),
         );
         return {
           ...link,

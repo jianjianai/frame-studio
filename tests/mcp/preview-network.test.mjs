@@ -93,17 +93,22 @@ test(
             `<iframe id="film" sandbox="allow-scripts" allow="autoplay" src="/film/index.html?ai=1"></iframe><script type="module">import {previewCacheBridge} from '/cache.js';window.stopCache=previewCacheBridge({current:document.getElementById('film')},'/film/index.html');</script>`,
           ),
       );
+      const cacheSource = fs.readFileSync(
+        path.join(repo, "studio/preview-cache.js"),
+        "utf8",
+      );
+      // Delay the async audio ACK, not the synchronous resource broker ACK.
+      const delayedCacheSource = cacheSource.replace(
+        "port.postMessage({ ack: true });\n    let cancelled",
+        "await new Promise(resolve => setTimeout(resolve, 350)); port.postMessage({ ack: true });\n    let cancelled",
+      );
+      assert.notEqual(
+        delayedCacheSource,
+        cacheSource,
+        "weak-network fixture must apply its 350ms audio ACK delay",
+      );
       app.get("/cache.js", (_, res) =>
-        res
-          .type("text/javascript")
-          .send(
-            fs
-              .readFileSync(path.join(repo, "studio/preview-cache.js"), "utf8")
-              .replace(
-                "port.postMessage({ ack: true });",
-                "await new Promise(resolve => setTimeout(resolve, 350)); port.postMessage({ ack: true });",
-              ),
-          ),
+        res.type("text/javascript").send(delayedCacheSource),
       );
       app.get("/film/*", async (req, res) => {
         const file = req.params["*"],
@@ -140,8 +145,29 @@ test(
       browser = await launchBrowser();
       const page = await browser.newPage();
       page.setDefaultTimeout(25000);
-      page.on("pageerror", (e) => errors.push(e.message));
+      let reportBrowserError;
+      const firstBrowserError = new Promise((resolve) => {
+        reportBrowserError = resolve;
+      });
+      // Playwright's pageerror event includes the parent and all child frames.
+      page.on("pageerror", (error) => {
+        errors.push(error.message);
+        reportBrowserError(error.message);
+      });
       await page.goto("http://127.0.0.1:" + app.server.address().port);
+      const bridgeError = await Promise.race([
+        page
+          .waitForFunction(() => typeof window.stopCache === "function")
+          .then(() => undefined),
+        firstBrowserError,
+      ]);
+      assert.equal(
+        bridgeError,
+        undefined,
+        "parent preview cache bridge must install without browser errors: " +
+          bridgeError,
+      );
+      assert.deepEqual(errors, [], "parent/frame bootstrap errors");
       const frame = page.frames().find((f) => f.url().includes("/film/"));
       await frame.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
       const began = Date.now();

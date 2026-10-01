@@ -73,11 +73,32 @@ export function installAiBrowser(project: AnimationProject) {
   };
   const control = {
     version: 1,
+    preview: () =>
+      window.__FRAME_PREVIEW_CONTROL__?.preview() ?? {
+        mode: "original",
+        cache: null,
+      },
+    setPreviewMode: (mode: import("./live-preview-cache").PreviewMediaMode) => {
+      if (!window.__FRAME_PREVIEW_CONTROL__) throw Error("此页面不是实时预览");
+      return window.__FRAME_PREVIEW_CONTROL__.setPreviewMode(mode);
+    },
+    waitPreviewCache: (options: { timeoutMs?: number } = {}) => {
+      if (!window.__FRAME_PREVIEW_CONTROL__) throw Error("此页面不是实时预览");
+      return window.__FRAME_PREVIEW_CONTROL__.waitPreviewCache(options);
+    },
+    retryPreviewCache: () =>
+      window.__FRAME_PREVIEW_CONTROL__?.retryPreviewCache(),
+    cancelPreviewCache: () =>
+      window.__FRAME_PREVIEW_CONTROL__?.cancelPreviewCache(),
+    clearPreviewCache: () =>
+      window.__FRAME_PREVIEW_CONTROL__?.clearPreviewCache(),
     updateProject(next: AnimationProject) {
-      if (next.id !== project.id) throw new Error("Cannot change AI console project identity");
+      if (next.id !== project.id)
+        throw new Error("Cannot change AI console project identity");
       project = next;
     },
-    isExporting: () => [...jobs.values()].some(job => job.state === "running"),
+    isExporting: () =>
+      [...jobs.values()].some((job) => job.state === "running"),
     help: () => ({
       ready: "await FRAME_AI.ready()",
       info: "FRAME_AI.info()",
@@ -93,6 +114,10 @@ export function installAiBrowser(project: AnimationProject) {
       cancel: "FRAME_AI.cancelExport(id)",
       subtitles: "FRAME_AI.subtitles({download:true})",
       cleanup: "FRAME_AI.release(id)",
+      preview:
+        'FRAME_AI.preview(); FRAME_AI.setPreviewMode("cached"); await FRAME_AI.waitPreviewCache({timeoutMs:300000})',
+      previewCache:
+        "FRAME_AI.retryPreviewCache(); FRAME_AI.cancelPreviewCache(); await FRAME_AI.clearPreviewCache()",
       notes:
         "All rendering, sound and encoding run in this browser. Export jobs require the tab to remain open. Autoplay may require clicking Enable audio once.",
     }),
@@ -320,7 +345,8 @@ export function installAiBrowser(project: AnimationProject) {
             state: job.controller.signal.aborted ? "cancelled" : "failed",
             error: String(error),
           }),
-        ).finally(releaseSnapshot);
+        )
+        .finally(releaseSnapshot);
       return { id };
     },
     exportStatus: publicJob,

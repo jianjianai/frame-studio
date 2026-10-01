@@ -87,3 +87,24 @@ test("V5 export messages ignore another request, invalid phases and unbounded pr
     blob,
   );
 });
+
+test("live preview status accepts exactly the shared media modes and keeps strict sender validation", () => {
+  const base = {
+    type: "frame-live-preview",
+    state: "ready",
+    revision: 1,
+    sourceRevision: "a".repeat(64),
+  };
+  assert.deepEqual(decodePlayerMessage(base), base);
+  for (const mediaMode of ["original", "compressed", "cached"])
+    assert.deepEqual(decodePlayerMessage({ ...base, mediaMode }), {
+      ...base,
+      mediaMode,
+    });
+  assert.equal(decodePlayerMessage({ ...base, mediaMode: "invalid" }), null);
+  assert.equal(
+    decodePlayerMessage({ ...base, sessionId: "untrusted-session" }),
+    null,
+  );
+  assert.equal(decodePlayerMessage({ ...base, unexpected: true }), null);
+});

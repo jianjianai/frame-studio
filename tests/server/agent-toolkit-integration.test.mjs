@@ -56,6 +56,8 @@ test(
         );
         let stdout = "",
           stderr = "";
+        child.stdout.setEncoding("utf8");
+        child.stderr.setEncoding("utf8");
         child.stdout.on("data", (b) => (stdout += b));
         child.stderr.on("data", (b) => (stderr += b));
         child.stdin.end(input);

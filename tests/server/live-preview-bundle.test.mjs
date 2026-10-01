@@ -5,7 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import { createLivePreviewBundle } from "../../scripts/live-preview-bundle.mjs";
+import { createLivePreviewBundle, liveAssetRuntime } from "../../scripts/live-preview-bundle.mjs";
+import vm from "node:vm";
 import { assertLiveBundleBudget } from "../../scripts/live-preview-budget.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -145,5 +146,74 @@ test("real main and nested worker builds enforce the output budget before writin
     assert.match(String(errors[0].message || errors[0]), /revision cache is full/);
     assert.equal(bundles.length, 0);
     assert.deepEqual(await fsp.readdir(path.join(outDir, "assets")), ["coalesced-orphan.js"]);
+  } finally { await worker?.close(); await fsp.rm(owned, { recursive: true, force: true }); }
+});
+
+test("the actual asset runtime selects original, compressed and cached URLs independently of visual quality", () => {
+  const src = "films/test-film/clip.mp4", revision = "a".repeat(64), earlier = "b".repeat(64);
+  const code = liveAssetRuntime({ id: "test-film", revisions: { [src]: revision }, kinds: { [src]: "video" } });
+  const context = { URL, URLSearchParams, document: {}, __FRAME_LIVE_PREVIEW__: { mediaMode: "original" } };
+  const api = vm.runInNewContext(code.replaceAll("export const", "const")
+    .replaceAll("import.meta.url", JSON.stringify("https://preview.example/preview-live/token/assets/project.js"))
+    + ";({assetUrl,previewAssetUrl})", context);
+  const original = "https://preview.example/preview-live/token/" + src + "?v=" + revision;
+  for (const quality of ["draft", "standard", "high"])
+    assert.equal(api.previewAssetUrl(src, quality), original);
+  context.__FRAME_PREVIEW_MEDIA_MODE__ = "compressed";
+  assert.equal(api.previewAssetUrl(src, "standard"), "https://preview.example/preview-live/token/video/" + revision + "/preview");
+  assert.equal(api.previewAssetUrl(src, "draft"), "https://preview.example/preview-live/token/video/" + revision + "/economy");
+  assert.equal(api.previewAssetUrl(src, "high"), "https://preview.example/preview-live/token/video/" + revision + "/preview",
+    "explicit compression policy is independent of scene detail");
+  context.__FRAME_PREVIEW_READERS__ = 1;
+  assert.equal(api.previewAssetUrl(src, "high"), original, "a frozen offline export always reads originals");
+  assert.equal(api.previewAssetUrl(src, "draft"), original, "offline originals do not depend on render quality");
+  context.__FRAME_PREVIEW_READERS__ = 0;
+  delete context.__FRAME_PREVIEW_MEDIA_MODE__; delete context.__FRAME_LIVE_PREVIEW__;
+  assert.equal(api.previewAssetUrl(src, "high"), original, "legacy entries preserve high-quality originals");
+  context.__FRAME_PREVIEW_MEDIA_MODE__ = "cached";
+  const seen = [];
+  context.__FRAME_PREVIEW_ASSET_URL__ = url => { seen.push(url); return "blob:verified-cache"; };
+  assert.equal(api.previewAssetUrl(src, "draft"), "blob:verified-cache");
+  assert.equal(seen.at(-1), original, "cached mode resolves raw originals even at economy visual quality");
+  api.assetUrl("https://preview.example/preview-live/token/" + src + "?v=" + earlier);
+  assert.ok(seen.at(-1).endsWith("?v=" + earlier), "a frozen project's explicit source identity remains pinned");
+});
+
+test("editing an owned sample or SoundFont retires the generator revision without editing audio source", { timeout: 90000 }, async () => {
+  const owned = await fsp.mkdtemp(path.join(os.tmpdir(), "frame-live-sample-revision-"));
+  const projectDir = path.join(owned, "projects/test-film"), outDir = path.join(owned, "bundle");
+  await fsp.mkdir(path.join(projectDir, "public/samples"), { recursive: true });
+  await fsp.mkdir(path.join(projectDir, "public/music"), { recursive: true });
+  await fsp.writeFile(path.join(projectDir, "project.ts"), "export default {id:'test-film',load:()=>import('./scene'),loadAudio:()=>import('./audio')};");
+  await fsp.writeFile(path.join(projectDir, "scene.ts"), "export const scene='owned sample test';");
+  const audio = "import {assetUrl} from '../../src/engine/types';export const sample=assetUrl('films/test-film/samples/piano.wav');export const bank=assetUrl('films/test-film/music/bank.sf2');export const generators={piano:{createAudio(){return{dispose(){}}}}};";
+  await fsp.writeFile(path.join(projectDir, "audio.ts"), audio);
+  await fsp.writeFile(path.join(projectDir, "public/samples/piano.wav"), "first owned sample");
+  await fsp.writeFile(path.join(projectDir, "public/music/bank.sf2"), "first owned bank");
+  const bundles = [], errors = [];
+  let worker;
+  const waitBundle = async count => {
+    const end = Date.now() + 30000;
+    while (bundles.length < count && Date.now() < end) {
+      if (errors.length) throw errors[0];
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.ok(bundles.length >= count, "an asset-only update must publish without modifying audio.ts");
+    return bundles.at(-1);
+  };
+  try {
+    worker = await createLivePreviewBundle({ root, projectDir, id: "test-film", outDir,
+      onBundle: bundle => bundles.push(bundle), onError: error => errors.push(error) });
+    const first = await waitBundle(1), count = bundles.length + 1;
+    await fsp.writeFile(path.join(projectDir, "public/samples/piano.wav"), "second owned sample");
+    const sample = await waitBundle(count);
+    assert.notEqual(sample.audioGeneratorRevision, first.audioGeneratorRevision);
+    assert.notEqual(sample.fingerprints.audio, first.fingerprints.audio);
+    const bankCount = bundles.length + 1;
+    await fsp.writeFile(path.join(projectDir, "public/music/bank.sf2"), "second owned bank");
+    const bank = await waitBundle(bankCount);
+    assert.notEqual(bank.audioGeneratorRevision, sample.audioGeneratorRevision);
+    assert.equal(await fsp.readFile(path.join(projectDir, "audio.ts"), "utf8"), audio);
+    assert.deepEqual(errors, []);
   } finally { await worker?.close(); await fsp.rm(owned, { recursive: true, force: true }); }
 });

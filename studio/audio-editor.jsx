@@ -19,6 +19,7 @@ import {
   editAudioDocument,
 } from "../src/engine/audio-document.mjs";
 import "./audio-editor.css";
+import { ToneEffectEditor, defaultToneOptions } from "./tone-effect-editor";
 const uid = (p) => p + "_" + crypto.randomUUID().slice(0, 8);
 const labels = {
   gain: "增益",
@@ -477,11 +478,22 @@ export function AudioEditor({
       const p = audioProcessorSchema.parse({
         type: processor,
         ...(processor === "duck" ? { track: doc.tracks[0]?.id } : {}),
+        ...(processor === "tone"
+          ? { effect: "Reverb", options: defaultToneOptions("Reverb") }
+          : {}),
         id: uid("fx"),
       });
       editItem("processors", [...effectList, p]);
+      setError("");
     } catch (e) {
-      setError("请先添加触发轨道");
+      setError(
+        processor === "duck" && !doc.tracks.length
+          ? "请先添加触发轨道"
+          : "无法添加处理器：" +
+              (e.issues
+                ?.map((issue) => issue.path.join(".") + ": " + issue.message)
+                .join("；") || e.message),
+      );
     }
   };
   const setEffect = (i, key, value) => {
@@ -489,17 +501,23 @@ export function AudioEditor({
     effects[i][key] = value;
     editItem("processors", effects);
   };
-  const numberField = (key, label, min, step = 0.01) => (
+  const numberField = (key, label, min, step = 0.01, max) => (
     <label key={key}>
       {label}
       <input
         aria-label={label}
         type="number"
         min={min}
+        max={max}
         step={step}
         value={item[key] ?? 0}
         disabled={blocked}
-        onChange={(e) => editItem(key, Number(e.target.value))}
+        onChange={(e) =>
+          editItem(
+            key,
+            Math.max(min, Math.min(max ?? Infinity, Number(e.target.value))),
+          )
+        }
       />
     </label>
   );
@@ -947,7 +965,174 @@ export function AudioEditor({
                   {numberField("start", "开始秒", 0)}
                   {numberField("duration", "时长秒", 0.001)}
                   {numberField("offset", "素材入点秒", 0)}
-                  {numberField("rate", "速度", 0.05)}
+                  {numberField("rate", "速度倍率", 0.05)}
+                  {doc.sources.find((source) => source.id === item.source)
+                    ?.kind === "file" && (
+                    <>
+                      {numberField("pitch", "移调半音", -48, 1, 48)}
+                      <label className="audio-check">
+                        <input
+                          type="checkbox"
+                          checked={!!item.preservePitch}
+                          disabled={blocked}
+                          onChange={(event) =>
+                            editItem("preservePitch", event.target.checked)
+                          }
+                        />
+                        变速时保持音高
+                      </label>
+                      <div className="audio-wide audio-pitch-tools">
+                        <Button
+                          disabled={blocked}
+                          onClick={() =>
+                            editItem(
+                              "pitch",
+                              Math.max(-48, (item.pitch ?? 0) - 12),
+                            )
+                          }
+                        >
+                          降八度
+                        </Button>
+                        <Button
+                          disabled={blocked}
+                          onClick={() =>
+                            editItem(
+                              "pitch",
+                              Math.min(48, (item.pitch ?? 0) + 12),
+                            )
+                          }
+                        >
+                          升八度
+                        </Button>
+                        <Button
+                          disabled={blocked}
+                          onClick={() =>
+                            change((document) => {
+                              const clip = document.clips.find(
+                                (clip) => clip.id === item.id,
+                              );
+                              clip.pitch = 0;
+                              clip.rate = 1;
+                              clip.preservePitch = false;
+                              delete clip.stretch;
+                            })
+                          }
+                        >
+                          重置音高与速度
+                        </Button>
+                        <small>
+                          移调范围 ±48
+                          半音。保持音高后，速度只改变节奏；关闭时速度也改变音高。
+                        </small>
+                      </div>
+                      <details className="audio-wide audio-stretch-settings">
+                        <summary>高级音色与处理质量 · Signalsmith</summary>
+                        <div className="audio-stretch-grid">
+                          <label>
+                            处理预设
+                            <select
+                              value={item.stretch?.preset ?? "default"}
+                              disabled={blocked}
+                              onChange={(event) =>
+                                editItem("stretch", {
+                                  ...item.stretch,
+                                  preset: event.target.value,
+                                })
+                              }
+                            >
+                              <option value="default">标准质量</option>
+                              <option value="cheaper">节省计算</option>
+                            </select>
+                          </label>
+                          {[
+                            [
+                              "formantSemitones",
+                              "共振峰移调半音",
+                              -48,
+                              48,
+                              0,
+                              1,
+                            ],
+                            [
+                              "tonalityHz",
+                              "音调处理上限 Hz",
+                              20,
+                              24000,
+                              8000,
+                              100,
+                            ],
+                            [
+                              "formantBaseHz",
+                              "共振峰基频 Hz（0 自动）",
+                              0,
+                              2000,
+                              0,
+                              1,
+                            ],
+                            ["blockMs", "分析窗口毫秒（0 自动）", 0, 500, 0, 1],
+                            [
+                              "intervalMs",
+                              "处理间隔毫秒（0 自动）",
+                              0,
+                              250,
+                              0,
+                              1,
+                            ],
+                          ].map(([key, title, min, max, fallback, step]) => (
+                            <label key={key}>
+                              {title}
+                              <input
+                                type="number"
+                                aria-label={title}
+                                min={min}
+                                max={max}
+                                step={step}
+                                value={item.stretch?.[key] ?? fallback}
+                                disabled={blocked}
+                                onChange={(event) =>
+                                  editItem("stretch", {
+                                    ...item.stretch,
+                                    [key]: Math.min(
+                                      max,
+                                      Math.max(min, Number(event.target.value)),
+                                    ),
+                                  })
+                                }
+                              />
+                            </label>
+                          ))}
+                          <label className="audio-check">
+                            <input
+                              type="checkbox"
+                              checked={!!item.stretch?.formantCompensation}
+                              disabled={blocked}
+                              onChange={(event) =>
+                                editItem("stretch", {
+                                  ...item.stretch,
+                                  formantCompensation: event.target.checked,
+                                })
+                              }
+                            />
+                            补偿变调后的人声音色
+                          </label>
+                          <label className="audio-check">
+                            <input
+                              type="checkbox"
+                              checked={!!item.stretch?.splitComputation}
+                              disabled={blocked}
+                              onChange={(event) =>
+                                editItem("stretch", {
+                                  ...item.stretch,
+                                  splitComputation: event.target.checked,
+                                })
+                              }
+                            />
+                            分散处理计算
+                          </label>
+                        </div>
+                      </details>
+                    </>
+                  )}
                   {numberField("fadeIn", "淡入秒", 0)}
                   {numberField("fadeOut", "淡出秒", 0)}
                   <label className="audio-check">
@@ -1120,6 +1305,7 @@ export function AudioEditor({
                   <header>
                     <strong>
                       {audioProcessors.find((p) => p.id === fx.type)?.name}
+                      {fx.type === "tone" ? " · " + fx.effect : ""}
                     </strong>
                     <label>
                       <input
@@ -1154,54 +1340,71 @@ export function AudioEditor({
                       <Trash2 size={13} />
                     </Button>
                   </header>
-                  <div className="audio-form">
-                    {Object.entries(fx)
-                      .filter(([k]) => !["type", "id", "bypass"].includes(k))
-                      .map(([k, v]) => (
-                        <label key={k}>
-                          {labels[k] ?? k}
-                          {k === "mode" ? (
-                            <select
-                              value={v}
-                              onChange={(e) => setEffect(i, k, e.target.value)}
-                            >
-                              {[
-                                "lowpass",
-                                "highpass",
-                                "bandpass",
-                                "notch",
-                                "lowshelf",
-                                "highshelf",
-                                "peaking",
-                                "allpass",
-                              ].map((v) => (
-                                <option key={v}>{v}</option>
-                              ))}
-                            </select>
-                          ) : k === "track" ? (
-                            <select
-                              value={v}
-                              onChange={(e) => setEffect(i, k, e.target.value)}
-                            >
-                              {doc.tracks.map((t) => (
-                                <option key={t.id} value={t.id}>
-                                  {t.name}
-                                </option>
-                              ))}
-                            </select>
-                          ) : (
-                            <input
-                              type="number"
-                              step=".01"
-                              value={v}
-                              onChange={(e) =>
-                                setEffect(i, k, Number(e.target.value))
-                              }
-                            />
-                          )}
-                        </label>
-                      ))}
-                  </div>
+                  {fx.type === "tone" ? (
+                    <ToneEffectEditor
+                      fx={fx}
+                      index={i}
+                      disabled={blocked}
+                      onChange={(next) => {
+                        const effects = structuredClone(effectList);
+                        effects[i] = next;
+                        editItem("processors", effects);
+                      }}
+                    />
+                  ) : (
+                    <div className="audio-form">
+                      {Object.entries(fx)
+                        .filter(([k]) => !["type", "id", "bypass"].includes(k))
+                        .map(([k, v]) => (
+                          <label key={k}>
+                            {labels[k] ?? k}
+                            {k === "mode" ? (
+                              <select
+                                value={v}
+                                onChange={(e) =>
+                                  setEffect(i, k, e.target.value)
+                                }
+                              >
+                                {[
+                                  "lowpass",
+                                  "highpass",
+                                  "bandpass",
+                                  "notch",
+                                  "lowshelf",
+                                  "highshelf",
+                                  "peaking",
+                                  "allpass",
+                                ].map((v) => (
+                                  <option key={v}>{v}</option>
+                                ))}
+                              </select>
+                            ) : k === "track" ? (
+                              <select
+                                value={v}
+                                onChange={(e) =>
+                                  setEffect(i, k, e.target.value)
+                                }
+                              >
+                                {doc.tracks.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                            ) : (
+                              <input
+                                type="number"
+                                step=".01"
+                                value={v}
+                                onChange={(e) =>
+                                  setEffect(i, k, Number(e.target.value))
+                                }
+                              />
+                            )}
+                          </label>
+                        ))}
+                    </div>
+                  )}
                 </div>
               ))}
               <div className="audio-key">

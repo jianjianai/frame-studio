@@ -13,7 +13,7 @@ export class LivePreviewMedia {
   constructor({ data, maxBytes = 1024 * 1024 * 1024, transcode = runTranscode } = {}) {
     this.root = path.join(data, "live-preview-media");
     this.maxBytes = maxBytes; this.transcode = transcode;
-    this.pending = new Map(); this.entries = new Map(); this.waiters = [];
+    this.pending = new Map(); this.jobs = new Map(); this.entries = new Map(); this.waiters = [];
     this.running = 0; this.closed = false;
     fs.mkdirSync(this.root, { recursive: true });
     this.ready = this.load();
@@ -33,6 +33,7 @@ export class LivePreviewMedia {
   }
   /** Capture new public content before a revision is published; subsequent edits reuse the frozen bytes. */
   async snapshot(session, asset) {
+    if (session.closed || session.abort?.signal.aborted) throw problem(499, "Preview request cancelled");
     const key = asset.revision, existing = session.mediaFiles.get(key);
     if (existing) return existing;
     const pendingKey = "snapshot:" + session.id + ":" + key;
@@ -57,7 +58,7 @@ export class LivePreviewMedia {
       const hashing = new Transform({ transform(chunk, _encoding, done) { hash.update(chunk); done(null, chunk); } });
       try {
         await pipeline(fs.createReadStream(source, { flags: fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0) }),
-          hashing, fs.createWriteStream(temporary, { flags: "wx", mode: 0o600 }));
+          hashing, fs.createWriteStream(temporary, { flags: "wx", mode: 0o600 }), { signal: session.abort?.signal });
         const after = await fsp.lstat(source);
         if (mediaSignature(after) !== asset.signature) throw problem(409, "Media changed while preparing its preview");
         const contentHash = hash.digest("hex");
@@ -71,40 +72,111 @@ export class LivePreviewMedia {
     this.pending.set(pendingKey, operation);
     try { return await operation; } finally { this.pending.delete(pendingKey); }
   }
-  async rendition(session, asset, profile, kind = "audio") {
+  async rendition(session, asset, profile, kind = "audio", { signal } = {}) {
     await this.ready;
-    if (!["preview", "economy"].includes(profile)) throw problem(400, "Invalid audio preview profile");
+    this.checkCancelled(session, signal);
+    if (!["preview", "economy"].includes(profile)) throw problem(400, "Invalid preview media profile");
     if (!["audio", "video", "image"].includes(kind)) throw problem(400, "Invalid preview media kind");
     const original = await this.snapshot(session, asset);
+    this.checkCancelled(session, signal);
     const key = original.contentHash + "-" + kind + "-" + profile + "-v2";
     const existing = this.entries.get(key);
     if (existing && fs.existsSync(existing.file)) { existing.used = Date.now(); return existing.file; }
-    if (this.pending.has(key)) return this.pending.get(key);
-    const operation = (async () => {
-      await this.acquire();
-      const file = path.join(this.root, key + (kind === "video" ? ".mp4" : kind === "image" ? ".webp" : ".m4a")), temporary = file + "." + randomUUID() + ".tmp";
-      try {
-        if (!fs.existsSync(file)) {
-          await this.transcode(original.file, temporary, profile, kind);
-          const stat = await fsp.stat(temporary);
-          if (!stat.size || stat.size > this.maxBytes) throw problem(413, "Audio rendition exceeds the preview cache budget");
-          await fsp.rename(temporary, file);
-        }
-        this.entries.set(key, { file, bytes: (await fsp.stat(file)).size, used: Date.now() });
-        await this.prune(key);
-        return file;
-      } finally { await fsp.rm(temporary, { force: true }); this.release(); }
-    })();
-    this.pending.set(key, operation);
-    try { return await operation; } finally { this.pending.delete(key); }
+    let job = this.jobs.get(key);
+    // A later retry waits for the cancelled process/temporary file to retire before creating a replacement.
+    if (job?.controller.signal.aborted) {
+      await job.promise.catch(() => {});
+      this.checkCancelled(session, signal);
+      job = this.jobs.get(key);
+    }
+    if (!job) {
+      job = { key, controller: new AbortController(), refs: new Set(), settled: false };
+      this.jobs.set(key, job);
+      job.promise = this.convert(original, key, profile, kind, job.controller.signal);
+      this.pending.set(key, job.promise);
+      // The first session owns the input snapshot until all shared readers finish.
+      session.mediaJobs ||= new Set();
+      session.mediaJobs.add(job.promise);
+      void job.promise.finally(() => {
+        job.settled = true; session.mediaJobs.delete(job.promise);
+        if (this.pending.get(key) === job.promise) this.pending.delete(key);
+        if (this.jobs.get(key) === job) this.jobs.delete(key);
+      }).catch(() => {});
+    }
+    return this.observe(job, session, signal);
   }
-  async acquire() {
+  checkCancelled(session, signal) {
     if (this.closed) throw problem(503, "Live media service stopped");
-    if (this.running >= 2) await new Promise((resolve, reject) => this.waiters.push({ resolve, reject }));
-    if (this.closed) throw problem(503, "Live media service stopped");
-    this.running++;
+    if (session.closed || session.abort?.signal.aborted || signal?.aborted)
+      throw problem(499, "Preview request cancelled");
   }
-  release() { this.running--; this.waiters.shift()?.resolve(); }
+  observe(job, session, signal) {
+    return new Promise((resolve, reject) => {
+      const ref = { session, signal };
+      job.refs.add(ref);
+      const signals = [...new Set([signal, session.abort?.signal].filter(Boolean))];
+      let finished = false;
+      const cleanup = () => {
+        if (finished) return false;
+        finished = true;
+        signals.forEach(value => value.removeEventListener("abort", cancel));
+        job.refs.delete(ref);
+        // Cancelling one viewer must not interrupt another viewer's rendition.
+        if (!job.settled && !job.refs.size) job.controller.abort(problem(499, "Preview request cancelled"));
+        return true;
+      };
+      const cancel = () => { if (cleanup()) reject(problem(499, "Preview request cancelled")); };
+      signals.forEach(value => value.addEventListener("abort", cancel, { once: true }));
+      job.promise.then(value => { if (cleanup()) resolve(value); }, error => { if (cleanup()) reject(error); });
+      if (signals.some(value => value.aborted) || session.closed) cancel();
+    });
+  }
+  async convert(original, key, profile, kind, signal) {
+    await this.acquire(signal);
+    const file = path.join(this.root, key + (kind === "video" ? ".mp4" : kind === "image" ? ".webp" : ".m4a")),
+      temporary = file + "." + randomUUID() + ".tmp";
+    try {
+      if (signal.aborted) throw problem(499, "Preview request cancelled");
+      if (!fs.existsSync(file)) {
+        await this.transcode(original.file, temporary, profile, kind, signal);
+        if (signal.aborted) throw problem(499, "Preview request cancelled");
+        const stat = await fsp.stat(temporary);
+        if (!stat.size || stat.size > this.maxBytes) throw problem(413, "Media rendition exceeds the preview cache budget");
+        await fsp.rename(temporary, file);
+      }
+      this.entries.set(key, { file, bytes: (await fsp.stat(file)).size, used: Date.now() });
+      await this.prune(key);
+      return file;
+    } finally { await fsp.rm(temporary, { force: true }); this.release(); }
+  }
+  async acquire(signal) {
+    if (this.closed) throw problem(503, "Live media service stopped");
+    if (signal?.aborted) throw problem(499, "Preview request cancelled");
+    if (this.running < 2) { this.running++; return; }
+    await new Promise((resolve, reject) => {
+      const waiter = {
+        resolve: () => { signal?.removeEventListener("abort", cancel); resolve(); },
+        reject: error => { signal?.removeEventListener("abort", cancel); reject(error); },
+      };
+      const cancel = () => {
+        const index = this.waiters.indexOf(waiter);
+        if (index >= 0) this.waiters.splice(index, 1);
+        waiter.reject(problem(499, "Preview request cancelled"));
+      };
+      this.waiters.push(waiter); signal?.addEventListener("abort", cancel, { once: true });
+      if (signal?.aborted) cancel();
+    });
+    // release() transfers an existing permit directly to this waiter.
+    if (this.closed || signal?.aborted) {
+      this.release();
+      throw problem(this.closed ? 503 : 499, this.closed ? "Live media service stopped" : "Preview request cancelled");
+    }
+  }
+  release() {
+    const next = !this.closed && this.waiters.shift();
+    if (next) next.resolve();
+    else this.running--;
+  }
   async prune(keep) {
     let bytes = [...this.entries.values()].reduce((sum, item) => sum + item.bytes, 0);
     for (const [key, item] of [...this.entries].sort(([, a], [, b]) => a.used - b.used)) {
@@ -115,13 +187,14 @@ export class LivePreviewMedia {
   }
   async close() {
     this.closed = true;
+    for (const job of this.jobs.values()) job.controller.abort(problem(503, "Live media service stopped"));
     for (const waiter of this.waiters.splice(0)) waiter.reject(problem(503, "Live media service stopped"));
     await Promise.allSettled(this.pending.values());
     await this.ready;
   }
 }
 
-function runTranscode(source, target, profile, kind) {
+function runTranscode(source, target, profile, kind, signal) {
   if (kind === "image") return import("sharp").then(({ default: sharp }) =>
     sharp(source, { animated: true, limitInputPixels: 64 * 1024 * 1024 }).rotate()
       .resize({ width: profile === "economy" ? 480 : 1280, withoutEnlargement: true })
@@ -136,11 +209,20 @@ function runTranscode(source, target, profile, kind) {
         : ["-map", "0:a:0", "-vn"]),
       "-ar", "48000", "-ac", economy ? "1" : "2", "-c:a", "aac", "-b:a", economy ? "48k" : kind === "video" ? "64k" : "96k",
       "-movflags", "+faststart", "-f", "mp4", target];
+    if (signal?.aborted) { reject(problem(499, "Preview request cancelled")); return; }
     const child = spawn(process.env.FFMPEG_PATH || "ffmpeg", args, { stdio: ["ignore", "ignore", "pipe"] });
+    const cancel = () => child.kill("SIGKILL");
+    signal?.addEventListener("abort", cancel, { once: true });
+    if (signal?.aborted) cancel();
     let error = "";
     child.stderr.on("data", bytes => { error = (error + String(bytes)).slice(-2048); });
     const timer = setTimeout(() => child.kill("SIGKILL"), 120000); timer.unref();
-    child.once("error", failure => { clearTimeout(timer); reject(failure); });
-    child.once("close", code => { clearTimeout(timer); code === 0 ? resolve() : reject(problem(502, "Audio preview conversion failed: " + error)); });
+    const cleanup = () => { clearTimeout(timer); signal?.removeEventListener("abort", cancel); };
+    child.once("error", failure => { cleanup(); reject(failure); });
+    child.once("close", code => {
+      cleanup();
+      if (signal?.aborted) reject(problem(499, "Preview request cancelled"));
+      else code === 0 ? resolve() : reject(problem(502, "Media preview conversion failed: " + error));
+    });
   });
 }

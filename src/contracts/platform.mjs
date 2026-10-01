@@ -9,6 +9,7 @@ import {
   workUndoResponseSchema,
 } from "./workflow.mjs";
 import { modelIdSchema } from "./ai-models.mjs";
+import { livePreviewMediaModeSchema } from "./live-preview.mjs";
 
 export const taskStateSchema = z.enum([
   "queued",
@@ -363,6 +364,7 @@ export const previewMessageSchema = z.discriminatedUnion("type", [
   z.strictObject({ type: z.literal("frame-preview-update-request") }),
   z.strictObject({
     type: z.literal("frame-live-preview"),
+    mediaMode: livePreviewMediaModeSchema.optional(),
     state: z.enum(["ready", "updating", "error", "reconnecting"]),
     sourceRevision: z.string().max(200).optional(),
     revision: z.number().int().nonnegative().optional(),

@@ -1,3 +1,4 @@
+import { SignalsmithPcmCache } from "./signalsmith-pcm";
 import {
   projectAudioTracks,
   type AnimationProject,
@@ -16,6 +17,8 @@ import {
   LIVE_LOOKAHEAD_SECONDS,
 } from "./media-buffering";
 import { audioSegments } from "./audio-document.mjs";
+import { prepareSignalsmith } from "./signalsmith-audio";
+import { prepareTone } from "./tone-runtime";
 import { AudioSourcePool } from "./audio-source-pool";
 import {
   buildMixGraph,
@@ -157,15 +160,16 @@ export function adaptAudioSourceRenditions(prepared: PreparedAudio) {
   for (const track of prepared.tracks)
     if (track.kind === "file") {
       const source = prepared.project?.previewAudioSources?.[track.src];
+      const mode = typeof window !== "undefined" ? window.__FRAME_PREVIEW_MEDIA_MODE__ : undefined;
+      const original = !prepared.live || mode === "original" || mode === "cached" ||
+        (typeof window !== "undefined" && (window.__FRAME_PREVIEW_READERS__ ?? 0) > 0);
       prepared.sourceKeys?.set(
         track.src,
         prepared.files!.bind(
           track.src,
-          prepared.live
-            ? source
-            : source?.originalUrl
-              ? { revision: source.revision, url: source.originalUrl }
-              : undefined,
+          original
+            ? source?.originalUrl ? { revision: source.revision, url: source.originalUrl } : undefined
+            : source,
         ),
       );
     }
@@ -221,6 +225,9 @@ export async function prepareAudioSegment(
 ) {
   signal?.throwIfAborted();
   const offline = "startRendering" in context;
+  const processors = prepared.document ? [prepared.document.master, ...prepared.document.tracks, ...prepared.document.buses].flatMap(c => c.processors) : [];
+  if (processors.some(p => p.type === "tone" && !p.bypass)) await prepareTone();
+  if (prepared.tracks.some(t => t.pitch || t.preservePitch || t.stretch)) await prepareSignalsmith();
   const began = performance.now();
   const activeSources = new Set(
     prepared.tracks
@@ -300,11 +307,15 @@ export async function prepareAudioSegment(
       )) {
         signal?.throwIfAborted();
         if (track.kind === "file") {
+          if (track.pitch || track.preservePitch || track.stretch) await prepared.files!.prepareStretched(
+            prepared.sourceKeys?.get(track.src) ?? track.src,
+            { rate: rate * (track.playbackRate ?? 1), pitch: track.pitch, preservePitch: track.preservePitch, stretch: track.stretch,
+              ...(track.loop ? { loopEnd: (track.offset ?? 0) + track.loop } : {}) }, signal);
           if (offline) continue;
           await prepared.files!.prepare(
             prepared.sourceKeys?.get(track.src) ?? track.src,
-            segment.offset,
-            segment.duration,
+            Math.max(0, segment.offset - (track.pitch || track.preservePitch || track.stretch ? 0.5 : 0)),
+            segment.duration + (track.pitch || track.preservePitch || track.stretch ? 1 : 0),
             signal,
           );
         } else {
@@ -315,6 +326,7 @@ export async function prepareAudioSegment(
             offset: segment.offset,
             duration: segment.duration,
             rate: rate * (track.playbackRate ?? 1),
+            pitch: track.pitch, preservePitch: track.preservePitch, stretch: track.stretch,
             signal,
           });
         }
@@ -423,6 +435,8 @@ export function scheduleAudio(
           offset: segment.offset,
           duration: segment.duration,
           rate: rate * (track.playbackRate ?? 1),
+          pitch: track.pitch, preservePitch: track.preservePitch, stretch: track.stretch,
+          ...(track.loop ? { loopStart: track.offset ?? 0, loopEnd: (track.offset ?? 0) + track.loop } : {}),
           onError,
         };
         let voice: { dispose(): void; ready?: Promise<void> };
@@ -470,7 +484,8 @@ export function scheduleAudio(
       };
       const timeouts = new Set<ReturnType<typeof setTimeout>>();
       // Non-looping generators schedule their own future chunks. Files use the same bounded source reader.
-      const selfScheduled = track.kind === "generated" && !track.loop;
+      const transformedFile = track.kind === "file" && !!(track.pitch || track.preservePitch || track.stretch);
+      const selfScheduled = (track.kind === "generated" && !track.loop) || transformedFile;
       const limit =
         offline || selfScheduled
           ? trackEnd
@@ -483,8 +498,10 @@ export function scheduleAudio(
                 ) *
                   rate,
             );
-      for (const s of audioSegments(track, projectDuration, from, limit - from))
-        schedule(s, from);
+      if (transformedFile) {
+        const s = trackSegment(track, projectDuration, from, limit - from);
+        if (s) schedule(s, from);
+      } else for (const s of audioSegments(track, projectDuration, from, limit - from)) schedule(s, from);
       cursor = limit;
       const pump = async () => {
         if (disposed || pumping) return;
@@ -526,6 +543,7 @@ export function scheduleAudio(
                 offset: s.offset,
                 duration: s.duration,
                 rate: rate * (track.playbackRate ?? 1),
+                pitch: track.pitch, preservePitch: track.preservePitch, stretch: track.stretch,
                 signal: abort.signal,
               });
             }
@@ -597,7 +615,7 @@ export function scheduleAudio(
     }
     return {
       dispose,
-      ready: Promise.all([...instances.values()].map((v) => v.ready)),
+      ready: Promise.all([mix.ready, ...[...instances.values()].map((v) => v.ready)]),
       setTrack(id: string, control: { gain: number; muted: boolean }) {
         const voice = instances.get(id);
         if (voice)
@@ -673,7 +691,7 @@ export function scheduleAudio(
             if (replacement) replacements.set(track.id, replacement);
           }
           await waitAudioReady(
-            Promise.all([...replacements.values()].map((v) => v.ready)),
+            Promise.all([candidateMix.ready, ...[...replacements.values()].map((v) => v.ready)]),
             signal,
           );
           signal?.throwIfAborted();
@@ -784,13 +802,14 @@ export class OfflineAudioRenderer {
   private sessionContext?: OfflineAudioContext;
   private abort = new AbortController();
   private rendering: Promise<unknown> = Promise.resolve();
+  private effectPcm = new SignalsmithPcmCache();
   constructor(
     private project: AnimationProject,
     private controls = new Map<string, { gain: number; muted: boolean }>(),
     private volume = 1,
   ) {}
   dispose() {
-    this.abort.abort();
+    this.abort.abort(); this.effectPcm.clear();
     const context = this.sessionContext;
     if (context)
       void this.prepared
@@ -806,7 +825,36 @@ export class OfflineAudioRenderer {
     this.rendering = request;
     return request;
   }
-  private async renderChunk(
+  private async renderChunk(start: number, duration: number): Promise<AudioBuffer> {
+    this.abort.signal.throwIfAborted();
+    if (!Number.isFinite(start) || start < 0 || !Number.isFinite(duration) || duration <= 0 || duration > 10)
+      throw Error("Audio chunks must be between 0 and 10 seconds");
+    const doc = this.project.audioDocument as AudioMixDocument | undefined;
+    const processors = [...doc?.master.processors ?? [], ...[...doc?.tracks ?? [], ...doc?.buses ?? []].flatMap(channel => channel.processors)];
+    if (!processors.some(processor => processor.type === "tone" && !processor.bypass)) return this.renderGraphChunk(start, duration);
+    // Native variable-delay/filter DSP has a sample-block state that depends on context origin.
+    // Use fixed source windows so arbitrary export requests share exactly the same PCM/state.
+    const sampleRate = 48000, firstFrame = Math.round(start * sampleRate), frames = Math.round(duration * sampleRate);
+    const output = new AudioBuffer({ numberOfChannels: 2, length: frames, sampleRate });
+    const a = firstFrame / sampleRate, b = (firstFrame + frames) / sampleRate;
+    for (let index = Math.max(0, Math.floor((a - 0.01) / 2)); index * 2 - 0.01 < b - 1e-8; index++) {
+      const origin = index * 2, windowStart = Math.max(0, origin - 0.01), windowFrames = Math.round((origin + 2.01 - windowStart) * sampleRate);
+      const buffer = await this.effectPcm.get(String(index), windowFrames * 8, () => this.renderGraphChunk(windowStart, windowFrames / sampleRate));
+      this.abort.signal.throwIfAborted();
+      const windowFrame = Math.round(windowStart * sampleRate), begin = Math.max(firstFrame, windowFrame), end = Math.min(firstFrame + frames, windowFrame + buffer.length);
+      for (let c = 0; c < 2; c++) {
+        const input = buffer.getChannelData(c), samples = output.getChannelData(c);
+        for (let frame = begin; frame < end; frame++) {
+          const time = frame / sampleRate;
+          const weight = index > 0 && time < origin + 0.01 ? Math.sin(Math.max(0, Math.min(1, (time - origin + 0.01) / 0.02)) * Math.PI / 2) ** 2 :
+            time > origin + 1.99 ? Math.cos(Math.max(0, Math.min(1, (time - origin - 1.99) / 0.02)) * Math.PI / 2) ** 2 : 1;
+          samples[frame - firstFrame] += input[frame - windowFrame] * weight;
+        }
+      }
+    }
+    return output;
+  }
+  private async renderGraphChunk(
     start: number,
     duration: number,
   ): Promise<AudioBuffer> {
@@ -821,7 +869,8 @@ export class OfflineAudioRenderer {
       throw Error("Audio chunks must be between 0 and 10 seconds");
     const preroll = Math.min(
       start,
-      mixPreroll(this.project.audioDocument as AudioMixDocument | undefined),
+      mixPreroll(this.project.audioDocument as AudioMixDocument | undefined) +
+        (projectAudioTracks(this.project).some(t => t.pitch || t.preservePitch || t.stretch) ? 0.5 : 0),
     );
     if (preroll > 120)
       throw Error(
@@ -887,6 +936,7 @@ export class OfflineAudioRenderer {
     } finally {
       graph?.dispose();
       master.disconnect();
+      if (context !== this.sessionContext) for (const mod of new Set(prepared.modules?.values() ?? [])) mod.disposeAudio?.(context);
     }
   }
   async pcm(

@@ -1,4 +1,5 @@
 import type { AudioTrack } from "./types";
+import { createToneEffect } from "./tone-runtime";
 import { smoothAudioParam } from "./live-audio-update";
 export type Processor = { type: string; bypass?: boolean; [key: string]: any };
 export type Channel = {
@@ -22,7 +23,9 @@ export function effectTail(processors: Processor[]): number {
     .reduce(
       (n, p) =>
         n +
-        (p.type === "distortion"
+        (p.type === "tone"
+          ? p.tail
+          : p.type === "distortion"
           ? 0.05
           : p.type === "reverb"
             ? p.seconds
@@ -71,6 +74,7 @@ export function buildMixGraph(
 ) {
   const owned: AudioNode[] = [],
     nodes = new Map<string, GainNode>();
+  const effects: ReturnType<typeof createToneEffect>[] = [];
   const updates: ((next: AudioMixDocument | undefined) => void)[] = [];
   const shape = (value?: AudioMixDocument) =>
     JSON.stringify([
@@ -93,7 +97,7 @@ export function buildMixGraph(
   const processorShape = (p: Processor) => [
     p.type,
     !!p.bypass,
-    ...(["reverb", "distortion", "duck", "limiter"].includes(p.type)
+    ...(["tone", "reverb", "distortion", "duck", "limiter"].includes(p.type)
       ? [p]
       : []),
   ];
@@ -116,7 +120,13 @@ export function buildMixGraph(
     for (const [index, p] of processors.entries()) {
       if (p.bypass) continue;
       let output: AudioNode;
-      if (p.type === "gain") {
+      if (p.type === "tone") {
+        const effect = createToneEffect(context, p.effect, p.options);
+        effects.push(effect);
+        const bridge = make(context.createGain());
+        effect.connect(current, bridge, when, from, rate);
+        output = bridge;
+      } else if (p.type === "gain") {
         const n = make(context.createGain());
         n.gain.value = p.gain;
         register(getter, index, (p) =>
@@ -351,6 +361,7 @@ export function buildMixGraph(
       }
     }
     return {
+      ready: Promise.all(effects.map(e => e.ready)),
       setOutput(value: number, immediate = false) {
         if (immediate) output.gain.value = value;
         else smoothAudioParam(output.gain, value, context);
@@ -366,10 +377,12 @@ export function buildMixGraph(
       destination: (track: AudioTrack) =>
         nodes.get(track.channel ?? "master") ?? master,
       dispose: () => {
+        for (const e of effects.reverse()) e.dispose();
         for (const n of owned.reverse()) n.disconnect();
       },
     };
   } catch (e) {
+    for (const effect of effects.reverse()) effect.dispose();
     for (const n of owned.reverse()) n.disconnect();
     throw e;
   }

@@ -343,38 +343,25 @@ export class AudioTransport {
     if (this.closed || this.requestedPlay || !this.controls.size) return;
     this.preparation?.abort();
     const request = (this.preparation = new AbortController());
+    void this.warmPreview(request.signal).catch(() => {
+      // Playback retries and reports an actionable error; background warming is quiet.
+    });
+  }
+  /** Await initial decode/generator preparation without starting the shared clock. */
+  async warmPreview(signal?: AbortSignal): Promise<void> {
+    if (this.closed) throw Error("Audio transport disposed");
+    signal?.throwIfAborted();
+    if (!this.controls.size) return;
+    await waitAudioReady(this.load(), signal);
+    signal?.throwIfAborted();
+    if (this.closed || !this.prepared || !this.context) return;
     const offset = this.clock.time();
-    void this.load()
-      .then(() => {
-        if (
-          this.closed ||
-          request.signal.aborted ||
-          this.requestedPlay ||
-          !this.prepared
-        )
-          return;
-        return Promise.all([
-          this.media?.prepare(
-            offset,
-            this.clock.rate,
-            this.controls,
-            request.signal,
-          ),
-          prepareAudioSegment(
-            this.prepared,
-            this.context!,
-            this.clock.duration,
-            offset,
-            this.clock.duration - offset,
-            this.clock.rate,
-            this.controls,
-            request.signal,
-          ),
-        ]);
-      })
-      .catch(() => {
-        // Playback will retry initialization and report actionable errors itself.
-      });
+    await Promise.all([
+      this.media?.prepare(offset, this.clock.rate, this.controls, signal),
+      prepareAudioSegment(this.prepared, this.context, this.clock.duration, offset,
+        Math.min(Math.max(0, this.clock.duration - offset), 8 * this.clock.rate), this.clock.rate, this.controls, signal),
+    ]);
+    signal?.throwIfAborted();
   }
   async play(): Promise<void> {
     if (this.closed) return;
@@ -584,7 +571,7 @@ export class AudioTransport {
         if (!current()) return;
         // Freeze the shared audio clock while synchronous generators create buffers.
         // Every track and the picture receive the same future anchor after readiness.
-        const lead = 0.04,
+        const lead = projectAudioTracks(this.project).some(t => t.pitch || t.preservePitch || t.stretch) ? 0.25 : 0.04,
           when = context.currentTime + lead;
         const activePrepared = this.prepared ?? prepared;
         if (activePrepared !== prepared)

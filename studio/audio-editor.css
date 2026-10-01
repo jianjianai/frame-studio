@@ -383,3 +383,16 @@
 .audio-effect {
   background: #ffffff70;
 }
+.audio-pitch-tools { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.audio-pitch-tools small { width: 100%; color: #526053; line-height: 1.5; }
+.audio-stretch-settings summary { cursor: pointer; padding: 6px 0; }
+.audio-stretch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; padding-top: 10px; }
+.audio-stretch-grid label { min-width: 0; }
+@media (max-width: 520px) { .audio-stretch-grid { grid-template-columns: 1fr; } }
+
+.tone-effect-editor { width: 100%; min-width: 0; }
+.tone-effect-editor .audio-hint { display: block; margin-top: 8px; line-height: 1.5; }
+.tone-json-settings { width: 100%; margin-top: 12px; }
+.tone-json-settings summary { cursor: pointer; padding: 6px 0; }
+.tone-json-settings textarea { width: 100%; min-height: 130px; resize: vertical; box-sizing: border-box; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 8px; border: 1px solid #cddabd; background: #f8faf5; color: #263b32; border-radius: 6px; }
+.tone-json-error { color: #a33b33; margin: 8px 0; line-height: 1.5; }

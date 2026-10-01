@@ -454,6 +454,33 @@ button.inline-time {
   text-align: center;
 }
 
-.live-preview-note { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; max-height: 28%; overflow: auto; }
-.live-preview-note .error-note { margin: 0; flex: 1; min-width: 180px; }
-.live-preview-note > .btn { margin-left: auto; flex: none; }
+.preview-pane > .live-preview-note { position: static; inset: auto; z-index: auto; display: flex; flex: 0 0 auto; align-items: center; flex-wrap: wrap; gap: 8px; max-height: 28%; overflow: auto; border-radius: 0; }
+.work-focus .preview-pane:has(> .live-preview-note) iframe { height: auto; }
+.live-preview-note .preview-error-details { flex: 1; min-width: 0; }
+.live-preview-note .preview-error-details summary { min-height: 44px; display: flex; align-items: center; cursor: pointer; }
+.live-preview-note .preview-error-details pre { margin: 6px 0 0; max-height: 140px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.live-preview-note > .btn { margin-left: auto; flex: none; min-height: 44px; }
+
+.live-audio-input-notice { flex: 0 0 auto; max-height: 35dvh; overflow: auto; padding: 10px 16px; border-bottom: 1px solid #cddabd; background: #edf3e6; color: #263b32; }
+.live-audio-input-request, .live-audio-input-active { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.live-audio-input-request + .live-audio-input-request { margin-top: 10px; }
+.live-audio-input-request > div, .live-audio-input-active > small { flex: 1; min-width: 180px; }
+.live-audio-input-request small { display: block; line-height: 1.5; }
+.live-audio-input-notice .btn { min-height: 44px; flex: 0 0 auto; }
+.live-audio-input-notice p { margin: 6px 0; }
+@media (min-width: 901px) {
+  .work-focus .creation:has(> .live-audio-input-notice) {
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .work-focus .creation:has(> .live-audio-input-notice) > .creation-toolbar {
+    grid-row: 1 / -1;
+  }
+  .work-focus .creation > .live-audio-input-notice {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .work-focus .creation:has(> .live-audio-input-notice) > .creation-split {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}

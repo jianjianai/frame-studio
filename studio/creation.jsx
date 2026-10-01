@@ -15,8 +15,9 @@ const CompositionEditor = lazy(() =>
   })),
 );
 import { ExportProgress, exportState } from "./exports";
-import { useEffect, useRef, useState, lazy, Suspense } from "react";
+import { useCallback, useEffect, useRef, useState, lazy, Suspense } from "react";
 import { previewCacheBridge } from "./preview-cache";
+import { liveAudioInputBridge } from "./live-audio-input";
 import { ResizeHandle } from "../src/ui/ResizeHandle";
 import {
   readPreference,
@@ -55,6 +56,11 @@ export function Creation({ id, notify }) {
     tasks = taskQuery.data || [],
     iframe = useRef(null),
     split = useRef(null);
+  const [playerElement, setPlayerElement] = useState(null);
+  const bindPlayer = useCallback((element) => {
+    iframe.current = element;
+    setPlayerElement(element);
+  }, []);
   const [panel, setPanel] = useState(""),
     [referenceReview, setReferenceReview] = useState(null),
     [tool, setTool] = useState(() => {
@@ -124,6 +130,8 @@ export function Creation({ id, notify }) {
           ? [...old, { id: asset.id, name: asset.name }]
           : old,
     );
+  const audioInput = useRef(null);
+  const [audioInputState, setAudioInputState] = useState(null);
   const restartPreview = useRef(() => {});
   const browserExport = useBrowserExport(iframe, notify, () =>
     restartPreview.current(),
@@ -206,6 +214,10 @@ export function Creation({ id, notify }) {
     window.addEventListener("keydown", shortcut);
     return () => window.removeEventListener("keydown", shortcut);
   }, []);
+  const resourcePreference = useRef(
+    readPreference("frame.preview-media-mode", "compressed"),
+  );
+  const attachedMedia = useRef({ key: "", mode: resourcePreference.current });
   const playerPreferences = useRef(readPreference("frame.player-view", {}));
   const playbackSnapshot = useRef(null),
     restorePending = useRef(null),
@@ -217,6 +229,17 @@ export function Creation({ id, notify }) {
     setPosition({ time: 0 });
   }, [id]);
   const playerKey = preview ? preview.id + ":" + playerGeneration : "";
+  if (attachedMedia.current.key !== playerKey)
+    attachedMedia.current = {
+      key: playerKey,
+      mode: resourcePreference.current,
+    };
+  const previewFrameUrl = () => {
+    const url = new URL(preview.url, location.href);
+    if (preview.live)
+      url.searchParams.set("mediaMode", attachedMedia.current.mode);
+    return url.href;
+  };
   if (playerKey && attachedPlayer.current !== playerKey) {
     attachedPlayer.current = playerKey;
     restorePending.current = playbackSnapshot.current;
@@ -311,6 +334,13 @@ export function Creation({ id, notify }) {
   useEffect(() => {
     const receive = (e) => {
       if (e.source !== iframe.current?.contentWindow) return;
+      if (
+        e.data?.type === "frame-preview-media-mode" &&
+        ["original", "compressed", "cached"].includes(e.data.mode)
+      ) {
+        resourcePreference.current = e.data.mode;
+        writePreference("frame.preview-media-mode", e.data.mode);
+      }
       const decoded = decodePlayerMessage(e.data);
       if (!decoded) return;
       if (decoded.type === "frame-download-error")
@@ -340,9 +370,26 @@ export function Creation({ id, notify }) {
     return () => window.removeEventListener("message", receive);
   }, []);
   useEffect(
-    () => (preview ? previewCacheBridge(iframe, preview.url) : undefined),
-    [preview?.url, playerGeneration],
+    () =>
+      preview && playerElement
+        ? previewCacheBridge(iframe, preview.url)
+        : undefined,
+    [preview?.url, playerGeneration, playerElement],
   );
+  useEffect(() => {
+    setAudioInputState(null);
+    if (!preview?.live || !playerElement) return;
+    const bridge = liveAudioInputBridge(
+      iframe,
+      preview.url,
+      setAudioInputState,
+    );
+    audioInput.current = bridge;
+    return () => {
+      bridge.dispose();
+      if (audioInput.current === bridge) audioInput.current = null;
+    };
+  }, [id, preview?.url, preview?.live, playerGeneration, playerElement]);
   useEffect(() => {
     writePreference("frame.chat-open", chatOpen);
     writePreference("frame.work-tool", tool);
@@ -352,6 +399,10 @@ export function Creation({ id, notify }) {
   if (query.error) return <ErrorNote error={query.error} />;
   const work = query.data;
   if (!work) return null;
+  const previewDiagnostic = String(previewError || "")
+    .replace(/\u001b\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g, "")
+    .replace(/\u001b/g, "");
   const running = tasks.filter(active),
     title = {
       exports: "导出",
@@ -374,6 +425,93 @@ export function Creation({ id, notify }) {
           tool === key ? closeTool() : openTool(key, trigger)
         }
       />
+      {audioInputState &&
+        (audioInputState.requests.length > 0 ||
+          audioInputState.granted ||
+          audioInputState.enumerationGranted ||
+          audioInputState.denied ||
+          audioInputState.error) && (
+          <section
+            className="live-audio-input-notice"
+            aria-label="预览麦克风权限"
+            aria-live="polite"
+          >
+            {audioInputState.requests.map((request) => (
+              <div className="live-audio-input-request" key={request.requestId}>
+                <div>
+                  <strong>此预览请求{request.label}</strong>
+                  <small>
+                    {request.op === "open"
+                      ? `仅传入本浏览器预览 · ${request.sampleRate} Hz · ${request.channels} 声道 · 不会自动外放或上传录音`
+                      : "仅返回音频输入设备信息，不会开启录音"}
+                  </small>
+                  {request.device !== undefined && (
+                    <small>请求设备：{String(request.device)}</small>
+                  )}
+                </div>
+                {request.stage === "opening" ? (
+                  <span role="status">正在取得音频权限…</span>
+                ) : (
+                  <Button
+                    onClick={(event) =>
+                      void audioInput.current?.allow(
+                        request.requestId,
+                        event.nativeEvent,
+                      )
+                    }
+                  >
+                    允许此作品本次预览
+                  </Button>
+                )}
+                <Button
+                  onClick={() => audioInput.current?.deny(request.requestId)}
+                >
+                  拒绝本预览
+                </Button>
+              </div>
+            ))}
+            {(audioInputState.granted ||
+              audioInputState.enumerationGranted) && (
+              <div className="live-audio-input-active">
+                <span>
+                  {audioInputState.active.length
+                    ? `麦克风使用中 · ${audioInputState.active.length} 个音频节点`
+                    : audioInputState.granted
+                      ? "麦克风已授权此预览 · 当前没有录音节点"
+                      : "此预览已获设备查询权限 · 不录音"}
+                </span>
+                {audioInputState.active[0]?.device?.label && (
+                  <small>{audioInputState.active[0].device.label}</small>
+                )}
+                <Button
+                  onClick={() =>
+                    audioInput.current?.stop("用户停止了本预览的麦克风")
+                  }
+                >
+                  停止麦克风并撤销授权
+                </Button>
+              </div>
+            )}
+            {audioInputState.error && (
+              <p role="alert">{audioInputState.error}</p>
+            )}
+            {audioInputState.denied && (
+              <div className="live-audio-input-active">
+                <small>
+                  麦克风已停止；代码不能自行重新开启。允许重新申请后，重新播放或调用
+                  open() 可再次发起请求。
+                </small>
+                <Button
+                  onClick={(event) =>
+                    audioInput.current?.reallow(event.nativeEvent)
+                  }
+                >
+                  允许重新申请麦克风
+                </Button>
+              </div>
+            )}
+          </section>
+        )}
       <div
         ref={split}
         className={`creation-split ${dockOpen ? "chat-open" : "chat-closed"} ${dragging ? "dragging" : ""}`}
@@ -394,7 +532,12 @@ export function Creation({ id, notify }) {
               {preview?.fallback && (
                 <span>实时预览暂不可用，当前显示已发布版本。</span>
               )}
-              {previewError && <ErrorNote error={previewError} />}
+              {previewError && (
+                <details className="preview-error-details">
+                  <summary>实时预览更新失败 · 查看错误</summary>
+                  <pre>{previewDiagnostic}</pre>
+                </details>
+              )}
               <Button disabled={browserBusy} onClick={retryPreview}>
                 重新连接实时预览
               </Button>
@@ -411,9 +554,9 @@ export function Creation({ id, notify }) {
               )}
               <iframe
                 key={playerKey}
-                ref={iframe}
+                ref={bindPlayer}
                 title="作品播放器"
-                src={preview.url}
+                src={previewFrameUrl()}
                 onLoad={() => {
                   sendPlayer("configure-view", {
                     preferences: playerPreferences.current,

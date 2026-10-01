@@ -1,4 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
+import {
+  validateAudioDocument,
+  audioEngines,
+  audioProcessors,
+} from "../../src/engine/audio-document.mjs";
+import { previewMessageSchema } from "../../src/contracts/platform.mjs";
 import { PREVIEW_VERSION } from "../../server/preview-version.mjs";
 
 /** Only API state is simulated. The UI/player served by the harness is production code. */
@@ -99,7 +105,8 @@ export async function mockApi(context, playerUrl, uiUrl) {
   ];
   const engine = {
     id: randomUUID(),
-    name: "本地验收声线",
+    name: "外部验收声线",
+    kind: "external",
     enabled: true,
     config: { voice: "fixture" },
     voices: [{ id: "fixture", name: "测试声线" }],
@@ -107,6 +114,51 @@ export async function mockApi(context, playerUrl, uiUrl) {
   const state = {
     calls,
     errors,
+    live: {
+      sessionId: randomUUID(),
+      sourceRevision: "1".repeat(64),
+      revision: 1,
+      state: "ready",
+    },
+    failLive: false,
+    audio: {
+      document: validateAudioDocument(
+        {
+          schemaVersion: 1,
+          sources: [
+            {
+              id: "generator",
+              kind: "generated",
+              module: "audio",
+              trackId: "melody",
+              engine: "web-audio",
+            },
+          ],
+          tracks: [{ id: "music", name: "验收音乐" }],
+          clips: [
+            {
+              id: "music_clip",
+              track: "music",
+              source: "generator",
+              start: 0,
+              duration: 2,
+            },
+          ],
+          master: { gain: 1, processors: [] },
+        },
+        { projectId: work.project, duration: 2 },
+      ),
+      sha256: "a".repeat(64),
+      projectSha256: "b".repeat(64),
+      declared: true,
+      duration: 2,
+      fps: 12,
+      engines: audioEngines,
+      processors: audioProcessors,
+      path: "audio.json",
+    },
+    snapshotRequests: [],
+    speechJobs: new Map(),
     repo,
     work,
     chat,
@@ -144,6 +196,7 @@ export async function mockApi(context, playerUrl, uiUrl) {
         return { items: state.repos, total: state.repos.length };
       case "repositories_get":
         return state.repos.find((r) => r.id === args.repo) || repo;
+      case "models_list":
       case "github_accounts":
       case "tools_info":
       case "tokens_list":
@@ -153,6 +206,40 @@ export async function mockApi(context, playerUrl, uiUrl) {
         return {
           ...(state.works.find((w) => w.id === args.id) || work),
           repository: repo,
+        };
+      case "works_files":
+        return [];
+      case "works_audio":
+        return structuredClone(state.audio);
+      case "works_audio_edit": {
+        if (
+          args.expectedSha256 !== state.audio.sha256 ||
+          args.projectSha256 !== state.audio.projectSha256
+        )
+          throw Error("验收：混音保存版本冲突");
+        if (args.operations.length !== 1 || args.operations[0].op !== "replace")
+          throw Error("验收：仅支持权威音频文档保存");
+        const document = validateAudioDocument(args.operations[0].document, {
+          projectId: work.project,
+          duration: 2,
+        });
+        state.audio = {
+          ...state.audio,
+          document,
+          sha256: createHash("sha256")
+            .update(JSON.stringify(document))
+            .digest("hex"),
+        };
+        return structuredClone(state.audio);
+      }
+      case "works_live_preview":
+        if (state.failLive) throw Error("验收：实时预览连接失败");
+        return {
+          ...state.live,
+          source: args.task ? "task" : "work",
+          mediaMode: args.mediaMode || "compressed",
+          url: playerUrl + "?fixtureLive=" + state.live.sessionId,
+          expires: new Date(Date.now() + 3600000).toISOString(),
         };
       case "works_preview_status":
         if (state.previewError) throw Error("验收：预览版本核对失败");
@@ -171,10 +258,19 @@ export async function mockApi(context, playerUrl, uiUrl) {
         return state.tasks;
       case "works_queue_status":
         return {
-          now, controllerReady: true, concurrency: 2,
-          items: state.tasks.filter(task => task.state === "queued").map(task => ({
-            id: task.id, code: "waiting-claim", reason: "等待测试调度器领取", queuedMs: 0, ahead: 0, blocker: null,
-          })),
+          now,
+          controllerReady: true,
+          concurrency: 2,
+          items: state.tasks
+            .filter((task) => task.state === "queued")
+            .map((task) => ({
+              id: task.id,
+              code: "waiting-claim",
+              reason: "等待测试调度器领取",
+              queuedMs: 0,
+              ahead: 0,
+              blocker: null,
+            })),
         };
       case "works_chats":
         return [chat];
@@ -363,13 +459,38 @@ export async function mockApi(context, playerUrl, uiUrl) {
         Object.assign(a, args);
         return a;
       }
-      case "speech_test":
+      case "speech_test": {
+        const started = Date.now();
+        state.speechJobs.set(args.requestId, {
+          requestId: args.requestId,
+          state: "succeeded",
+          phase: "completed",
+          receivedBytes: 4844,
+          started,
+          finished: started + 1,
+          elapsedMs: 1,
+        });
         return {
           task: randomUUID(),
           url: uiUrl + "/api/fixture.wav",
           expiresAt: new Date(Date.now() + 86400000).toISOString(),
           temporary: true,
         };
+      }
+      case "speech_status": {
+        const job = state.speechJobs.get(args.requestId);
+        if (!job) throw Error("语音请求状态不存在或已过期");
+        return { ...job };
+      }
+      case "speech_cancel": {
+        const job = state.speechJobs.get(args.requestId);
+        if (!job) throw Error("语音请求不存在");
+        return {
+          requestId: args.requestId,
+          cancelRequested: false,
+          state: job.state,
+        };
+      }
       case "works_speech_adopt":
         return { asset: assets[1], adopted: true, resynthesized: false };
       case "repositories_add": {
@@ -407,13 +528,15 @@ export async function mockApi(context, playerUrl, uiUrl) {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/me")
       return route.fulfill({ json: { admin: true } });
-    if (url.pathname.endsWith("/preview"))
+    if (url.pathname.endsWith("/preview")) {
+      state.snapshotRequests.push(url.pathname);
       return route.fulfill({
         json: {
-          url: playerUrl,
+          url: playerUrl + "?fixtureSnapshot=" + url.pathname.split("/").at(-2),
           expires: new Date(Date.now() + 3600000).toISOString(),
         },
       });
+    }
     if (
       url.pathname === "/api/fixture.wav" ||
       /\/api\/assets\/[^/]+\/file/.test(url.pathname)
@@ -465,6 +588,60 @@ export async function mockApi(context, playerUrl, uiUrl) {
         if (s.route === route) subscriptions.delete(s);
     });
   });
+  // The fake API owns source revisions; all live status messages still originate
+  // from the real sandboxed player WindowProxy, exercising the production guard.
+  await context.exposeBinding("__FRAME_REVIEW_MANIFEST__", () => ({
+    ...state.live,
+  }));
+  await context.addInitScript(() => {
+    if (!new URL(location.href).searchParams.has("fixtureLive")) return;
+    window.__FRAME_REVIEW_LIVE__ = {
+      retries: 0,
+      contexts: [],
+      announced: false,
+    };
+    window.addEventListener("message", (event) => {
+      if (event.source !== parent) return;
+      const value = event.data,
+        record = window.__FRAME_REVIEW_LIVE__;
+      if (value?.type === "frame-live-retry") record.retries++;
+      if (
+        value?.type !== "frame-player-command" ||
+        value.command !== "configure-work"
+      )
+        return;
+      record.contexts.push(value.context);
+      if (!record.announced && value.context?.previewMode === "live") {
+        record.announced = true;
+        void window.__FRAME_REVIEW_MANIFEST__().then((manifest) =>
+          parent.postMessage(
+            {
+              type: "frame-live-preview",
+              state: manifest.state,
+              sourceRevision: manifest.sourceRevision,
+              revision: manifest.revision,
+            },
+            "*",
+          ),
+        );
+      }
+    });
+  });
+  state.sendLive = async (frame, value) => {
+    const message = previewMessageSchema.parse({
+      type: "frame-live-preview",
+      ...value,
+    });
+    state.live.state = message.state;
+    if (message.state === "ready" && message.sourceRevision) {
+      state.live.sourceRevision = message.sourceRevision;
+      state.live.revision = message.revision ?? state.live.revision;
+    }
+    await frame.evaluate(
+      (message) => parent.postMessage(message, "*"),
+      message,
+    );
+  };
   state.broadcast = updateAll;
   return state;
 }

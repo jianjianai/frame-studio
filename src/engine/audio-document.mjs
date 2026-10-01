@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { audioEngines, audioProcessors } from "./audio-capabilities.mjs";
+import { audioEngines, audioProcessors, toneEffectNames } from "./audio-capabilities.mjs";
 export { audioEngines, audioProcessors } from "./audio-capabilities.mjs";
 import { assetReferenceSchema } from "./visual-document.mjs";
 const n = z.number().finite();
@@ -19,7 +19,18 @@ export const automationSchema = z
     (a) => a.every((k, i) => !i || k.at > a[i - 1].at),
     "Automation times must increase",
   );
+export const stretchOptionsSchema = z.strictObject({
+  tonalityHz: n.min(20).max(24000).default(8000),
+  formantSemitones: n.min(-48).max(48).default(0),
+  formantCompensation: z.boolean().default(false),
+  formantBaseHz: n.min(0).max(2000).default(0),
+  preset: z.enum(["default", "cheaper"]).default("default"),
+  blockMs: n.min(0).max(500).default(0),
+  intervalMs: n.min(0).max(250).default(0),
+  splitComputation: z.boolean().default(false),
+}).refine(v => !v.blockMs || !v.intervalMs || v.intervalMs <= v.blockMs, "Stretch interval must not exceed block length");
 const effects = [
+  ["tone", { effect: z.enum(toneEffectNames), options: z.record(z.string(), z.json()).superRefine((options,ctx)=>{for(const key of ["context","onload","onerror"])if(key in options)ctx.addIssue({code:"custom",path:[key],message:"Tone context and callbacks belong to the host; use createToneAudio for code callbacks"});}).default({}), tail: n.min(0).max(120).default(2) }],
   ["gain", { gain: n.min(0).max(4).default(1) }],
   ["pan", { pan: n.min(-1).max(1).default(0) }],
   [
@@ -147,6 +158,9 @@ export const audioClipSchema = z.strictObject({
   offset: n.nonnegative().default(0),
   phase: n.nonnegative().default(0),
   rate: n.min(0.05).max(16).default(1),
+  pitch: n.min(-48).max(48).default(0),
+  preservePitch: z.boolean().default(false),
+  stretch: stretchOptionsSchema.optional(),
   loop: n.min(0.01).max(3600).optional(),
   gain: n.min(0).max(4).default(1),
   pan: n.min(-1).max(1).default(0),
@@ -251,6 +265,9 @@ export function compileAudioTracks(value) {
       offset: c.offset,
       phase: c.phase,
       playbackRate: c.rate,
+      pitch: c.pitch,
+      preservePitch: c.preservePitch,
+      stretch: c.stretch,
       ...(c.loop ? { loop: c.loop } : {}),
       gain: c.gain,
       muted: c.muted || channel.muted,

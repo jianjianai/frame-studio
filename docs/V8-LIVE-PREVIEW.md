@@ -53,3 +53,7 @@ V7 `audio.json`、旧 `audioTracks` 和 `createAudio` 生成器直接进入实�
 
 
 实时预览在无同源权限的沙箱中运行。项目的 `new Worker(new URL('./worker.ts', import.meta.url))` 会打包为 classic Worker，并通过 Blob 引导读取该版本冻结的素材；名称等 classic 选项保持有效，项目仍需在 dispose 时 terminate。当前 Chromium 的此沙箱不能运行 module Worker，即使只执行一行 postMessage 也会失败；显式 `type:'module'` 会给出可操作的错误，改用上述 classic 写法。失败更新保留最后成功的画面。
+
+## 素材模式与完整缓存
+
+Frame 8.1 的原始素材、压缩素材与完整缓存模式、可见下载进度、版本更新与 AI 控制见 [PREVIEW-MODES.md](PREVIEW-MODES.md)。音频完整接口见 [AUDIO-CREATIVE.md](AUDIO-CREATIVE.md)。

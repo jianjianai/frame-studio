@@ -226,7 +226,7 @@ describe("authoring capability catalog", () => {
       getAuthoringCapabilities({ query: " TONE.JS " }).items.map(
         (item) => item.id,
       ),
-    ).toEqual(["tone"]);
+    ).toEqual(["tone", "audio-processor-tone"]);
     expect(
       getAuthoringCapabilities({ id: " three " }).items.map((item) => item.id),
     ).toEqual(["three"]);

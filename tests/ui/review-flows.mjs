@@ -83,6 +83,30 @@ export async function flowChecks(h) {
       exact: true,
     });
     await dialog.getByLabel("配音文字", { exact: true }).fill("请听这段旁白");
+    await expect(
+      dialog.getByRole("button", {
+        name: "生成试听（不加入作品）",
+        exact: true,
+      }),
+    )
+      .toBeEnabled()
+      .catch(async (error) => {
+        console.error(
+          "Voice fixture diagnostic:",
+          await dialog.evaluate((element) => ({
+            text: element.querySelector('textarea[name="text"]')?.value,
+            voice: element.querySelector('[name="voice"]')?.value,
+            engine:
+              element.querySelector('[name="engine"]')?.selectedOptions[0]
+                ?.textContent,
+            pending: element
+              .querySelector("form")
+              ?.getAttribute("data-pending"),
+            unavailable: element.textContent.includes("此模型尚未安装"),
+          })),
+        );
+        throw error;
+      });
     await dialog
       .getByRole("button", { name: "生成试听（不加入作品）", exact: true })
       .click();
@@ -130,6 +154,35 @@ export async function flowChecks(h) {
     await expect(
       page.locator('iframe[title="历史版本比较播放器"]'),
     ).toBeVisible();
+    const history = page.locator('iframe[title="历史版本比较播放器"]');
+    assert((await history.getAttribute("src")).includes("fixtureSnapshot="));
+    assert(!(await history.getAttribute("src")).includes("fixtureLive="));
+    assert(
+      state.snapshotRequests.length > 0,
+      "Historical comparison opens an immutable task snapshot",
+    );
+    await expect
+      .poll(() =>
+        page.frames().some((f) => f.url().includes("fixtureSnapshot=")),
+      )
+      .toBe(true);
+    const snapshotFrame = page
+      .frames()
+      .find((f) => f.url().includes("fixtureSnapshot="));
+    await snapshotFrame.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
+    await snapshotFrame.evaluate(() =>
+      parent.postMessage(
+        {
+          type: "frame-live-preview",
+          state: "error",
+          error: "A history player cannot replace the active live state",
+        },
+        "*",
+      ),
+    );
+    await expect(h.player().locator(".work-preview-status")).toHaveText(
+      "实时预览",
+    );
     assert.equal(
       state.calls.filter((c) => c.name === "works_restore").length,
       0,
@@ -177,10 +230,42 @@ export async function flowChecks(h) {
     await dialog.getByLabel("导出格式与位置").selectOption("webm");
     await dialog.getByLabel("导出分辨率").selectOption("640");
     await dialog.getByLabel("导出帧率").selectOption("12");
+    const liveCalls = () =>
+      state.calls.filter((c) => c.name === "works_live_preview").length;
+    await h.frame().evaluate(() => {
+      window.__FRAME_REVIEW_EXPORT_HOLD__ = true;
+      window.__FRAME_REVIEW_EXPORT_WIDTH__ = 640;
+    });
     const download = page.waitForEvent("download", { timeout: 120000 });
     await dialog
       .getByRole("button", { name: "开始本机导出 WebM", exact: true })
       .click();
+    await h
+      .frame()
+      .waitForFunction(
+        () =>
+          window.__FRAME_REVIEW_EXPORT_WAITING__ &&
+          window.__FRAME_PREVIEW_READERS__ > 0,
+      );
+    await expect(
+      h.player().getByRole("button", { name: "重新连接", exact: true }),
+    ).toBeDisabled();
+    const renewals = liveCalls();
+    await h.frame().evaluate(() => {
+      for (let i = 0; i < 5; i++)
+        parent.postMessage({ type: "frame-preview-update-request" }, "*");
+    });
+    await page.waitForTimeout(80);
+    assert.equal(
+      liveCalls(),
+      renewals,
+      "Export freezes the session; even trusted retries cannot reattach while encoding",
+    );
+    assert.equal(
+      await h.frame().evaluate(() => window.__FRAME_PREVIEW_READERS__),
+      1,
+    );
+    await h.frame().evaluate(() => window.__FRAME_REVIEW_EXPORT_CONTINUE__());
     const file = await download,
       target = path.join(reportDir, "fixture.webm");
     await file.saveAs(target);
@@ -189,6 +274,12 @@ export async function flowChecks(h) {
       fs.readFileSync(target).subarray(0, 4).toString("hex"),
       "1a45dfa3",
     );
+    await h
+      .frame()
+      .waitForFunction(() => window.__FRAME_PREVIEW_READERS__ === 0);
+    await expect(
+      h.player().getByRole("button", { name: "重新连接", exact: true }),
+    ).toBeEnabled();
     await expect(
       dialog.getByRole("button", { name: "再次下载 WebM", exact: true }),
     ).toBeVisible();

@@ -114,6 +114,17 @@ function validateRegularWithin(base, file) {
   }
 }
 
+/** A mode belongs to a viewer, not the shared compile session. The resolver is installed
+ * before project modules run, and may map immutable originals to verified browser cache bytes.
+ */
+export function liveAssetRuntime({ id, revisions, sizes = {}, kinds = {} }) {
+  return "const revisions=" + JSON.stringify(revisions) + ",sizes=" + JSON.stringify(sizes) + ",kinds=" + JSON.stringify(kinds) + ";" +
+          "const base=typeof document==='undefined'?(self.__FRAME_LIVE_ASSET_BASE__||new URL('../',self.location.href).href):new URL('../',import.meta.url).href;" +
+          "const parse=(relative)=>{const value=String(relative),match=value.match(/(?:^|\\/)(films\\/" + id + "\\/[^?#]+)(?:\\?([^#]*))?/);let key=match?decodeURIComponent(match[1]):value.replace(/^\\.\\//,'').replace(/^\\//,'');const explicit=match?new URLSearchParams(match[2]||'').get('v'):null;return {key,revision:/^[a-f0-9]{64}$/.test(explicit||'')?explicit:revisions[key]};};" +
+          "export const assetUrl=(relative)=>{const {key,revision}=parse(relative);const url=base+key+(revision?'?v='+revision:'');return globalThis.__FRAME_PREVIEW_ASSET_URL__?.(url)||url;};" +
+          "export const previewAssetUrl=(relative,quality='standard')=>{const selected=globalThis.__FRAME_PREVIEW_MEDIA_MODE__||globalThis.__FRAME_LIVE_PREVIEW__?.mediaMode;const mode=selected||'compressed';if(mode!=='compressed'||(globalThis.__FRAME_PREVIEW_READERS__||0)>0)return assetUrl(relative);const {key,revision}=parse(relative);const kind=kinds[key];return revision&&(selected==='compressed'||quality!=='high')&&kind?base+kind+'/'+revision+'/'+(quality==='draft'?'economy':'preview'):assetUrl(relative);};";
+}
+
 /** Persistent Rolldown graph, a bounded set of hashed chunks, no audio baking or type-check gate.
  * It publishes only after every output file was written. Old outputs remain usable until session disposal.
  */
@@ -159,6 +170,12 @@ export async function createLivePreviewBundle({ root, projectDir, id, outDir, on
     const project = chunks.find(file => file.isEntry && file.name === "project");
     const player = chunks.find(file => file.isEntry && file.name === "player");
     if (!project || !player) throw Error("Live bundle must contain player and project entries");
+    // Generator closures may keep decoded sample buffers or immutable assetUrl maps. A sample/bank edit
+    // must retire the old module even when audio.ts did not change. Dynamic loaders can use any owned
+    // runtime asset, so conservatively version the complete public inventory.
+    const generatorAssetRevision = digest(JSON.stringify(Object.entries(inventory.assets)
+      .map(([src, asset]) => [src, asset.revision]).sort(([a], [b]) => a.localeCompare(b))));
+    audioGeneratorRevision = digest(audioGeneratorRevision + generatorAssetRevision);
     inventory.fingerprints.audio = digest(inventory.fingerprints.audio + audioGeneratorRevision);
     const moduleGraph = Object.fromEntries(chunks.map(chunk => [chunk.fileName, { imports: chunk.imports, dynamicImports: chunk.dynamicImports }]));
     const preloads = new Set();
@@ -224,11 +241,7 @@ export async function createLivePreviewBundle({ root, projectDir, id, outDir, on
         this.addWatchFile(marker);
         const { revisions, sizes, kinds } = JSON.parse(fs.readFileSync(marker, "utf8"));
         return "export * from " + JSON.stringify(typesFile) + ";" + previewWorkerRuntime +
-          "const revisions=" + JSON.stringify(revisions) + ",sizes=" + JSON.stringify(sizes) + ",kinds=" + JSON.stringify(kinds) + ";" +
-          "const base=typeof document==='undefined'?(self.__FRAME_LIVE_ASSET_BASE__||new URL('../',self.location.href).href):new URL('../',import.meta.url).href;" +
-          "const parse=(relative)=>{const value=String(relative),match=value.match(/(?:^|\\/)(films\\/" + id + "\\/[^?#]+)(?:\\?([^#]*))?/);let key=match?decodeURIComponent(match[1]):value.replace(/^\\.\\//,'').replace(/^\\//,'');const explicit=match?new URLSearchParams(match[2]||'').get('v'):null;return {key,revision:/^[a-f0-9]{64}$/.test(explicit||'')?explicit:revisions[key]};};" +
-          "export const assetUrl=(relative)=>{const {key,revision}=parse(relative);return base+key+(revision?'?v='+revision:'');};" +
-          "export const previewAssetUrl=(relative,quality='standard')=>{const {key,revision}=parse(relative);const kind=kinds[key];return revision&&quality!=='high'&&kind?base+kind+'/'+revision+'/'+(quality==='draft'?'economy':'preview'):assetUrl(relative);};";
+          liveAssetRuntime({ id, revisions, sizes, kinds });
       }
       if (moduleId !== virtual) {
         const file = clean(moduleId);

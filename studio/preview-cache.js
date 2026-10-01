@@ -26,6 +26,45 @@ async function trim(cache) {
 }
 export function previewCacheBridge(iframe, url) {
   const base = new URL("./", new URL(url, location.href));
+  let releaseResources = () => {},
+    disposed = false;
+  const queuedResources = [];
+  const pendingResources = (event) => {
+    if (
+      event.source !== iframe.current?.contentWindow ||
+      event.data?.type !== "frame-preview-resource-cache"
+    )
+      return;
+    const port = event.ports[0];
+    if (!port) return;
+    port.postMessage({ ack: true });
+    queuedResources.push(event);
+  };
+  if (
+    base.origin === location.origin &&
+    base.pathname.startsWith("/preview-live/")
+  ) {
+    window.addEventListener("message", pendingResources);
+    import("./live-resource-cache.js")
+      .then(({ liveResourceCacheBridge }) => {
+        if (disposed) return;
+        releaseResources = liveResourceCacheBridge(
+          iframe,
+          url,
+          queuedResources.splice(0),
+        );
+        window.removeEventListener("message", pendingResources);
+      })
+      .catch((error) => {
+        window.removeEventListener("message", pendingResources);
+        for (const event of queuedResources.splice(0)) {
+          event.ports[0].postMessage({
+            error: "浏览器缓存模块加载失败，请重试：" + error.message,
+          });
+          event.ports[0].close();
+        }
+      });
+  }
   const pending = new Map();
   const lifetime = new AbortController();
   const valid = async (data, sha) => {
@@ -135,6 +174,13 @@ export function previewCacheBridge(iframe, url) {
   };
   window.addEventListener("message", receive);
   return () => {
+    disposed = true;
+    window.removeEventListener("message", pendingResources);
+    for (const event of queuedResources.splice(0)) {
+      event.ports[0].postMessage({ error: "预览已关闭" });
+      event.ports[0].close();
+    }
+    releaseResources();
     lifetime.abort();
     window.removeEventListener("message", receive);
   };

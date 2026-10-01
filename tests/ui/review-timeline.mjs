@@ -38,6 +38,36 @@ export function populateTimelineFixture(f) {
       ),
     }),
   );
+  // Hold one real export frame until the UI has exercised its frozen-preview
+  // controls. This only edits the UUID fixture; no production renderer is mocked.
+  const sceneSource = fs.readFileSync(f.file("scene.ts"), "utf8");
+  assert(sceneSource.includes("export function createScene("));
+  fs.writeFileSync(
+    f.file("scene.ts"),
+    sceneSource.replace(
+      "export function createScene(",
+      "function createFixtureScene(",
+    ) +
+      `
+export function createScene(options: SceneOptions): Scene {
+  const scene = createFixtureScene(options), prepare = scene.prepareFrame?.bind(scene);
+  scene.prepareFrame = async (time, frameOptions) => {
+    const scope = globalThis as typeof globalThis & {
+      __FRAME_PREVIEW_READERS__?: number; __FRAME_REVIEW_EXPORT_HOLD__?: boolean;
+      __FRAME_REVIEW_EXPORT_WAITING__?: boolean; __FRAME_REVIEW_EXPORT_WIDTH__?: number;
+      __FRAME_REVIEW_EXPORT_CONTINUE__?: () => void;
+    };
+    if ((scope.__FRAME_PREVIEW_READERS__ || 0) > 0 && scope.__FRAME_REVIEW_EXPORT_HOLD__ && options.width === scope.__FRAME_REVIEW_EXPORT_WIDTH__) {
+      scope.__FRAME_REVIEW_EXPORT_HOLD__ = false;
+      scope.__FRAME_REVIEW_EXPORT_WAITING__ = true;
+      await new Promise<void>((resolve) => { scope.__FRAME_REVIEW_EXPORT_CONTINUE__ = resolve; });
+    }
+    await prepare?.(time, frameOptions);
+  };
+  return scene;
+}
+`,
+  );
 }
 
 export async function timelineChecks(h) {

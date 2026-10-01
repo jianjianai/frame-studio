@@ -28,6 +28,7 @@ export function bindLiveProjectWorkers(code) {
 }
 
 export const previewWorkerRuntime = `export function createPreviewWorker(url,options){
+  const cached=globalThis.__FRAME_PREVIEW_WORKER__?.(url,options);if(cached)return cached;
   if(options?.type==='module')throw Error("Opaque live preview supports classic bundled workers; omit type:'module'.");
   const href=new URL(String(url),globalThis.location.href).href;
   const base=new URL('../',href).href;

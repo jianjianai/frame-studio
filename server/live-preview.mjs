@@ -11,6 +11,8 @@ import { copyTree, treeHash } from "./project-files.mjs";
 import { createLivePreviewWorker } from "./live-preview-worker.mjs";
 import { LivePreviewMedia } from "./live-preview-media.mjs";
 import { liveSourceInventory } from "../scripts/live-preview-bundle.mjs";
+import { bundleResources, runtimeResources, liveResource } from "./live-preview-resources.mjs";
+import { livePreviewMediaModeSchema } from "../src/contracts/live-preview.mjs";
 
 const runtimeRoot = fileURLToPath(new URL("../", import.meta.url));
 const brotli = promisify(brotliCompress), gz = promisify(gzip);
@@ -23,9 +25,9 @@ const AUDIO = /\.(?:wav|mp3|ogg|opus|flac|m4a|aac|aiff?|pcm)$/i;
 export class LivePreviewSessions {
   constructor({ db, data, repos, root = runtimeRoot, bundleFactory = createLivePreviewWorker,
     idleMs = 10 * 60 * 1000, leaseMs = 60 * 60 * 1000, maxSessions = 4,
-    maxBundleBytes = 512 * 1024 * 1024, media } = {}) {
+    maxBundleBytes = 512 * 1024 * 1024, maxRuntimeBytes = 32 * 1024 * 1024, media } = {}) {
     this.db = db; this.data = data; this.repos = repos; this.root = root; this.bundleFactory = bundleFactory;
-    this.idleMs = idleMs; this.leaseMs = leaseMs; this.maxSessions = maxSessions; this.maxBundleBytes = maxBundleBytes;
+    this.idleMs = idleMs; this.leaseMs = leaseMs; this.maxSessions = maxSessions; this.maxBundleBytes = maxBundleBytes; this.maxRuntimeBytes = maxRuntimeBytes;
     this.sessions = new Map(); this.keys = new Map(); this.capabilities = new Map(); this.pending = new Map(); this.closed = false;
     this.media = media || new LivePreviewMedia({ data });
     fs.mkdirSync(path.join(data, "live-preview"), { recursive: true });
@@ -47,19 +49,21 @@ export class LivePreviewSessions {
     const { dir } = await this.repos.project(work.repo, work.project);
     return { projectDir: dir, source: "work", task: null };
   }
-  async start({ work, task, ai = false }) {
+  async start({ work, task, ai = false, mediaMode = "compressed" }) {
+    const checkedMode = livePreviewMediaModeSchema.safeParse(mediaMode);
+    if (!checkedMode.success) throw problem(400, "Invalid preview media mode");
     if (this.closed) throw problem(503, "Live preview service stopped");
     if (work.deleted) throw problem(410, "Work is in the recycle bin");
     const key = work.id + ":" + (task || "work");
     const existing = this.sessions.get(this.keys.get(key));
     if (existing && !existing.closed) {
       existing.expires = Date.now() + this.leaseMs; existing.lastUsed = Date.now();
-      return this.link(existing, ai);
+      return this.link(existing, ai, mediaMode);
     }
-    if (this.pending.has(key)) return this.link(await this.pending.get(key), ai);
+    if (this.pending.has(key)) return this.link(await this.pending.get(key), ai, mediaMode);
     const creation = this.create(work, task, key);
     this.pending.set(key, creation);
-    try { return this.link(await creation, ai); } finally { this.pending.delete(key); }
+    try { return this.link(await creation, ai, mediaMode); } finally { this.pending.delete(key); }
   }
   async create(work, task, key) {
     const source = await this.source(work, task);
@@ -69,14 +73,17 @@ export class LivePreviewSessions {
         .sort((a, b) => a.lastUsed - b.lastUsed)[0];
       if (idle) await this.stop(idle.id);
       else throw problem(503, "Live preview capacity is busy; close an unused preview and retry");
+      // Another start can finish while the old worker is stopping.
+      if (this.sessions.size >= this.maxSessions)
+        throw problem(503, "Live preview capacity is busy; close an unused preview and retry");
     }
     const id = randomUUID(), secret = token(), now = Date.now();
     const session = { id, key, secret, work: work.id, repo: work.repo, project: work.project, ...source,
       outDir: path.join(this.data, "live-preview", id), expires: now + this.leaseMs, lastUsed: now,
       state: "starting", revision: 0, manifest: null, error: null, clients: 0, closed: false,
       emitter: new EventEmitter(), files: new Set(), fileBytes: new Map(), assets: new Map(), assetKeys: new Map(),
-      mediaFiles: new Map(), mediaBytes: 0, mediaReserved: 0, sourceSnapshots: new Map(), releases: new Set(), publish: Promise.resolve(),
-      lastLeaseWritten: 0, leaseWrite: Promise.resolve() };
+      mediaFiles: new Map(), mediaBytes: 0, mediaReserved: 0, runtimeFiles: new Map(), runtimeBytes: 0, runtimeSources: new Map(), resourceHashes: new Map(), sourceSnapshots: new Map(), releases: new Set(), publish: Promise.resolve(),
+      abort: new AbortController(), mediaJobs: new Set(), lastLeaseWritten: 0, leaseWrite: Promise.resolve() };
     session.emitter.setMaxListeners(100);
     this.sessions.set(id, session); this.keys.set(key, id); this.capabilities.set(hash(secret), id);
     await this.writeLease(session);
@@ -109,7 +116,25 @@ export class LivePreviewSessions {
     for (const file of (bundle.files || []).filter(file => !session.files.has(file))) {
       const output = confined(session.outDir, file);
       await Promise.all(["", ".br", ".gz"].map(suffix => fsp.rm(output + suffix, { force: true })));
+      session.resourceHashes.delete(file);
     }
+    // Candidate media is not reachable until commit. Failed edits must not consume the original-media quota forever.
+    for (const [revision, record] of session.mediaFiles) {
+      if (session.assets.has(revision)) continue;
+      await fsp.rm(record.file, { force: true });
+      session.mediaFiles.delete(revision); session.mediaBytes -= record.bytes;
+    }
+    const retainedRuntime = new Set([...session.sourceSnapshots.values()]
+      .flatMap(snapshot => snapshot.manifest.resources.filter(resource => resource.kind === "runtime")
+        .map(resource => resource.path + ":" + resource.revision)));
+    for (const [key, record] of session.runtimeFiles) {
+      if (retainedRuntime.has(key)) continue;
+      session.runtimeFiles.delete(key); session.runtimeBytes -= record.bytes;
+      if (![...session.runtimeFiles.values()].some(value => value.file === record.file))
+        await fsp.rm(record.file, { force: true });
+    }
+    for (const [relative, record] of session.runtimeSources)
+      if (!session.runtimeFiles.has(relative + ":" + record.resource.revision)) session.runtimeSources.delete(relative);
     if (!session.sourceSnapshots.has(bundle.sourceRevision))
       await fsp.rm(path.join(session.outDir, "source-snapshots", bundle.sourceRevision), { recursive: true, force: true });
   }
@@ -118,8 +143,12 @@ export class LivePreviewSessions {
     const entries = Object.entries(bundle.assets).map(([src, asset]) => ({ ...asset, src }));
     // Preserve all owned runtime media before publishing a revision. This is local bounded copying,
     // never full-film audio generation; already captured identities are reused.
-    for (let index = 0; index < entries.length; index += 4)
-      await Promise.all(entries.slice(index, index + 4).map(asset => this.media.snapshot(session, asset)));
+    for (let index = 0; index < entries.length; index += 4) {
+      const results = await Promise.allSettled(entries.slice(index, index + 4).map(asset => this.media.snapshot(session, asset)));
+      const failed = results.find(result => result.status === "rejected");
+      // Wait for sibling copies before rollback; otherwise a late sibling can register leaked candidate bytes.
+      if (failed) throw failed.reason;
+    }
     if (session.closed) return;
     const codeDir = path.join(session.outDir, "source-snapshots", bundle.sourceRevision);
     const newSizes = new Map(session.fileBytes);
@@ -149,7 +178,6 @@ export class LivePreviewSessions {
     const previous = session.manifest, assetRevisions = {}, audioSources = {};
     for (const asset of entries) {
       assetRevisions[asset.src] = asset.revision;
-      session.assets.set(asset.revision, asset); session.assetKeys.set(asset.src + ":" + asset.revision, asset);
       if (AUDIO.test(asset.src) && asset.bytes >= 256 * 1024) {
         const base = "/preview-live/" + session.secret + "/audio/" + asset.revision + "/";
         const originalUrl = "/preview-live/" + session.secret + "/" + asset.src + "?v=" + asset.revision;
@@ -161,7 +189,15 @@ export class LivePreviewSessions {
           originalUrl: "/preview-live/" + session.secret + "/" + asset.src + "?v=" + asset.revision };
       }
     }
+    const resources = [
+      ...await bundleResources(session, bundle.files),
+      ...entries.map(asset => liveResource(session, asset.src, asset.revision, asset.bytes, "media")),
+      ...await runtimeResources(session, this.root, this.maxRuntimeBytes),
+    ];
+    if (resources.length > 20000) throw problem(413, "Live preview contains too many runtime resources");
     const manifest = {
+      workId: session.work, projectId: session.project,
+      mediaModes: ["original", "compressed", "cached"], defaultMediaMode: "compressed", resources,
       schemaVersion: 1, sessionId: session.id, revision: session.revision + 1, source: session.source,
       sourceRevision: bundle.sourceRevision, projectUrl: bundle.projectUrl, fingerprints: bundle.fingerprints,
       changes: {
@@ -174,6 +210,9 @@ export class LivePreviewSessions {
       preloads: bundle.preloads || [], moduleGraph: bundle.moduleGraph || {},
       createdAt: new Date().toISOString(), buildMs: bundle.buildMs,
     };
+    for (const asset of entries) {
+      session.assets.set(asset.revision, asset); session.assetKeys.set(asset.src + ":" + asset.revision, asset);
+    }
     session.fileBytes = newSizes; for (const file of bundle.files) session.files.add(file);
     session.shell = { playerUrl: bundle.playerUrl, styles: bundle.styles };
     session.manifest = manifest; session.revision = manifest.revision; session.state = "ready"; session.error = null;
@@ -184,8 +223,11 @@ export class LivePreviewSessions {
     }
     session.emitter.emit("revision", manifest);
   }
-  link(session, ai = false) {
-    return { url: "/preview-live/" + session.secret + "/index.html" + (ai ? "?ai=1" : ""),
+  link(session, ai = false, mediaMode = "compressed") {
+    const query = new URLSearchParams();
+    if (ai) query.set("ai", "1");
+    if (mediaMode !== "compressed") query.set("mediaMode", mediaMode);
+    return { mediaMode, url: "/preview-live/" + session.secret + "/index.html" + (query.size ? "?" + query : ""),
       sessionId: session.id, sourceRevision: session.manifest?.sourceRevision || null, source: session.source,
       expires: new Date(session.expires).toISOString(), state: session.manifest ? "ready" : session.state,
       revision: session.revision, ...(session.error ? { error: session.error.message } : {}) };
@@ -274,10 +316,11 @@ export class LivePreviewSessions {
   async stop(id) {
     const session = this.sessions.get(id);
     if (!session || session.closed) return;
-    session.closed = true;
+    session.closed = true; session.abort.abort(problem(499, "Preview request cancelled"));
     this.sessions.delete(id); this.keys.delete(session.key); this.capabilities.delete(hash(session.secret));
     for (const release of session.releases) release(); session.releases.clear(); session.emitter.removeAllListeners();
     await session.worker?.close(); await session.publish; await session.leaseWrite;
+    await Promise.allSettled(session.mediaJobs);
     await fsp.rm(session.outDir, { recursive: true, force: true });
   }
   async sweep() {

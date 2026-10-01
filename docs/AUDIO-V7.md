@@ -79,11 +79,11 @@ V7 将音源、混音轨道、时间片段、分组总线和主输出分开。�
 }
 ```
 
-省略字段由公共 schema 填默认值。最多 256 音源、64 轨道、1024 片段、16 总线、每通道 16 处理器、8 发送。资源只能属于当前项目。`linkedVideo` 控制合成视频原声是否继续参与混音。播放速度改变采样播放速率，也会改变音高；这里没有声称提供保调变速。
+省略字段由公共 schema 填默认值。最多 256 音源、64 轨道、1024 片段、16 总线、每通道 16 处理器、8 发送。资源只能属于当前项目。`linkedVideo` 控制合成视频原声是否继续参与混音。默认播放速度仍改变采样速率与音高。Frame 8.1 的片段 pitch 独立调整半音，preservePitch 保调变速，stretch 控制 Signalsmith 的共振峰与窗口；Tone 全部效果和代码采样乐器见 [AUDIO-CREATIVE.md](AUDIO-CREATIVE.md)。
 
 ## 生成器
 
-引擎注册表列出 Web Audio、Tone.js、PCM Worker/WASM、SoundFont/MIDI 和自定义生成器。标签是能力说明；实际代码通过项目的 `loadAudio` 模块导出 `generators` 注册表。多个框架可在一个工程混用，均接收宿主上下文和绝对调度时间，不另启全局时钟。
+引擎注册表列出 Web Audio、Tone.js、Signalsmith Stretch、PCM Worker/WASM、SoundFont/MIDI 和自定义生成器。标签是能力说明；实际代码通过项目的 `loadAudio` 模块导出 `generators` 注册表。多个框架可在一个工程混用，均接收宿主上下文和绝对调度时间，不另启全局时钟。
 
 ```ts
 // projects/my-film/audio.ts
