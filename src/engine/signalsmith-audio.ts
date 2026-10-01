@@ -119,8 +119,6 @@ function checked(change: StretchSchedule): StretchSchedule {
   for (const [key, value] of Object.entries(change))
     if (typeof value === "number" && !Number.isFinite(value))
       throw Error("Invalid stretch " + key);
-  if (change.rate !== undefined && change.rate <= 0)
-    throw Error("Stretch rate must be positive");
   return { ...change };
 }
 function cancelled<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -341,12 +339,18 @@ export function createSignalsmithAudio(
   };
   const settings = (
     options: Pick<GeneratedAudioOptions, "rate" | "pitch" | "stretch">,
-  ) => ({
-    configuration: { ...config.configuration, ...options.stretch },
-    schedule: { ...config.schedule, ...options.stretch },
-    pitch: (config.schedule?.semitones ?? 0) + (options.pitch ?? 0),
-    rate: options.rate,
-  });
+  ) => {
+    if (!Number.isFinite(options.rate) || options.rate <= 0)
+      throw Error(
+        "Signalsmith source rate must be finite and positive; use createSignalsmithNode for freezing or reverse buffer playback",
+      );
+    return {
+      configuration: { ...config.configuration, ...options.stretch },
+      schedule: { ...config.schedule, ...options.stretch },
+      pitch: (config.schedule?.semitones ?? 0) + (options.pitch ?? 0),
+      rate: options.rate,
+    };
+  };
   const shortPcm = async (
     options: Pick<
       GeneratedAudioOptions,
@@ -389,6 +393,8 @@ export function createSignalsmithAudio(
       await cancelled(shortPcm(options), options.signal);
     },
     createAudio(options: GeneratedAudioOptions) {
+      // Validate before scheduling any gate time or dividing source duration.
+      settings(options);
       const abort = new AbortController();
       let node: SignalsmithNode | undefined,
         sourceNode: AudioBufferSourceNode | undefined,

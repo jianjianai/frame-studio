@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import { projectAssets } from "./scripts/project-assets.mjs";
@@ -18,9 +20,24 @@ export default defineConfig({
       },
     },
   ],
-  optimizeDeps: { include: ["tone", "tone/build/esm/classes.js", "remotion", "@remotion/player", "@remotion/media", "@remotion/web-renderer"] },
+  optimizeDeps: {
+    include: [
+      "tone",
+      "tone/build/esm/classes.js",
+      "remotion",
+      "@remotion/player",
+      "@remotion/media",
+      "@remotion/web-renderer",
+    ],
+  },
   worker: { format: "iife" },
   server: {
+    fs: {
+      allow: [
+        fileURLToPath(new URL(".", import.meta.url)),
+        fs.realpathSync(new URL("./node_modules", import.meta.url)),
+      ],
+    },
     host: "127.0.0.1",
     port: 5173,
     strictPort: true,

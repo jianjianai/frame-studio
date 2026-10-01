@@ -221,6 +221,8 @@ createSignalsmithNode(context, options, signal) 保留官方完整接口：
 | configure                     | 预设、窗口、计算间隔和分散计算                       |
 | dispose                       | 停止节点、释放端口和连接，保留宿主上下文             |
 
+底层 createSignalsmithNode 的 schedule/start 保留官方的有限数值 rate：0 冻结当前缓冲位置，负值向较早的位置倒读输入缓冲。缓冲模式须提供要读取的样本；负速循环的音质与环绕语义没有本框架额外保证。宿主播放时间线与 createSignalsmithAudio 便利层要求 rate 为正值，避免无效时长、除零或逆向调度；需要冻结或倒读时在项目代码中使用底层节点并按宿主输出时间调用 stop。
+
 对实时输入的变速不能凭空获得未来音频；官方 live-input 模式忽略 sample-buffer 的位置、速度和循环参数。需要拉伸素材时先提供缓冲。不要把 live-input 节点当成离线素材处理的替代品。
 
 ## 真实麦克风与录音

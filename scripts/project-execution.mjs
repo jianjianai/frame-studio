@@ -98,6 +98,9 @@ export function projectConfig(root, id, outDir) {
     cacheDir: projectPath(root, id, ".cache/vite"),
     build: { target: "es2022", outDir, emptyOutDir: false },
     server: {
+      // Query imports such as Signalsmith ?raw must also reach shared dependencies
+      // when the isolated project links node_modules outside its Vite root.
+      fs: { allow: [root, fs.realpathSync(path.join(root, "node_modules"))] },
       host: "127.0.0.1",
       port: 0,
       strictPort: false,

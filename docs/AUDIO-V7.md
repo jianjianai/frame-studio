@@ -114,9 +114,9 @@ const synth = createToneAudio(
 export const { generators, createAudio } = createAudioRack({ synth });
 ```
 
-Tone 实例必须显式传入 `toneContext`，避免 `Tone.start()`、`setContext()` 或全局 Transport。宿主提供的上下文不能由生成器关闭。示例为短音序列；有跨切点延音的乐器应自行重建持续音符状态。适配器不承诺把任意使用全局状态的第三方音频代码自动变成可跳转生成器。
+Frame 8.1 的 `createToneAudio` 提供完整宿主绑定的 `HostTone`，构造器自动使用本实例 `toneContext`，也可以显式传入同一宿主的上下文。Transport、Destination、Draw、Listener、事件、信号、分析、录音与输入类均可通过该命名空间使用；不要直接导入全局 `tone` 命名空间另启时钟。`Tone.start()` 由宿主管理，`setContext()` 拒绝替换宿主，生成器不能关闭公共 AudioContext。示例为短音序列；有跨切点延音的乐器应按 offset 重建持续音符状态，有限事件乐谱可使用 `createToneTimeline`，见 [音频创作](AUDIO-CREATIVE.md)。
 
-V8 的 `createToneAudio` 按需导入 Tone 的类入口，准备声音时不触发公共 `tone` 入口对全局 Transport、Destination 和原生上下文的提前初始化；传给生成器的 `Tone` 是类命名空间。每个节点仍显式使用 `toneContext`，适配器只释放自己的包装器，宿主 AudioContext 由播放器管理。Tone 某些类的默认参数在首次创建节点时仍可能惰性初始化库自己的默认上下文；Frame 不改写或擅自销毁第三方全局上下文。参数和源码更新复用已有宿主上下文，不为每次修改创建新上下文。计算音高可使用 `new Tone.FrequencyClass(toneContext, 'A3')`，避免隐式全局上下文。
+适配器按需导入 Tone，并为各声音实例绑定类、工厂函数和上下文接口。Time、Frequency、Midi、Ticks、TransportTime 使用本实例上下文，计算音高可直接使用 `Tone.Frequency('A3')`。`Tone.Context` 创建同一宿主 AudioContext 的借用包装；借用上下文的 close/resume 不关闭或启动公共 AudioContext。参数和源码更新沿用播放器管理的宿主上下文，各实例只释放自己创建的包装器与节点。跨切点事件、延音和随机源仍需支持绝对时间重建，第三方代码直接使用全局状态时不会自动获得这些能力。
 
 `createWorkerPcmAudio` 在 Worker 内生成绝对时间 PCM，可封装 WASM DSP；`createSampledScoreAudio` 继续使用 SoundFont/MIDI 原采样与原乐谱。其使用与资源约束见 [AUDIO.md](AUDIO.md) 和 [AI-PRODUCTION.md](AI-PRODUCTION.md)。`module:"legacy"` 直接选择原来的 `createAudio`，便于兼容迁移。
 

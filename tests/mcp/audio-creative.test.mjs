@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { fixture } from "./helpers.mjs";
@@ -10,9 +12,21 @@ test(
   { timeout: 90000 },
   async () => {
     const f = fixture({ browser: true });
+    const previousNodeEnv = process.env.NODE_ENV;
     let server, browser;
     try {
-      server = await createServer(projectConfig(f.root, "test-film"));
+      process.env.NODE_ENV = "production";
+      const config = projectConfig(f.root, "test-film"),
+        dependencies = fs.realpathSync(path.join(f.root, "node_modules"));
+      assert(
+        !dependencies.startsWith(f.root + path.sep),
+        "Use shared dependencies outside the fixture root",
+      );
+      assert(
+        config.server.fs.allow.includes(dependencies),
+        "Production-linked raw modules require the exact dependency directory",
+      );
+      server = await createServer(config);
       await server.listen();
       browser = await launchBrowser();
       const page = await browser.newPage();
@@ -22,6 +36,48 @@ test(
           "/?debug=1#/film/test-film",
       );
       await page.waitForFunction(() => window.__FRAME_STUDIO__?.ready);
+      const source = await (
+        await page.request.get(
+          "http://127.0.0.1:" +
+            server.httpServer.address().port +
+            "/src/engine/signalsmith-audio.ts",
+        )
+      ).text();
+      const rawImport = source.match(
+        /import\("([^"\n]*signalsmith[^"\n]*\?raw[^"\n]*)"\)/,
+      )?.[1];
+      assert(
+        rawImport,
+        "Resolve the actual Vite raw module URL, including external node_modules links",
+      );
+      const rawProof = await page.evaluate(async (url) => {
+        const module = await import(url),
+          worklet = module.default;
+        return {
+          type: typeof worklet,
+          officialBuffer:
+            typeof worklet === "string" &&
+            worklet.includes(
+              "audioSamples += count;\n\t\t\t\t\t\tblockSamples += count;",
+            ),
+          officialSchedule:
+            typeof worklet === "string" &&
+            worklet.includes("this.timeMap[1].output <= outputTime"),
+          officialConfigure:
+            typeof worklet === "string" &&
+            worklet.includes("\n\t\t\t\tconfigure();"),
+          officialLoop:
+            typeof worklet === "string" &&
+            worklet.includes("currentMapSegment.input -= loopLength;"),
+        };
+      }, rawImport);
+      assert.deepEqual(rawProof, {
+        type: "string",
+        officialBuffer: true,
+        officialSchedule: true,
+        officialConfigure: true,
+        officialLoop: true,
+      });
       const result = await page.evaluate(async () => {
         const { createSignalsmithNode, createSignalsmithAudio } =
           await import("/src/engine/signalsmith-audio.ts");
@@ -86,6 +142,56 @@ test(
             intervalMs: 250,
             splitComputation: true,
           });
+        const renderDirection = async (rate) => {
+          const context = new OfflineAudioContext(2, 48000 * 3.5, 48000),
+            node = await createSignalsmithNode(context),
+            signal = new Float32Array(48000 * 3);
+          let phase = 0;
+          for (let i = 0; i < signal.length; i++) {
+            const hz = i < 48000 ? 220 : i < 96000 ? 660 : 880;
+            phase += (2 * Math.PI * hz) / 48000;
+            signal[i] = 0.2 * Math.sin(phase);
+          }
+          await node.addBuffers([signal, signal.slice()]);
+          node.connect(context.destination);
+          const started = await node.start({
+            output: 0.25,
+            input: rate < 0 ? 2.5 : 1.25,
+            rate,
+          });
+          await node.stop(3);
+          const buffer = await context.startRendering();
+          node.dispose();
+          return {
+            rate: started.rate,
+            head: inspect(buffer, 0.4, 0.6),
+            middle: inspect(buffer, 1.2, 1.4),
+            tail: inspect(buffer, 2.35, 2.55),
+          };
+        };
+        const freeze = await renderDirection(0),
+          reverse = await renderDirection(-1),
+          invalidHighLevelRates = [];
+        for (const rate of [0, -1, NaN]) {
+          const context = new OfflineAudioContext(2, 4800, 48000),
+            module = createSignalsmithAudio({ buffers: make() });
+          try {
+            await module.prepareSegment({
+              context,
+              trackId: "invalid",
+              offset: 0,
+              duration: 0.1,
+              rate,
+            });
+            invalidHighLevelRates.push(false);
+          } catch (error) {
+            invalidHighLevelRates.push(
+              /finite and positive/.test(error.message),
+            );
+          } finally {
+            module.disposeAudio?.(context);
+          }
+        }
         const context = new OfflineAudioContext(2, 48000 * 2, 48000),
           node = await createSignalsmithNode(context);
         await node.configure({
@@ -119,6 +225,9 @@ test(
         const loop = await context.startRendering();
         node.dispose();
         return {
+          freeze,
+          reverse,
+          invalidHighLevelRates,
           up: up.during,
           slow: slow.during,
           seek: seek.during,
@@ -133,6 +242,37 @@ test(
           loop: inspect(loop, 0.5, 1.1),
         };
       });
+      assert.equal(result.freeze.rate, 0);
+      assert.equal(result.reverse.rate, -1);
+      for (const region of [
+        result.freeze.head,
+        result.freeze.middle,
+        result.freeze.tail,
+      ])
+        assert(
+          region.finite && region.rms > 0.03 && Math.abs(region.hz - 660) < 20,
+          JSON.stringify(result),
+        );
+      for (const [region, hz] of [
+        [result.reverse.head, 880],
+        [result.reverse.middle, 660],
+        [result.reverse.tail, 220],
+      ])
+        assert(
+          region.finite && region.rms > 0.03 && Math.abs(region.hz - hz) < 20,
+          JSON.stringify(result),
+        );
+      assert(
+        result.invalidHighLevelRates.every(Boolean),
+        JSON.stringify(result),
+      );
+      console.log(
+        JSON.stringify({
+          freeze: result.freeze,
+          reverse: result.reverse,
+          invalidHighLevelRates: result.invalidHighLevelRates,
+        }),
+      );
       assert(Math.abs(result.up.hz - 880) < 12, JSON.stringify(result));
       assert(Math.abs(result.slow.hz - 440) < 8, JSON.stringify(result));
       assert(Math.abs(result.seek.hz - 880) < 12, JSON.stringify(result));
@@ -163,6 +303,8 @@ test(
       await browser?.close();
       await server?.close();
       f.close();
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previousNodeEnv;
     }
   },
 );
