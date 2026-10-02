@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { database } from "../../server/db.mjs";
 import { createApp } from "../../server/app.mjs";
 import { launchBrowser } from "../../scripts/browser.mjs";
@@ -129,6 +130,94 @@ function changedBytes(log, from) {
   return log.slice(from).reduce((sum, entry) => sum + entry.bytes, 0);
 }
 
+// CDP event callbacks are not awaited. Own every command until Fetch is disabled.
+function interruptModuleFetch(cdp) {
+  const pending = new Set(),
+    failures = [],
+    cancelled = new Set();
+  let interruptedURL,
+    reserved = false,
+    stopped;
+  const loadingFailed = (event) => {
+    if (event.canceled === true) cancelled.add(event.requestId);
+  };
+  const interrupt = (event) => {
+    const command =
+      !interruptedURL && !reserved
+        ? "Fetch.failRequest"
+        : "Fetch.continueRequest";
+    if (command === "Fetch.failRequest") reserved = true;
+    const operation = Promise.resolve()
+      .then(() =>
+        cdp.send(command, {
+          requestId: event.requestId,
+          ...(command === "Fetch.failRequest"
+            ? { errorReason: "InternetDisconnected" }
+            : {}),
+        }),
+      )
+      .then(() => {
+        if (command === "Fetch.failRequest") interruptedURL = event.request.url;
+      })
+      .catch((error) =>
+        failures.push({
+          command,
+          requestId: event.requestId,
+          networkId: event.networkId,
+          error,
+        }),
+      )
+      .finally(() => {
+        if (command === "Fetch.failRequest") reserved = false;
+        pending.delete(operation);
+      });
+    pending.add(operation);
+  };
+  cdp.on("Network.loadingFailed", loadingFailed);
+  cdp.on("Fetch.requestPaused", interrupt);
+  return {
+    interruptedURL: () => interruptedURL,
+    stop() {
+      return (stopped ??= (async () => {
+        // No new callbacks may create commands while this owned interception drains.
+        cdp.off("Fetch.requestPaused", interrupt);
+        await Promise.all([...pending]);
+        try {
+          await cdp.send("Fetch.disable");
+        } finally {
+          cdp.off("Network.loadingFailed", loadingFailed);
+        }
+        // Abort events can arrive after the command rejects; classify only after the
+        // protocol round trip above. Never excuse an uncorrelated or different error.
+        const expectedCancellation = (row) =>
+          row.command === "Fetch.continueRequest" &&
+          /Protocol error \(Fetch\.continueRequest\): Invalid InterceptionId\.?$/.test(
+            row.error.message,
+          ) &&
+          row.networkId &&
+          cancelled.has(row.networkId);
+        const unexpected = failures.filter((row) => !expectedCancellation(row));
+        if (unexpected.length)
+          throw new AggregateError(
+            unexpected.map((row) => row.error),
+            "Unexpected CDP interception failures: " +
+              unexpected
+                .map(
+                  (row) =>
+                    `${row.command} ${row.requestId}/${row.networkId || "no-network-id"}: ${row.error.message}`,
+                )
+                .join("; "),
+          );
+        return {
+          cancelled: failures
+            .filter(expectedCancellation)
+            .map((row) => row.networkId),
+        };
+      })());
+    },
+  };
+}
+
 test(
   "V8 real live capability: source edits preserve playing audio, last good frame, seeks and cached dependencies at 450 ms RTT",
   { skip: !databaseURL, timeout: 240000 },
@@ -144,7 +233,7 @@ test(
     );
     const port = Number(process.env.FRAME_TEST_PORT || 55779),
       origin = "http://127.0.0.1:" + port;
-    let platform, browser, page, cdp;
+    let platform, browser, page, cdp, interception;
     const transfers = [],
       requests = [],
       consoleErrors = [];
@@ -529,21 +618,7 @@ test(
 
       // Interrupt exactly one uncached module fetch while SSE remains connected.
       // Automatic retry of this same immutable revision must work without poisoning ESM.
-      let interruptedURL;
-      const interrupt = async (event) => {
-        if (!interruptedURL) {
-          interruptedURL = event.request.url;
-          await cdp.send("Fetch.failRequest", {
-            requestId: event.requestId,
-            errorReason: "InternetDisconnected",
-          });
-        } else {
-          await cdp.send("Fetch.continueRequest", {
-            requestId: event.requestId,
-          });
-        }
-      };
-      cdp.on("Fetch.requestPaused", interrupt);
+      interception = interruptModuleFetch(cdp);
       await cdp.send("Fetch.enable", {
         patterns: [
           {
@@ -561,12 +636,17 @@ test(
         null,
         { timeout: 20000 },
       );
+      const interceptionResult = await interception.stop();
+      const interruptedURL = interception.interruptedURL();
       assert.ok(
         interruptedURL,
-        "a real uncached module request was interrupted",
+        "a real uncached module request was interrupted successfully",
       );
-      await cdp.send("Fetch.disable");
-      cdp.off("Fetch.requestPaused", interrupt);
+      if (interceptionResult.cancelled.length)
+        t.diagnostic(
+          "Concurrent module requests cancelled by the preview: " +
+            interceptionResult.cancelled.join(", "),
+        );
       await waitColor(page, "#0f766e");
       assert.equal((await readPlayback(page)).contexts, 1);
       assert.ok(Math.abs((await readPlayback(page)).state.time - 9.5) < 0.01);
@@ -638,10 +718,139 @@ test(
         }),
       );
     } finally {
-      await browser?.close();
-      await platform?.app.close();
-      f.close();
-      fs.rmSync(owned, { recursive: true, force: true });
+      try {
+        await interception?.stop();
+      } finally {
+        await browser?.close();
+        await platform?.app.close();
+        f.close();
+        fs.rmSync(owned, { recursive: true, force: true });
+      }
     }
   },
 );
+
+const turn = () => new Promise((resolve) => setImmediate(resolve));
+const paused = (requestId, networkId) => ({
+  requestId,
+  networkId,
+  request: { url: "http://fixture.invalid/" + requestId + ".js" },
+});
+function interceptionFixture(continueRequest) {
+  const cdp = new EventEmitter(),
+    commands = [];
+  cdp.send = async (command, parameters) => {
+    commands.push({ command, parameters });
+    if (command === "Fetch.continueRequest") return continueRequest(parameters);
+  };
+  return { cdp, commands, interception: interruptModuleFetch(cdp) };
+}
+
+test("V8 CDP fixture drains registered commands before disabling and detaches owned listeners", async () => {
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const { cdp, commands, interception } = interceptionFixture(() => gate);
+  cdp.emit("Fetch.requestPaused", paused("first", "network-1"));
+  cdp.emit("Fetch.requestPaused", paused("second", "network-2"));
+  await turn();
+  assert.equal(
+    interception.interruptedURL(),
+    "http://fixture.invalid/first.js",
+  );
+  const stopped = interception.stop();
+  cdp.emit("Fetch.requestPaused", paused("after-stop", "network-3"));
+  await turn();
+  assert.deepEqual(
+    commands.map((row) => row.command),
+    ["Fetch.failRequest", "Fetch.continueRequest"],
+  );
+  assert.equal(cdp.listenerCount("Fetch.requestPaused"), 0);
+  release();
+  assert.deepEqual(await stopped, { cancelled: [] });
+  await interception.stop();
+  assert.deepEqual(
+    commands.map((row) => row.command),
+    ["Fetch.failRequest", "Fetch.continueRequest", "Fetch.disable"],
+  );
+  assert.equal(cdp.listenerCount("Network.loadingFailed"), 0);
+});
+
+test("V8 CDP fixture recognizes only matching cancelled Network requests even when cancellation arrives after rejection", async () => {
+  const error = Error(
+    "cdpSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId.",
+  );
+  const { cdp, interception } = interceptionFixture(async () => {
+    throw error;
+  });
+  cdp.emit("Fetch.requestPaused", paused("first", "network-1"));
+  await turn();
+  cdp.emit("Fetch.requestPaused", paused("cancelled", "network-cancelled"));
+  await turn();
+  cdp.emit("Network.loadingFailed", {
+    requestId: "network-cancelled",
+    canceled: true,
+    errorText: "net::ERR_ABORTED",
+  });
+  assert.deepEqual(await interception.stop(), {
+    cancelled: ["network-cancelled"],
+  });
+  assert.equal(cdp.listenerCount("Fetch.requestPaused"), 0);
+  assert.equal(cdp.listenerCount("Network.loadingFailed"), 0);
+});
+
+for (const [name, message, cancelled] of [
+  [
+    "uncorrelated Invalid InterceptionId",
+    "cdpSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId.",
+    false,
+  ],
+  [
+    "unrelated protocol error on a cancelled request",
+    "cdpSession.send: Protocol error (Fetch.continueRequest): Unexpected fixture failure.",
+    true,
+  ],
+  [
+    "matching Network error without the cancelled flag",
+    "cdpSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId.",
+    "false-flag",
+  ],
+  [
+    "matching Network error with the cancelled flag absent",
+    "cdpSession.send: Protocol error (Fetch.continueRequest): Invalid InterceptionId.",
+    "missing-flag",
+  ],
+]) {
+  test("V8 CDP fixture fails for " + name, async () => {
+    const error = Error(message);
+    const { cdp, interception } = interceptionFixture(async () => {
+      throw error;
+    });
+    cdp.emit("Fetch.requestPaused", paused("first", "network-1"));
+    await turn();
+    cdp.emit("Fetch.requestPaused", paused("failed", "network-failed"));
+    await turn();
+    cdp.emit("Network.loadingFailed", {
+      requestId:
+        cancelled === "false-flag" ||
+        cancelled === "missing-flag" ||
+        cancelled === true
+          ? "network-failed"
+          : "other-request",
+      ...(cancelled === "missing-flag"
+        ? {}
+        : { canceled: cancelled !== "false-flag" }),
+      errorText: "net::ERR_ABORTED",
+    });
+    await assert.rejects(
+      interception.stop(),
+      (result) =>
+        result instanceof AggregateError &&
+        result.errors.length === 1 &&
+        result.errors[0] === error,
+    );
+    assert.equal(cdp.listenerCount("Fetch.requestPaused"), 0);
+    assert.equal(cdp.listenerCount("Network.loadingFailed"), 0);
+  });
+}

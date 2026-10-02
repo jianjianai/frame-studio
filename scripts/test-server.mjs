@@ -34,8 +34,8 @@ child.on("close", (code) => {
   const skips = tail.split(/\r?\n/).filter((line) => /^\s*ok \d+\b.*# SKIP/i.test(line));
   if (release) {
     // A licensed user-supplied soundfont is an explicitly optional content fixture.
-    // The generated soundfont regression always runs. Windows native execution is
-    // required by release.yml on windows-latest and cannot execute on Linux.
+    // The generated soundfont regression always runs. Windows native API/render
+    // verification requires a separate Windows run and cannot execute on Linux.
     // All server integrations, including real CLI protocol fixtures, must run.
     const unexpected = skips.filter((line) => {
       if (line.includes("preserve GeneralUser synthesis")) return false;

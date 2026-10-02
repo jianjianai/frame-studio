@@ -33,3 +33,9 @@ v8.2.0 的不可变源提交 `37e846faa5e6976d917a4a7ee1334fe757244fa2` 在真�
 - 新测试 SHA-256：`a986343f70a86c01ec5bfe76153e9c4f0e67f8742f7306e1749ddc5374e82692`。
 
 这轮证据证明跨平台脚本与严格构建身份校验，不等于完整官方 WebUI 编译、原生应用 GUI 或新发布 CI 已通过；后续候选由发布方建立及验收。未修改已发布归档、标签或生产环境；各目标测试内部临时目录按 finally 清理，本机外层 fixture 按前述保留。
+
+### 实际 Windows 本机作品与渲染路径
+
+为补足 Linux 正式门禁中按平台跳过的 Windows 用例，在本机 Node 26.8.2 / pnpm 12.4.2 / 源码 `6c8c71163af2b9eda8f08933ce1fcdef8a80b8a6` 执行 `node --test tests/server/local-mode.test.mjs`：4/4 PASS、0 fail、0 skip，39.094 秒。其中 Windows 原生模式创建作品、实际帧与 1 秒 12 fps 视频渲染及预览 build 用例 37.379 秒通过。
+
+首次 `pnpm build` 因本机缺少锁定的 Signalsmith 1.3.2 依赖失败；执行 `pnpm install --frozen-lockfile --prefer-offline` 恢复既有锁定依赖后，build 与 build:studio 重跑均 exit 0，Git 与锁文件未改。测试使用自有临时 SQLite/data；本 run 临时目录剩余 0，测试进程退出，43173 端口无监听。日志 `.cache/paseo-windows-821-localmode.log`，SHA-256 `6ac80f215220cb305b89434aaed48c72dd2638a86071694bf3047262ef63fc9c`，`.exit` 为 0。这是实际 Windows API 与渲染路径证明，不等于安装包安装或完整原生 GUI 验收。
