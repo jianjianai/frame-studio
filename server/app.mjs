@@ -156,7 +156,7 @@ export async function createApp({
   });
   await installPaseoGateway({ app, manager: services.paseoManager, workService: services.paseoWork,
     store: services.paseoStore, drafts: services.paseoDrafts, authenticate: requirePlatformSession,
-    origin, connections: services.connections, db, data, secrets: services.secrets, localMode });
+    connections: services.connections, db, data, secrets: services.secrets, localMode });
   agentTools({ app, db, data, assets, actions, localMode });
   app.post(
     "/api/login",

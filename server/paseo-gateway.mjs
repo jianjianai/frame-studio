@@ -13,6 +13,7 @@ import { paseoSessionEnvironment } from "./paseo-credentials.mjs";
 import { confinedAsync } from "./project-files.mjs";
 import { hash, problem } from "./security.mjs";
 import { creatorPrompt } from "./creator-workspace.mjs";
+import { requestExternalOrigin } from "./request-origin.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const eventSchema = z.strictObject({ version: z.literal(1),
@@ -29,20 +30,22 @@ const hopHeaders = new Set(["connection", "keep-alive", "proxy-authenticate", "p
   "transfer-encoding", "upgrade", "cookie", "authorization", "host"]);
 
 /** Transparent transport to the complete upstream daemon; FRAME does not parse native conversations. */
-export async function installPaseoGateway({ app, manager, workService, store, drafts, authenticate, origin,
+export async function installPaseoGateway({ app, manager, workService, store, drafts, authenticate,
   connections, db, data, secrets, localMode = false, uiRoot = process.env.FRAME_PASEO_UI || path.join(root, ".cache/paseo-runtime/web") }) {
-  origin = new URL(origin).origin;
-  const scope = hash("frame-admin:" + origin).slice(0, 32);
-  const bootstrap = async (workId, nonce) => {
+  const bootstrap = async (req, workId, nonce) => {
+    // Both the session response and deep-route HTML belong to this accessed origin.
+    // Validate before ensure: malformed authority/nonce must not start a daemon.
+    const origin = requestExternalOrigin(req), parsedNonce = nonceSchema.parse(nonce);
+    const scope = hash("frame-admin:" + origin).slice(0, 32);
     const work = await workService.works.get(workId, { active: true });
     const runtime = await manager.ensure(work);
     return FrameBootstrapSchema.parse({ version: 1, workId, userScope: scope,
-      nonce: nonceSchema.parse(nonce), basePath: "/paseo/" + workId + "/",
+      nonce: parsedNonce, basePath: "/paseo/" + workId + "/",
       parentOrigin: origin, serverId: runtime.serverId, workspaceId: runtime.workspaceId, label: work.title.slice(0, 160) });
   };
   app.get("/api/paseo/works/:workId/session", async req => {
     const nonce = randomBytes(24).toString("base64url");
-    const value = await bootstrap(z.uuid().parse(req.params.workId), nonce);
+    const value = await bootstrap(req, z.uuid().parse(req.params.workId), nonce);
     return { uiUrl: value.basePath + "?frameNonce=" + nonce, bootstrap: value,
       status: await workService.status(value.workId) };
   });
@@ -164,7 +167,7 @@ export async function installPaseoGateway({ app, manager, workService, store, dr
   } }, async (req, reply) => {
     if (reply.sent) return;
     const workId = z.uuid().parse(req.params.workId);
-    const value = await bootstrap(workId, req.query.frameNonce || randomBytes(24).toString("base64url"));
+    const value = await bootstrap(req, workId, req.query.frameNonce || randomBytes(24).toString("base64url"));
     const html = await fsp.readFile(path.join(uiRoot, "index.html"), "utf8");
     if (!html.includes("<head>")) throw problem(503, "Paseo WebUI build is invalid");
     const injected = html.replace("<head>", "<head><script>globalThis.__PASEO_FRAME_EMBED__=" + htmlJson(value) + ";</script>");
