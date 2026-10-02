@@ -152,6 +152,7 @@ test(
       "0001-frame-embed.patch",
       "0002-frame-session-env.patch",
       patchName,
+      "0004-frame-shared-speech-wait.patch",
     ]);
   },
 );
