@@ -6,6 +6,8 @@ import { RevisionPreview } from "./revision-preview";
 import { PaseoChat } from "./paseo-chat";
 import { WorkTools } from "./work-tools";
 import { WorkDock } from "./work-dock";
+import { PreviewMediaPanel } from "./preview-media-panel";
+import { usePreviewMediaSession } from "./preview-media-session";
 const AudioEditor = lazy(() =>
   import("./audio-editor").then((m) => ({ default: m.AudioEditor })),
 );
@@ -86,6 +88,7 @@ export function Creation({ id, notify }) {
         "composition",
         "audio",
         "materials",
+        "preview-media",
         "voice",
         "tasks",
         "sync",
@@ -251,10 +254,23 @@ export function Creation({ id, notify }) {
       key: playerKey,
       mode: resourcePreference.current,
     };
+  const mediaSession = usePreviewMediaSession({
+    iframe,
+    playerElement,
+    playerKey,
+    live: preview?.live,
+    onMode: (mode) => {
+      if (resourcePreference.current === mode) return;
+      resourcePreference.current = mode;
+      writePreference("frame.preview-media-mode", mode);
+    },
+  });
   const previewFrameUrl = () => {
     const url = new URL(preview.url, location.href);
-    if (preview.live)
+    if (preview.live) {
       url.searchParams.set("mediaMode", attachedMedia.current.mode);
+      url.searchParams.set("mediaControls", "external");
+    }
     return url.href;
   };
   if (playerKey && attachedPlayer.current !== playerKey) {
@@ -655,6 +671,19 @@ export function Creation({ id, notify }) {
             closeTool();
           }}
         >
+          {visited["preview-media"] && (
+            <div
+              className="work-tool-pane"
+              data-dock-pane="preview-media"
+              hidden={tool !== "preview-media"}
+            >
+              <PreviewMediaPanel
+                state={mediaSession.state}
+                disabled={browserBusy}
+                onCommand={mediaSession.command}
+              />
+            </div>
+          )}
           <div
             className="work-tool-pane chat-tool-pane"
             data-dock-pane="ai"

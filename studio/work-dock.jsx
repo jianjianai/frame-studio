@@ -7,6 +7,7 @@ export const toolNames = {
   composition: "合成与片段",
   audio: "音频工作台",
   materials: "素材",
+  "preview-media": "素材模式",
   voice: "配音",
   tasks: "后台任务",
   sync: "源代码管理",
@@ -30,6 +31,7 @@ export function WorkDock({
       const pane = root?.querySelector(`[data-dock-pane="${tool}"]`);
       const first =
         pane?.querySelector("textarea:not(:disabled)") ||
+        pane?.querySelector('input[type="radio"]:checked:not(:disabled)') ||
         pane?.querySelector("input:not(:disabled)") ||
         pane?.querySelector("iframe") ||
         pane?.querySelector("button:not(:disabled)");

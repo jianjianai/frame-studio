@@ -105,28 +105,28 @@
   }
 }
 
-/* Keep controls and notices in their own rows inside opaque live preview frames. */
-body.work-preview #root:has(.preview-media-controls) {
+/* Keep notices and player rows stable with internal or external media controls. */
+body.live-preview-shell #root {
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-body.work-preview #root:has(.preview-media-controls) > .preview-media-controls {
+body.live-preview-shell #root > .preview-media-controls {
   flex: 0 0 auto;
   max-height: min(45dvh, 320px);
   overflow: auto;
 }
-body.work-preview #root:has(.preview-media-controls) > .work-player {
+body.live-preview-shell #root > .work-player {
   flex: 1;
   height: auto;
   min-height: 0;
 }
-body.work-preview #root:has(.preview-media-controls) > .ai-browser-header {
+body.live-preview-shell #root > .ai-browser-header {
   flex: 0 0 auto;
   max-height: 30dvh;
   overflow: auto;
 }
-body.work-preview #root:has(.preview-media-controls) > .live-preview-notice {
+body.live-preview-shell #root > .live-preview-notice {
   display: flex;
   align-items: flex-start;
   gap: 8px;

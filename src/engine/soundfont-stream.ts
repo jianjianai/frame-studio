@@ -2,6 +2,7 @@ import type { Score } from "./score.mjs";
 import type { StereoPcm } from "./procedural-audio";
 import type { GeneratedAudioOptions } from "./types";
 import SoundfontWorker from "./soundfont.worker?worker&inline";
+import { AdaptiveAudioBuffer } from "./media-buffering";
 import {
   SCORE_SAMPLE_RATE,
   SCORE_CHUNK_SECONDS,
@@ -24,6 +25,7 @@ export class ScoreStream {
   private rejectReady?: (error: Error) => void;
   private failure?: Error;
   private requested = "";
+  private buffering = new AdaptiveAudioBuffer();
   private chunks = new Map<number, Chunk>();
   private listeners = new Set<() => void>();
   private waiters = new Set<{
@@ -41,6 +43,16 @@ export class ScoreStream {
   }
   get error() {
     return this.failure;
+  }
+  /** Future music + foley window only; historical seek PCM is managed separately. */
+  bufferSeconds(rate: number, initial = false) {
+    const budget = 128 * 1024 * 1024;
+    // The shared policy has a 0.5s UX floor. Programmatic playback rates can be
+    // much larger than the UI choices; the future PCM budget remains a hard cap.
+    return Math.min(
+      this.buffering.seconds(rate, 2, budget, initial),
+      budget / (384000 * 2 * Math.max(1, rate) * 2),
+    );
   }
   initialize() {
     return (this.initialization ??= (async () => {
@@ -124,6 +136,7 @@ export class ScoreStream {
   }
   async ensure(fromTime: number, until: number, signal?: AbortSignal) {
     signal?.throwIfAborted();
+    const began = performance.now();
     await this.initialize();
     signal?.throwIfAborted();
     if (this.failure) throw this.failure;
@@ -139,6 +152,7 @@ export class ScoreStream {
         through,
         resolve: () => {
           clear();
+          this.buffering.observePreparation((performance.now() - began) / 1000);
           resolve();
         },
         reject: (error: Error) => {
@@ -204,15 +218,24 @@ export function createStreamVoice(
   if (trackId !== "music" && trackId !== "foley")
     throw new Error("未知生成音轨: " + trackId);
   const end = Math.min(offset + duration, stream.duration);
+  // Freeze the startup target for this voice: other voices/worker completion
+  // can update the shared adaptive policy while this range is being prepared.
+  const initialEnd = Math.min(end, offset + stream.bufferSeconds(rate, true) * rate);
   let next = Math.floor(offset / SCORE_CHUNK_SECONDS),
-    demanded = -1,
-    disposed = false;
+    disposed = false,
+    initial = true,
+    pumping = false,
+    filling = false;
   const nodes = new Set<AudioBufferSourceNode>();
   const abort = new AbortController();
   let unsubscribe = () => {};
+  let timer: ReturnType<typeof setInterval> | undefined;
+  let failure: unknown;
   const dispose = () => {
     if (disposed) return;
     disposed = true;
+    if (timer !== undefined) clearInterval(timer);
+    timer = undefined;
     abort.abort();
     unsubscribe();
     for (const node of nodes) {
@@ -229,68 +252,107 @@ export function createStreamVoice(
   };
   const fail = (error: unknown) => {
     if (disposed) return;
+    failure = error;
     dispose();
     options.onError?.(
       error instanceof Error ? error : new Error(String(error)),
     );
   };
   function pump() {
-    if (disposed || end <= offset) return;
-    if (stream.error) throw stream.error;
-    const now = Math.max(offset, offset + (context.currentTime - when) * rate);
-    const until = offline ? end : Math.min(end, now + 1.5 * rate);
-    const through = Math.ceil(until / SCORE_CHUNK_SECONDS - 1e-9);
-    while (next < through) {
-      const buffer = stream.buffer(trackId as "music" | "foley", next, context);
-      if (!buffer) {
-        if (offline) throw new Error("离线音频片段尚未准备好");
-        break;
-      }
-      const chunkStart = next * SCORE_CHUNK_SECONDS;
-      const start = Math.max(offset, chunkStart),
-        stop = Math.min(end, chunkStart + buffer.duration);
-      const at = when + (start - offset) / rate;
-      if (!offline && at < context.currentTime - 0.04)
-        throw new Error(
-          "音频生成未跟上播放，已暂停以保持声音与画面同步，请继续播放",
-        );
-      const source = context.createBufferSource();
-      nodes.add(source);
-      source.buffer = buffer;
-      source.playbackRate.value = rate;
-      source.connect(destination);
-      source.onended = () => {
-        source.onended = null;
-        source.disconnect();
-        source.buffer = null;
-        nodes.delete(source);
-        try {
-          pump();
-        } catch (error) {
-          fail(error);
+    if (disposed || pumping || end <= offset) return;
+    pumping = true;
+    try {
+      if (stream.error) throw stream.error;
+      const now = Math.max(offset, offset + (context.currentTime - when) * rate);
+      const until = offline
+        ? end
+        : initial
+          ? initialEnd
+          : Math.min(end, now + stream.bufferSeconds(rate) * rate);
+      const through = Math.ceil(until / SCORE_CHUNK_SECONDS - 1e-9);
+      while (next < through) {
+        const buffer = stream.buffer(trackId as "music" | "foley", next, context);
+        if (!buffer) {
+          if (offline) throw new Error("离线音频片段尚未准备好");
+          break;
         }
-      };
-      source.start(at, start - chunkStart, stop - start);
-      next++;
-    }
-    if (!offline && through > demanded) {
-      demanded = through;
-      void stream
-        .ensure(next * SCORE_CHUNK_SECONDS, until, abort.signal)
-        .catch(fail);
+        const chunkStart = next * SCORE_CHUNK_SECONDS;
+        const start = Math.max(offset, chunkStart),
+          stop = Math.min(end, chunkStart + buffer.duration);
+        const at = when + (start - offset) / rate;
+        if (!offline && at < context.currentTime - 0.04)
+          throw new Error(
+            "音频生成未跟上播放，已暂停以保持声音与画面同步，请继续播放",
+          );
+        const source = context.createBufferSource();
+        nodes.add(source);
+        source.buffer = buffer;
+        source.playbackRate.value = rate;
+        source.connect(destination);
+        source.onended = () => {
+          source.onended = null;
+          source.disconnect();
+          source.buffer = null;
+          nodes.delete(source);
+          try {
+            pump();
+          } catch (error) {
+            fail(error);
+          }
+        };
+        source.start(at, start - chunkStart, stop - start);
+        next++;
+      }
+      if (next * SCORE_CHUNK_SECONDS >= end && timer !== undefined) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+      // One outstanding refill per voice. Shared music/foley demands are merged by
+      // ScoreStream; worker message callbacks may arrive during another pump.
+      if (!offline && !initial && next < through && !filling) {
+        filling = true;
+        void stream.ensure(next * SCORE_CHUNK_SECONDS, until, abort.signal).then(
+          () => {
+            filling = false;
+            safePump();
+          },
+          fail,
+        );
+      }
+    } finally {
+      pumping = false;
     }
   }
-  if (!offline)
-    unsubscribe = stream.subscribe(() => {
-      try {
-        pump();
-      } catch (error) {
-        fail(error);
-      }
-    });
+  function safePump() {
+    try {
+      pump();
+    } catch (error) {
+      fail(error);
+    }
+  }
+  if (!offline) unsubscribe = stream.subscribe(safePump);
   try {
     pump();
-    return { dispose };
+    if (offline) return { dispose };
+    // The host awaits ready with its AudioContext suspended. PCM in the worker
+    // alone is insufficient: native nodes must cover this window before resume.
+    const ready = (async () => {
+      await stream.ensure(offset, initialEnd, abort.signal);
+      abort.signal.throwIfAborted();
+      pump();
+      if (next < Math.ceil(initialEnd / SCORE_CHUNK_SECONDS - 1e-9))
+        throw new Error("音频初始播放队列尚未准备好");
+      initial = false;
+      pump();
+      // Timers complement chunk/ended callbacks; the initial native queue is
+      // what protects audio during a synchronous visual frame.
+      if (!disposed && next * SCORE_CHUNK_SECONDS < end)
+        timer = setInterval(safePump, 100);
+    })().catch((error) => {
+      dispose();
+      throw failure ?? error;
+    });
+    return { ready, dispose };
   } catch (error) {
     dispose();
     throw error;

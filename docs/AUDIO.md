@@ -51,7 +51,7 @@ pnpm audio:mix my-film projects/my-film/production/mix.json
 
 三个 Demo 均已接入生成音轨，`audio.ts` 提供入口，`music/score.mjs` 保存乐谱，`music/foley.mjs` 保存动作音效。两轨可独立调节。乐器部分继续使用原 GeneralUser GS 2.0.3 采样库、原乐谱和 spessasynth_core 4.3.22。素材与完整许可随各项目 public/music 保存，浏览器读取素材，在后台线程处理乐谱和声音；不使用新的合成音色替换。动作音效保留原代码与固定种子，不依赖预合成整曲 WAV。
 
-`createSampledScoreAudio({score, foley, bank, sha256, levels})` 按需生成采样配乐，项目导出返回对象的 `prepareAudio`、`prepareSegment`、`createAudio`、`disposeAudio`。加载采样素材后先准备约半秒播放缓冲，随后按约 0.256 秒的片段生成，保持约 1.5 秒的播放余量，倍速时相应增加源音频长度。生成线程在满足请求后停止计算，不会为了启动播放而先合成整首音乐。原动作音效函数仍一次性准备，以保留原随机序列和声音细节。
+`createSampledScoreAudio({score, foley, bank, sha256, levels})` 按需生成采样配乐，项目导出返回对象的 `prepareAudio`、`prepareSegment`、`createAudio`、`disposeAudio`。加载采样素材后先准备通常 4 秒播放时长对应的源片段，并等原生 Web Audio 节点实际排入初始队列后才启动共享时间线；随后按约 0.256 秒的片段生成，通常保持 8 秒播放余量。准备耗时会自适应增加窗口，初始不超过 12 秒、持续不超过 24 秒，并按倍速与两条音轨的 128MiB 未来窗口预算收紧。该预算约束新增的未来队列，不代表历史跳转 PCM 缓存的总内存上限。生成线程在满足请求后停止计算，不会为了启动播放而先合成整首音乐。原动作音效函数仍一次性准备，以保留原随机序列和声音细节。
 
 `music/mix.json` 的 `music` 和 `master` 保存既定混音增益，播放时不再扫描整曲响度。当前参数从原处理流程标定：原始采样配乐的 `music = min(0.12 / RMS, 0.72 / peak)`；原 EQ 和首尾淡化处理后的音乐与动作音效相加，再由 `masterScoreTracks` 计算 -18 LUFS 与 -1.8 dB 峰值上限之间较小的总增益。`sourceEventSha256` 标记标定时的乐谱事件摘要，不是运行时检查。修改乐谱、采样、动作音效或母带处理时需要同步重新标定，不能沿用原曲的响度结论。
 

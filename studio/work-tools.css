@@ -393,7 +393,7 @@
     gap: 3px;
   }
 }
-@media (min-width: 901px) and (max-height: 340px) {
+@media (min-width: 901px) and (max-height: 640px) {
   .work-focus .creation-actions {
     overflow-y: auto;
     scrollbar-width: thin;

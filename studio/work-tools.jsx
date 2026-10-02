@@ -4,6 +4,7 @@ import {
   Film,
   Layers,
   Music2,
+  HardDrive,
   MessageSquare,
   Image,
   Mic,
@@ -22,6 +23,7 @@ const tools = [
   ["composition", Layers, "合成"],
   ["audio",Music2,"音频"],
   ["materials", Image, "素材"],
+  ["preview-media", HardDrive, "素材模式"],
   ["voice", Mic, "配音"],
 ];
 
@@ -46,7 +48,7 @@ export function WorkTools({
   const menuTrigger = useRef(null);
   const keys = compact
     ? ["work", "tools", "ai", ...(agentNotifications ? ["notifications"] : []), "exports"]
-    : ["work", "ai", "composition", "audio", "materials", "voice", "tasks", "sync", ...(agentNotifications ? ["notifications"] : []), "exports"];
+    : ["work", "ai", "composition", "audio", "materials", "preview-media", "voice", "tasks", "sync", ...(agentNotifications ? ["notifications"] : []), "exports"];
   const focusKey = keys.includes(focused) ? focused : "work";
   const syncLabel =
     syncError || sync?.error
@@ -308,6 +310,14 @@ export function WorkTools({
             </>
           ) : (
             <>
+              <button
+                role="menuitem"
+                tabIndex={-1}
+                onClick={() => select("preview-media")}
+              >
+                <HardDrive size={17} />
+                素材模式
+              </button>
               <button
                 role="menuitem"
                 tabIndex={-1}

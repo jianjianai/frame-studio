@@ -119,11 +119,16 @@ export function createSampledScoreAudio(
       await client(context).initialize();
     },
     async prepareSegment({ context, offset, duration, rate, signal }) {
-      // Export awaits the requested span; preview starts after half a second
-      // and then feeds the queue as native audio nodes finish playing.
-      await client(context).ensure(
+      // Export prepares exactly the requested span. Live startup uses the same
+      // bounded adaptive window as voice.ready, which also queues native nodes.
+      const stream = client(context);
+      await stream.ensure(
         offset,
-        offset + Math.min(duration, isOffline(context) ? duration : 0.5 * rate),
+        offset +
+          Math.min(
+            duration,
+            isOffline(context) ? duration : stream.bufferSeconds(rate, true) * rate,
+          ),
         signal,
       );
     },

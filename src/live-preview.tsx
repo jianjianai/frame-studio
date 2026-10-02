@@ -15,6 +15,7 @@ import {
 } from "./engine/live-preview-cache";
 import { installPreviewControls } from "./engine/live-preview-controls";
 import { installAiBrowser } from "./engine/ai-browser";
+import { installPreviewMediaBridge } from "./ui/preview-media-bridge";
 import "./styles.css";
 import "./preview-cache.css";
 import "./work-preview.css";
@@ -69,7 +70,16 @@ function LivePreview() {
   const client = useRef<ReturnType<typeof createLivePreviewClient> | null>(
     null,
   );
+  const mediaBridge = useRef<ReturnType<
+    typeof installPreviewMediaBridge
+  > | null>(null);
+  const externalMediaControls =
+    parent !== window &&
+    new URLSearchParams(location.search).get("mediaControls") === "external";
   const aiMode = new URLSearchParams(location.search).get("ai") === "1";
+  useEffect(() => {
+    mediaBridge.current?.update();
+  }, [cache, mediaMode, exportBusy]);
   useEffect(() => {
     const config = window.__FRAME_LIVE_PREVIEW__;
     if (!config) {
@@ -114,6 +124,12 @@ function LivePreview() {
     });
     client.current = connection;
     installPreviewControls(connection);
+    const bridge = installPreviewMediaBridge(
+      connection,
+      () => setMediaMode(connection.mode()),
+      setControlError,
+    );
+    mediaBridge.current = bridge;
     const readers = () =>
       setExportBusy((window.__FRAME_PREVIEW_READERS__ ?? 0) > 0);
     window.addEventListener("frame-preview-readers", readers);
@@ -123,13 +139,21 @@ function LivePreview() {
       if (
         event.data?.type === "frame-preview-media-mode" &&
         validPreviewMode(event.data.mode)
-      )
-        connection.setMode(event.data.mode);
+      ) {
+        try {
+          connection.setMode(event.data.mode);
+          setControlError("");
+        } catch (error) {
+          setControlError(String(error));
+        }
+      }
     };
     window.addEventListener("message", retry);
     return () => {
       window.removeEventListener("message", retry);
       window.removeEventListener("frame-preview-readers", readers);
+      bridge.dispose();
+      if (mediaBridge.current === bridge) mediaBridge.current = null;
       connection.dispose();
       client.current = null;
     };
@@ -191,120 +215,127 @@ function LivePreview() {
     .replace(/\u001b/g, "");
   return (
     <>
-      <section className="preview-media-controls" aria-label="预览素材模式">
-        <label>
-          素材模式{" "}
-          <select
-            value={mediaMode}
-            disabled={exportBusy}
-            title={exportBusy ? "导出完成后可切换素材模式" : undefined}
-            onChange={(event) =>
-              changeMode(event.target.value as PreviewMediaMode)
-            }
-          >
-            <option value="original">原始素材 · 浏览器处理</option>
-            <option value="compressed">压缩素材 · 节省流量</option>
-            <option value="cached">完整缓存 · 原始素材</option>
-          </select>
-        </label>
-        <span>
-          {mediaMode === "original"
-            ? "原始素材直接交给浏览器解码和处理"
-            : mediaMode === "compressed"
-              ? "按需使用服务器预览副本"
-              : "先缓存本版本全部素材和运行依赖；保存更新后自动补齐变化"}
-        </span>
-        {controlError && <p role="alert">{controlError}</p>}
-        {mediaMode === "cached" && cache && (
-          <div className="preview-cache-panel" aria-live="polite">
-            <div className="preview-cache-summary">
-              <strong>{cachePresentation?.title}</strong>
-              <span>
-                {cache.completeFiles} / {cache.totalFiles} 个文件 ·{" "}
-                {bytes(cache.downloadedBytes)} / {bytes(cache.totalBytes)}
-              </span>
-              <div className="preview-cache-actions">
-                {(cache.state === "downloading" ||
-                  cache.state === "preparing") && (
-                  <button onClick={() => client.current?.cancelCache()}>
-                    取消缓存
-                  </button>
-                )}
-                {(cache.state === "error" || cache.state === "cancelled") && (
-                  <button onClick={() => void client.current?.retry()}>
-                    {cachePresentation?.retryLabel}
-                  </button>
-                )}
-                <button
-                  onClick={() =>
-                    void client.current
-                      ?.clearCache()
-                      .catch((error) =>
-                        setCache((value) =>
-                          value ? { ...value, warning: String(error) } : value,
-                        ),
-                      )
-                  }
-                >
-                  清理本作品缓存
-                </button>
-              </div>
-            </div>
-            <progress
-              aria-label="完整素材缓存进度"
-              value={cache.downloadedBytes}
-              max={cache.totalBytes || 1}
-            />
-            {cache.state === "ready" && (
-              <small>
-                本版本播放从浏览器缓存读取；解码和声音生成仍由浏览器执行。已持久保存{" "}
-                {cache.persistentFiles} 个文件。
-              </small>
-            )}
-            {cache.storage?.quota !== undefined && (
-              <small>
-                浏览器剩余存储约{" "}
-                {bytes(
-                  Math.max(0, cache.storage.quota - (cache.storage.usage ?? 0)),
-                )}
-              </small>
-            )}
-            {cache.warning && (
-              <p className="preview-cache-warning">{cache.warning}</p>
-            )}
-            {cache.error && <p role="alert">{cache.error}</p>}
-            {!!cache.remaining.length && (
-              <details open={cache.state === "error"}>
-                <summary>还需缓存 {cache.remaining.length} 个文件</summary>
-                <ul className="preview-cache-files">
-                  {cache.remaining.slice(0, visibleFiles).map((file) => (
-                    <li key={file.path}>
-                      <span title={file.path}>{file.path}</span>
-                      <small>
-                        {file.state === "downloading"
-                          ? "下载中 "
-                          : file.state === "error"
-                            ? "失败 "
-                            : "等待 "}
-                        {bytes(file.downloadedBytes)} / {bytes(file.bytes)}
-                      </small>
-                      {file.error && <em>{file.error}</em>}
-                    </li>
-                  ))}
-                </ul>
-                {cache.remaining.length > visibleFiles && (
+      {!externalMediaControls && (
+        <section className="preview-media-controls" aria-label="预览素材模式">
+          <label>
+            素材模式{" "}
+            <select
+              value={mediaMode}
+              disabled={exportBusy}
+              title={exportBusy ? "导出完成后可切换素材模式" : undefined}
+              onChange={(event) =>
+                changeMode(event.target.value as PreviewMediaMode)
+              }
+            >
+              <option value="original">原始素材 · 浏览器处理</option>
+              <option value="compressed">压缩素材 · 节省流量</option>
+              <option value="cached">完整缓存 · 原始素材</option>
+            </select>
+          </label>
+          <span>
+            {mediaMode === "original"
+              ? "原始素材直接交给浏览器解码和处理"
+              : mediaMode === "compressed"
+                ? "按需使用服务器预览副本"
+                : "先缓存本版本全部素材和运行依赖；保存更新后自动补齐变化"}
+          </span>
+          {controlError && <p role="alert">{controlError}</p>}
+          {mediaMode === "cached" && cache && (
+            <div className="preview-cache-panel" aria-live="polite">
+              <div className="preview-cache-summary">
+                <strong>{cachePresentation?.title}</strong>
+                <span>
+                  {cache.completeFiles} / {cache.totalFiles} 个文件 ·{" "}
+                  {bytes(cache.downloadedBytes)} / {bytes(cache.totalBytes)}
+                </span>
+                <div className="preview-cache-actions">
+                  {(cache.state === "downloading" ||
+                    cache.state === "preparing") && (
+                    <button onClick={() => client.current?.cancelCache()}>
+                      取消缓存
+                    </button>
+                  )}
+                  {(cache.state === "error" || cache.state === "cancelled") && (
+                    <button onClick={() => void client.current?.retry()}>
+                      {cachePresentation?.retryLabel}
+                    </button>
+                  )}
                   <button
-                    onClick={() => setVisibleFiles((value) => value + 100)}
+                    onClick={() =>
+                      void client.current
+                        ?.clearCache()
+                        .catch((error) =>
+                          setCache((value) =>
+                            value
+                              ? { ...value, warning: String(error) }
+                              : value,
+                          ),
+                        )
+                    }
                   >
-                    显示更多文件（还有 {cache.remaining.length - visibleFiles}{" "}
-                    个）
+                    清理本作品缓存
                   </button>
-                )}
-              </details>
-            )}
-          </div>
-        )}
-      </section>
+                </div>
+              </div>
+              <progress
+                aria-label="完整素材缓存进度"
+                value={cache.downloadedBytes}
+                max={cache.totalBytes || 1}
+              />
+              {cache.state === "ready" && (
+                <small>
+                  本版本播放从浏览器缓存读取；解码和声音生成仍由浏览器执行。已持久保存{" "}
+                  {cache.persistentFiles} 个文件。
+                </small>
+              )}
+              {cache.storage?.quota !== undefined && (
+                <small>
+                  浏览器剩余存储约{" "}
+                  {bytes(
+                    Math.max(
+                      0,
+                      cache.storage.quota - (cache.storage.usage ?? 0),
+                    ),
+                  )}
+                </small>
+              )}
+              {cache.warning && (
+                <p className="preview-cache-warning">{cache.warning}</p>
+              )}
+              {cache.error && <p role="alert">{cache.error}</p>}
+              {!!cache.remaining.length && (
+                <details open={cache.state === "error"}>
+                  <summary>还需缓存 {cache.remaining.length} 个文件</summary>
+                  <ul className="preview-cache-files">
+                    {cache.remaining.slice(0, visibleFiles).map((file) => (
+                      <li key={file.path}>
+                        <span title={file.path}>{file.path}</span>
+                        <small>
+                          {file.state === "downloading"
+                            ? "下载中 "
+                            : file.state === "error"
+                              ? "失败 "
+                              : "等待 "}
+                          {bytes(file.downloadedBytes)} / {bytes(file.bytes)}
+                        </small>
+                        {file.error && <em>{file.error}</em>}
+                      </li>
+                    ))}
+                  </ul>
+                  {cache.remaining.length > visibleFiles && (
+                    <button
+                      onClick={() => setVisibleFiles((value) => value + 100)}
+                    >
+                      显示更多文件（还有 {cache.remaining.length - visibleFiles}{" "}
+                      个）
+                    </button>
+                  )}
+                </details>
+              )}
+            </div>
+          )}
+        </section>
+      )}
       {aiMode && (
         <section className="ai-browser-header">
           <div>
@@ -351,7 +382,7 @@ function LivePreview() {
     </>
   );
 }
-document.body.classList.add("work-preview");
+document.body.classList.add("work-preview", "live-preview-shell");
 document.documentElement.dataset.previewAudio = "0";
 createRoot(document.getElementById("root")!).render(
   <LiveBoundary>
