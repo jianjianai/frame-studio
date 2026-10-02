@@ -18,6 +18,8 @@ Paseo 固定版本 0.10.2，提交 919c737c1948c5a16220307403a82e90d3e27ea0。�
 
 预填的完整 archive 只硬链接到本次 staging，不额外复制或重新下载。官方提取后删除 staging 的链接，共享原始 archive 保留供发布接受后的精确缓存清理。清理只操作本 job 的 UUID 目录和自己的锁，不修改其他 job、旧作品模型或历史。
 
+只读联动审查发现崩溃恢复缺口：生产者在硬链接后被强制终止，旧 staging 的链接未清理，原压缩包变为多个 hardlink。此前 nlink=1 限制会让恢复后的生产者永久拒绝这个只读输入。现仅放宽预填 archive 的链接数量限制，仍要求 regular、无符号链接、非空；锁文件和原生配置的独立约束不变。真实测试启动专用 Node 子进程，在实际建立链接后 SIGKILL，再由新生产者恢复失效锁、复用同一 inode 完成全部模型。原输入和旧 staging 都保留，只清理新 job 的 staging；不递归删除未知孤儿目录。
+
 ## 体量与性能边界
 
 本次 root 发布排障报告已验证并预填两个默认 archive：
@@ -36,7 +38,7 @@ Paseo 固定版本 0.10.2，提交 919c737c1948c5a16220307403a82e90d3e27ea0。�
 
 实际开发容器 Node **24.21.0**：
 
-- node --test --test-concurrency=1 tests/server/paseo-speech-models.test.mjs：**14/14 PASS，0 skip，exit 0**，1323.595511 ms。
+- node --test --test-concurrency=1 tests/server/paseo-speech-models.test.mjs：**15/15 PASS，0 skip，exit 0**，1571.804022 ms。新增真实 SIGKILL 崩溃目标单独 **1/1 PASS，0 skip，exit 0**。
 - 涵盖跨工厂唯一写入、默认顺序、原子可见性、ready 复用、不复制 archive、错误安全与已完成文件复用、失权后可重试、最后发布前失权、关闭与启动竞态、失效锁恢复、外来有效锁保留、自定义原生配置、只读等待与取消、默认先就绪、后台错误恢复。
 - 实际安装包 API 导入及目录验证通过，禁用测试中的模型网络请求，读取官方三项目录。使用完整的有限 fixture 文件验证已就绪路径，无真实权重下载。
 - 官方 server npm run typecheck --workspace=@getpaseo/server：tsgo **exit 0**。
@@ -45,10 +47,15 @@ Paseo 固定版本 0.10.2，提交 919c737c1948c5a16220307403a82e90d3e27ea0。�
 
 目标日志：
 
-- .cache/paseo-821/speech-models-target.log 与 .exit
+- .cache/paseo-821/speech-models-crash-final.log 与 .exit：最终 15 项
+- .cache/paseo-821/speech-crash-target.log 与 .exit：新增真实子进程崩溃项
+- .cache/paseo-821/speech-models-target.log 与 .exit：修复崩溃缺口前的 14 项记录保留
 - .cache/paseo-821/speech-upstream-typecheck.log 与 .exit
 - .cache/paseo-821/speech-source-check.log 与 .exit
 - .cache/paseo-821/speech-entry-syntax.log 与 .exit
+- .cache/paseo-821/speech-models-syntax.log、speech-models-test-syntax.log 与各自 .exit：最终 helper 与测试语法 exit 0
+
+对最终 manager f35873ee2b5bddc7372d746c49b7cee91cc1353101f579cdf776a0ad74c59fad 与 options 00b703373305288f097a7e3ee3850e2d8d3c30975b5006743cd338e68cb45bc9 的只读联动审查确认：API 请求只更新作品请求，控制器持 leadership 才启动共享生产者；ready 重开以 generation+touched 恢复一次，不每次扫描反复下载；关闭先取消共享任务，失权由 heartbeat 和最后发布检查拦截；只读消费者按精确目录生效，自定义目录保留官方行为。除已修复的崩溃链接恢复问题，未发现其他具体联动阻断。该审查未运行新的整套测试。
 
 首次目标因 fixture 在状态文件创建前直接读取 ENOENT 失败，修正为等待真实后台状态后通过。源码校验先受到 root Git ownership 与不同 UID 缓存权限限制；最终使用实际 Node 24、仅进程级精确 safe.directory 配置完成，未更改全局 Git 信任或公共目录权限。
 

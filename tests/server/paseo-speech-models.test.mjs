@@ -5,6 +5,8 @@ import path from "node:path";
 import os from "node:os";
 import { stripTypeScriptTypes } from "node:module";
 import { pathToFileURL } from "node:url";
+import { fork } from "node:child_process";
+import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   createSharedSpeechModels,
@@ -169,6 +171,115 @@ test("prefilled archives are linked without copying and preserved after official
   await until(() => missing(path.join(root, ".frame-speech-lock")));
   assert.equal(await fs.readFile(archive, "utf8"), "trusted archive fixture");
   assert.equal((await fs.stat(archive)).nlink, 1);
+});
+
+test("a killed producer's real staging hardlink does not prevent recovery or delete its orphan", async (t) => {
+  const data = await temporary(t),
+    root = path.join(data, "paseo-models");
+  const archive = path.join(root, ".downloads", "stt.tar.bz2");
+  await fs.mkdir(path.dirname(archive), { recursive: true });
+  await fs.writeFile(archive, "verified crash-recovery archive");
+  const input = await fs.stat(archive);
+  const worker = path.join(data, "crashing-producer.mjs");
+  const helper = new URL(
+    "../../integrations/paseo/speech-models.mjs",
+    import.meta.url,
+  ).href;
+  await fs.writeFile(
+    worker,
+    [
+      "import fs from 'node:fs/promises';",
+      "import path from 'node:path';",
+      "import {createSharedSpeechModels} from " + JSON.stringify(helper) + ";",
+      "process.on('disconnect', () => process.exit(3));",
+      "setInterval(() => {}, 1000);",
+      "const cache=createSharedSpeechModels({data:process.argv[2],catalog:" +
+        JSON.stringify(catalogue) +
+        ",heartbeatMs:40,staleMs:500,pollMs:10,",
+      "downloader:async({modelsDir})=>{",
+      "await fs.writeFile(path.join(modelsDir,'orphan-marker.txt'),'Keep the previous owner stage');",
+      "process.send({stage:modelsDir}); await new Promise(()=>{});",
+      "}}); await cache.start();",
+    ].join("\n"),
+  );
+  const child = fork(worker, [data], {
+    stdio: ["ignore", "ignore", "pipe", "ipc"],
+    windowsHide: true,
+  });
+  let diagnostic = "";
+  child.stderr.on("data", (chunk) => {
+    diagnostic = (diagnostic + chunk).slice(-2048);
+  });
+  const killOwnedChild = async () => {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    const ended = once(child, "exit");
+    child.kill("SIGKILL");
+    await ended;
+  };
+  t.after(killOwnedChild);
+  let message;
+  try {
+    [message] = await once(child, "message", {
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    throw Error(
+      "Crash producer did not reach its real archive link: " + diagnostic,
+    );
+  }
+  const orphan = message.stage;
+  assert.equal(path.dirname(orphan), path.join(root, ".frame-staging"));
+  assert.match(path.basename(orphan), /^[0-9a-f-]{36}$/);
+  const orphanArchive = path.join(orphan, ".downloads", "stt.tar.bz2");
+  assert.equal((await fs.stat(orphanArchive)).ino, input.ino);
+  assert.equal((await fs.stat(archive)).nlink, 2);
+  await killOwnedChild(); // SIGKILL prevents the original producer's finally cleanup.
+  assert.equal((await fs.stat(archive)).nlink, 2);
+  assert.equal(await missing(orphanArchive), false);
+  const lock = path.join(root, ".frame-speech-lock"),
+    stale = new Date(Date.now() - 5000);
+  assert.equal(await missing(lock), false);
+  await fs.utimes(lock, stale, stale); // Advance the fixture's lease expiry without a long sleep.
+  const calls = [];
+  const cache = factory(data, async ({ modelsDir, modelIds }) => {
+    const id = modelIds[0];
+    calls.push(id);
+    if (id === "stt") {
+      const linked = path.join(modelsDir, ".downloads", "stt.tar.bz2");
+      assert.equal((await fs.stat(linked)).ino, input.ino);
+      assert.equal((await fs.stat(archive)).nlink, 3);
+      assert.equal(
+        await fs.readFile(linked, "utf8"),
+        "verified crash-recovery archive",
+      );
+      await fs.unlink(linked);
+    }
+    await writeModel(
+      modelsDir,
+      catalogue.find((model) => model.id === id),
+    );
+  });
+  t.after(() => cache.close());
+  await cache.start();
+  await until(async () => (await readState(root)).state === "ready");
+  await until(() => missing(lock));
+  assert.deepEqual(calls, ["stt", "tts", "optional"]);
+  assert.equal(
+    await fs.readFile(archive, "utf8"),
+    "verified crash-recovery archive",
+  );
+  assert.equal((await fs.stat(archive)).nlink, 2);
+  assert.equal(
+    await fs.readFile(path.join(orphan, "orphan-marker.txt"), "utf8"),
+    "Keep the previous owner stage",
+  );
+  assert.equal(
+    await fs.readFile(orphanArchive, "utf8"),
+    "verified crash-recovery archive",
+  );
+  assert.deepEqual(await fs.readdir(path.join(root, ".frame-staging")), [
+    path.basename(orphan),
+  ]);
 });
 
 test("download failure is safe, retains completed defaults, and retries only missing models", async (t) => {

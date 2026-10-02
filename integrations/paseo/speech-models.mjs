@@ -310,12 +310,13 @@ export function createSharedSpeechModels({
       for (const model of models) {
         await fence();
         if (!complete.includes(model.id)) {
-          // A trusted prefilled archive is linked only inside this job; no extra network/byte copy.
+          // A crashed producer may leave another staging link. Extraction only reads this input;
+          // never remove those unknown stages or reject a reusable archive because of their links.
           const filename = path.basename(new URL(model.archiveUrl).pathname);
           const archive = path.join(root, ".downloads", filename);
           const existing = await regular(archive);
           if (existing) {
-            if (!existing.isFile() || !existing.size || existing.nlink !== 1)
+            if (!existing.isFile() || !existing.size)
               throw Error("Invalid prefilled speech archive");
             await fs.link(archive, path.join(staging, ".downloads", filename));
           }
