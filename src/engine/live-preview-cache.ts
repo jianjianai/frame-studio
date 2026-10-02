@@ -389,13 +389,14 @@ export function createLivePreviewCache(
   const activeWorkers = new Set<Worker>();
   const workerMappings = () =>
     Object.fromEntries([...byUrl].map(([key, entry]) => [key, entry.url]));
+  const workerState = () => ({
+    [workerControl]: true,
+    mediaMode: mode,
+    mappings: workerMappings(),
+    semantics: Object.fromEntries(semanticUrls),
+  });
   const updateWorkers = () => {
-    const message = {
-      [workerControl]: true,
-      cached: mode === "cached",
-      mappings: workerMappings(),
-      semantics: Object.fromEntries(semanticUrls),
-    };
+    const message = workerState();
     for (const worker of activeWorkers) worker.postMessage(message);
   };
   const workerPrefix = () => {
@@ -410,10 +411,12 @@ export function createLivePreviewCache(
       JSON.stringify(mappings) +
       ";let __frameSemantics=" +
       JSON.stringify(Object.fromEntries(semanticUrls)) +
-      ";self.__FRAME_PREVIEW_MEDIA_MODE__=__frameCached?'cached':'original';" +
+      ";self.__FRAME_PREVIEW_MEDIA_MODE__=" +
+      JSON.stringify(mode) +
+      ";" +
       "self.addEventListener('message',e=>{if(e.data?.[" +
       JSON.stringify(workerControl) +
-      "]!==true)return;e.stopImmediatePropagation();__frameCached=e.data.cached;__frameCache=e.data.mappings;__frameSemantics=e.data.semantics;self.__FRAME_PREVIEW_MEDIA_MODE__=__frameCached?'cached':'original';});" +
+      "]!==true)return;e.stopImmediatePropagation();self.__FRAME_PREVIEW_MEDIA_MODE__=e.data.mediaMode;__frameCached=e.data.mediaMode==='cached';__frameCache=e.data.mappings;__frameSemantics=e.data.semantics;});" +
       "const __frameResolve=u=>{const key=new URL(String(u),self.__FRAME_LIVE_ASSET_BASE__).href;return (__frameCached&&(__frameCache[key]||__frameCache[key.split('#')[0]]))||u;};" +
       'self.__FRAME_PREVIEW_ASSET_URL__=u=>{if(!__frameCached)return u;const original=new URL(String(u),self.__FRAME_LIVE_ASSET_BASE__),canonical=__frameSemantics[original.href]||__frameSemantics[original.href.split("#")[0]];if(!canonical||original.search)return u;const current=new URL(canonical);current.hash=original.hash;return current.href;};const __frameFetch=self.fetch.bind(self);self.fetch=(u,o)=>{if(!__frameCached)return __frameFetch(u,o);const key=new URL(String(u instanceof Request?u.url:u),self.__FRAME_LIVE_ASSET_BASE__).href,mapped=__frameResolve(key);if(mapped===key&&key.startsWith(self.__FRAME_LIVE_ASSET_BASE__)&&/\\/(films|vendor|fonts|assets)\\//.test(new URL(key).pathname))return Promise.resolve(new Response("素材不在当前版本缓存中",{status:404}));return __frameFetch(u instanceof Request?new Request(mapped,u):mapped,o);};' +
       "const __frameScripts=self.importScripts.bind(self);self.importScripts=(...u)=>__frameScripts(...u.map(__frameResolve));"
@@ -465,12 +468,7 @@ export function createLivePreviewCache(
         (mode === "cached" && workerUrls.has(absolute(String(url))))
       ) {
         activeWorkers.add(this);
-        this.postMessage({
-          [workerControl]: true,
-          cached: mode === "cached",
-          mappings: workerMappings(),
-          semantics: Object.fromEntries(semanticUrls),
-        });
+        this.postMessage(workerState());
       }
     }
     terminate() {

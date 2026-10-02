@@ -6,8 +6,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { startLocalApp, freeLocalPort } from "../../server/local-app.mjs";
 import { sqliteDatabase } from "../../server/sqlite.mjs";
+import { PaseoManager } from "../../server/paseo-manager.mjs";
 
-test("local browser startup does not wait for speech and exit protects unsaved browser activity", async () => {
+test("local browser startup does not wait for speech and exit protects unsaved browser activity", async t => {
   const names = ["FRAME_TEST_LOCAL", "FRAME_LOCAL_MODE", "FRAME_PUBLIC_URL", "FRAME_DATA", "FRAME_SPEECH_URL", "FRAME_LAUNCH_TOKEN"];
   const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
   const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-desktop-protocol-"));
@@ -18,7 +19,16 @@ test("local browser startup does not wait for speech and exit protects unsaved b
     const headers = { host: new URL(local.origin).host, origin: local.origin };
     const invoke = (url, payload, extra = {}) => local.app.inject({ url, method: payload ? "POST" : "GET", payload, headers: { ...headers, ...extra } });
     assert.equal((await invoke("/api/me")).json().localMode, true);
-    assert.equal((await invoke("/api/desktop/status")).json().speech.state, "starting");
+    // Capture the actual manager without replacing createApp or the local services contract.
+    let nativeManager;
+    const originalActive = PaseoManager.prototype.active;
+    const capture = t.mock.method(PaseoManager.prototype, "active", async function (...args) {
+      nativeManager = this;
+      return originalActive.apply(this, args);
+    });
+    try { assert.equal((await invoke("/api/desktop/status")).json().speech.state, "starting"); }
+    finally { capture.mock.restore(); }
+    assert.ok(nativeManager instanceof PaseoManager);
     const repos = (await invoke("/api/action", { name: "repositories_page", args: {} })).json();
     assert.equal(repos.items[0].name, "我的作品");
     const work = (await invoke("/api/action", { name: "works_create", args: { repo: repos.items[0].id, title: "Exit admission" } })).json();
@@ -30,6 +40,29 @@ test("local browser startup does not wait for speech and exit protects unsaved b
     assert.equal((await invoke("/api/desktop/status")).json().unsaved, 1);
     assert.equal((await invoke("/api/desktop/prepare-exit", {}, { "x-frame-desktop": process.env.FRAME_LAUNCH_TOKEN })).statusCode, 409);
     await invoke("/api/desktop/activity", { session, dirty: false });
+    let nativeActivity = [];
+    const activity = t.mock.method(nativeManager, "active", async () => nativeActivity);
+    try {
+      const idle = { workId: work.id, repo: repos.items[0].id, project: "exit-admission", state: "ready",
+        activeAgents: [], pendingPermissions: 0, activeTerminals: 0, incomplete: false };
+      for (const [name, busy] of [
+        ["native agent", { activeAgents: ["owned-native-agent"] }],
+        ["native terminal", { activeTerminals: 1 }],
+        ["pending permission", { pendingPermissions: 1 }],
+        ["unknown native activity", { incomplete: true }],
+      ]) {
+        nativeActivity = [{ ...idle, ...busy }];
+        const status = await invoke("/api/desktop/status");
+        assert.equal(status.statusCode, 200, name);
+        assert.equal(status.json().active, 1, name);
+        assert.equal(status.json().unsaved, 0, name);
+        const blocked = await invoke("/api/desktop/prepare-exit", {}, { "x-frame-desktop": process.env.FRAME_LAUNCH_TOKEN });
+        assert.equal(blocked.statusCode, 409, name + " must prevent desktop shutdown");
+        assert.equal(blocked.json().active, 1, name);
+      }
+      nativeActivity = [];
+      assert.equal((await invoke("/api/desktop/status")).json().active, 0);
+    } finally { activity.mock.restore(); }
     completeSpeech({ close: async () => { closed = true; } });
     await new Promise(resolve => setImmediate(resolve));
     assert.equal((await invoke("/api/desktop/status")).json().speech.state, "ready");

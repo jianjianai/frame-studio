@@ -93,8 +93,8 @@ export function agentTools({
 }) {
   app.post("/api/agent/action", async (req) => {
     const task = req.agentTask;
-    const runRoot = task?.runRoot || path.join(data, "runs", task?.id || "");
     if (!task) throw problem(403, "Task credential required");
+    const runRoot = () => task.runRoot || path.join(data, "runs", task.id || "");
     const { name, args = {} } = req.body || {};
     if (!args || typeof args !== "object" || Array.isArray(args))
       throw problem(400, "Tool args must be a JSON object");
@@ -165,7 +165,7 @@ export function agentTools({
     if (name === "engine_test") {
       const preview = await actions.call("speech_test", args);
       const relative = `projects/${task.project}/.cache/speech/${preview.task}.${preview.mime === "audio/wav" ? "wav" : "mp3"}`;
-      const target = confined(runRoot, relative);
+      const target = confined(runRoot(), relative);
       fs.mkdirSync(path.dirname(target), { recursive: true });
       await fs.promises.copyFile(
         confined(path.join(data, "runs", preview.task), preview.path),
@@ -201,7 +201,7 @@ export function agentTools({
       )
         throw problem(403, "Material does not belong to this repository");
       if (asset.deleted) throw problem(409, "Material is in recycle bin");
-      const root = path.join(runRoot, "projects", task.project),
+      const root = path.join(runRoot(), "projects", task.project),
         ext = path
           .extname(asset.name)
           .replace(/[^.a-zA-Z0-9]/g, "")

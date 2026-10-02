@@ -84,3 +84,11 @@
 - `tests/server/ai-workbench-browser.test.mjs`
 - `tests/server/chat-retry-browser.test.mjs`
 - `tests/server/v5-workflow-browser.test.mjs`
+
+## 正式候选门禁发现：桌面返回对象契约（2026-10-02）
+
+正式候选的 `local-desktop.test.mjs` 暴露真实产品错误：`createApp` 返回的原生服务位于 `paseo.manager`，桌面入口却访问不存在的顶层 `paseoManager`，导致状态与退出保护返回 500。此测试使用真实 `startLocalApp` 和 SQLite，不是缺少 fake services 的夹具问题。最小修复仅把 `server/local-app.mjs` 的活动读取改为 `services.paseo.manager.active()`，保留原生活动保护。
+
+在原三项桌面测试中增加实际创建 manager 的退出断言；一次捕获真实 manager 时委托原 `active` 并立即恢复，然后仅在该实例的方法模拟原生 Agent、终端、待确认权限与未知活动。每一种都要求状态 active=1、unsaved=0、退出返回 409，恢复空活动后原先正常退出和发布失败恢复断言仍成立；不跳过、不降低任何原有门槛。
+
+实际 Node `v24.21.0` 在 `frame-development` 执行 `node --test --test-concurrency=1 tests/server/local-desktop.test.mjs`：3/3 通过、0 skip、exit 0，总时长 2393.06ms。日志 `.cache/paseo-integration/local-desktop-node24.log`、`.exit`。本次仅修改桌面入口这一处、该目标测试和本记录，没有改源归档、发布脚本或生产。

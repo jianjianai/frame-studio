@@ -40,7 +40,8 @@ export function probe(){const raw='films/test-film/source.mp4',image='films/test
   svg:previewAssetUrl('films/test-film/vector.svg','draft'),animated:previewAssetUrl('films/test-film/animated.webp','draft')};}
 export function snapshotProbe(){const before=probe(),release=beginPreviewSnapshot();try{return{before,during:probe()};}finally{release();}}
 async function waitForWorker(worker){try{return await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Worker asset probe timed out')),12000);worker.onmessage=event=>{clearTimeout(timer);resolve(event.data);};worker.onerror=event=>{clearTimeout(timer);reject(Error(event.message));};});}finally{worker.terminate();}}
-export function workerProbe(){return waitForWorker(new Worker(new URL('./asset-worker.ts',import.meta.url),{name:'frozen-assets'}));}
+export function assetWorker(){return new Worker(new URL('./asset-worker.ts',import.meta.url),{name:'frozen-assets'});}
+export function workerProbe(){return waitForWorker(assetWorker());}
 export function moduleWorkerProbe(){return waitForWorker(new Worker(new URL('./asset-worker.ts',import.meta.url),{type:'module',name:'frozen-module-assets'}));}
 export async function imageFrame(quality){const bitmap=await openImageSource(assetUrl('films/test-film/image.png'),undefined,320,180,quality);const result={width:bitmap.width,height:bitmap.height,bytes:videoSourceDiagnostics().images.bitmapBytes};bitmap.close();result.released=videoSourceDiagnostics().images.bitmapBytes;return result;}
 `;
@@ -80,8 +81,9 @@ test(
     await fsp.writeFile(
       path.join(projectDir, "asset-worker.ts"),
       "import {assetUrl,previewAssetUrl} from '../../src/engine/types';" +
-        "const raw='films/test-film/source.mp4',pinned=assetUrl(raw),proxy=previewAssetUrl(pinned,'standard');" +
-        "Promise.all([pinned,proxy].map(async url=>{const response=await fetch(url,{headers:{Range:'bytes=0-127'}});return{url,status:response.status,bytes:(await response.arrayBuffer()).byteLength};})).then(fetches=>self.postMessage({pinned,proxy,fetches,name:self.name})).catch(error=>{throw error;});",
+        "function probe(){const raw='films/test-film/source.mp4',pinned=assetUrl(raw),proxy=previewAssetUrl(pinned,'standard');" +
+        "Promise.all([pinned,proxy].map(async url=>{const response=await fetch(url,{headers:{Range:'bytes=0-127'}});return{url,status:response.status,bytes:(await response.arrayBuffer()).byteLength};})).then(fetches=>self.postMessage({pinned,proxy,fetches,name:self.name})).catch(error=>{throw error;});}" +
+        "self.addEventListener('message',probe);probe();",
     );
     await fsp.writeFile(
       path.join(projectDir, "public/vector.svg"),
@@ -472,6 +474,62 @@ test(
           (item) => item.status === 206 && item.bytes === 128,
         ),
         "bundled browser workers must actually fetch both frozen original media and the lazy reusable proxy",
+      );
+      const workerModes = await page.evaluate(async () => {
+        const manifest = await (
+          await fetch(window.__FRAME_LIVE_PREVIEW__.manifestUrl)
+        ).json();
+        const module = await import(
+          new URL(manifest.projectUrl, location.href).href
+        );
+        const worker = (await module.default.load()).assetWorker();
+        const receive = () =>
+          new Promise((resolve, reject) => {
+            const timer = setTimeout(
+              () => reject(Error("Persistent Worker mode probe timed out")),
+              12000,
+            );
+            worker.onmessage = (event) => {
+              clearTimeout(timer);
+              resolve(event.data);
+            };
+            worker.onerror = (event) => {
+              clearTimeout(timer);
+              reject(Error(event.message));
+            };
+          });
+        try {
+          const results = [{ mode: "compressed", probe: await receive() }];
+          for (const mode of ["original", "compressed"]) {
+            window.__FRAME_PREVIEW_CONTROL__.setPreviewMode(mode);
+            const pending = receive();
+            worker.postMessage("probe");
+            results.push({ mode, probe: await pending });
+          }
+          return results;
+        } finally {
+          worker.terminate();
+        }
+      });
+      for (const { mode, probe } of workerModes) {
+        assert.equal(probe.name, "frozen-assets");
+        assert.equal(probe.pinned, result.pinned);
+        assert.equal(
+          probe.proxy,
+          mode === "original" ? result.pinned : result.video.standard,
+          `the same living Worker follows ${mode} mode without changing its source revision`,
+        );
+        assert.ok(
+          probe.fetches.every(
+            (item) => item.status === 206 && item.bytes === 128,
+          ),
+          `${mode} Worker must actually fetch its selected media rendition`,
+        );
+      }
+      await page.waitForFunction(
+        () =>
+          window.__FRAME_LIVE_STATUS__?.state === "ready" &&
+          window.__FRAME_LIVE_STATUS__?.mediaMode === "compressed",
       );
       const frames = await page.evaluate(async () => {
         const manifest = await (

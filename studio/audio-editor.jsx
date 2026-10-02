@@ -20,7 +20,11 @@ import {
 } from "../src/engine/audio-document.mjs";
 import "./audio-editor.css";
 import { ToneEffectEditor, defaultToneOptions } from "./tone-effect-editor";
-import { NumberInput } from "./editor-inputs";
+import {
+  NumberInput,
+  NumericDraftProvider,
+  flushNumericPending,
+} from "./editor-inputs";
 import { stretchPreset, stretchMode } from "./editor-drafts.mjs";
 const uid = (p) => p + "_" + crypto.randomUUID().slice(0, 8);
 const labels = {
@@ -84,7 +88,9 @@ export function AudioEditor({
     [doc, setDoc] = useState(null),
     [files, setFiles] = useState([]),
     [error, setError] = useState(""),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [numericDirty, setNumericDirty] = useState(false),
+    [numericReset, setNumericReset] = useState(0);
   const [selected, setSelected] = useState({ kind: "master" }),
     [past, setPast] = useState([]),
     [future, setFuture] = useState([]),
@@ -155,12 +161,14 @@ export function AudioEditor({
   }, [doc?.clips]);
   const drag = useRef(null),
     loadRequest = useRef(0),
-    current = useRef(null);
+    current = useRef(null),
+    editorElement = useRef(null);
   current.current = doc;
-  const dirty = useMemo(
+  const canonicalDirty = useMemo(
     () => !!state && JSON.stringify(doc) !== JSON.stringify(state.document),
     [doc, state?.document],
   );
+  const dirty = canonicalDirty || numericDirty;
   const blocked = disabled || busy;
   const load = async (restoreDraft = false) => {
     const request = ++loadRequest.current;
@@ -202,6 +210,8 @@ export function AudioEditor({
         setDoc(s.document);
       }
       setFiles(f);
+      setNumericReset((previous) => previous + 1);
+      setNumericDirty(false);
       setPast([]);
       setFuture([]);
     } catch (e) {
@@ -217,6 +227,7 @@ export function AudioEditor({
     setPast([]);
     setFuture([]);
     setSelected({ kind: "master" });
+    setNumericDirty(false);
   }, [work.id]);
   useEffect(() => {
     if (visible) void load(true);
@@ -234,7 +245,7 @@ export function AudioEditor({
     if (!state || state.workId !== work.id || !doc) return;
     try {
       const key = "frame-audio-draft:" + work.id;
-      if (dirty)
+      if (canonicalDirty)
         sessionStorage.setItem(
           key,
           JSON.stringify({
@@ -247,7 +258,7 @@ export function AudioEditor({
     } catch {
       /* Editing remains usable when browser storage is unavailable. */
     }
-  }, [doc, state, work.id, dirty]);
+  }, [doc, state, work.id, canonicalDirty]);
   const change = (fn) => {
     if (blocked) return;
     setPast((p) => [...p.slice(-49), structuredClone(current.current)]);
@@ -271,11 +282,17 @@ export function AudioEditor({
     setFuture((f) => f.slice(1));
   };
   const save = async () => {
-    if (blocked) return;
+    if (blocked || !flushNumericPending(editorElement.current)) return;
+    const latest = current.current;
+    if (
+      state.declared &&
+      JSON.stringify(latest) === JSON.stringify(state.document)
+    )
+      return;
     setBusy(true);
     setError("");
     try {
-      const document = validateAudioDocument(doc, {
+      const document = validateAudioDocument(latest, {
         projectId: work.project,
         duration: state.duration,
       });
@@ -410,11 +427,17 @@ export function AudioEditor({
     if (blocked || e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    e.currentTarget.setPointerCapture(e.pointerId);
-    const row = e.currentTarget.closest(".audio-lane");
+    const target = e.currentTarget;
+    // Dragging suppresses normal focus changes, so commit before capturing.
+    if (!flushNumericPending(editorElement.current)) return;
+    const latest = current.current;
+    const clip = latest.clips.find((item) => item.id === c.id);
+    if (!clip) return;
+    target.setPointerCapture(e.pointerId);
+    const row = target.closest(".audio-lane");
     drag.current = {
-      before: structuredClone(doc),
-      clip: { ...c },
+      before: structuredClone(latest),
+      clip: { ...clip },
       x: e.clientX,
       width: row.getBoundingClientRect().width,
       mode,
@@ -459,10 +482,20 @@ export function AudioEditor({
   const endDrag = () => {
     if (drag.current) {
       const before = drag.current.before;
-      setPast((p) => [...p.slice(-49), before]);
-      setFuture([]);
       drag.current = null;
+      if (JSON.stringify(current.current) !== JSON.stringify(before)) {
+        setPast((p) => [...p.slice(-49), before]);
+        setFuture([]);
+      }
     }
+  };
+  const cancelDrag = (e) => {
+    if (!drag.current) return;
+    const before = drag.current.before;
+    drag.current = null;
+    setDoc(before);
+    if (e.currentTarget.hasPointerCapture(e.pointerId))
+      e.currentTarget.releasePointerCapture(e.pointerId);
   };
   if (!doc)
     return (
@@ -533,8 +566,9 @@ export function AudioEditor({
       />
     </label>
   );
-  return (
+  const content = (
     <div
+      ref={editorElement}
       className="audio-editor"
       role="region"
       aria-label="多轨音频编辑器"
@@ -695,7 +729,7 @@ export function AudioEditor({
                     onPointerDown={(e) => beginDrag(e, c, "move")}
                     onPointerMove={moveDrag}
                     onPointerUp={endDrag}
-                    onPointerCancel={endDrag}
+                    onPointerCancel={cancelDrag}
                   >
                     {
                       <ClipWaveform
@@ -1502,5 +1536,13 @@ export function AudioEditor({
         </section>
       </div>
     </div>
+  );
+  return (
+    <NumericDraftProvider
+      onDirtyChange={setNumericDirty}
+      resetKey={`${work.id}:${numericReset}`}
+    >
+      {content}
+    </NumericDraftProvider>
   );
 }

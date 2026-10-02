@@ -131,6 +131,21 @@ test(
       await expect(editor.getByLabel("开始秒", { exact: true })).toHaveValue(
         "0",
       );
+      await expect(editor.getByLabel("时长秒", { exact: true })).toHaveValue(
+        "1",
+      );
+      // The duration blur and the subsequent drag are two distinct undo steps.
+      await editor.getByTitle("撤销", { exact: true }).click();
+      await expect(editor.getByLabel("时长秒", { exact: true })).toHaveValue(
+        "2",
+      );
+      await editor.getByTitle("重做", { exact: true }).click();
+      await expect(editor.getByLabel("时长秒", { exact: true })).toHaveValue(
+        "1",
+      );
+      await expect(editor.getByLabel("开始秒", { exact: true })).toHaveValue(
+        "0",
+      );
       await editor
         .getByRole("button", { name: "保存混音", exact: true })
         .click();
@@ -168,6 +183,7 @@ test(
         "0.5",
       );
       await editor.getByLabel("作品增益", { exact: true }).fill("0.6");
+      await editor.getByLabel("作品增益", { exact: true }).press("Tab");
       await expect
         .poll(() =>
           page.evaluate(
