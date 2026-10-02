@@ -11,7 +11,7 @@ COPY server/local-tools.mjs ./server/local-tools.mjs
 RUN --mount=type=cache,id=frame-paseo-npm,target=/root/.npm node scripts/build-paseo.mjs --runtime=/opt/paseo --output=/tmp/frame-paseo-bundle
 
 FROM node:24-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs gh ffmpeg chromium fonts-noto-cjk ca-certificates curl tini && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs gh ffmpeg chromium fonts-noto-cjk ca-certificates curl tini bzip2 && rm -rf /var/lib/apt/lists/*
 COPY --from=docker:29-cli /usr/local/bin/docker /usr/local/bin/docker
 RUN npm install -g pnpm@12.4.2 @openai/codex@0.158.0 @anthropic-ai/claude-code@2.1.283
 WORKDIR /opt/frame

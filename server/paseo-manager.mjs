@@ -10,9 +10,12 @@ import { executionRuntime } from "./execution-runtime.mjs";
 import { confinedAsync, exists } from "./project-files.mjs";
 import { hash, token, problem } from "./security.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
+import { publicAgentText } from "./agent-public-data.mjs";
+import { paseoCallbackUrl, paseoDaemonOptions, paseoUnavailable, inspectPaseoContainer } from "./paseo-runtime-options.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const activeStates = new Set(["running", "initializing"]);
+const startupConcurrency = 2;
 const terminalBusy = terminal => !terminal.activity || terminal.activity.state === "working" ||
   terminal.activity.attentionReason === "needs_input" ||
   terminal.activity.state === "attention" && terminal.activity.attentionReason !== "finished";
@@ -69,7 +72,7 @@ export class PaseoManager {
   constructor({ db, data, store, workService, tasks, connections, localMode = process.env.FRAME_LOCAL_MODE === "1",
     clientFactory, runCommand = command, idleMs = 20 * 60 * 1000, startTimeoutMs = 90000 } = {}) {
     Object.assign(this, { db, data, store, workService, tasks, connections, localMode, clientFactory, runCommand, idleMs, startTimeoutMs });
-    this.clients = new Map(); this.connecting = new Map(); this.profileRevisions = new Map(); this.profileSyncs = new Map(); this.clientScope = "frame-" + (process.env.FRAME_ROLE || "local") + "-" + randomUUID(); this.starting = new Map(); this.children = new Map(); this.closed = false;
+    this.clients = new Map(); this.connecting = new Map(); this.profileRevisions = new Map(); this.profileSyncs = new Map(); this.clientScope = "frame-" + (process.env.FRAME_ROLE || "local") + "-" + randomUUID(); this.starting = new Map(); this.runningStarts = 0; this.startWaiters = []; this.speechRequests = new Map(); this.children = new Map(); this.closed = false;
   }
   async controlPath(workId) {
     return confinedAsync(this.data, "paseo/" + uuid(workId) + "/control.json");
@@ -174,10 +177,10 @@ export class PaseoManager {
           draftRoot: prepared.draft.draftRoot, projectRoot: prepared.draft.projectRoot,
           runtimeRoot: root, runtimeFingerprint: binding.runtimeFingerprint, state: "ready" };
       }
-      if (binding?.state === "failed") throw problem(503, binding.error || "Paseo startup failed; reopen to retry");
+      if (binding?.state === "failed") throw paseoUnavailable("failed", binding.error);
       await sleep(200);
     }
-    throw problem(503, "Paseo is still starting; reconnect to this work");
+    throw paseoUnavailable("waiting");
   }
   async client(workId, binding = null) {
     if (this.connecting.has(workId)) return this.connecting.get(workId);
@@ -310,28 +313,88 @@ export class PaseoManager {
       "projects/*/.history/", "/.frame-runtime.json"].join("\n") + "\n");
     await atomicPaseoJson(marker, { fingerprint: runtime.fingerprint, project: work.project });
   }
-  async start(workId) {
-    if (this.starting.has(workId)) return this.starting.get(workId);
-    const start = this.db.lock("paseo-daemon:" + workId, () => this.startLocked(workId));
-    this.starting.set(workId, start);
-    try { return await start; } finally { this.starting.delete(workId); }
+  async sharedSpeechRoot() {
+    this.speechModelsPromise ||= import("../integrations/paseo/speech-models.mjs").then(({ createSharedSpeechModels }) =>
+      createSharedSpeechModels({ data: this.data, runtimeRoot: nativeRoot(), assertLeadership: () => this.assertStartupOwner() }));
+    return (await this.speechModelsPromise).start();
   }
-  async startLocked(workId) {
-    if (!this.localMode) await this.tasks.assertLeadership();
-    const { work, draft } = await this.workService.prepare(workId);
-    let binding = await this.store.getWork(workId);
-    if (binding.state === "ready") {
-      try { await this.observe(workId, { refresh: true }); return binding; }
-      catch { await this.dropClient(workId); }
+  async resumeSharedSpeech(binding) {
+    if (!binding.requested) return;
+    const request = binding.daemonGeneration + ":" + binding.touched;
+    if (this.speechRequests.get(binding.workId) === request) return;
+    await this.assertStartupOwner();
+    // requestWork alone changes touched; native events only change updated/lastObserved.
+    // Record this user request before awaiting so one failed download is not retried every scan.
+    this.speechRequests.set(binding.workId, request);
+    try { await this.sharedSpeechRoot(); }
+    catch (error) {
+      if (error.leadershipLost || this.closed) {
+        if (this.speechRequests.get(binding.workId) === request) this.speechRequests.delete(binding.workId);
+        throw error;
+      }
+      console.error("Paseo shared speech preparation:", binding.workId,
+        "Shared speech cache unavailable; reopen the work to retry. Chat remains available.");
     }
-    const runtime = this.localMode ? { ...(await runtimeIdentity()), image: null, local: true }
-      : await executionRuntime({ data: this.data, task: { kind: "paseo" }, command: this.runCommand });
-    const daemonGeneration = String(BigInt(binding.daemonGeneration || "0") + 1n);
-    binding = await this.store.updateRuntime(workId, { state: "starting", daemonGeneration, error: null,
-      runtimeFingerprint: runtime.fingerprint, image: runtime.image }, { expectedDaemonGeneration: binding.daemonGeneration });
-    if (!binding) return;
+  }
+  async assertStartupOwner() {
+    if (this.closed) throw Object.assign(Error("Paseo controller is stopping"), { leadershipLost: true });
+    if (!this.localMode) await this.tasks.assertLeadership();
+  }
+  async withStartupSlot(callback) {
+    // Reserve synchronously: an asynchronous lease check must not admit a third launch.
+    if (this.runningStarts >= startupConcurrency) await new Promise((resolve, reject) => this.startWaiters.push({ resolve, reject }));
+    else this.runningStarts++;
+    try { await this.assertStartupOwner(); return await callback(); }
+    finally {
+      const next = this.startWaiters.shift();
+      if (next) next.resolve(); // Transfer the reserved slot directly to the FIFO waiter.
+      else this.runningStarts--;
+    }
+  }
+  async start(workId, { profiles } = {}) {
+    if (this.starting.has(workId)) return this.starting.get(workId);
+    const start = this.withStartupSlot(() => this.db.lock("paseo-daemon:" + workId, () => this.startLocked(workId, profiles)));
+    this.starting.set(workId, start);
+    try { return await start; }
+    finally { if (this.starting.get(workId) === start) this.starting.delete(workId); }
+  }
+  scheduleStart(workId, profiles) {
+    if (this.closed || this.starting.has(workId) || this.starting.size >= startupConcurrency) return;
+    void this.start(workId, { profiles }).catch(error => {
+      if (!error.leadershipLost && !this.closed) console.error("Paseo startup request:", workId,
+        paseoUnavailable("failed", error.message).message);
+    });
+  }
+  async startLocked(workId, desiredProfiles) {
+    let binding, daemonGeneration, control, phase = "prepare";
     try {
-      const control = await this.control(workId, { create: true });
+      await this.assertStartupOwner();
+      binding = await this.store.getWork(workId);
+      const { work, draft } = await this.workService.prepare(workId);
+      binding ||= await this.store.getWork(workId);
+      if (!binding) throw Error("Paseo work registration is missing");
+      if (binding.state === "ready") {
+        try {
+          await this.resumeSharedSpeech(binding);
+          await this.observe(workId, { refresh: true }); return binding;
+        }
+        catch (error) {
+          if (error.leadershipLost) throw error;
+          await this.assertStartupOwner();
+          await this.dropClient(workId);
+        }
+      }
+      phase = "runtime";
+      const runtime = this.localMode ? { ...(await runtimeIdentity()), image: null, local: true }
+        : await executionRuntime({ data: this.data, task: { kind: "paseo" }, command: this.runCommand });
+      await this.assertStartupOwner();
+      const nextGeneration = String(BigInt(binding.daemonGeneration || "0") + 1n);
+      const admittedStart = await this.store.updateRuntime(workId, { state: "starting", daemonGeneration: nextGeneration, error: null,
+        runtimeFingerprint: runtime.fingerprint, image: runtime.image }, { expectedDaemonGeneration: binding.daemonGeneration });
+      if (!admittedStart) return;
+      binding = admittedStart; daemonGeneration = nextGeneration;
+      phase = "configuration";
+      control = await this.control(workId, { create: true });
       const home = await confinedAsync(this.data, "paseo/" + workId + "/home");
       await fs.mkdir(path.join(home, ".paseo"), { recursive: true, mode: 0o700 });
       await fs.mkdir(path.join(draft.base, "references"), { recursive: true, mode: 0o700 });
@@ -340,15 +403,20 @@ export class PaseoManager {
       const old = await fs.readFile(configPath, "utf8").then(JSON.parse).catch(error => {
         if (error.code !== "ENOENT") throw error; return {};
       });
-      const profiles = await this.profiles();
+      const profiles = await (desiredProfiles || this.profiles());
       const userProfiles = Object.fromEntries(Object.entries(old.agents?.providers || {}).filter(([id]) => !id.startsWith("frame-")));
       await atomicPaseoJson(configPath, { ...old,
-        daemon: { ...old.daemon, relay: { ...old.daemon?.relay, enabled: false } },
+        daemon: paseoDaemonOptions(old.daemon),
         features: { ...old.features, webUi: { ...old.features?.webUi, enabled: false } },
         agents: { ...old.agents, providers: { ...userProfiles, ...profiles } },
         pluginsEnabled: true, plugins: { ...old.plugins, frame: { source: "directory",
           path: this.localMode ? path.join(root, "integrations/paseo/frame-plugin") : "/opt/frame/integrations/paseo/frame-plugin", enabled: true } },
       });
+      const callbackUrl = paseoCallbackUrl(workId, { localMode: this.localMode });
+      await this.assertStartupOwner();
+      const sharedModels = await this.sharedSpeechRoot();
+      await this.assertStartupOwner();
+      phase = "launch";
       let endpoint, container = null;
       if (this.localMode) {
         const port = await new Promise((resolve, reject) => { const server = net.createServer();
@@ -358,7 +426,8 @@ export class PaseoManager {
           cwd: draft.draftRoot, windowsHide: true, env: { ...paseoProcessEnvironment(), HOME: home, PASEO_HOME: path.join(home, ".paseo"),
             PASEO_LISTEN: "127.0.0.1:" + port, FRAME_PASEO_CONTROL: await this.controlPath(workId),
             FRAME_PASEO_ROOT: nativeRoot(), FRAME_PASEO_WORK_ID: workId, FRAME_REFERENCE_ROOT: path.join(draft.base, "references"),
-            FRAME_PASEO_URL: (process.env.FRAME_AGENT_URL || process.env.FRAME_PUBLIC_URL) + "/api/paseo/internal/" + workId,
+            FRAME_PASEO_URL: callbackUrl,
+            FRAME_PASEO_SHARED_MODELS: sharedModels, FRAME_PASEO_SHARED_MODELS_READONLY: "1",
           }, stdio: ["ignore", "ignore", "pipe"],
         });
         child.stderr.on("data", () => {}); // Native structured logs remain in its own private Paseo home.
@@ -368,12 +437,15 @@ export class PaseoManager {
         container = String(child.pid);
       } else {
         container = "frame-paseo-" + workId;
-        const existing = await this.runCommand("docker", ["inspect", "--format", "{{json .}}", container],
-          { timeout: 10000, max: 256 * 1024 }).then(JSON.parse).catch(() => null);
+        const existing = await inspectPaseoContainer(this.runCommand, container);
         if (existing) {
-          if (existing.Config.Labels?.["frame.paseo.work"] !== workId) throw Error("Paseo container identity conflict");
+          const existingGeneration = existing.Config.Labels?.["frame.paseo.generation"];
+          if (existing.Config.Labels?.["frame.paseo.work"] !== workId || !/^(0|[1-9][0-9]*)$/.test(existingGeneration || "") ||
+              BigInt(existingGeneration) >= BigInt(daemonGeneration))
+            throw Error("Paseo container work or generation identity conflict");
           await this.tasks.assertLeadership();
           await this.runCommand("docker", ["stop", "--time", "45", container], { timeout: 60000 });
+          await this.assertStartupOwner();
           await this.runCommand("docker", ["rm", container], { timeout: 10000 });
         }
         const network = await this.network();
@@ -386,12 +458,14 @@ export class PaseoManager {
           "--mount", "type=bind,source=" + this.host("paseo/" + workId + "/home") + ",target=/paseo-home",
           "--mount", "type=bind,source=" + this.host("paseo/" + workId + "/control.json") + ",target=/paseo-control/control.json,readonly",
           "--mount", "type=bind,source=" + this.host("tools") + ",target=/tools,readonly",
+          "--mount", "type=bind,source=" + this.host("paseo-models") + ",target=/paseo-models,readonly",
           "--mount", "type=bind,source=" + this.host("paseo/" + workId + "/references") + ",target=/frame-references,readonly",
           "-e", "FRAME_REFERENCE_ROOT=/frame-references",
           "-e", "HOME=/paseo-home", "-e", "PASEO_HOME=/paseo-home/.paseo",
           "-e", "PASEO_LISTEN=0.0.0.0:6767", "-e", "FRAME_PASEO_ROOT=/opt/paseo",
           "-e", "FRAME_PASEO_CONTROL=/paseo-control/control.json", "-e", "FRAME_PASEO_WORK_ID=" + workId,
-          "-e", "FRAME_PASEO_URL=" + (process.env.FRAME_AGENT_URL || process.env.FRAME_PUBLIC_URL) + "/api/paseo/internal/" + workId,
+          "-e", "FRAME_PASEO_URL=" + callbackUrl,
+          "-e", "FRAME_PASEO_SHARED_MODELS=/paseo-models", "-e", "FRAME_PASEO_SHARED_MODELS_READONLY=1",
           "-w", "/workspace", runtime.image, "node", "/opt/frame/integrations/paseo/daemon-entry.mjs"];
         // Existing platform read-only interfaces are visible; only this work's project tree is writable.
         for (const name of ["src", "scripts", "docs", "templates", "public", "node_modules", "package.json", "pnpm-lock.yaml",
@@ -407,23 +481,31 @@ export class PaseoManager {
         await this.tasks.assertLeadership();
         await this.runCommand("docker", args, { timeout: 120000, max: 256 * 1024 });
       }
+      await this.assertStartupOwner();
+      phase = "health";
       await this.store.updateRuntime(workId, { endpoint, container }, { expectedDaemonGeneration: daemonGeneration });
       const deadline = Date.now() + this.startTimeoutMs;
-      let health = false;
+      let health = false, healthStatus = null;
       while (Date.now() < deadline && !this.closed) {
+        await this.assertStartupOwner();
         const current = await this.store.getWork(workId);
         if (current?.daemonGeneration !== daemonGeneration || current.state !== "starting")
           throw Error("Paseo startup was superseded");
-        health = await fetch(endpoint + "/api/health", { signal: AbortSignal.timeout(2000) }).then(r => r.ok).catch(() => false);
+        health = await fetch(endpoint + "/api/health", { headers: { Authorization: "Bearer " + control.capability }, signal: AbortSignal.timeout(2000) })
+          .then(async response => { healthStatus = response.status; await response.body?.cancel(); return response.ok; })
+          .catch(() => { healthStatus = null; return false; });
         if (health) break;
         await sleep(250);
       }
-      if (!health) throw Error("Paseo daemon did not become ready");
+      if (!health) throw Error("Paseo daemon did not become ready" + (healthStatus == null ? " (health connection unavailable)" : " (health HTTP " + healthStatus + ")"));
+      await this.assertStartupOwner();
+      phase = "registration";
       const current = await this.store.getWork(workId);
       if (current?.daemonGeneration !== daemonGeneration || current.state !== "starting")
         throw Error("Paseo startup was superseded");
       let workspace, serverId, lastError;
       while (Date.now() < deadline && !this.closed) {
+        await this.assertStartupOwner();
         const current = await this.store.getWork(workId);
         if (current?.daemonGeneration !== daemonGeneration || current.state !== "starting")
           throw Error("Paseo startup was superseded");
@@ -435,38 +517,72 @@ export class PaseoManager {
           serverId = client.getLastServerInfoMessage()?.serverId;
           if (!serverId) throw Error("Paseo worker identity is not ready");
           break;
-        } catch (error) { lastError = error; await this.dropClient(workId); await sleep(250); }
+        } catch (error) {
+          if (error.leadershipLost) throw error;
+          await this.assertStartupOwner();
+          lastError = error; await this.dropClient(workId); await sleep(250);
+        }
       }
       if (!serverId) throw Error(lastError?.message || "Paseo worker did not become ready");
+      await this.assertStartupOwner();
       const admitted = await this.store.updateRuntime(workId, { state: "ready", workspaceId: workspace.workspace.id, serverId,
         endpoint, container, error: null }, { expectedDaemonGeneration: daemonGeneration });
       if (!admitted) throw Error("Paseo startup was superseded");
       await this.observe(workId, { refresh: true });
     } catch (error) {
-      await this.dropClient(workId);
-      await this.cleanupFailedStart(workId, daemonGeneration).catch(() => {});
-      await this.store.updateRuntime(workId, { state: "failed", endpoint: null, container: null, error: String(error.message).slice(0, 1000) },
-        { expectedDaemonGeneration: daemonGeneration });
+      // A former leader cannot stop a daemon or overwrite the new controller's result.
+      if (error.leadershipLost || this.closed) throw error;
+      await this.assertStartupOwner();
+      const expected = daemonGeneration || binding?.daemonGeneration;
+      const current = await this.store.getWork(workId);
+      if (expected != null && current?.daemonGeneration === expected) {
+        await this.dropClient(workId);
+        let cleaned = false;
+        if (daemonGeneration) {
+          try { cleaned = await this.cleanupFailedStart(workId, daemonGeneration); }
+          catch (cleanupError) {
+            if (cleanupError.leadershipLost) throw cleanupError;
+            await this.assertStartupOwner();
+            console.error("Paseo startup cleanup:", workId, "generation=" + expected,
+              publicAgentText(cleanupError.message, { limit: 1000, env: { ...process.env, FRAME_PASEO_TOKEN: control?.capability } }));
+          }
+        }
+        await this.assertStartupOwner();
+        const safe = publicAgentText(error.message || "Paseo startup failed", {
+          limit: 900, env: { ...process.env, FRAME_PASEO_TOKEN: control?.capability },
+        });
+        const message = "Paseo startup (" + phase + "): " + safe;
+        const failed = await this.store.updateRuntime(workId, { state: "failed", error: message,
+          ...(cleaned ? { endpoint: null, container: null } : {}) },
+          { expectedDaemonGeneration: expected });
+        if (failed) console.error("Paseo startup:", workId, "generation=" + expected, message);
+      }
       throw error;
     }
   }
   async cleanupFailedStart(workId, generation) {
     if (this.localMode) {
       const child = this.children.get(workId);
-      if (child?.frameGeneration !== generation) return;
+      if (!child) return true;
+      if (child.frameGeneration !== generation) throw Error("Paseo cleanup generation changed");
       child.kill("SIGTERM");
       await Promise.race([new Promise(resolve => child.once("exit", resolve)), sleep(5000)]);
       if (child.exitCode === null) child.kill("SIGKILL");
       if (this.children.get(workId) === child) this.children.delete(workId);
+      return true;
     } else {
       await this.tasks.assertLeadership();
       const name = "frame-paseo-" + workId;
-      const container = await this.runCommand("docker", ["inspect", "--format", "{{json .}}", name],
-        { timeout: 10000, max: 256 * 1024 }).then(JSON.parse).catch(() => null);
-      if (!container || container.Config.Labels?.["frame.paseo.work"] !== workId ||
-          container.Config.Labels?.["frame.paseo.generation"] !== generation) return;
+      const container = await inspectPaseoContainer(this.runCommand, name);
+      if (!container) return true;
+      if (container.Config.Labels?.["frame.paseo.work"] !== workId ||
+          container.Config.Labels?.["frame.paseo.generation"] !== generation)
+        throw Error("Paseo cleanup work or generation identity changed");
+      await this.assertStartupOwner();
       if (container.State.Running) await this.runCommand("docker", ["stop", "--time", "10", name], { timeout: 20000 });
+      await this.assertStartupOwner();
       await this.runCommand("docker", ["rm", name], { timeout: 10000 });
+      return true;
     }
   }
   async dropClient(workId) {
@@ -482,15 +598,20 @@ export class PaseoManager {
       if (binding.container) {
         const c = JSON.parse(await this.runCommand("docker", ["inspect", "--format", "{{json .}}", binding.container], { max: 256 * 1024 }));
         if (c.Config.Labels?.["frame.paseo.work"] !== workId) throw Error("Refusing to stop another work's daemon");
+        await this.assertStartupOwner();
         await this.runCommand("docker", ["stop", "--time", "45", binding.container], { timeout: 60000 });
+        await this.assertStartupOwner();
         await this.runCommand("docker", ["rm", binding.container], { timeout: 10000 });
       }
     } else this.children.get(workId)?.kill("SIGTERM");
+    await this.assertStartupOwner();
     await this.onStopped?.(workId);
     await this.dropClient(workId);
+    await this.assertStartupOwner();
     await this.store.updateRuntime(workId, { state: "stopped", requested, endpoint: null, container: null,
       daemonGeneration: String(BigInt(binding.daemonGeneration || "0") + 1n) },
       { expectedDaemonGeneration: binding.daemonGeneration });
+    this.speechRequests.delete(workId);
   }
   async tick() {
     if (this.closed || this.ticking) return;
@@ -498,40 +619,53 @@ export class PaseoManager {
     try {
       if (!this.localMode) await this.tasks.assertLeadership();
       const rows = await this.store.listWorks({ states: ["cold", "starting", "ready", "stopped", "failed"] });
-      const currentRuntime = await runtimeIdentity();
-      const profiles = await this.profiles();
+      // Reuse one catalog read per scan, but handle its failure inside each generation's startup.
+      const currentRuntime = runtimeIdentity(), profiles = this.profiles();
+      void currentRuntime.catch(() => {}); void profiles.catch(() => {});
       let warm = rows.filter(row => row.state === "ready").length;
       for (const row of rows) {
         if (this.closed) break;
+        await this.assertStartupOwner();
         const stopRequested = await this.db.setting("paseo-stop:" + row.workId);
         if (stopRequested) {
           // A delayed stop belongs to one generation and cannot stop a newly reopened daemon.
           const matching = String(stopRequested.generation) === row.daemonGeneration;
           if (matching) await this.stop(row.workId);
+          await this.assertStartupOwner();
           await this.db.pool.query("DELETE FROM settings WHERE key=$1 AND value=$2::jsonb",
             ["paseo-stop:" + row.workId, JSON.stringify(stopRequested)]);
           if (matching) continue;
         }
         const work = await this.workService.works.get(row.workId).catch(() => null);
-        if (!work || work.deleted) { if (row.container) await this.stop(row.workId); continue; }
+        if (!work || work.deleted) {
+          this.speechRequests.delete(row.workId);
+          if (row.container) await this.stop(row.workId);
+          continue;
+        }
         if (row.requested && ["cold", "starting"].includes(row.state)) {
-          await this.start(row.workId).catch(() => {}); continue;
+          // Do not hold the scan (or unrelated cancellation/profile work) for a 90-second launch.
+          this.scheduleStart(row.workId, profiles);
+          continue;
         }
         if (row.state !== "ready") continue;
         try {
-          await this.syncProfiles(row.workId, row, profiles);
+          await this.resumeSharedSpeech(row);
+          await this.syncProfiles(row.workId, row, await profiles);
           const summary = await this.observe(row.workId, { refresh: true });
           const idle = !summary.incomplete && !summary.activeAgents.length && !summary.pendingPermissions && !summary.activeTerminals;
           const candidateBusy = (await this.store.listCandidates(row.workId, { states: ["validating", "publishing"] })).length > 0;
-          if (idle && !candidateBusy && row.runtimeFingerprint !== currentRuntime.fingerprint) {
+          if (idle && !candidateBusy && row.runtimeFingerprint !== (await currentRuntime).fingerprint) {
             await this.stop(row.workId, { requested: true });
-            await this.start(row.workId);
+            this.scheduleStart(row.workId, profiles);
           } else if (idle && !summary.scheduled && !candidateBusy &&
               Date.now() - new Date(row.touched).getTime() > (warm > 4 ? 60000 : this.idleMs)) {
             await this.stop(row.workId); warm--;
           } else await this.onReconcile?.(row.workId, summary);
         } catch (error) {
-          await this.store.updateRuntime(row.workId, { state: "failed", error: "Paseo connection lost; draft and history retained" });
+          if (error.leadershipLost) throw error;
+          await this.assertStartupOwner();
+          await this.store.updateRuntime(row.workId, { state: "failed", error: "Paseo connection lost; draft and history retained" },
+            { expectedDaemonGeneration: row.daemonGeneration });
           await this.dropClient(row.workId);
         }
       }
@@ -584,10 +718,16 @@ export class PaseoManager {
     await this.notify(workId, { type: "agent.turn_ended" });
     return { stopped: running.length + terminalRows.length };
   }
-  beginClose() { this.closed = true; }
+  beginClose() {
+    this.closed = true;
+    const error = Object.assign(Error("Paseo controller is stopping"), { leadershipLost: true });
+    for (const waiter of this.startWaiters.splice(0)) waiter.reject(error);
+    this.speechClosing ||= this.speechModelsPromise?.then(models => models.close());
+    void this.speechClosing?.catch(error => console.error("Paseo shared speech stop:", publicAgentText(error.message, { limit: 1000 })));
+  }
   async close() {
     this.beginClose();
-    await Promise.allSettled([...this.starting.values(), ...this.profileSyncs.values(), ...this.connecting.values()]);
+    await Promise.allSettled([...this.starting.values(), ...this.profileSyncs.values(), ...this.connecting.values(), this.speechClosing]);
     await Promise.allSettled([...this.clients.keys()].map(id => this.dropClient(id)));
     // Container daemons survive an API/controller restart; their supervisor persists native receipts.
     if (this.localMode) for (const child of this.children.values()) child.kill("SIGTERM");

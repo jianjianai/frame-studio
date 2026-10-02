@@ -5,6 +5,7 @@
 - `0001-frame-embed.patch`：完整官方 WebUI 的同源嵌入、路由、桥接与首次消息适配。默认构建不受 FRAME 嵌入模式影响。
 - `0002-frame-session-env.patch`：Codex 使用当前 session hook 环境；原生消息回执恢复后核对 FRAME 冻结选择，并串行协调模型切换和发送。
 - `0003-windows-web-build.patch`：WebUI 导出通过当前 Node 执行校验后的 npm CLI，兼容 Windows，保留官方构建参数、环境及失败退出语义。
+- `0004-frame-shared-speech-wait.patch`：FRAME 只读共享模型模式等待受信后台准备；默认听写与发声模型先就绪，原生自定义模型目录仍沿用官方行为。
 - `frame-plugin/`：官方插件 API 的作品指令、当前 session 凭据与生命周期提示。`shared/bridge.ts` 是唯一共享契约源。
 - `runtime/`：独立锁定的原生包依赖；不混入作品依赖。
 - `PASEO-LICENSE`：上游版权与 Apache 2.0 许可证；第三方组件保留各自许可证。上述补丁包含 FRAME 对上游的修改。

@@ -13,6 +13,7 @@ import {
   repo as platformRoot,
 } from "../mcp/helpers.mjs";
 import { until } from "./paseo-test-fixture.mjs";
+import { holdSharedSpeechPreparation } from "./paseo-speech-model-fixture.mjs";
 
 export async function nativeWorkflowFixture(
   t,
@@ -68,12 +69,20 @@ export async function nativeWorkflowFixture(
     services,
     created = false,
     film,
-    closeBrowser;
+    closeBrowser,
+    speechPreparation;
   t.after(async () => {
     const children = [...(services?.paseoManager?.children.values() || [])];
     try {
       await closeBrowser?.();
       await app?.close();
+      await speechPreparation?.close();
+      if (speechPreparation?.calls)
+        assert.equal(
+          speechPreparation.aborted,
+          true,
+          "Owned pending speech preparation must stop",
+        );
       for (const child of children) {
         if (child.exitCode !== null || child.signalCode !== null) continue;
         await until(
@@ -83,6 +92,7 @@ export async function nativeWorkflowFixture(
         ).catch(() => child.kill("SIGKILL"));
       }
     } finally {
+      await speechPreparation?.close();
       if (created) {
         await admin.query(
           "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()",
@@ -152,6 +162,9 @@ export async function nativeWorkflowFixture(
     "Own database controller lease",
   );
   await services.tasks.assertLeadership();
+  speechPreparation = await holdSharedSpeechPreparation(services.paseoManager, {
+    runtimeRoot: selectedRuntime,
+  });
   const call = (name, args = {}) => services.actions.call(name, args);
   const repo = await call("repositories_add", {
     name: "Native workflow fixture",
@@ -205,6 +218,10 @@ export async function nativeWorkflowFixture(
   });
   await app.listen({ host: "127.0.0.1", port });
   const ready = await services.paseoManager.ensure(work);
+  const modelState = await speechPreparation.state();
+  assert.equal(modelState.state, "preparing");
+  assert.deepEqual(modelState.completedModelIds, []);
+  assert.equal(speechPreparation.calls, 1);
   const client = await services.paseoManager.client(work.id);
   const capture = path.join(directory, "native-provider.jsonl");
   const profileId = "frame-" + profile.id;
@@ -268,5 +285,6 @@ export async function nativeWorkflowFixture(
     captured,
     ownAsset,
     foreignAsset,
+    speechPreparation,
   };
 }

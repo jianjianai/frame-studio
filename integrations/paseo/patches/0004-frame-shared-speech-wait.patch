@@ -1,0 +1,164 @@
+diff --git a/packages/server/src/server/speech/providers/local/models.ts b/packages/server/src/server/speech/providers/local/models.ts
+index f6c7cc4..63563e3 100644
+--- a/packages/server/src/server/speech/providers/local/models.ts
++++ b/packages/server/src/server/speech/providers/local/models.ts
+@@ -1,3 +1,7 @@
++import {
++  isFrameSharedSpeechModelDirectory,
++  waitForFrameSharedSpeechModels,
++} from "./frame-shared-model-wait.js";
+ import { ensureSherpaOnnxModels, getSherpaOnnxModelDir } from "./sherpa/model-downloader.js";
+ import {
+   DEFAULT_LOCAL_STT_MODEL,
+@@ -36,6 +40,9 @@ export async function ensureLocalSpeechModels(options: {
+   logger: import("pino").Logger;
+   signal?: AbortSignal;
+ }): Promise<Record<LocalSpeechModelId, string>> {
++  if (isFrameSharedSpeechModelDirectory(options.modelsDir)) {
++    return waitForFrameSharedSpeechModels(options);
++  }
+   return ensureSherpaOnnxModels({
+     modelsDir: options.modelsDir,
+     modelIds: options.modelIds,
+diff --git a/packages/server/src/server/speech/speech-runtime.ts b/packages/server/src/server/speech/speech-runtime.ts
+index 6e56a9e..0d183e0 100644
+--- a/packages/server/src/server/speech/speech-runtime.ts
++++ b/packages/server/src/server/speech/speech-runtime.ts
+@@ -9,6 +9,7 @@ import {
+   getLocalSpeechModelDir,
+   listLocalSpeechModels,
+ } from "./providers/local/models.js";
++import { shouldRetryFrameSharedSpeechWait } from "./providers/local/frame-shared-model-wait.js";
+ import { initializeLocalSpeechServices } from "./providers/local/runtime.js";
+ import {
+   getOpenAiSpeechAvailability,
+@@ -661,6 +662,13 @@ export function createSpeechService(params: {
+         await runReconcile();
+       }
+ 
++      if (
++        backgroundDownloadError &&
++        (await shouldRetryFrameSharedSpeechWait(localModelConfig?.modelsDir))
++      ) {
++        backgroundDownloadError = null;
++      }
++
+       if (
+         missingLocalModelIds.length > 0 &&
+         !backgroundDownloadInProgress &&
+diff --git a/packages/server/src/server/speech/providers/local/frame-shared-model-wait.ts b/packages/server/src/server/speech/providers/local/frame-shared-model-wait.ts
+new file mode 100644
+index 0000000..ce90a00
+--- /dev/null
++++ b/packages/server/src/server/speech/providers/local/frame-shared-model-wait.ts
+@@ -0,0 +1,110 @@
++import { lstat, readFile } from "node:fs/promises";
++import path from "node:path";
++import { setTimeout as delay } from "node:timers/promises";
++import { getSherpaOnnxModelSpec, type LocalSpeechModelId } from "./sherpa/model-catalog.js";
++
++const STATE_FILE = ".frame-speech-state.json";
++const failure =
++  "Shared speech model preparation failed; reopen the work to retry. Chat remains available.";
++
++export function isFrameSharedSpeechModelDirectory(modelsDir?: string | null): boolean {
++  const shared = process.env.FRAME_PASEO_SHARED_MODELS;
++  return (
++    process.env.FRAME_PASEO_SHARED_MODELS_READONLY === "1" &&
++    !!shared &&
++    path.isAbsolute(shared) &&
++    !!modelsDir &&
++    path.resolve(modelsDir) === path.resolve(shared)
++  );
++}
++
++async function safeStat(file: string) {
++  const value = await lstat(file).catch((error: NodeJS.ErrnoException) => {
++    if (error.code === "ENOENT") return null;
++    throw new Error(failure);
++  });
++  if (value?.isSymbolicLink()) throw new Error(failure);
++  return value;
++}
++
++async function readSharedState(modelsDir: string): Promise<{ state: string } | null> {
++  const file = path.join(modelsDir, STATE_FILE);
++  const stat = await safeStat(file);
++  if (!stat) return null;
++  if (!stat.isFile() || stat.nlink !== 1 || stat.size > 32768) throw new Error(failure);
++  try {
++    const value = JSON.parse(await readFile(file, "utf8"));
++    if (
++      !value ||
++      value.version !== 1 ||
++      !["preparing", "ready", "error"].includes(value.state) ||
++      ![value.modelIds, value.completedModelIds].every(
++        (ids) =>
++          Array.isArray(ids) &&
++          ids.length <= 20 &&
++          ids.every((id) => typeof id === "string" && id.length <= 128),
++      )
++    ) {
++      throw new Error(failure);
++    }
++    return { state: value.state };
++  } catch {
++    throw new Error(failure);
++  }
++}
++
++async function modelReady(modelsDir: string, modelId: LocalSpeechModelId): Promise<boolean> {
++  const spec = getSherpaOnnxModelSpec(modelId);
++  const base = path.join(modelsDir, spec.extractedDir);
++  if (!(await safeStat(base))?.isDirectory()) return false;
++  for (const relative of spec.requiredFiles) {
++    let current = base;
++    const parts = relative.split("/");
++    for (let index = 0; index < parts.length; index++) {
++      current = path.join(current, parts[index]!);
++      const stat = await safeStat(current);
++      if (
++        !stat ||
++        (index < parts.length - 1
++          ? !stat.isDirectory()
++          : !(stat.isDirectory() || (stat.isFile() && stat.size > 0)))
++      )
++        return false;
++    }
++  }
++  return true;
++}
++
++/** Frame consumers never download or write to the controller-owned read-only shared cache. */
++export async function waitForFrameSharedSpeechModels(options: {
++  modelsDir: string;
++  modelIds: LocalSpeechModelId[];
++  signal?: AbortSignal;
++}): Promise<Record<LocalSpeechModelId, string>> {
++  const ids = [...new Set(options.modelIds)];
++  for (;;) {
++    options.signal?.throwIfAborted();
++    // Defaults can become usable while an optional model is still preparing, or has failed.
++    if ((await Promise.all(ids.map((id) => modelReady(options.modelsDir, id)))).every(Boolean)) {
++      options.signal?.throwIfAborted();
++      return Object.fromEntries(
++        ids.map((id) => [
++          id,
++          path.join(options.modelsDir, getSherpaOnnxModelSpec(id).extractedDir),
++        ]),
++      ) as Record<LocalSpeechModelId, string>;
++    }
++    const state = await readSharedState(options.modelsDir);
++    if (state?.state === "error") throw new Error(failure);
++    await delay(250, undefined, { signal: options.signal });
++  }
++}
++
++/** Only Frame's shared producer retry may restart a failed read-only wait. */
++export async function shouldRetryFrameSharedSpeechWait(
++  modelsDir?: string | null,
++): Promise<boolean> {
++  if (!isFrameSharedSpeechModelDirectory(modelsDir)) return false;
++  const state = await readSharedState(modelsDir!);
++  return state?.state === "preparing" || state?.state === "ready";
++}
