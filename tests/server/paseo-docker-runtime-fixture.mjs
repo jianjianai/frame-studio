@@ -411,15 +411,15 @@ async function worker() {
     }
     const ownKey = "owned-selected-" + randomUUID(),
       otherKey = "owned-other-" + randomUUID();
-    const save = (label, key) =>
+    const save = (name, key) =>
       call("connections_save", {
-        label,
+        name,
         tool: "codex",
         mode: "api",
         apiKey: key,
         baseUrl: "http://owned-fake-provider.invalid/v1",
         model: "owned-model",
-        models: [{ id: "owned-model", label: "Owned model", enabled: true }],
+        models: [{ id: "owned-model", name: "Owned model", enabled: true }],
       });
     const selected = await save("Selected fixture profile", ownKey);
     await save("Unselected fixture profile", otherKey);
