@@ -47,6 +47,7 @@ interface PlayerSessionOptions {
   onSegmentEnd: () => void;
   onSnapshot: (state: PlaybackSnapshot) => void;
   onLoading: (loading: boolean) => void;
+  onStarting?: (starting: boolean) => void;
   onError: (error: string) => void;
   onFps: (fps: number) => void;
   onTrackControl: (id: string, control: TrackControl) => void;
@@ -64,6 +65,7 @@ export function createPlayerSession({
   onSegmentEnd,
   onSnapshot,
   onLoading,
+  onStarting,
   onError,
   onFps,
   onTrackControl,
@@ -87,6 +89,7 @@ export function createPlayerSession({
   const sound = new AudioTransport(project, (error) => {
     recordError(error.message);
     if (!canceled) {
+      invalidatePlay();
       onError("播放已暂停：" + error.message);
       publish();
     }
@@ -125,30 +128,93 @@ export function createPlayerSession({
       manualFrames--;
     }
   };
+  // This intent fences visual preparation before AudioTransport's own generation
+  // exists. It is shared by every UI/API/restore caller; it is not another clock.
+  let playEpoch = 0, pendingPlay = initial.playing;
+  const initialPlayEpoch = playEpoch;
+  const setPendingPlay = (pending: boolean) => {
+    if (pendingPlay === pending) return;
+    pendingPlay = pending;
+    if (!canceled) onStarting?.(pending);
+  };
+  onStarting?.(pendingPlay);
+  const currentPlay = (epoch: number) => !canceled && epoch === playEpoch;
+  const invalidatePlay = () => {
+    ++playEpoch;
+    setPendingPlay(false);
+    return playEpoch;
+  };
+  const pausePlayback = () => {
+    if (canceled) return;
+    invalidatePlay();
+    sound.pause();
+    publish();
+  };
+  let playWork: Promise<void> | undefined;
+  const runPlayback = (starting: boolean, work: (current: () => boolean) => Promise<void>) => {
+    if (canceled) return Promise.resolve();
+    const epoch = ++playEpoch;
+    const current = () => currentPlay(epoch);
+    setPendingPlay(starting);
+    sound.pause();
+    publish();
+    playWork = (async () => {
+      try {
+        await work(current);
+      } catch (error) {
+        if (current()) throw error;
+      } finally {
+        // An old request must not clear a newer request's loader or publish state.
+        if (current()) { setPendingPlay(false); publish(); }
+      }
+    })();
+    return playWork;
+  };
+  const drawPosition = async (time: number, captions: boolean, pause: boolean) => {
+    if (canceled) return;
+    const active = sound.clock.playing || sound.buffering;
+    const epoch = invalidatePlay();
+    if (pause || !active) sound.pause();
+    sound.seek(time);
+    try {
+      await ready;
+      if (!currentPlay(epoch) || !api.ready) return;
+      await drawRequested(sound.clock.time(), captions);
+      if (currentPlay(epoch)) publish();
+    } catch (error) {
+      if (currentPlay(epoch)) throw error;
+    }
+  };
   const api: StudioApi = {
     ready: false,
     projectId: project.id,
     duration: project.duration,
-    async frame(t, subtitles = true) {
-      sound.pause();
-      sound.seek(t);
-      await drawRequested(sound.clock.time(), subtitles);
-      publish();
+    frame: (time, captions = true) => drawPosition(time, captions, true),
+    seek: (time) => drawPosition(time, subtitles(), false),
+    play: () => {
+      // Explicit play is idempotent once the transport owns the active request,
+      // including its internal buffering/restart phase.
+      if (canceled) return Promise.resolve();
+      if (sound.buffering) {
+        if (pendingPlay && playWork) return playWork;
+        const epoch = playEpoch;
+        // Transport restart already owns this preparation. Await it without
+        // starting a fresh generation; pause/seek/replacement cancels the wait.
+        return (async () => {
+          while (currentPlay(epoch) && sound.buffering)
+            await new Promise(resolve => setTimeout(resolve, 20));
+        })();
+      }
+      if (sound.clock.playing) return Promise.resolve();
+      return runPlayback(true, async (current) => {
+        await ready;
+        if (!current() || !api.ready) return;
+        const committed = await drawRequested(sound.clock.time(), subtitles());
+        if (!current() || !committed) return;
+        await sound.play();
+      });
     },
-    async seek(t) {
-      sound.seek(t);
-      await drawRequested(sound.clock.time(), subtitles());
-      publish();
-    },
-    async play() {
-      await drawRequested(sound.clock.time(), subtitles());
-      await sound.play();
-      publish();
-    },
-    pause() {
-      sound.pause();
-      publish();
-    },
+    pause: pausePlayback,
     getState: () => ({
       time: sound.clock.time(),
       playing: sound.clock.playing,
@@ -200,6 +266,7 @@ export function createPlayerSession({
       audio: {
         state: sound.context?.state ?? "locked",
         buffering: sound.buffering,
+        starting: pendingPlay,
         prepareMs: sound.prepareMs,
         source: sound.diagnostics(),
         tracks: Object.fromEntries(sound.controls),
@@ -232,7 +299,7 @@ export function createPlayerSession({
       const t = sound.clock.time();
       const end = segmentEnd();
       if (end !== null && t >= end) {
-        sound.pause();
+        pausePlayback();
         sound.seek(end);
         onSegmentEnd();
       }
@@ -249,11 +316,11 @@ export function createPlayerSession({
         }
       }
       if (
-        t >= project.duration &&
+        sound.clock.time() >= project.duration &&
         sound.clock.playing &&
         !sound.clock.loop
       ) {
-        sound.pause();
+        pausePlayback();
       }
       if (now - uiAt > 65) {
         publish();
@@ -270,9 +337,10 @@ export function createPlayerSession({
       }
       raf = requestAnimationFrame(tick);
     } catch (e) {
+      if (canceled) return;
       recordError(e);
       renderFailed = true;
-      sound.pause();
+      pausePlayback();
       onError("渲染错误：" + String(e));
       if (!canceled) raf = requestAnimationFrame(tick);
     }
@@ -291,11 +359,15 @@ export function createPlayerSession({
         parent.postMessage({ type: "frame-preview-loading", message: "" }, "*");
       publish();
       sound.preload();
-      if (initial.playing) await sound.play();
-      raf = requestAnimationFrame(tick);
+      if (initial.playing && currentPlay(initialPlayEpoch)) {
+        await sound.play();
+        if (currentPlay(initialPlayEpoch)) { setPendingPlay(false); publish(); }
+      }
+      if (!canceled) raf = requestAnimationFrame(tick);
     })
     .catch((e) => {
       if (canceled) return;
+      pausePlayback();
       if (embedded && parent !== window)
         parent.postMessage(
           {
@@ -317,8 +389,35 @@ export function createPlayerSession({
         raf = requestAnimationFrame(tick);
       }
     });
+  const restorePlayback = (
+    state: Pick<PlaybackSnapshot, "time" | "playing" | "rate" | "loop"> &
+      Partial<Pick<PlaybackSnapshot, "volume" | "muted">>,
+    applyView?: () => void,
+  ) => runPlayback(state.playing, async (current) => {
+    // Reserve at command receipt, including while ready is unresolved. A pause
+    // during ready/seek cancels this original intent instead of allowing fresh play.
+    await ready;
+    if (!current() || !api.ready) return;
+    sound.setRate(state.rate);
+    sound.setLoop(state.loop);
+    if (state.volume !== undefined) sound.setVolume(state.volume);
+    if (state.muted !== undefined) sound.setMuted(state.muted);
+    applyView?.();
+    if (!current()) return;
+    sound.seek(Math.min(api.duration, state.time));
+    const committed = await drawRequested(sound.clock.time(), subtitles());
+    if (!current() || !committed) return;
+    if (state.playing) await sound.play();
+  });
   const updateProject = async (next: AnimationProject, options: PlayerProjectUpdate = {}) => {
+    if (canceled) return false;
     if (next.id !== project.id) throw new Error("A player session cannot change project identity");
+    // Cancel obsolete visual start/restore work without interrupting a running
+    // transport's existing atomic scene/audio revision update.
+    const active = sound.clock.playing || sound.buffering;
+    invalidatePlay();
+    if (!active) sound.pause();
+    publish();
     const epoch = ++updateEpoch;
     updating?.abort();
     const controller = updating = new AbortController();
@@ -376,7 +475,7 @@ export function createPlayerSession({
       if (canceled || epoch !== updateEpoch || previewSnapshotBusy()) return committed;
       output.setPlayback(readPlayback(sound));
       try { await drawRequested(sound.clock.time(), subtitles()); }
-      catch (error) { recordError(error); renderFailed = true; sound.pause(); onError("渲染错误：" + String(error)); }
+      catch (error) { if (!canceled) { recordError(error); renderFailed = true; pausePlayback(); onError("渲染错误：" + String(error)); } }
       publish();
       return true;
     } catch (error) {
@@ -394,15 +493,13 @@ export function createPlayerSession({
     }
   };
   const visibility = () => {
-    if (document.hidden) {
-      sound.pause();
-      publish();
-    }
+    if (document.hidden) pausePlayback();
   };
   document.addEventListener("visibilitychange", visibility);
   const dispose = () => {
     if (canceled) return;
     canceled = true;
+    invalidatePlay();
     lifetime.abort();
     updating?.abort();
     ++updateEpoch;
@@ -419,6 +516,8 @@ export function createPlayerSession({
     ready,
     api,
     snapshot: () => readPlayback(sound),
+    get starting() { return pendingPlay; },
+    restorePlayback,
     updateProject,
     dispose,
   };

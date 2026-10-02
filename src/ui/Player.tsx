@@ -258,7 +258,6 @@ export function Player({
   };
   const publishRef = useRef(publish);
   publishRef.current = publish;
-  const restoreEpoch = useRef(0);
   const commandHandler = useRef<(data: Record<string, any>) => void>(() => {});
   commandHandler.current = (data) => {
     if (data.command === "export") setExportOpen(true);
@@ -285,15 +284,18 @@ export function Player({
         project.id + ".srt",
       );
     if (data.command === "pause") {
-      transport.current?.pause();
+      playerSession.current?.api.pause();
       publish();
     }
-    if (data.command === "play" && transport.current && !loading && !exporting) {
+    if (data.command === "play" && playerSession.current && !loading && !exporting) {
+      const session = playerSession.current;
       segmentEnd.current = Number.isFinite(data.end) ? Math.min(project.duration, data.end) : null;
-      void transport.current.play().then(publish).catch(error => setError(String(error.message || error)));
+      void session.api.play().catch(error => {
+        if (playerSession.current === session) setError(String(error.message || error));
+      });
     }
     if (data.command === "seek" && Number.isFinite(data.time)) {
-      transport.current?.pause();
+      playerSession.current?.api.pause();
       if (
         data.selection &&
         Number.isFinite(data.selection.start) &&
@@ -309,23 +311,11 @@ export function Player({
     }
     if (data.command === "restore-session" && data.state) {
       const state = data.state, session = playerSession.current;
-      const epoch = ++restoreEpoch.current;
-      if (session) void session.ready.then(async () => {
-        if (epoch !== restoreEpoch.current || playerSession.current !== session || !session.api.ready) return;
-        const a = session.audio;
-        a.pause();
-        a.setRate(state.rate);
-        a.setLoop(state.loop);
-        if (state.volume !== undefined) a.setVolume(state.volume);
-        if (state.muted !== undefined) a.setMuted(state.muted);
+      if (session) void session.restorePlayback(state, () => {
         if (state.subtitles !== undefined) { subtitleRef.current = state.subtitles; setShowSubtitles(state.subtitles); }
         if (state.selection) updateSelection(state.selection);
-        await session.api.seek(Math.min(session.api.duration, state.time));
-        if (epoch !== restoreEpoch.current || playerSession.current !== session) return;
-        if (state.playing) await a.play();
-        publishRef.current();
       }).catch(error => {
-        if (epoch === restoreEpoch.current && playerSession.current === session) setError(String(error));
+        if (playerSession.current === session) setError(String(error));
       });
     }
     if (data.command === "configure-work") setWorkContext(data.context);
@@ -366,35 +356,29 @@ export function Player({
   useEffect(() => {
     publish();
   }, [selection]);
-  const seek = (t: number) => {
+  const seek = (time: number) => {
     if (exporting || exportAbort.current) return;
-    transport.current?.seek(t);
-    renderer.current?.render(
-      transport.current?.clock.time() ?? 0,
-      subtitleRef.current,
-    ).catch((error) => { transport.current?.pause(); setError(String(error)); });
-    publish();
+    const session = playerSession.current;
+    if (!session) return;
+    void session.api.seek(time).catch(error => {
+      if (playerSession.current !== session) return;
+      session.api.pause();
+      setError(String(error));
+    });
   };
   const toggle = async () => {
-    const a = transport.current;
-    if (!a || loading || exporting) return;
+    const session = playerSession.current;
+    if (!session || loading || exporting) return;
     setError("");
-    if (a.clock.playing || a.buffering) {
-      a.pause();
+    if (session.starting || session.audio.clock.playing || session.audio.buffering) {
+      session.api.pause();
       segmentEnd.current = null;
-      setStarting(false);
-      publish();
       return;
     }
-    setStarting(true);
     try {
-      await renderer.current?.render(a.clock.time(),subtitleRef.current);
-      await a.play();
-      publish();
-    } catch (e) {
-      setError("播放未能开始：" + String(e));
-    } finally {
-      setStarting(false);
+      await session.api.play();
+    } catch (error) {
+      if (playerSession.current === session) setError("播放未能开始：" + String(error));
     }
   };
   const fullscreen = () => {
@@ -430,6 +414,7 @@ export function Player({
         publishRef.current();
       },
       onLoading: setLoading,
+      onStarting: setStarting,
       onError: setError,
       onFps: setFps,
       onTrackControl: (id, control) =>
@@ -520,6 +505,7 @@ export function Player({
     return () => window.removeEventListener("keydown", key);
   });
   async function renderWebm(options?: Parameters<typeof exportPlayerVideo>[1]) {
+    if (!loading && !exportAbort.current) playerSession.current?.api.pause();
     return exportPlayerVideo(
       {
         project: applied.current.project,
@@ -786,7 +772,7 @@ export function Player({
                   title="上一帧（,）"
                   disabled={loading || exporting}
                   onClick={() => {
-                    transport.current?.pause();
+                    playerSession.current?.api.pause();
                     segmentEnd.current = null;
                     seek(view.time - 1 / project.fps);
                   }}
@@ -816,7 +802,7 @@ export function Player({
                   title="下一帧（.）"
                   disabled={loading || exporting}
                   onClick={() => {
-                    transport.current?.pause();
+                    playerSession.current?.api.pause();
                     segmentEnd.current = null;
                     seek(view.time + 1 / project.fps);
                   }}
@@ -908,14 +894,15 @@ export function Player({
                         selection.end <= selection.start
                       }
                       onClick={async () => {
-                        transport.current?.pause();
-                        seek(selection.start!);
+                        const session = playerSession.current;
+                        if (!session) return;
                         segmentEnd.current = selection.end!;
                         try {
-                          await transport.current?.play();
-                          publish();
+                          await session.restorePlayback({
+                            ...session.snapshot(), time: selection.start!, playing: true,
+                          });
                         } catch (error) {
-                          setError("片段播放失败：" + String(error));
+                          if (playerSession.current === session) setError("片段播放失败：" + String(error));
                         }
                       }}
                     >
@@ -1047,7 +1034,7 @@ export function Player({
             onSelection={updateSelection}
             onSeek={seek}
             onPause={() => {
-              transport.current?.pause();
+              playerSession.current?.api.pause();
               segmentEnd.current = null;
               publish();
             }}
@@ -1131,7 +1118,7 @@ export function Player({
                   value={quality}
                   disabled={exporting}
                   onChange={(e) => {
-                    transport.current?.pause();
+                    playerSession.current?.api.pause();
                     publish();
                     setQuality(e.target.value as Quality);
                   }}
