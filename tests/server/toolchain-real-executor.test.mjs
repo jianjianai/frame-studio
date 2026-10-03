@@ -150,7 +150,7 @@ test(
       );
       taskIds.push(frame.id);
       const readyFrame = (await cli.wait(frame.id, { timeoutMs: 150000 })).task;
-      assert.equal(readyFrame.state, "succeeded");
+      assert.equal(readyFrame.state, "succeeded", readyFrame.error || "Native frame task failed without a diagnostic");
       const png = readyFrame.result.artifacts.find((artifact) =>
         artifact.path.endsWith(".png"),
       );
@@ -309,6 +309,7 @@ test(
       if (oldHost === undefined) delete process.env.FRAME_HOST_DATA;
       else process.env.FRAME_HOST_DATA = oldHost;
       fs.rmSync(data, { recursive: true, force: true });
+      fs.rmSync(artifactDirectory, { recursive: true, force: true });
     }
   },
 );

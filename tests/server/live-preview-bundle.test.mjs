@@ -56,7 +56,7 @@ test("persistent live graph watches imported production, tests and hidden source
       const count = bundles.length + 1;
       await fsp.writeFile(dependency, "export const color=" + JSON.stringify(color) + ";");
       const next = await waitBundle(count);
-      assert.notEqual(next.sourceRevision, index === 0 ? first.sourceRevision : bundles.at(-2).sourceRevision);
+      assert.notEqual(next.compiledRevision, index === 0 ? first.compiledRevision : bundles.at(-2).compiledRevision);
       assert.deepEqual(next.files.filter(file => /\/vendor(?:-|\.)/.test(file)), vendor);
       const previous = index === 0 ? first : bundles.at(-2);
       const changed = next.files.filter(file => file.endsWith(".js") && !previous.files.includes(file));
@@ -67,7 +67,7 @@ test("persistent live graph watches imported production, tests and hidden source
     const beforeWorker = bundles.at(-1), count = bundles.length + 1;
     await fsp.writeFile(workerDependency, "export const value=2;");
     const nextWorker = await waitBundle(count);
-    assert.notEqual(nextWorker.sourceRevision, beforeWorker.sourceRevision);
+    assert.notEqual(nextWorker.compiledRevision, beforeWorker.compiledRevision);
     assert.notDeepEqual(nextWorker.files.filter(file => /background/.test(file)), beforeWorker.files.filter(file => /background/.test(file)));
     t.diagnostic(JSON.stringify({ coldMs: first.buildMs, warmMs: warm, warmGzipBytes: warmBytes, workerMs: nextWorker.buildMs, stableVendorChunks: vendor.length, preloads: first.preloads }));
   } finally { await worker?.close(); await fsp.rm(owned, { recursive: true, force: true }); }
@@ -91,12 +91,14 @@ test("extensionless imports cannot follow ignored-directory links or read privat
       let failure;
       const bundles = [];
       try {
-        worker = await createLivePreviewBundle({ root, projectDir, id: "test-film", outDir: path.join(owned, "out-" + index),
+        try {
+          worker = await createLivePreviewBundle({ root, projectDir, id: "test-film", outDir: path.join(owned, "out-" + index),
           onBundle: bundle => bundles.push(bundle), onError: error => { failure = error; } });
+        } catch (error) { failure = error; }
         const deadline = Date.now() + 12000;
         while (!failure && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 25));
         assert.ok(failure, "unsafe source must be rejected before publication");
-        assert.match(String(failure.message || failure), /(?:escapes|private environment|links or special)/);
+        assert.match(String(failure.message || failure), /(?:escapes|private environment|[Ll]inks.*special|Invalid path)/);
         assert.equal(bundles.length, 0);
       } finally { await worker?.close(); worker = null; }
     }

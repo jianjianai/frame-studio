@@ -672,12 +672,14 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..cff541590eb34da7570fd366e2a99d475eab46ad
 --- /dev/null
 +++ b/packages/app/src/frame/bridge.web.ts
-@@ -0,0 +1,184 @@
+@@ -0,0 +1,234 @@
 +import { getFrameBootstrap } from "./bootstrap";
 +import { FrameEmbedError } from "./bootstrap-model";
 +import {
 +  FrameOperationSchema,
 +  FramePortMessageSchema,
++  FrameFreezeInputSchema,
++  FrameFreezeResponseSchema,
 +  type FrameOperation,
 +  type FrameBootstrap,
 +} from "../../../../plugin-examples/frame/shared/bridge";
@@ -832,11 +834,59 @@ index 0000000000000000000000000000000000000000..cff541590eb34da7570fd366e2a99d47
 +  }
 +}
 +
-+let bridge: FrameBridge | null = null;
++/** A full-page Paseo uses the authenticated work API without inventing player context. */
++class StandaloneBridge implements FrameClientBridge {
++  private readonly requests = new Set<AbortController>();
++  private closed = false;
++  constructor(private readonly config: FrameBootstrap) {}
++  async request(op: FrameOperation, payload: unknown): Promise<unknown> {
++    FrameOperationSchema.parse(op);
++    if (this.closed) throw new FrameEmbedError("bridge_closed", "This Frame work has closed.");
++    if (op === "context.read" || op === "context.subscribe") return {};
++    if (op === "message.accepted") return { accepted: true };
++    if (op === "context.attach")
++      throw new FrameEmbedError("player_context_unavailable", "Open the Frame work to select a preview time or materials.");
++    if (op === "preview.open" || op === "results.open" || op === "dock.close") {
++      const url = "/#/work/" + this.config.workId;
++      if (op === "dock.close") window.location.assign(url);
++      else window.open(url, "_blank", "noopener");
++      return {};
++    }
++    const input = FrameFreezeInputSchema.parse(payload);
++    if (new TextEncoder().encode(JSON.stringify(input)).byteLength > MAX_MESSAGE_BYTES)
++      throw new FrameEmbedError("bridge_size", "The Frame reference is too large.");
++    if (this.requests.size >= MAX_PENDING_REQUESTS)
++      throw new FrameEmbedError("bridge_busy", "Frame is processing too many requests.");
++    const controller = new AbortController();
++    const timer = setTimeout(() => controller.abort(new Error("Frame did not finish this request. You can retry.")), REQUEST_TIMEOUT_MS);
++    this.requests.add(controller);
++    try {
++      const response = await fetch("/api/paseo/works/" + this.config.workId + "/messages/freeze", {
++        method: "POST", credentials: "same-origin", signal: controller.signal,
++        headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
++      });
++      const result: unknown = await response.json();
++      if (!response.ok) {
++        const message = typeof result === "object" && result !== null && "message" in result && typeof result.message === "string"
++          ? result.message : "Frame could not freeze this message. Reconnect and retry.";
++        throw new FrameEmbedError("frame_request_failed", message);
++      }
++      return FrameFreezeResponseSchema.parse(result);
++    } finally { clearTimeout(timer); this.requests.delete(controller); }
++  }
++  subscribe(_listener: FrameListener): () => void { return () => {}; }
++  dispose(): void {
++    this.closed = true;
++    for (const controller of this.requests) controller.abort(new Error("This Frame work has closed."));
++    this.requests.clear();
++  }
++}
++
++let bridge: FrameBridge | StandaloneBridge | null = null;
 +export function getFrameBridge(): FrameClientBridge | null {
 +  const config = getFrameBootstrap();
 +  if (!config) return null;
-+  bridge ??= new FrameBridge(config);
++  bridge ??= window.parent === window ? new StandaloneBridge(config) : new FrameBridge(config);
 +  return bridge;
 +}
 +export function installFrameBridge(): () => void {
@@ -857,6 +907,7 @@ index 0000000000000000000000000000000000000000..cff541590eb34da7570fd366e2a99d47
 +    dispose();
 +  };
 +}
+
 diff --git a/packages/app/src/frame/composer.ts b/packages/app/src/frame/composer.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..c8013dda86d58041005054e8880a550736b091fd
@@ -1193,7 +1244,7 @@ new file mode 100644
 index 0000000000000000000000000000000000000000..12f277206324e7d7fbc75ccb259dc8c3f9873b45
 --- /dev/null
 +++ b/packages/app/src/frame/creation.web.ts
-@@ -0,0 +1,209 @@
+@@ -0,0 +1,154 @@
 +import AsyncStorage from "@react-native-async-storage/async-storage";
 +import type {
 +  DaemonClient,
@@ -1217,8 +1268,7 @@ index 0000000000000000000000000000000000000000..12f277206324e7d7fbc75ccb259dc8c3
 +  const config = getFrameBootstrap();
 +  if (!config || adaptedClients.has(client)) return client;
 +  adaptedClients.add(client);
-+  const nativeAgent = client.createAgent.bind(client),
-+    nativeWorkspace = client.createWorkspace.bind(client);
++  const nativeAgent = client.createAgent.bind(client);
 +  const registry = new FrameCreationRegistry(config.workId, AsyncStorage, async () => {
 +    const bridge = getFrameBridge();
 +    if (!bridge) throw new FrameEmbedError("bridge_missing", "The Frame work is not connected.");
@@ -1272,19 +1322,9 @@ index 0000000000000000000000000000000000000000..12f277206324e7d7fbc75ccb259dc8c3
 +    const captured = capturedContext ?? context().request("context.read", {});
 +    void captured.catch(() => {});
 +    const root = await boundWorkspace();
-+    const requested = options.workspaceId ?? root.id;
-+    const workspaces = await client.fetchWorkspaces({
-+      filter: { projectId: root.projectId },
-+      page: { limit: 200 },
-+    });
-+    const workspace = workspaces.entries.find(
-+      (item) => item.id === requested && item.projectRootPath === root.projectRootPath,
-+    );
-+    if (!workspace)
-+      throw new FrameEmbedError(
-+        "workspace_scope",
-+        "Create conversations in this work or its managed worktrees. To use another project, open it in Frame.",
-+      );
++    if (options.workspaceId && options.workspaceId !== root.id)
++      throw new FrameEmbedError("workspace_scope", "All conversations in this Frame work share its one workspace.");
++    const workspace = root;
 +    const cwd = options.config?.cwd ?? options.cwd ?? workspace.workspaceDirectory;
 +    if (cwd !== workspace.workspaceDirectory)
 +      throw new FrameEmbedError(
@@ -1355,54 +1395,11 @@ index 0000000000000000000000000000000000000000..12f277206324e7d7fbc75ccb259dc8c3
 +        requestId: requestId ?? options.requestId ?? crypto.randomUUID(),
 +      };
 +    }
-+    if (!options.agent) return nativeWorkspace(options, requestId);
-+    const original = options.agent;
-+    const key = workspaceCreationKey(options, requestId);
-+    if (!key)
-+      throw new FrameEmbedError("creation_key", "The worktree needs a stable native creation key.");
-+    return registry.run(key, publicIntent(options), {
-+      prompt: original.initialPrompt ?? "",
-+      messageId: original.clientMessageId,
-+      context: captured,
-+      attachmentsFingerprint: await fingerprintFrameSubmission({
-+        images: original.images ?? [],
-+        attachments: original.attachments ?? [],
-+      }),
-+      create: async (agentId) => {
-+        const {
-+          initialPrompt: _,
-+          clientMessageId: __,
-+          images: ___,
-+          attachments: ____,
-+          ...blank
-+        } = original;
-+        const result = await nativeWorkspace(
-+          {
-+            ...options,
-+            firstAgentContext: undefined,
-+            agent: { ...blank, agentId },
-+            idempotencyKey: key,
-+          },
-+          requestId,
-+        );
-+        if (!result.agent)
-+          throw new FrameEmbedError(
-+            "creation_failed",
-+            result.error ?? "The native worktree did not create its conversation.",
-+          );
-+        return {
-+          agentId: result.agent.id,
-+          profileId: result.agent.provider,
-+          model: result.agent.model,
-+          result,
-+        };
-+      },
-+      freeze: (input) => context().request("freeze.submit", input),
-+      send: (agentId, frozen) => send(agentId, frozen, original),
-+    });
++    throw new FrameEmbedError("workspace_scope", "Frame works use one shared workspace. Create a conversation in this work instead.");
 +  };
 +  return client;
 +}
+
 diff --git a/packages/app/src/frame/initial-message.ts b/packages/app/src/frame/initial-message.ts
 new file mode 100644
 index 0000000000000000000000000000000000000000..ca1cc624187ab72d84bda5ff7f9c86fba31e5837

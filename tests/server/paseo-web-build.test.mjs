@@ -153,6 +153,10 @@ test(
       "0002-frame-session-env.patch",
       patchName,
       "0004-frame-shared-speech-wait.patch",
+      "0005-frame-single-workspace.patch",
+      "0006-frame-host-startup.patch",
+      "0007-frame-clickable-reference.patch",
+      "0008-frame-worktree-workflow.patch",
     ]);
   },
 );

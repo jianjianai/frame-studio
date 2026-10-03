@@ -55,6 +55,7 @@ export function useBrowserExport(iframe, notify, onUnresponsive) {
         releaseFile();
         file.current = {
           url: URL.createObjectURL(value.blob),
+          bytes: value.blob.size,
           name: String(value.filename || "frame-export.webm")
             .replace(/[\\/\x00-\x1f]/g, "_")
             .slice(0, 180),
@@ -66,6 +67,13 @@ export function useBrowserExport(iframe, notify, onUnresponsive) {
         progress: value.progress,
         error: value.error,
         filename: file.current?.name,
+        bytes: file.current?.bytes,
+        ...(value.sourceRevision
+          ? { sourceRevision: value.sourceRevision }
+          : {}),
+        ...(value.compiledRevision
+          ? { compiledRevision: value.compiledRevision }
+          : {}),
       });
       if (value.state === "failed")
         callbacks.current.notify(value.error || "本机导出失败", "error");
@@ -105,12 +113,24 @@ export function useBrowserExport(iframe, notify, onUnresponsive) {
   return {
     job,
     busy,
-    start(options) {
+    start(options, reference = {}) {
       if (activeStates.includes(current.current?.state))
         throw Error("当前导出尚未完成");
       if (!iframe.current?.contentWindow) throw Error("请先等待播放器就绪");
       releaseFile();
-      const next = { id: crypto.randomUUID(), state: "queued" };
+      const next = {
+        id: crypto.randomUUID(),
+        state: "queued",
+        ...(reference.sourceRevision
+          ? { sourceRevision: reference.sourceRevision }
+          : {}),
+        ...(reference.compiledRevision
+          ? { compiledRevision: reference.compiledRevision }
+          : {}),
+        ...(reference.sourceCommit
+          ? { sourceCommit: reference.sourceCommit }
+          : {}),
+      };
       update(next);
       send("export-start", { id: next.id, options });
     },

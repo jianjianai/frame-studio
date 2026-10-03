@@ -16,7 +16,6 @@ import {
   RotateCcw,
   ArrowUpRight,
   Pencil,
-  Copy,
 } from "lucide-react";
 import {
   api,
@@ -215,8 +214,7 @@ export function WorkLibrary({ repo, recent = false, notify, localMode = false })
   const [view, setView] = useState(readLibraryView);
   const [settings, setSettings] = useState(false),
     [create, setCreate] = useState(false);
-  const [edit, setEdit] = useState(null),
-    [duplicate, setDuplicate] = useState(null);
+  const [rename, setRename] = useState(null);
   const [remove, setRemove] = useState(null),
     [confirmation, setConfirmation] = useState("");
   const [purge, setPurge] = useState(null),
@@ -623,17 +621,12 @@ export function WorkLibrary({ repo, recent = false, notify, localMode = false })
                           disabled={busy}
                           items={[
                             {
-                              label: "编辑作品信息",
+                              label: "重命名",
                               icon: Pencil,
-                              action: () => setEdit(work),
+                              action: () => setRename(work),
                             },
                             {
-                              label: "创建副本",
-                              icon: Copy,
-                              action: () => setDuplicate({ work }),
-                            },
-                            {
-                              label: "移入回收站",
+                              label: "删除",
                               icon: Trash2,
                               danger: true,
                               action: () => {
@@ -727,23 +720,20 @@ export function WorkLibrary({ repo, recent = false, notify, localMode = false })
           }}
         />
       )}
-      {edit && (
-        <Modal title="作品信息" onClose={() => setEdit(null)}>
-          <p>整理名称、简介与制作状态，方便下次找到作品。</p>
+      {rename && (
+        <Modal title="重命名作品" onClose={() => setRename(null)}>
           <Form
             busy={busy}
-            submit="保存作品信息"
+            submit="保存名称"
             onSubmit={(values) =>
               run(async () => {
                 await api("works_update", {
-                  id: edit.id,
-                  expectedRevision: edit.metadataRevision,
+                  id: rename.id,
+                  expectedRevision: rename.metadataRevision,
                   title: values.title.trim(),
-                  description: values.description.trim(),
-                  status: values.status,
                 });
-                setEdit(null);
-                notify("作品信息已保存");
+                setRename(null);
+                notify("作品名称已保存");
                 refresh();
               })
             }
@@ -753,99 +743,11 @@ export function WorkLibrary({ repo, recent = false, notify, localMode = false })
                 name="title"
                 required
                 autoFocus
-                defaultValue={edit.title}
+                defaultValue={rename.title}
                 maxLength={150}
               />
             </Field>
-            <Field label="制作状态">
-              <select name="status" defaultValue={edit.status || "draft"}>
-                {Object.entries(productionLabels).map(([id, label]) => (
-                  <option key={id} value={id}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="作品简介">
-              <textarea
-                name="description"
-                defaultValue={edit.description || ""}
-                rows={3}
-                maxLength={4000}
-                placeholder="记录内容、目标或当前进度"
-              />
-            </Field>
           </Form>
-        </Modal>
-      )}
-      {duplicate && (
-        <Modal title="创建作品副本" onClose={() => setDuplicate(null)}>
-          {duplicate.created ? (
-            <p role="status">
-              副本已创建。
-              <a
-                className="button primary"
-                href={"#/work/" + duplicate.created.id}
-                target="_blank"
-                rel="noopener"
-                onClick={() => setDuplicate(null)}
-              >
-                打开副本
-                <ArrowUpRight size={15} />
-              </a>
-            </p>
-          ) : (
-            <>
-              <p>
-                复制「{duplicate.work.title}
-                」的内容和引用素材，作为一个独立作品继续创作。
-              </p>
-              <Form
-                busy={busy}
-                submit="创建并打开副本"
-                onSubmit={(values) =>
-                  run(async () => {
-                    const tab = window.open("about:blank", "_blank");
-                    if (tab) {
-                      tab.opener = null;
-                      tab.document.title = "正在创建副本…";
-                    }
-                    let created;
-                    try {
-                      created = await api("works_duplicate", {
-                        id: duplicate.work.id,
-                        title: values.title.trim(),
-                      });
-                    } catch (error) {
-                      tab?.close();
-                      throw error;
-                    }
-                    refresh();
-                    notify("作品副本已创建");
-                    if (tab && !tab.closed) {
-                      tab.location.replace(
-                        new URL("#/work/" + created.id, location.href).href,
-                      );
-                      setDuplicate(null);
-                    } else setDuplicate({ ...duplicate, created });
-                  })
-                }
-              >
-                <Field label="副本名称">
-                  <input
-                    name="title"
-                    required
-                    autoFocus
-                    maxLength={150}
-                    defaultValue={(duplicate.work.title + " · 副本").slice(
-                      0,
-                      150,
-                    )}
-                  />
-                </Field>
-              </Form>
-            </>
-          )}
         </Modal>
       )}
       {remove && (

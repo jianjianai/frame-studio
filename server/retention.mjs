@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ArtifactLeases } from "./artifact-leases.mjs";
+import { isLiveReviewRevision, liveReviewSnapshotKey } from "./live-review-snapshot.mjs";
 
 export class Retention {
   constructor(db, data) {
@@ -74,9 +75,6 @@ export class Retention {
       );
       await this.db.pool.query("DELETE FROM sessions WHERE expires<now()");
       await this.db.pool.query(
-        "DELETE FROM agent_tokens WHERE task IN (SELECT id FROM tasks WHERE state NOT IN ('queued','running','cancelling'))",
-      );
-      await this.db.pool.query(
         "DELETE FROM settings WHERE key LIKE 'preview:%' AND (value->>'expires')::bigint<$1",
         [Date.now()],
       );
@@ -104,12 +102,11 @@ export class Retention {
           throw error;
         });
         references.push(...nativeReferences);
-        const protectedKeys = new Set(
-          references.map(
-            ({ review_reference: ref }) =>
-              ref.liveSessionId + "/" + ref.sourceRevision,
-          ),
-        );
+        const protectedKeys = new Set();
+        for (const { review_reference: reference } of references) {
+          try { protectedKeys.add(liveReviewSnapshotKey(reference)); }
+          catch (error) { if (error.statusCode !== 400) throw error; }
+        }
         await pruneLiveReviewReferences(this.data, { protectedKeys });
       }
       const uploads = path.join(this.data, "uploads");
@@ -150,8 +147,8 @@ export class Retention {
 }
 
 // Frozen review snapshots outlive ephemeral preview sessions, but never accumulate forever.
-// Active/retained tasks pin exact revisions. New snapshots have a grace period while a
-// chat transaction creates its task; symlinks and non-canonical directory names are ignored.
+// Active/retained tasks and native message contexts pin exact revisions. New snapshots
+// have an admission grace period; symlinks and non-canonical directory names are ignored.
 export async function pruneLiveReviewReferences(
   data,
   {
@@ -174,7 +171,7 @@ export async function pruneLiveReviewReferences(
     for (const revision of await fs.promises.readdir(folder, {
       withFileTypes: true,
     })) {
-      if (!revision.isDirectory() || !/^[0-9a-f]{64}$/.test(revision.name))
+      if (!revision.isDirectory() || !isLiveReviewRevision(revision.name))
         continue;
       const dir = path.join(folder, revision.name);
       const stat = await fs.promises.lstat(dir);

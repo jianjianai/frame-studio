@@ -70,11 +70,11 @@ pnpm --silent platform download 任务UUID frame-0.500000.png --out ./review/fra
 
 `frame-task.json` 是 `{"id":"作品UUID","kind":"frame","input":{"time":0.5,"width":640}}`。可用 `kind` 包括 `validate`、`frame`、`storyboard`、`render`、`build`。创建任务的 `requestKey` 是调用方生成的 UUID，只能为同一个请求重用，用于响应丢失后的去重。
 
-V8 默认 `works_browser` 返回持续更新的实时能力链接，不创建 build 任务；打开页面后由常驻会话准备首个版本。`task` 可指定同作品的 AI 草稿。`mode:"snapshot"` 或 `rebuild:true` 使用原有不可变构建，`--wait` 再等待其任务并获取链接；`rebuild:true` 只作用于最初请求。会话、弱网与版本规则见 [V8 实时预览](V8-LIVE-PREVIEW.md)。
+V8 默认 `works_browser` 返回持续更新的实时能力链接，不创建 build 任务；打开页面后由常驻会话准备首个版本。预览只有当前作品工作区，不接受 AI 草稿或任务作为来源。`mode:"snapshot"` 或 `rebuild:true` 使用原有不可变构建，`--wait` 再等待其任务并获取链接；`rebuild:true` 只作用于最初请求。会话、弱网与版本规则见 [V8 实时预览](V8-LIVE-PREVIEW.md)。
 
 MCP 使用 `frame_task_status`。`waitMs` 最多 10 秒；每页最多 100 条事件。默认不带完整构建清单，返回任务摘要、输出路径、下载入口和后续操作建议。把 **`nextAfter` 原样作为字符串** 带入下一次 `after`，避免大事件编号经过浮点数转换后丢失精度。即使 `done:true`，`hasMore:true` 仍表示有最后几页事件未读完。全量诊断仍可通过原 `task_get` 获取；原前端协议没有改名或更改数组形状。
 
-`publish_failed` 意味着结果保存需要恢复，不能当作仍在运行而无限等待。先检查失败原因，再调用 `task_retry_publish`；不要为保存失败重新执行已经完成的 AI 任务。
+`publish_failed` 意味着结果保存需要恢复，不能当作仍在运行而无限等待。先检查失败原因，再调用 `task_retry_publish`；不要为保存失败重新执行已经完成的导出。
 
 PNG 在 MCP 中直接作为图像输出，JSON/SRT 作为文本。结构化元数据与原内容一并返回，图像 base64 不重复塞进 JSON。语音试听继续返回音频块并带结构化文件元数据。视频、音频和较大文件用 `platform download`，或对 `downloadPath` 发起同服务器的带认证请求。过期文件返回明确的重建提示。
 
@@ -116,7 +116,7 @@ HTTP/MCP 错误包含 `error`、`status`、`code`、`recovery` 等机器可读�
 
 新操作需要运行包含本次改动的服务端。安装后客户端可能需要刷新 MCP 工具列表，未发布的分支不会改变当前生产连接的可用工具。
 
-回归测试集中在 `tests/server/agent-toolkit.test.mjs`、`agent-toolkit-integration.test.mjs`、`platform-cli.test.mjs`，并纳入 `pnpm verify`。涉及 PostgreSQL 的测试必须使用专用 `frame_test` 数据库；发布执行器的额外门禁见 [VERIFICATION](VERIFICATION.md)。
+回归测试集中在 `tests/server/platform-toolkit.test.mjs`、`platform-toolkit-integration.test.mjs`、`platform-cli.test.mjs`，并纳入 `pnpm verify`。涉及 PostgreSQL 的测试必须使用专用 `frame_test` 数据库；发布执行器的额外门禁见 [VERIFICATION](VERIFICATION.md)。
 
 远程 CLI 支持任意域名或 IP 的 HTTP(S) 地址，传输和访问策略由反向代理管理。`--allow-http` 保留为兼容参数，无需显式启用。
 

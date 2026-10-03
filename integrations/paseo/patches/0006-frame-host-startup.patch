@@ -1,0 +1,33 @@
+diff --git a/packages/app/src/runtime/host-runtime.ts b/packages/app/src/runtime/host-runtime.ts
+--- a/packages/app/src/runtime/host-runtime.ts
++++ b/packages/app/src/runtime/host-runtime.ts
+@@ -1525,7 +1525,6 @@
+   private async runBoot(): Promise<void> {
+     const override = readConfiguredLocalDaemonOverride();
+     await this.loadFromStorage();
+-    this.markHostRegistryLoaded();
+     const frame = getFrameBootstrap();
+     const origin = getFrameBrowserOrigin();
+     if (frame && origin) {
+@@ -1537,8 +1536,11 @@
+         useTls: address.protocol === "https:",
+         label: frame.label,
+       });
++      this.hostRegistryStatus = "ready";
++      this.markHostRegistryLoaded();
+       return;
+     }
++    this.markHostRegistryLoaded();
+ 
+     let isE2E: string | null = null;
+     try {
+@@ -1629,7 +1631,8 @@
+     } catch (error) {
+       console.error("[HostRuntime] Failed to load host registry from storage", error);
+     } finally {
+-      this.hostRegistryStatus = "ready";
++      // FRAME installs its bound host before routing may inspect the registry.
++      this.hostRegistryStatus = getFrameBootstrap() ? "loading" : "ready";
+       this.emitHostList();
+       if (shouldPersistHosts) {
+         void this.persistHosts().catch((error) =>

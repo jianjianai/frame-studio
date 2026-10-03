@@ -102,7 +102,7 @@ export async function workToolsChecks(h) {
       );
     },
   );
-  await check("完整Paseo作品面板入口：素材、旧版记录与展开恢复", async () => {
+  await check("完整Paseo作品面板入口：素材、独立标签页与展开恢复", async () => {
     await ai();
     const native = page.locator('iframe[title^="Paseo ·"]');
     await expect(native).toBeVisible();
@@ -111,11 +111,19 @@ export async function workToolsChecks(h) {
     await expect(page.locator("dialog[open]")).toHaveCount(0);
     await dock.getByRole("button", { name: /返回对话/ }).click();
     await expect(native).toHaveAttribute("data-retained", "same-native-iframe");
-    await page.getByRole("button", { name: "旧版记录", exact: true }).click();
     await expect(
-      page.getByRole("region", { name: "旧版创作记录" }),
-    ).toBeVisible();
-    await page.getByRole("button", { name: "Paseo", exact: true }).click();
+      page.getByRole("button", { name: "旧版记录", exact: true }),
+    ).toHaveCount(0);
+    const popupPromise = page.waitForEvent("popup");
+    await page
+      .getByRole("link", { name: "在新标签页打开 Paseo", exact: true })
+      .click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState();
+    assert.equal(new URL(popup.url()).pathname, `/paseo/${state.work.id}/`);
+    assert.equal(new URL(popup.url()).searchParams.get("frameStandalone"), "1");
+    assert.equal(await popup.evaluate(() => window.opener), null);
+    await popup.close();
     await page
       .getByRole("button", { name: "展开 AI 面板", exact: true })
       .click();
@@ -139,12 +147,26 @@ export async function workToolsChecks(h) {
       window.__FRAME_REVIEW_PASEO__.request("results.open", {}),
     );
     const results = page.getByRole("region", {
-      name: "作品校验与应用",
+      name: "作品检查",
       exact: true,
     });
-    await expect(results).toContainText("主工作区尚未产生作品校验结果");
+    await expect(results).toContainText("当前作品尚未检查");
     await expect(results).toBeFocused();
     await expect(native).toBeVisible();
+    await results
+      .getByRole("button", { name: "检查当前作品", exact: true })
+      .click();
+    await state.broadcast();
+    await expect(results).toContainText("作品检查通过");
+    const revision = state.live.sourceRevision;
+    state.live.sourceRevision = "e".repeat(64);
+    await state.broadcast();
+    await expect(results).toContainText("检查对应较早版本，当前修改尚未检查");
+    state.live.sourceRevision = revision;
+    await state.broadcast();
+    await expect(
+      results.getByRole("button", { name: "应用到作品", exact: true }),
+    ).toHaveCount(0);
   });
   await check("任务/同步是可收起面板，点击画面不误关或中断任务", async () => {
     const cancellations = state.calls.filter(
@@ -236,8 +258,9 @@ export async function workToolsChecks(h) {
       await wet.fill("0.4");
       await wet.press("Tab");
       await expect.poll(async () => (await processor()).options.wet).toBe(0.4);
-      await effect.getByText("完整官方参数 JSON", { exact: true }).click();
       const json = effect.getByLabel("Tone 参数 JSON 1", { exact: true });
+      if (!(await json.isVisible()))
+        await effect.getByText("完整官方参数 JSON", { exact: true }).click();
       await json.fill(
         JSON.stringify({
           wet: 0.4,
@@ -315,6 +338,70 @@ export async function workToolsChecks(h) {
       await expect(
         editor.getByLabel("Tone 湿声比例 1", { exact: true }),
       ).toHaveValue("0.35");
+      await dock
+        .getByRole("button", { name: "关闭音频工作台", exact: true })
+        .click();
+      await ai();
+    },
+  );
+  await check(
+    "导出前明确提醒未保存音频与JSON，返回保存保留输入且不自动保存",
+    async () => {
+      await tool("音频").click();
+      const editor = page.getByRole("region", {
+        name: "多轨音频编辑器",
+        exact: true,
+      });
+      const effect = editor.getByRole("region", {
+        name: "Tone 效果 1",
+        exact: true,
+      });
+      const json = effect.getByLabel("Tone 参数 JSON 1", { exact: true });
+      if (!(await json.isVisible()))
+        await effect.getByText("完整官方参数 JSON", { exact: true }).click();
+      const original = await json.inputValue();
+      await json.fill('{"pitch":');
+      const saves = state.calls.filter(
+        (c) => c.name === "works_audio_edit",
+      ).length;
+      await tool("导出").click();
+      const dialog = page.getByRole("dialog", { name: "导出", exact: true });
+      await expect(
+        dialog.getByRole("status", { name: "导出前未保存修改" }),
+      ).toContainText("导出只包含已保存的内容");
+      await dialog
+        .getByRole("button", { name: "返回音频保存", exact: true })
+        .click();
+      await expect(dialog).toHaveCount(0);
+      await expect(editor).toBeVisible();
+      await expect(json).toHaveValue('{"pitch":');
+      assert.equal(
+        state.calls.filter((c) => c.name === "works_audio_edit").length,
+        saves,
+      );
+      await editor
+        .getByRole("button", { name: "保存混音", exact: true })
+        .click();
+      await expect(editor.getByRole("alert").first()).toContainText(
+        "有尚未应用的 JSON 参数",
+      );
+      assert.equal(
+        state.calls.filter((c) => c.name === "works_audio_edit").length,
+        saves,
+      );
+      await effect
+        .getByRole("button", { name: "恢复当前参数", exact: true })
+        .click();
+      await expect(json).toHaveValue(original);
+      await expect(editor.locator(".audio-status")).toHaveText("已保存");
+      await tool("导出").click();
+      await expect(
+        page.getByRole("status", { name: "导出前未保存修改" }),
+      ).toHaveCount(0);
+      await page
+        .getByRole("dialog", { name: "导出", exact: true })
+        .getByRole("button", { name: "关闭弹窗", exact: true })
+        .click();
       await dock
         .getByRole("button", { name: "关闭音频工作台", exact: true })
         .click();

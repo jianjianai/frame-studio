@@ -92,7 +92,7 @@ window.cleanup=()=>{WorkerManager.reset();cache.dispose()};window.ready=true;`;
         fs: {
           allow: [root, await fs.realpath(path.join(root, "node_modules"))],
         },
-        watch: { ignored: ["**/.cache/**"] },
+        watch: null,
       },
       plugins: [
         {

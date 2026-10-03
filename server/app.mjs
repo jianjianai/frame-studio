@@ -4,7 +4,7 @@ import {
   isMcpOperation,
   textToolResult,
   structuredValue,
-} from "./agent-toolkit.mjs";
+} from "./platform-toolkit.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -26,7 +26,7 @@ import {
   confined,
   problem,
 } from "./security.mjs";
-import { agentTools } from "./agent-tools.mjs";
+import { workTools } from "./work-tools.mjs";
 import { browserPreview } from "./browser-preview.mjs";
 import { installLivePreview } from "./live-preview-routes.mjs";
 import { sendMedia } from "./media.mjs";
@@ -113,13 +113,8 @@ export async function createApp({
       : null;
     let authenticated = false;
     if (req.url === "/api/agent/action") {
-      if (bearer)
-        req.agentTask = await db.one(
-          "SELECT t.* FROM agent_tokens a JOIN tasks t ON t.id=a.task WHERE a.hash=$1 AND t.kind='agent' AND t.state='running'",
-          [hash(bearer)],
-        );
-      if (!req.agentTask && bearer) req.agentTask = await services.paseoManager.agentContext(bearer);
-      if (!req.agentTask) throw problem(401, "Active task credential required");
+      if (bearer) req.agentTask = await services.paseoManager.agentContext(bearer);
+      if (!req.agentTask) throw problem(401, "Work-scoped Paseo credential required");
       return;
     }
     if (localMode) return;
@@ -155,9 +150,9 @@ export async function createApp({
       .send({ status: state.ready ? "ready" : "degraded" });
   });
   await installPaseoGateway({ app, manager: services.paseoManager, workService: services.paseoWork,
-    store: services.paseoStore, drafts: services.paseoDrafts, authenticate: requirePlatformSession,
+    store: services.paseoStore, workspace: services.paseoWorkspace, authenticate: requirePlatformSession,
     connections: services.connections, db, data, secrets: services.secrets, localMode });
-  agentTools({ app, db, data, assets, actions, localMode });
+  workTools({ app, db, data, assets, actions, localMode });
   app.post(
     "/api/login",
     async (req, res) => {
@@ -482,7 +477,7 @@ export async function createApp({
     await mcp.close();
     await services.close();
   });
-  return { app, db, repos, assets, tasks, actions, paseo: { manager: services.paseoManager, work: services.paseoWork, store: services.paseoStore, drafts: services.paseoDrafts } };
+  return { app, db, repos, assets, tasks, actions, paseo: { manager: services.paseoManager, work: services.paseoWork, store: services.paseoStore, workspace: services.paseoWorkspace } };
 }
 if (
   process.argv[1] &&

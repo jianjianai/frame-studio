@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { isCliMain } from "./cli-main.mjs";
 import { authoringState } from "./authoring-state.mjs";
 import { referenceCatalog, readAuthoringReference } from "./authoring-reference.mjs";
 import { errorRecovery } from "./tool-errors.mjs";
@@ -6,7 +7,7 @@ import { commandCatalog, describeFilmCommand, parseCommandArgs } from "./film-co
 import { getAuthoringCapabilities } from "../src/contracts/capabilities.mjs";
 import { adapters } from "../src/engine/adapters.mjs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import { readProject, validProjectId } from "./project-metadata.mjs";
 import { projectPath } from "./project-paths.mjs";
@@ -396,10 +397,7 @@ export function runFilm(args, root = process.cwd()) {
   return result.status ?? 1;
 }
 
-if (
-  process.argv[1] &&
-  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
-) {
+if (isCliMain(import.meta.url)) {
   try {
     process.exitCode = runFilm(process.argv.slice(2));
   } catch (error) {

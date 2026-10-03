@@ -1,6 +1,6 @@
 import { speechInputShape } from "../scripts/tts-capabilities.mjs";
 import { workSourceTools } from "./work-source-tools.mjs";
-import { compactTask } from "./agent-toolkit.mjs";
+import { compactTask } from "./platform-toolkit.mjs";
 import { taskSummaryColumns } from "./task-summary.mjs";
 import {
   projectCreationShape,
@@ -289,18 +289,6 @@ export function workOperations({
       invoke("speech_generate", { ...(await resolve(id)), ...a }),
   );
   add(
-    "works_chats",
-    "List this work’s persistent AI conversations",
-    { id: uuid },
-    async (a) => {
-      const w = await resolve(a.id);
-      return db.all(
-        "SELECT * FROM chats WHERE repo=$1 AND project=$2 ORDER BY created DESC",
-        [w.repo, w.project],
-      );
-    },
-  );
-  add(
     "works_versions",
     "List independent Git history and legacy local snapshots of this work",
     workVersionsRequestSchema,
@@ -389,19 +377,15 @@ export function workOperations({
       rebuild: z.boolean().default(false),
       mode: z.enum(["live", "snapshot"]).default("live"),
       mediaMode: livePreviewMediaModeSchema.optional().describe("Live resource mode: original, compressed or fully cached in the browser."),
-      task: uuid.optional(),
     },
     async (a) => {
       if (a.mediaMode && (a.mode !== "live" || a.rebuild))
         throw problem(400, "素材模式仅用于实时预览");
-      if (a.task && (a.mode === "snapshot" || a.rebuild))
-        throw problem(400, "AI draft selection requires live preview mode");
-      if (a.task && !registry.works_live_preview)
-        throw problem(503, "Live draft preview is unavailable");
-      if (a.mode === "live" && !a.rebuild && registry.works_live_preview) {
+      if (a.mode === "live" && !a.rebuild) {
+        if (!registry.works_live_preview) throw problem(503, "Live workspace preview is unavailable");
         const op = registry.works_live_preview;
         const link = await op.fn(
-          op.schema.parse({ id: a.id, task: a.task, ai: true, mediaMode: a.mediaMode }),
+          op.schema.parse({ id: a.id, ai: true, mediaMode: a.mediaMode }),
         );
         return {
           ...link,

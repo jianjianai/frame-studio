@@ -15,7 +15,6 @@
     "types": []
   },
   "include": [
-    "studio/chat-draft.js",
     "studio/task-events.js",
     "src/contracts/*.mjs",
     "src/contracts/*.ts",

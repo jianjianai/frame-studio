@@ -45,7 +45,7 @@ export function contributeFrameClient(client: PluginClientContext): () => void {
     remove(agent.id);
     if (stopped || !config.success || !agent.workspaceId) return;
     const workspaceId = agent.workspaceId;
-    const attach = client.addComposerPill({
+    const attach = window.parent === window ? null : client.addComposerPill({
       id: "context",
       workspaceId,
       agentId: agent.id,
@@ -80,7 +80,7 @@ export function contributeFrameClient(client: PluginClientContext): () => void {
         },
       },
     });
-    controls.set(agent.id, [attach, open]);
+    controls.set(agent.id, attach ? [attach, open] : [open]);
   }
   void client.paseo.agents
     .list({ subscribe: {}, signal: lifetime.signal })
@@ -170,7 +170,7 @@ export function FramePanel({ theme, layout }: PluginWorkspacePanelProps) {
       (
         [
           ["preview.open", "查看作品预览"],
-          ["results.open", "查看结果与原有历史"],
+          ["results.open", "查看作品任务与结果"],
           ["dock.close", "返回作品"],
         ] as const
       ).map(([op, title]) => ({ op, title, onPress: () => run(op) })),
@@ -180,7 +180,7 @@ export function FramePanel({ theme, layout }: PluginWorkspacePanelProps) {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Frame 作品</Text>
       <Text style={styles.muted}>
-        模型、权限请求、提问和对话由 Paseo 管理。作品预览、校验、应用和原有历史在 Frame 中继续保留。
+        对话、模型与权限由 Paseo 管理。文件编辑、作品预览和工具共用当前作品工作区。
       </Text>
       <View style={styles.info}>
         <Text style={styles.detail}>当前画面：{context?.time?.toFixed(2) ?? "未定位"} 秒</Text>

@@ -8,7 +8,6 @@ import {
   workUndoRequestSchema,
   workUndoResponseSchema,
 } from "./workflow.mjs";
-import { modelIdSchema } from "./ai-models.mjs";
 import { livePreviewMediaModeSchema } from "./live-preview.mjs";
 
 export const taskStateSchema = z.enum([
@@ -28,7 +27,6 @@ export const executableTaskKindSchema = z.enum([
   "storyboard",
   "render",
   "build",
-  "agent",
   "tools-update",
 ]);
 // Speech auditions are persisted artifacts, not executable queue jobs.
@@ -70,13 +68,13 @@ export const reviewContextSchema = z
     sourceCommit: commitSchema.optional(),
     liveSessionId: uuid.optional(),
     sourceRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-    draftTask: uuid.optional(),
+    compiledRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     shotId: shotIdSchema.optional(),
   })
   .refine(
     (a) => Boolean(a.liveSessionId) === Boolean(a.sourceRevision) &&
       (!a.liveSessionId || (!a.previewTask && !a.sourceCommit)) &&
-      (!a.draftTask || Boolean(a.liveSessionId)),
+      (!a.compiledRevision || Boolean(a.liveSessionId)),
     "Use one complete live or immutable review reference",
   )
   .refine(
@@ -85,28 +83,6 @@ export const reviewContextSchema = z
       (a.start !== undefined && a.end !== undefined && a.end > a.start),
     "Invalid review range",
   );
-export const chatSubmissionShape = {
-  prompt: z.string().trim().min(1).max(40000),
-  requestKey: uuid.optional(),
-  context: reviewContextSchema.optional(),
-  model: modelIdSchema.optional(),
-};
-export const workChatCreateSchema = z
-  .strictObject({
-    id: uuid,
-    connection: uuid.optional(),
-    provider: z.enum(["codex", "claude"]).optional(),
-    title: z.string().min(1).max(120).default("创作对话"),
-  })
-  .refine(
-    (a) => Boolean(a.connection) !== Boolean(a.provider),
-    "Choose exactly one connection or legacy provider",
-  );
-export const workChatSendSchema = z.strictObject({
-  id: uuid,
-  chat: uuid,
-  ...chatSubmissionShape,
-});
 export const taskSummarySchema = z.looseObject({
   id: uuid,
   state: taskStateSchema,
@@ -144,11 +120,6 @@ export const workVersionRequestSchema = workIdRequestSchema.extend({
 export const workRestoreRequestSchema = workIdRequestSchema.extend({
   version: z.union([uuid, commitSchema]),
   expectedRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-});
-export const workChatTurnsRequestSchema = workIdRequestSchema.extend({
-  chat: uuid,
-  before: uuid.optional(),
-  limit: z.number().int().min(1).max(100).default(30),
 });
 export const taskInputSchema = z
   .strictObject({
@@ -225,10 +196,6 @@ export const operationContracts = Object.freeze({
     request: workPreviewRequestSchema,
     response: previewStatusSchema,
   },
-  works_chat_turns: {
-    request: workChatTurnsRequestSchema,
-    response: z.array(taskSummarySchema),
-  },
   works_exports: {
     request: workIdRequestSchema,
     response: z.array(z.looseObject({ id: uuid, state: taskStateSchema })),
@@ -276,15 +243,6 @@ export const operationContracts = Object.freeze({
     request: workUndoRequestSchema,
     response: workUndoResponseSchema,
   },
-  works_chat_create: {
-    request: workChatCreateSchema,
-    response: z.looseObject({
-      id: uuid,
-      provider: z.enum(["codex", "claude"]),
-      connection: uuid.nullable().optional(),
-    }),
-  },
-  works_chat_send: { request: workChatSendSchema, response: taskSummarySchema },
   task_get: { request: taskGetRequestSchema, response: taskGetResponseSchema },
 });
 /** @param {string} name */
@@ -331,6 +289,8 @@ export const playerViewSchema = z.strictObject({
 export const playerExportStateSchema = z.object({
   type: z.literal("frame-export-state"),
   id: z.string().min(1).max(80),
+  sourceRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  compiledRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   state: z.enum([
     "queued",
     "running",
@@ -368,6 +328,7 @@ export const previewMessageSchema = z.discriminatedUnion("type", [
     mediaMode: livePreviewMediaModeSchema.optional(),
     state: z.enum(["ready", "updating", "error", "reconnecting"]),
     sourceRevision: z.string().max(200).optional(),
+    compiledRevision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     revision: z.number().int().nonnegative().optional(),
     error: z.string().max(6000).optional(),
   }),

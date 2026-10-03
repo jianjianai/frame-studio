@@ -6,21 +6,12 @@ const signature = (value) =>
 const endpoint = (value) => String(value || "").replace(/\/+$/, "");
 
 /** Freeze non-secret choices at enqueue, not when a queue slot eventually opens. */
-export async function freezeExecution({ db, connections, secrets, input }) {
-  let config;
-  if (input.connection) {
-    if (!connections) throw problem(503, "模型连接服务不可用");
-    config = connections.selection
-      ? await connections.selection(input.connection, input.model)
-      : await connections.resolve(input.connection);
-  } else {
-    const legacy = await db.setting(input.provider);
-    config = {
-      ...(legacy?.encrypted ? secrets.decrypt(legacy.encrypted) : {}),
-      tool: input.provider,
-      mode: "api",
-    };
-  }
+export async function freezeExecution({ connections, input }) {
+  if (!input.connection) throw problem(400, "请选择 Paseo 模型连接");
+  if (!connections) throw problem(503, "模型连接服务不可用");
+  const config = connections.selection
+    ? await connections.selection(input.connection, input.model)
+    : await connections.resolve(input.connection);
   if (config.tool !== input.provider)
     throw problem(409, "所选连接与会话的执行工具不一致，请新建对应工具的对话");
   if (!config.apiKey && config.mode !== "official")
@@ -28,7 +19,7 @@ export async function freezeExecution({ db, connections, secrets, input }) {
   const selection = {
     schema: 1,
     provider: input.provider,
-    connection: input.connection || null,
+    connection: input.connection,
     connectionName: config.name || input.provider,
     model: String(input.model ?? config.model ?? ""),
     baseUrl: endpoint(config.baseUrl),
@@ -45,7 +36,7 @@ export async function freezeExecution({ db, connections, secrets, input }) {
 
 /** Credentials remain revocable references. Never store API keys in tasks or send one to a changed endpoint. */
 export function resolveExecution(selection, config, provider) {
-  if (!selection) return config; // Explicit compatibility path for pre-V5 queued tasks.
+  if (!selection) throw problem(409, "缺少冻结的模型选择，请重新提交消息");
   if (
     Array.isArray(config.models) &&
     selection.model &&
@@ -88,64 +79,5 @@ export function resolveExecution(selection, config, provider) {
     model: selection.model,
     baseUrl: selection.baseUrl,
     mode: selection.authMode,
-  };
-}
-
-export function resumableSession(chat, execution) {
-  if (!execution) return chat?.upstream || null;
-  return chat?.upstream_execution === execution.sessionKey
-    ? chat.upstream
-    : null;
-}
-
-/** A new upstream session still receives bounded, persisted conversation context instead of silently forgetting it. */
-export async function continuationContext(db, task, chat, execution) {
-  const upstream = resumableSession(chat, execution);
-  if (upstream || !task.chat)
-    return { upstream, turns: [], strategy: upstream ? "resume" : "new" };
-  const rows = await db.all(
-    "SELECT id,input FROM tasks WHERE chat=$1 AND (created,id)<(SELECT created,id FROM tasks WHERE id=$2) ORDER BY created DESC,id DESC LIMIT 12",
-    [task.chat, task.id],
-  );
-  let remaining = 24000;
-  const turns = [];
-  for (const row of rows) {
-    if (remaining <= 0) break;
-    const events = await db.all(
-      "SELECT kind,data FROM events WHERE task=$1 AND (kind IN ('message','summary') OR (kind='agent-item' AND ((data->>'kind'='message' AND data ? 'text') OR (data->>'kind'='question' AND data->'question'->>'state'='answered')))) ORDER BY id DESC LIMIT 16",
-      [row.id],
-    );
-    const messages = new Map();
-    for (const event of events) {
-      const id = event.data?.id || event.kind;
-      if (event.data?.kind === "question" && !messages.has(id)) {
-        const q = event.data.question;
-        messages.set(id, "用户已回答：" + JSON.stringify({ questions: q.payload?.questions, answers: q.answers }));
-        continue;
-      }
-      if (!messages.has(id) && typeof event.data?.text === "string")
-        messages.set(id, event.data.text);
-    }
-    const prompt = String(row.input?.prompt || "").slice(
-      0,
-      Math.min(4000, remaining),
-    );
-    remaining -= prompt.length;
-    const answer = [...messages.values()]
-      .reverse()
-      .join("\n")
-      .slice(0, Math.min(4000, remaining));
-    remaining -= answer.length;
-    turns.unshift({
-      task: row.id,
-      prompt,
-      answer,
-      context: row.input?.context || null,
-    });
-  }
-  return {
-    upstream: null,
-    turns,
-    strategy: turns.length ? "new-with-context" : "new",
   };
 }

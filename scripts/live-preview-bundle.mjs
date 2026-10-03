@@ -6,6 +6,7 @@ import { build } from "vite";
 import react from "@vitejs/plugin-react";
 import { remotionProjectAssets } from "./remotion-project-assets.mjs";
 import { bindLiveProjectWorkers, previewWorkerRuntime } from "./live-preview-project-workers.mjs";
+import { treeHash } from "../server/project-files.mjs";
 import { assertLiveBundleBudget } from "./live-preview-budget.mjs";
 
 const digest = value => createHash("sha256").update(value).digest("hex");
@@ -98,7 +99,8 @@ export async function liveSourceInventory(projectDir, id, { dependencies = [], a
     } else if (audioFile(relative)) audio.push(entry);
     else visual.push(entry);
   }
-  return { sourceRevision: digest(JSON.stringify(source)), assets, sourceFiles, fileRevisions,
+  return { sourceRevision: assetsOnly ? null : await treeHash(projectDir, { includeExecutableMode: true }),
+    compiledRevision: digest(JSON.stringify(source)), assets, sourceFiles, fileRevisions,
     fingerprints: { visual: digest(JSON.stringify(visual)), audio: digest(JSON.stringify(audio)), metadata: digest(JSON.stringify(metadata)) } };
 }
 

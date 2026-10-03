@@ -1,7 +1,7 @@
 import { registerToolHelp } from "./tool-catalog.mjs";
 import { readUpload } from "./upload-state.mjs";
 import { projectTextOperations, readSource } from "./project-text.mjs";
-import { agentToolkitOperations } from "./agent-toolkit.mjs";
+import { platformToolkitOperations } from "./platform-toolkit.mjs";
 import fs from "node:fs";
 import { readProject } from "../scripts/project-metadata.mjs";
 import { authoringState } from "../scripts/authoring-state.mjs";
@@ -10,8 +10,7 @@ import { rendererIds } from "../src/engine/adapters.mjs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { agentInteractionOperations } from "./agent-interactions.mjs";
-import { agentEventPage } from "./agent-event-page.mjs";
+import { taskEventPage } from "./task-event-page.mjs";
 import { speechOperations } from "./speech.mjs";
 import { workOperations } from "./work-operations.mjs";
 import { livePreviewOperations } from "./live-preview-routes.mjs";
@@ -191,7 +190,7 @@ export function operations({
     taskGetRequestSchema,
     async (a) => ({
       task: await tasks.get(a.id),
-      ...(await agentEventPage(db, a.id, a.after)),
+      ...(await taskEventPage(db, a.id, a.after)),
     }),
   );
   add(
@@ -488,16 +487,13 @@ export function operations({
         return result;
       }),
   );
-  add("chats_list", "List persistent AI conversations", {}, () =>
-    db.all("SELECT * FROM chats ORDER BY created DESC LIMIT 100"),
-  );
   add(
     "settings_get",
-    "Read connection settings with secrets removed",
+    "Read compatible GitHub settings and tool upgrade history without secrets",
     {},
     async () => {
       const result = {};
-      for (const name of ["github", "codex", "claude"]) {
+      for (const name of ["github"]) {
         const s = await db.setting(name),
           v = s?.encrypted ? secrets.decrypt(s.encrypted) : {};
         result[name] = {
@@ -514,9 +510,9 @@ export function operations({
   );
   add(
     "settings_save",
-    "Save encrypted provider credentials; blank secret preserves prior value",
+    "Save compatible GitHub credentials; blank secret preserves the prior token",
     {
-      provider: z.enum(["github", "codex", "claude"]),
+      provider: z.literal("github"),
       secret: z.string().max(8000).optional(),
       baseUrl: z.string().max(1000).default(""),
       model: z.string().max(200).default(""),
@@ -535,11 +531,7 @@ export function operations({
         v = old?.encrypted ? secrets.decrypt(old.encrypted) : {};
       v.baseUrl = a.baseUrl;
       v.model = a.model;
-      // Legacy connections also pin credential identity for queued V5 turns.
-      // A random generation avoids reusing an identity after concurrent key rotations.
-      if (a.provider !== "github" && a.secret && a.secret !== v.apiKey)
-        v.auth_generation = randomUUID();
-      if (a.secret) v[a.provider === "github" ? "token" : "apiKey"] = a.secret;
+      if (a.secret) v.token = a.secret;
       await db.setting(a.provider, { encrypted: secrets.encrypt(v) });
       return { ok: true };
     },
@@ -586,7 +578,6 @@ export function operations({
     livePreview,
   });
   if (livePreview) livePreviewOperations({ add, works, livePreview });
-  const interactions = agentInteractionOperations({ add, db, data });
   workResultOperations({ add, db, data, works, repos, tasks });
   if (connections)
     workbenchOperations({
@@ -601,11 +592,10 @@ export function operations({
       github,
       retention,
     });
-  agentToolkitOperations({ add, registry, db, works, tasks });
+  platformToolkitOperations({ add, registry, db, works, tasks });
   registerToolHelp(add, registry);
   return {
     works,
-    interactions,
     livePreview,
     registry,
     call,

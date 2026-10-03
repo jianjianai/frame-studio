@@ -25,6 +25,7 @@ export function CompositionEditor({
   position,
   onSeek,
   onSaved,
+  onDirtyChange,
   disabled = false,
 }) {
   const [state, setState] = useState(null),
@@ -45,6 +46,11 @@ export function CompositionEditor({
     timeline = useRef(null),
     current = useRef(null);
   current.current = state;
+  const dirty = !!draft || jsonDraft !== null;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const load = async () => {
     setError("");
     try {

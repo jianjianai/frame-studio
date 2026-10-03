@@ -13,9 +13,6 @@ export function usePreviewSession({
   blocked,
   notify,
   mode = "immutable",
-  taskId,
-  source,
-  paseoAgent,
 }) {
   const [state, setState] = useState({
     preview: null,
@@ -31,9 +28,6 @@ export function usePreviewSession({
     latest,
     blocked,
     mode,
-    taskId,
-    source,
-    paseoAgent,
   };
   useEffect(() => {
     const owner = createPreviewSessionController({
@@ -75,15 +69,15 @@ export function usePreviewSession({
   }, []);
   useEffect(() => {
     controller.current?.update(inputs.current);
-  }, [workId, latest?.id, blocked, mode, taskId, source, paseoAgent]);
+  }, [workId, latest?.id, blocked, mode]);
   const { preview, stage, error, status } = state;
   const reference =
     preview?.live && /^[a-f0-9]{64}$/.test(preview.observedRevision || "")
       ? {
           liveSessionId: preview.sessionId,
           sourceRevision: preview.observedRevision,
-          ...(preview.source === "task" && preview.requestedTask
-            ? { draftTask: preview.requestedTask }
+          ...(preview.compiledRevision
+            ? { compiledRevision: preview.compiledRevision }
             : {}),
         }
       : preview?.sourceCommit

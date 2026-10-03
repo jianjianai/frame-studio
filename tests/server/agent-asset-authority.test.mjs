@@ -4,7 +4,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { agentTools } from "../../server/agent-tools.mjs";
+import { workTools } from "../../server/work-tools.mjs";
+import { Assets } from "../../server/assets.mjs";
 
 function materialFixture(
   t,
@@ -16,7 +17,7 @@ function materialFixture(
   t.after(() => fs.rmSync(data, { recursive: true, force: true }));
   const bytes = Buffer.from("material import fixture"),
     sha = createHash("sha256").update(bytes).digest("hex"),
-    task = { id: randomUUID(), repo: randomUUID(), project: "authority-film" },
+    task = { kind: "paseo", id: randomUUID(), repo: randomUUID(), project: "authority-film" },
     asset = {
       id: randomUUID(),
       name: filename,
@@ -26,7 +27,7 @@ function materialFixture(
       license: "Fixture source and license",
       deleted: false,
     },
-    project = path.join(data, "runs", task.id, "projects", task.project),
+    project = path.join(data, "works", task.id, "projects", task.project),
     metadata = unconnectedVisual
       ? 'const project = {renderer:"remotion",loadVisual:()=>import("./visual.json"),loadRemotion:()=>import("./react-root")}; export default project;\n'
       : "Existing metadata must remain unchanged during material import.\n",
@@ -45,33 +46,27 @@ function materialFixture(
   }
   if (mode === "document")
     fs.writeFileSync(path.join(project, "audio.json"), audio);
+  const assetService = new Assets({
+    lock: async (_key, fn) => fn(),
+    pool: { query: async (sql, params) => {
+      assert.match(sql, /INSERT INTO asset_refs/);
+      assert.deepEqual(params, [asset.id, task.repo, task.project, `public/imports/${sha.slice(0, 20)}${path.extname(filename)}`]);
+      return { rows: [], rowCount: 1 };
+    } },
+  }, data, {
+    writable: async (repo, id) => { assert.equal(repo, task.repo); assert.equal(id, task.project); },
+    project: async () => ({ dir: project }),
+  });
+  assetService.get = async id => { assert.equal(id, asset.id); calls.push("asset"); return asset; };
+  assetService.linkRepository = async (id, repo) => { assert.equal(id, asset.id); assert.equal(repo, task.repo); };
   let route;
-  agentTools({
-    app: {
-      post(url, handler) {
-        assert.equal(url, "/api/agent/action");
-        route = handler;
-      },
-    },
-    db: {
-      async one(sql, params) {
-        assert.match(sql, /asset_repos/);
-        assert.deepEqual(params, [asset.id, task.repo]);
-        return { asset: asset.id };
-      },
-      async lock(key, handler) {
-        assert.equal(key, "agent-material:" + task.id);
-        return handler();
-      },
-    },
+  workTools({
+    app: { post(url, handler) { assert.equal(url, "/api/agent/action"); route = handler; } },
+    db: { one: async (sql, params) => {
+      assert.match(sql, /asset_repos/); assert.deepEqual(params, [asset.id, task.repo]); return { asset: asset.id };
+    } },
     data,
-    assets: {
-      async get(id) {
-        assert.equal(id, asset.id);
-        calls.push("asset");
-        return asset;
-      },
-    },
+    assets: assetService,
     actions: {
       async call(name, args) {
         calls.push(name);
@@ -169,7 +164,7 @@ for (const mode of ["legacy", "document"])
         mode,
       });
       const result = await fixture.import();
-      assert.deepEqual(fixture.calls, ["asset"]);
+      assert.deepEqual(fixture.calls, ["asset", "asset"]);
       assert.match(result.nextAction, /node scripts\/work-tool\.mjs context/);
       assert.match(result.nextAction, /film audio authority-film get --json/);
       assert.match(result.nextAction, /authority\.audio\.mode is document/);
@@ -208,7 +203,7 @@ test("Agent final speech preserves synthesis results and uses authoritative mix 
     mode: "document",
   });
   const result = await fixture.import("speech");
-  assert.deepEqual(fixture.calls, ["speech_generate"]);
+  assert.deepEqual(fixture.calls, ["speech_generate", "asset"]);
   assert.equal(result.requestId, "fixture-request");
   assert.deepEqual(result.applied, { speed: 1 });
   assert.deepEqual(result.warnings, []);
@@ -227,7 +222,7 @@ for (const [mime, filename, kind] of [
     async (t) => {
       const fixture = materialFixture(t, { mime, filename });
       const result = await fixture.import();
-      assert.deepEqual(fixture.calls, ["asset"]);
+      assert.deepEqual(fixture.calls, ["asset", "asset"]);
       assert.match(
         result.nextAction,
         /For other renderers, inspect authority\.visual/,
@@ -276,7 +271,7 @@ test("Agent visual imports prioritize a custom React root despite an unconnected
     unconnectedVisual: true,
   });
   const result = await fixture.import();
-  assert.deepEqual(fixture.calls, ["asset"]);
+  assert.deepEqual(fixture.calls, ["asset", "asset"]);
   assert.match(
     result.nextAction,
     /first inspect context\.projectInfo\.renderer/,
@@ -424,7 +419,7 @@ for (const { label, mime, filename, expectations } of [
     async (t) => {
       const fixture = materialFixture(t, { mime, filename });
       const result = await fixture.import();
-      assert.deepEqual(fixture.calls, ["asset"]);
+      assert.deepEqual(fixture.calls, ["asset", "asset"]);
       assert(result.nextAction.includes(result.url));
       for (const expectation of expectations)
         assert.match(result.nextAction, expectation);

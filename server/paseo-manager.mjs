@@ -1,5 +1,4 @@
 import fs from "node:fs/promises";
-import { constants } from "node:fs";
 import path from "node:path";
 import net from "node:net";
 import { spawn } from "node:child_process";
@@ -10,12 +9,14 @@ import { executionRuntime } from "./execution-runtime.mjs";
 import { confinedAsync, exists } from "./project-files.mjs";
 import { hash, token, problem } from "./security.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
-import { publicAgentText } from "./agent-public-data.mjs";
+import { linkSharedRuntime, sharedRuntimeNames } from "../scripts/shared-runtime.mjs";
+import { publicText } from "./public-data.mjs";
 import { paseoCallbackUrl, paseoDaemonOptions, paseoUnavailable, inspectPaseoContainer } from "./paseo-runtime-options.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const activeStates = new Set(["running", "initializing"]);
 const startupConcurrency = 2;
+const repositoryBusy = error => error?.statusCode === 409 && error.message === "Repository is busy";
 const terminalBusy = terminal => !terminal.activity || terminal.activity.state === "working" ||
   terminal.activity.attentionReason === "needs_input" ||
   terminal.activity.state === "attention" && terminal.activity.attentionReason !== "finished";
@@ -48,31 +49,12 @@ export async function atomicPaseoJson(file, value) {
   await fs.rename(temporary, file);
 }
 
-// Git metadata is intentionally excluded from public project-file APIs.
-async function readOwnedGitMetadata(base, relative) {
-  const file = path.resolve(base, relative);
-  if (!file.startsWith(path.resolve(base) + path.sep) ||
-      await fs.realpath(path.dirname(file)) !== path.dirname(file))
-    throw problem(403, "Native Git registration path changed");
-  const handle = await fs.open(file, constants.O_RDONLY | (constants.O_NOFOLLOW || 0));
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.nlink !== 1 || stat.size > 4096)
-      throw problem(403, "Native Git registration is invalid");
-    const value = await handle.readFile("utf8");
-    const current = await fs.lstat(file);
-    if (current.isSymbolicLink() || current.dev !== stat.dev || current.ino !== stat.ino)
-      throw problem(403, "Native Git registration changed");
-    return value.trim();
-  } finally { await handle.close(); }
-}
-
 /** The controller owns processes; API callers only request their work's stable daemon. */
 export class PaseoManager {
   constructor({ db, data, store, workService, tasks, connections, localMode = process.env.FRAME_LOCAL_MODE === "1",
     clientFactory, runCommand = command, idleMs = 20 * 60 * 1000, startTimeoutMs = 90000 } = {}) {
     Object.assign(this, { db, data, store, workService, tasks, connections, localMode, clientFactory, runCommand, idleMs, startTimeoutMs });
-    this.clients = new Map(); this.connecting = new Map(); this.profileRevisions = new Map(); this.profileSyncs = new Map(); this.clientScope = "frame-" + (process.env.FRAME_ROLE || "local") + "-" + randomUUID(); this.starting = new Map(); this.runningStarts = 0; this.startWaiters = []; this.speechRequests = new Map(); this.children = new Map(); this.closed = false;
+    this.clients = new Map(); this.connecting = new Map(); this.profileRevisions = new Map(); this.profileSyncs = new Map(); this.clientScope = "frame-" + (process.env.FRAME_ROLE || "local") + "-" + randomUUID(); this.starting = new Map(); this.runningStarts = 0; this.startWaiters = []; this.speechRequests = new Map(); this.children = new Map(); this.ensuring = new Map(); this.observing = new Map(); this.runtimePreparations = new Map(); this.closed = false;
   }
   async controlPath(workId) {
     return confinedAsync(this.data, "paseo/" + uuid(workId) + "/control.json");
@@ -105,49 +87,16 @@ export class PaseoManager {
     return workId + "." + encoded + "." + signature;
   }
   async resolveAgentWorkspace(workId, cwd) {
-    const prepared = await this.workService.prepare(workId);
-    const nativeDraft = this.localMode ? prepared.draft.draftRoot : "/workspace";
-    const nativeHome = this.localMode ? path.join(prepared.draft.base, "home") : "/paseo-home";
+    const prepared = await this.workService.resolve(workId) || await this.workService.prepare(workId);
+    const workspace = prepared.workspace;
+    const nativeRoot = this.localMode ? workspace.workspaceRoot : "/workspace";
     const normalized = path.resolve(cwd);
-    let hostCwd, checkoutRoot, nativeCheckout;
-    if (normalized === nativeDraft || normalized.startsWith(nativeDraft + path.sep)) {
-      hostCwd = normalized === nativeDraft ? prepared.draft.draftRoot :
-        await confinedAsync(prepared.draft.draftRoot, path.relative(nativeDraft, normalized).replaceAll("\\", "/"));
-      checkoutRoot = prepared.draft.draftRoot; nativeCheckout = nativeDraft;
-    } else {
-      const nativeTrees = path.join(nativeHome, ".paseo/worktrees");
-      if (!normalized.startsWith(nativeTrees + path.sep)) throw problem(403, "Native workspace does not belong to this work");
-      const hostTrees = path.join(prepared.draft.base, "home/.paseo/worktrees");
-      hostCwd = await confinedAsync(hostTrees, path.relative(nativeTrees, normalized).replaceAll("\\", "/"));
-      let current = hostCwd;
-      while (current !== hostTrees && !await exists(path.join(current, ".git"))) current = path.dirname(current);
-      if (current === hostTrees) throw problem(403, "Native worktree registration is missing");
-      const registration = (await readOwnedGitMetadata(current, ".git")).match(/^gitdir: (.+)$/);
-      const nativeGitRoot = path.join(nativeDraft, ".git/worktrees");
-      if (!registration || path.dirname(path.resolve(registration[1])) !== path.resolve(nativeGitRoot))
-        throw problem(403, "Native worktree belongs to another repository");
-      const backpointer = await readOwnedGitMetadata(prepared.draft.draftRoot,
-        ".git/worktrees/" + path.basename(registration[1]) + "/gitdir");
-      nativeCheckout = path.join(nativeTrees, path.relative(hostTrees, current));
-      if (path.resolve(backpointer) !== path.resolve(nativeCheckout, ".git"))
-        throw problem(403, "Native worktree registration changed");
-      checkoutRoot = current;
-      const modules = path.join(checkoutRoot, "node_modules");
-      const shared = path.join(root, "node_modules");
-      let installed = await fs.lstat(modules).catch(error => {
-        if (error.code !== "ENOENT") throw error; return null;
-      });
-      if (!installed) {
-        try { await fs.symlink(shared, modules, process.platform === "win32" ? "junction" : "dir"); }
-        catch (error) { if (error.code !== "EEXIST") throw error; }
-        installed = await fs.lstat(modules);
-      }
-      if (!installed.isSymbolicLink() || await fs.realpath(modules) !== await fs.realpath(shared))
-        throw problem(409, "Native worktree dependencies are not the shared FRAME runtime");
-    }
-    const actual = await fs.realpath(hostCwd);
-    if (actual !== hostCwd) throw problem(403, "Native workspace path changed");
-    return { hostCwd, checkoutRoot, nativeCheckout, prepared };
+    if (normalized !== nativeRoot && !normalized.startsWith(nativeRoot + path.sep))
+      throw problem(403, "所有对话必须使用当前作品的唯一工作区；保留的历史工作树仅可恢复源码");
+    const hostCwd = normalized === nativeRoot ? workspace.workspaceRoot :
+      await confinedAsync(workspace.workspaceRoot, path.relative(nativeRoot, normalized).replaceAll("\\", "/"));
+    if (await fs.realpath(hostCwd) !== hostCwd) throw problem(403, "Native workspace path changed");
+    return { hostCwd, checkoutRoot: workspace.workspaceRoot, nativeCheckout: nativeRoot, prepared };
   }
   async agentContext(credential) {
     const match = /^([0-9a-f-]{36})\.([a-zA-Z0-9_-]{1,1024})\.([a-zA-Z0-9_-]{43})$/.exec(credential || "");
@@ -165,16 +114,25 @@ export class PaseoManager {
   }
   async ensure(work) {
     if (this.tasks.desktopClosing) throw problem(409, "工作台正在退出，请重新打开后再开始创作。");
-    const prepared = await this.workService.prepare(typeof work === "string" ? work : work.id);
-    await this.store.requestWork(prepared.work.id);
-    if (this.localMode) await this.start(prepared.work.id);
+    const workId = typeof work === "string" ? work : work.id;
+    if (this.ensuring.has(workId)) return this.ensuring.get(workId);
+    const operation = this.ensureOwned(workId);
+    this.ensuring.set(workId, operation);
+    try { return await operation; }
+    finally { if (this.ensuring.get(workId) === operation) this.ensuring.delete(workId); }
+  }
+  async ensureOwned(workId) {
+    const existing = await this.store.getWork(workId);
+    const prepared = await this.workService.resolve(workId, { binding: existing }) || await this.workService.prepare(workId);
+    await this.store.requestWork(workId);
+    if (this.localMode && existing?.state !== "ready") await this.start(workId);
     const deadline = Date.now() + this.startTimeoutMs;
     while (!this.closed && Date.now() < deadline) {
-      const binding = await this.store.getWork(prepared.work.id);
+      const binding = await this.store.getWork(workId);
       if (binding?.state === "ready" && binding.workspaceId && binding.serverId) {
-        await this.syncProfiles(prepared.work.id, binding);
+        await this.syncProfiles(workId, binding);
         return { generation: binding.daemonGeneration, workspaceId: binding.workspaceId, serverId: binding.serverId,
-          draftRoot: prepared.draft.draftRoot, projectRoot: prepared.draft.projectRoot,
+          workspaceRoot: prepared.workspace.workspaceRoot, projectRoot: prepared.workspace.projectRoot,
           runtimeRoot: root, runtimeFingerprint: binding.runtimeFingerprint, state: "ready" };
       }
       if (binding?.state === "failed") throw paseoUnavailable("failed", binding.error);
@@ -226,11 +184,25 @@ export class PaseoManager {
     if (binding.state !== "ready") return { state: binding.state, activeAgents: [], pendingPermissions: 0, activeTerminals: 0,
       incomplete: !!binding.container,
       ...(binding.error ? { error: binding.error } : {}) };
-    const client = await this.client(workId, binding);
-    const [agents, terminals, schedules] = await Promise.all([
-      client.fetchAgents({ page: { limit: 200 }, timeout: 10000 }),
-      client.listTerminals(undefined, undefined, { workspaceId: binding.workspaceId }), client.scheduleList(),
-    ]);
+    const identity = workId + ":" + binding.daemonGeneration;
+    if (this.observing.has(identity)) return this.observing.get(identity);
+    const operation = this.observeBinding(workId, binding);
+    this.observing.set(identity, operation);
+    try { return await operation; }
+    finally { if (this.observing.get(identity) === operation) this.observing.delete(identity); }
+  }
+  async observeBinding(workId, binding) {
+    let agents, terminals, schedules;
+    try {
+      const client = await this.client(workId, binding);
+      [agents, terminals, schedules] = await Promise.all([
+        client.fetchAgents({ page: { limit: 200 }, timeout: 10000 }),
+        client.listTerminals(undefined, undefined, { workspaceId: binding.workspaceId }), client.scheduleList(),
+      ]);
+    } catch (error) {
+      if (!error.leadershipLost && !repositoryBusy(error)) error.paseoNativeFailure = true;
+      throw error;
+    }
     const rows = agents.entries.map(entry => entry.agent || entry);
     const activeAgents = rows.filter(agent => activeStates.has(agent.status) || agent.pendingPermissions?.length || agent.status === "permission").map(agent => agent.id);
     const pendingPermissions = rows.reduce((sum, agent) => sum + (agent.pendingPermissions?.length || (agent.status === "permission" ? 1 : 0)), 0);
@@ -297,21 +269,41 @@ export class PaseoManager {
     if (!base || !path.isAbsolute(base)) throw Error("FRAME_HOST_DATA is required for Docker work environments");
     return path.join(base, relative);
   }
-  async prepareRuntime(draftRoot, work, runtime) {
-    // Once per runtime identity; source projects and native state are never reset.
-    const marker = path.join(draftRoot, ".frame-runtime.json");
-    const previous = await fs.readFile(marker, "utf8").then(JSON.parse).catch(error => {
-      if (error.code !== "ENOENT") throw error; return null;
+  async prepareRuntime(workspaceRoot, work, runtime) {
+    const previous = this.runtimePreparations.get(work.repo) || Promise.resolve();
+    const preparation = previous.catch(() => {}).then(async () => {
+      await this.assertStartupOwner();
+      return this.prepareRuntimeLocked(workspaceRoot, work, runtime);
     });
-    if (previous?.fingerprint === runtime.fingerprint) return;
-    for (const name of ["src", "scripts", "templates", "docs", "public", "package.json", "pnpm-lock.yaml",
-      "pnpm-workspace.yaml", ".npmrc", "tsconfig.json", "index.html", "vite.config.ts", "vitest.config.ts", "AGENTS.md"])
-      if (await exists(path.join(root, name))) await fs.cp(path.join(root, name), path.join(draftRoot, name), { recursive: true });
-    const modules = path.join(draftRoot, "node_modules");
-    if (!(await exists(modules))) await fs.symlink(path.join(root, "node_modules"), modules, process.platform === "win32" ? "junction" : "dir");
-    await fs.writeFile(path.join(draftRoot, ".gitignore"), ["node_modules", ".cache/", "projects/*/.cache/", "projects/*/exports/",
-      "projects/*/.history/", "/.frame-runtime.json"].join("\n") + "\n");
-    await atomicPaseoJson(marker, { fingerprint: runtime.fingerprint, project: work.project });
+    this.runtimePreparations.set(work.repo, preparation);
+    try { return await preparation; }
+    finally { if (this.runtimePreparations.get(work.repo) === preparation) this.runtimePreparations.delete(work.repo); }
+  }
+  async prepareRuntimeLocked(workspaceRoot, work, runtime) {
+    // Shared immutable runtime paths are linked once. There is no project copy or second Git index.
+    return this.db.lock("git-layout:" + work.repo, async () => {
+      const common = (await this.runCommand("git", ["rev-parse", "--git-common-dir"], { cwd: workspaceRoot, timeout: 10000 })).trim();
+      const gitCommon = path.resolve(workspaceRoot, common);
+      linkSharedRuntime(workspaceRoot, root, { mutableIndex: true });
+      const linked = [];
+      for (const name of sharedRuntimeNames)
+        if (await exists(path.join(root, name))) linked.push("/" + name);
+      const excludes = path.join(gitCommon, "info/exclude");
+      await fs.mkdir(path.dirname(excludes), { recursive: true });
+      const previous = await fs.readFile(excludes, "utf8").catch(error => { if (error.code !== "ENOENT") throw error; return ""; });
+      const existing = new Set(previous.split(/\r?\n/));
+      const missing = linked.filter(name => !existing.has(name));
+      if (missing.length) await fs.appendFile(excludes, (previous && !previous.endsWith("\n") ? "\n" : "") + missing.join("\n") + "\n");
+      const marker = await confinedAsync(this.data, "paseo/" + work.id + "/runtime.json");
+      await atomicPaseoJson(marker, { fingerprint: runtime.fingerprint, project: work.project, gitCommon });
+      return { gitCommon };
+    });
+  }
+  hostPath(file) {
+    const relative = path.relative(path.resolve(this.data), path.resolve(file));
+    if (!relative || path.isAbsolute(relative) || relative === ".." || relative.startsWith(".." + path.sep))
+      throw Error("Paseo host path is outside FRAME data");
+    return this.host(relative);
   }
   async sharedSpeechRoot() {
     this.speechModelsPromise ||= import("../integrations/paseo/speech-models.mjs").then(({ createSharedSpeechModels }) =>
@@ -370,24 +362,32 @@ export class PaseoManager {
     try {
       await this.assertStartupOwner();
       binding = await this.store.getWork(workId);
-      const { work, draft } = await this.workService.prepare(workId);
-      binding ||= await this.store.getWork(workId);
-      if (!binding) throw Error("Paseo work registration is missing");
-      if (binding.state === "ready") {
+      await this.workService.works.get(workId, { active: true });
+      if (binding?.state === "ready") {
         try {
           await this.resumeSharedSpeech(binding);
           await this.observe(workId, { refresh: true }); return binding;
         }
         catch (error) {
-          if (error.leadershipLost) throw error;
+          if (error.leadershipLost || !error.paseoNativeFailure) throw error;
           await this.assertStartupOwner();
           await this.dropClient(workId);
         }
       }
+      const { work, workspace } = await this.workService.prepare(workId);
+      binding ||= await this.store.getWork(workId);
+      if (!binding) throw Error("Paseo work registration is missing");
       phase = "runtime";
       const runtime = this.localMode ? { ...(await runtimeIdentity()), image: null, local: true }
         : await executionRuntime({ data: this.data, task: { kind: "paseo" }, command: this.runCommand });
+      // Layout preparation can briefly contend with another work in the same repo.
+      // It does not own a daemon generation until every launch prerequisite is ready.
+      const runtimeMounts = await this.prepareRuntime(workspace.workspaceRoot, work, runtime);
       await this.assertStartupOwner();
+      const refreshed = await this.store.getWork(workId);
+      if (refreshed?.daemonGeneration !== binding.daemonGeneration || !refreshed.requested || refreshed.state === "stopped")
+        throw Object.assign(Error("Paseo startup was superseded"), { paseoStartupSuperseded: true });
+      binding = refreshed;
       const nextGeneration = String(BigInt(binding.daemonGeneration || "0") + 1n);
       const admittedStart = await this.store.updateRuntime(workId, { state: "starting", daemonGeneration: nextGeneration, error: null,
         runtimeFingerprint: runtime.fingerprint, image: runtime.image }, { expectedDaemonGeneration: binding.daemonGeneration });
@@ -397,8 +397,7 @@ export class PaseoManager {
       control = await this.control(workId, { create: true });
       const home = await confinedAsync(this.data, "paseo/" + workId + "/home");
       await fs.mkdir(path.join(home, ".paseo"), { recursive: true, mode: 0o700 });
-      await fs.mkdir(path.join(draft.base, "references"), { recursive: true, mode: 0o700 });
-      await this.prepareRuntime(draft.draftRoot, work, runtime);
+      await fs.mkdir(path.join(workspace.base, "references"), { recursive: true, mode: 0o700 });
       const configPath = path.join(home, ".paseo/config.json");
       const old = await fs.readFile(configPath, "utf8").then(JSON.parse).catch(error => {
         if (error.code !== "ENOENT") throw error; return {};
@@ -423,10 +422,10 @@ export class PaseoManager {
           server.once("error", reject); server.listen(0, "127.0.0.1", () => { const port = server.address().port; server.close(() => resolve(port)); }); });
         endpoint = "http://127.0.0.1:" + port;
         const child = spawn(process.execPath, [path.join(root, "integrations/paseo/daemon-entry.mjs")], {
-          cwd: draft.draftRoot, windowsHide: true, env: { ...paseoProcessEnvironment(), HOME: home, PASEO_HOME: path.join(home, ".paseo"),
+          cwd: workspace.workspaceRoot, windowsHide: true, env: { ...paseoProcessEnvironment(), HOME: home, PASEO_HOME: path.join(home, ".paseo"),
             PASEO_LISTEN: "127.0.0.1:" + port, FRAME_PASEO_CONTROL: await this.controlPath(workId),
-            FRAME_PASEO_ROOT: nativeRoot(), FRAME_PASEO_WORK_ID: workId, FRAME_REFERENCE_ROOT: path.join(draft.base, "references"),
-            FRAME_PASEO_URL: callbackUrl,
+            FRAME_PASEO_ROOT: nativeRoot(), FRAME_PASEO_WORK_ID: workId, FRAME_REFERENCE_ROOT: path.join(workspace.base, "references"),
+            FRAME_PASEO_URL: callbackUrl, FRAME_SHARED_RUNTIME_ROOT: path.resolve(root), FRAME_SHARED_RUNTIME_FINGERPRINT: runtime.fingerprint,
             FRAME_PASEO_SHARED_MODELS: sharedModels, FRAME_PASEO_SHARED_MODELS_READONLY: "1",
           }, stdio: ["ignore", "ignore", "pipe"],
         });
@@ -454,30 +453,24 @@ export class PaseoManager {
           "--label", "frame.paseo.generation=" + daemonGeneration, "--label", "frame.paseo.runtime=" + runtime.fingerprint,
           "--memory", "4g", "--cpus", "2", "--pids-limit", "512", "--cap-drop", "ALL",
           "--security-opt", "no-new-privileges", "--user", "1000:1000", "--network", network,
-          "--mount", "type=bind,source=" + this.host("paseo/" + workId + "/draft") + ",target=/workspace",
+          "--mount", "type=bind,source=" + this.hostPath(workspace.workspaceRoot) + ",target=/workspace",
+          "--mount", "type=bind,source=" + this.hostPath(workspace.workspaceRoot) + ",target=" + workspace.workspaceRoot,
+          "--mount", "type=bind,source=" + this.hostPath(runtimeMounts.gitCommon) + ",target=" + runtimeMounts.gitCommon,
           "--mount", "type=bind,source=" + this.host("paseo/" + workId + "/home") + ",target=/paseo-home",
           "--mount", "type=bind,source=" + this.host("paseo/" + workId + "/control.json") + ",target=/paseo-control/control.json,readonly",
           "--mount", "type=bind,source=" + this.host("tools") + ",target=/tools,readonly",
           "--mount", "type=bind,source=" + this.host("paseo-models") + ",target=/paseo-models,readonly",
           "--mount", "type=bind,source=" + this.host("paseo/" + workId + "/references") + ",target=/frame-references,readonly",
-          "-e", "FRAME_REFERENCE_ROOT=/frame-references",
+          "-e", "FRAME_REFERENCE_ROOT=/frame-references", "-e", "FRAME_PROJECT=" + work.project,
           "-e", "HOME=/paseo-home", "-e", "PASEO_HOME=/paseo-home/.paseo",
           "-e", "PASEO_LISTEN=0.0.0.0:6767", "-e", "FRAME_PASEO_ROOT=/opt/paseo",
           "-e", "FRAME_PASEO_CONTROL=/paseo-control/control.json", "-e", "FRAME_PASEO_WORK_ID=" + workId,
           "-e", "FRAME_PASEO_URL=" + callbackUrl,
+          "-e", "FRAME_SHARED_RUNTIME_ROOT=/opt/frame", "-e", "FRAME_SHARED_RUNTIME_FINGERPRINT=" + runtime.fingerprint,
           "-e", "FRAME_PASEO_SHARED_MODELS=/paseo-models", "-e", "FRAME_PASEO_SHARED_MODELS_READONLY=1",
           "-w", "/workspace", runtime.image, "node", "/opt/frame/integrations/paseo/daemon-entry.mjs"];
-        // Existing platform read-only interfaces are visible; only this work's project tree is writable.
-        for (const name of ["src", "scripts", "docs", "templates", "public", "node_modules", "package.json", "pnpm-lock.yaml",
-          "pnpm-workspace.yaml", ".npmrc", "tsconfig.json", "vite.config.ts", "vitest.config.ts", "AGENTS.md"])
-          if (await exists(path.join(root, name))) {
-            const at = args.indexOf("-w");
-            args.splice(at, 0, "--mount", "type=bind,source=" + this.host("paseo/" + workId + "/draft/" + name) + ",target=/workspace/" + name + ",readonly");
-          }
-        // node_modules is an image-owned link; bind its actual image directory through the mounted draft is unnecessary.
-        const nm = args.findIndex(arg => arg.includes("draft/node_modules,target="));
-        if (nm >= 0) args.splice(nm - 1, 2);
-        await this.runCommand("chown", ["-R", "1000:1000", draft.base], { timeout: 120000 });
+        await this.runCommand("chown", ["-R", "1000:1000", home], { timeout: 120000 });
+        await this.runCommand("chown", ["1000:1000", workspace.base, path.join(workspace.base, "references"), await this.controlPath(workId)], { timeout: 10000 });
         await this.tasks.assertLeadership();
         await this.runCommand("docker", args, { timeout: 120000, max: 256 * 1024 });
       }
@@ -503,7 +496,7 @@ export class PaseoManager {
       const current = await this.store.getWork(workId);
       if (current?.daemonGeneration !== daemonGeneration || current.state !== "starting")
         throw Error("Paseo startup was superseded");
-      let workspace, serverId, lastError;
+      let registeredWorkspace, serverId, lastError;
       while (Date.now() < deadline && !this.closed) {
         await this.assertStartupOwner();
         const current = await this.store.getWork(workId);
@@ -511,11 +504,14 @@ export class PaseoManager {
           throw Error("Paseo startup was superseded");
         try {
           const client = await this.client(workId);
-          workspace = await client.openProject(this.localMode ? draft.draftRoot : "/workspace");
-          if (workspace.error || !workspace.workspace?.id)
-            throw Error(workspace.error || "Paseo work registration failed");
+          registeredWorkspace = await client.openProject(this.localMode ? workspace.workspaceRoot : "/workspace");
+          if (registeredWorkspace.error || !registeredWorkspace.workspace?.id)
+            throw Error(registeredWorkspace.error || "Paseo work registration failed");
           serverId = client.getLastServerInfoMessage()?.serverId;
           if (!serverId) throw Error("Paseo worker identity is not ready");
+          // Verify initial native RPCs inside the bounded registration retry loop.
+          // Readers can only observe ready after the complete runtime is usable.
+          await this.observeBinding(workId, { ...current, workspaceId: registeredWorkspace.workspace.id, serverId, endpoint, container });
           break;
         } catch (error) {
           if (error.leadershipLost) throw error;
@@ -525,13 +521,12 @@ export class PaseoManager {
       }
       if (!serverId) throw Error(lastError?.message || "Paseo worker did not become ready");
       await this.assertStartupOwner();
-      const admitted = await this.store.updateRuntime(workId, { state: "ready", workspaceId: workspace.workspace.id, serverId,
+      const admitted = await this.store.updateRuntime(workId, { state: "ready", workspaceId: registeredWorkspace.workspace.id, serverId,
         endpoint, container, error: null }, { expectedDaemonGeneration: daemonGeneration });
       if (!admitted) throw Error("Paseo startup was superseded");
-      await this.observe(workId, { refresh: true });
     } catch (error) {
       // A former leader cannot stop a daemon or overwrite the new controller's result.
-      if (error.leadershipLost || this.closed) throw error;
+      if (error.leadershipLost || error.paseoStartupSuperseded || this.closed || repositoryBusy(error) || binding?.state === "ready" && !daemonGeneration) throw error;
       await this.assertStartupOwner();
       const expected = daemonGeneration || binding?.daemonGeneration;
       const current = await this.store.getWork(workId);
@@ -544,11 +539,11 @@ export class PaseoManager {
             if (cleanupError.leadershipLost) throw cleanupError;
             await this.assertStartupOwner();
             console.error("Paseo startup cleanup:", workId, "generation=" + expected,
-              publicAgentText(cleanupError.message, { limit: 1000, env: { ...process.env, FRAME_PASEO_TOKEN: control?.capability } }));
+              publicText(cleanupError.message, { limit: 1000, env: { ...process.env, FRAME_PASEO_TOKEN: control?.capability } }));
           }
         }
         await this.assertStartupOwner();
-        const safe = publicAgentText(error.message || "Paseo startup failed", {
+        const safe = publicText(error.message || "Paseo startup failed", {
           limit: 900, env: { ...process.env, FRAME_PASEO_TOKEN: control?.capability },
         });
         const message = "Paseo startup (" + phase + "): " + safe;
@@ -590,9 +585,11 @@ export class PaseoManager {
     this.profileRevisions.delete(workId);
     await old?.client.close().catch(() => {});
   }
-  async stop(workId, { requested = false } = {}) {
+  async stop(workId, { requested = false, expectedDaemonGeneration, expectedTouched } = {}) {
     const binding = await this.store.getWork(workId);
     if (!binding) return;
+    if (expectedDaemonGeneration !== undefined && binding.daemonGeneration !== expectedDaemonGeneration ||
+        expectedTouched !== undefined && binding.touched !== expectedTouched) return false;
     if (!this.localMode) {
       await this.tasks.assertLeadership();
       if (binding.container) {
@@ -612,6 +609,7 @@ export class PaseoManager {
       daemonGeneration: String(BigInt(binding.daemonGeneration || "0") + 1n) },
       { expectedDaemonGeneration: binding.daemonGeneration });
     this.speechRequests.delete(workId);
+    return true;
   }
   async tick() {
     if (this.closed || this.ticking) return;
@@ -636,7 +634,15 @@ export class PaseoManager {
             ["paseo-stop:" + row.workId, JSON.stringify(stopRequested)]);
           if (matching) continue;
         }
-        const work = await this.workService.works.get(row.workId).catch(() => null);
+        let work;
+        try { work = await this.workService.works.get(row.workId); }
+        catch (error) {
+          if (error.statusCode !== 404) {
+            if (error.leadershipLost) throw error;
+            if (!repositoryBusy(error)) console.error("Paseo work lookup:", row.workId, publicText(error.message, { limit: 1000 }));
+            continue;
+          }
+        }
         if (!work || work.deleted) {
           this.speechRequests.delete(row.workId);
           if (row.container) await this.stop(row.workId);
@@ -651,27 +657,42 @@ export class PaseoManager {
         try {
           await this.resumeSharedSpeech(row);
           await this.syncProfiles(row.workId, row, await profiles);
-          const summary = await this.observe(row.workId, { refresh: true });
+          let summary;
+          try { summary = await this.observe(row.workId, { refresh: true }); }
+          catch (error) {
+            if (!error.paseoNativeFailure) throw error;
+            await this.assertStartupOwner();
+            const failed = await this.store.updateRuntime(row.workId, { state: "failed", error: "Paseo connection lost; source and native history retained" },
+              { expectedDaemonGeneration: row.daemonGeneration });
+            if (failed) await this.dropClient(row.workId);
+            continue;
+          }
           const idle = !summary.incomplete && !summary.activeAgents.length && !summary.pendingPermissions && !summary.activeTerminals;
-          const candidateBusy = (await this.store.listCandidates(row.workId, { states: ["validating", "publishing"] })).length > 0;
-          if (idle && !candidateBusy && row.runtimeFingerprint !== (await currentRuntime).fingerprint) {
-            await this.stop(row.workId, { requested: true });
-            this.scheduleStart(row.workId, profiles);
-          } else if (idle && !summary.scheduled && !candidateBusy &&
+          const validationBusy = (await this.store.listValidations(row.workId, { states: ["running"] })).length > 0;
+          if (idle && !validationBusy && row.runtimeFingerprint !== (await currentRuntime).fingerprint) {
+            if (await this.stop(row.workId, { requested: true, expectedDaemonGeneration: row.daemonGeneration, expectedTouched: row.touched }) !== false)
+              this.scheduleStart(row.workId, profiles);
+          } else if (idle && !summary.scheduled && !validationBusy &&
               Date.now() - new Date(row.touched).getTime() > (warm > 4 ? 60000 : this.idleMs)) {
-            await this.stop(row.workId); warm--;
-          } else await this.onReconcile?.(row.workId, summary);
+            if (await this.stop(row.workId, { expectedDaemonGeneration: row.daemonGeneration, expectedTouched: row.touched }) !== false) warm--;
+          } else {
+            try { await this.onReconcile?.(row.workId, summary); }
+            catch (error) {
+              if (error.leadershipLost) throw error;
+              // Source checks have their own reports; their failure cannot invalidate a healthy daemon.
+              if (!repositoryBusy(error)) console.error("Paseo workspace reconciliation:", row.workId,
+                publicText(error.message, { limit: 1000 }));
+            }
+          }
         } catch (error) {
           if (error.leadershipLost) throw error;
-          await this.assertStartupOwner();
-          await this.store.updateRuntime(row.workId, { state: "failed", error: "Paseo connection lost; draft and history retained" },
-            { expectedDaemonGeneration: row.daemonGeneration });
-          await this.dropClient(row.workId);
+          if (repositoryBusy(error)) continue;
+          console.error("Paseo controller reconciliation:", row.workId, publicText(error.message, { limit: 1000 }));
         }
       }
     } finally { this.ticking = false; }
   }
-  async active({ repo, project, profileId } = {}) {
+  async active({ repo, project, profileId, refresh = true } = {}) {
     const rows = await this.store.listWorks({ states: ["starting", "ready", "failed"] });
     const result = [];
     for (const row of rows) {
@@ -679,7 +700,9 @@ export class PaseoManager {
       let summary = row.nativeSummary || {};
       if (row.state === "failed" && row.container) summary = { ...summary, incomplete: true };
       if (row.state === "ready") {
-        try { summary = await this.observe(row.workId, { refresh: true }); }
+        // Realtime readers reuse the controller's recent observation; writing an
+        // identical summary here would trigger another subscription refresh.
+        try { summary = await this.observe(row.workId, { refresh }); }
         catch { summary = { ...summary, incomplete: true }; }
       }
       if (row.state !== "starting" && !summary.incomplete && !summary.activeAgents?.length &&
@@ -696,6 +719,25 @@ export class PaseoManager {
     }
     return result;
   }
+  async cancelValidation(workId, reportId) {
+    if (!/^[0-9a-f-]{36}$/i.test(reportId || "")) throw Error("Invalid validation identity");
+    if (this.localMode) return; // The local command owns an AbortSignal and its child process groups.
+    await this.tasks.assertLeadership();
+    const binding = await this.store.getWork(workId);
+    if (binding?.state !== "ready" || !binding.container) return;
+    const script = `const fs=require('node:fs'),path=require('node:path');
+      (async()=>{const [project,id]=process.argv.slice(1),file=path.join('/workspace/projects',project,'.cache/validation',id+'.json');
+      let value;try{value=JSON.parse(fs.readFileSync(file,'utf8'))}catch(e){if(e.code==='ENOENT')return;throw e}
+      if(value.reportId!==id||!Number.isSafeInteger(value.pid)||value.pid<2)throw Error('Validation process identity changed');
+      const current=()=>{let cmd;try{cmd=fs.readFileSync('/proc/'+value.pid+'/cmdline','utf8')}catch(e){if(e.code==='ENOENT')return false;throw e}
+        if(!cmd)return false;if(!cmd.includes('/opt/frame/server/paseo-validate.mjs')||!cmd.includes('"reportId":"'+id+'"'))throw Error('Validation process identity changed');return true;};
+      if(current()){process.kill(value.pid,'SIGTERM');const until=Date.now()+5000;
+        while(current()&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,50));
+        if(current())process.kill(value.pid,'SIGKILL');}
+      fs.rmSync(file,{force:true});})().catch(e=>{console.error(e.message);process.exitCode=1});`;
+    await this.runCommand("docker", ["exec", binding.container, "node", "-e", script, binding.project, reportId], { timeout: 15000, max: 65536 });
+  }
+
   async cancelWork(workId) {
     const binding = await this.store.getWork(workId);
     if (!binding || !["starting", "ready", "failed"].includes(binding.state)) return { stopped: 0 };
@@ -723,7 +765,7 @@ export class PaseoManager {
     const error = Object.assign(Error("Paseo controller is stopping"), { leadershipLost: true });
     for (const waiter of this.startWaiters.splice(0)) waiter.reject(error);
     this.speechClosing ||= this.speechModelsPromise?.then(models => models.close());
-    void this.speechClosing?.catch(error => console.error("Paseo shared speech stop:", publicAgentText(error.message, { limit: 1000 })));
+    void this.speechClosing?.catch(error => console.error("Paseo shared speech stop:", publicText(error.message, { limit: 1000 })));
   }
   async close() {
     this.beginClose();

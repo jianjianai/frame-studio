@@ -3,12 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { command } from "./process.mjs";
-import {
-  confined,
-  problem,
-  token,
-  hash,
-} from "./security.mjs";
+import { problem } from "./security.mjs";
 import { snapshotVersion, versionTree } from "./version-review.mjs";
 import { TaskPublication } from "./task-publication.mjs";
 import { TaskMonitor } from "./task-monitor.mjs";
@@ -19,20 +14,11 @@ import { runtimeLimits, diskCapacity } from "./runtime-status.mjs";
 import { executableTaskKindSchema } from "../src/contracts/platform.mjs";
 import { ControllerLease } from "./controller-lease.mjs";
 import { LocalProcesses } from "./local-processes.mjs";
-import { resolveExecution, continuationContext } from "./execution-selection.mjs";
-import { prepareReviewReference } from "./review-reference.mjs";
+import { freezeRenderWorkspace, assertFrozenWorkspace, cleanTaskWorkspace, assertTaskContainer, cleanOrphanTaskWorkspaces, taskDirectory } from "./task-workspace.mjs";
 import { taskSummaryColumns } from "./task-summary.mjs";
-// Pre-V5 chat tasks stored server-enriched input. Recover their original acknowledgement
-// before consulting mutable connection/catalog state; explicit changed input still conflicts.
+import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 function sameTaskRequest(existing, requested) {
-  if (existing.request_input != null)
-    return isDeepStrictEqual(existing.request_input, requested);
-  if (existing.kind !== "agent" || !existing.chat)
-    return isDeepStrictEqual(existing.input, requested);
-  const { assetNames: _names, ...context } = existing.input.context || {};
-  const saved = { ...existing.input, context };
-  if (requested.model === undefined) delete saved.model;
-  return isDeepStrictEqual(saved, { ...requested, context: requested.context || {} });
+  return isDeepStrictEqual(existing.request_input ?? existing.input, requested);
 }
 export class Tasks {
   constructor(db, data, repos, secrets, { runCommand = command } = {}) {
@@ -49,23 +35,23 @@ export class Tasks {
     this.secrets = secrets;
     this.localProcesses = process.env.FRAME_LOCAL_MODE === "1" ? new LocalProcesses(data) : null;
     this.publication = new TaskPublication({
-      db, data, repos, get: id => this.get(id), finishCancellation: id => this.finishCancellation(id),
+      db, data, repos, get: id => this.get(id), finishCancellation: id => this.finishCancellation(id), cleanup: task => this.cleanup(task),
     });
     this.monitor = new TaskMonitor({
       db, data, command: (...args) => this.command(...args), get: id => this.get(id), localProcesses: this.localProcesses,
       complete: (task, exit) => this.complete(task, exit), failTask: (task, message) => this.failTask(task, message),
+      cleanup: task => this.cleanup(task),
     });
     this.ticking = false;
     this.closed = false;
+    this.validations = new Map();
     fs.mkdirSync(path.join(data, "runs"), { recursive: true });
-    fs.mkdirSync(path.join(data, "sessions"), { recursive: true });
   }
   async create({
     repo,
     project,
     kind,
     input = {},
-    chat = null,
     requestKey = null,
     prepareInput = null,
   }) {
@@ -96,7 +82,6 @@ export class Tasks {
           if (
             existing.repo !== repo ||
             existing.project !== project ||
-            existing.chat !== chat ||
             existing.kind !== kind ||
             !sameTaskRequest(existing, requestedInput)
           )
@@ -104,8 +89,6 @@ export class Tasks {
           return existing;
         }
       }
-      // Recover an existing acknowledgement before validating mutable provider state.
-      // New admissions still run under the provider lock shared with deletion.
       if (repo) {
         // Recheck inside the work lock: a purge may have completed after the first lookup.
         await this.repos.project(repo, project, { exists: kind !== "new" });
@@ -113,12 +96,7 @@ export class Tasks {
         if (work?.deleted || await this.db.setting(`purged-work:${repo}:${project}`))
           throw problem(409, "作品已删除，请先恢复作品或创建新作品");
       }
-      if (input.connection) {
-        const provider = await this.db.one("SELECT state FROM connections WHERE id=$1", [input.connection]);
-        if (!provider || provider.state === "deleted")
-          throw problem(409, "提供商已删除，请重新选择后发送");
-      }
-      if (repo && kind !== "agent" && !input.version) await this.repos.writable(repo, project);
+      if (repo && kind === "new") await this.repos.writable(repo, project);
       if (
         kind === "tools-update" &&
         (await this.db.one(
@@ -129,22 +107,45 @@ export class Tasks {
       const prepared = prepareInput ? await prepareInput(JSON.parse(JSON.stringify(input))) : {};
       input = JSON.parse(JSON.stringify(prepared.input ?? input));
       if (this.desktopClosing) throw problem(409, "工作台正在退出，请重新打开后再开始任务。");
-      return this.db.one(
-        "INSERT INTO tasks(id,repo,project,kind,input,chat,request_key,request_input,execution,review_reference) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *",
-        [id, repo || null, project || null, kind, input, chat, requestKey, requestedInput, prepared.execution || null, prepared.reviewReference || null],
-      );
+      let snapshot = null;
+      try {
+        if (kind === "render") {
+          const runtime = await this.renderRuntime();
+          snapshot = await freezeRenderWorkspace({ data: this.data, repos: this.repos,
+            task: { id, repo, project, kind, input }, runtime });
+        }
+        return await this.db.one(
+          "INSERT INTO tasks(id,repo,project,kind,input,request_key,request_input,fingerprint,source_commit,base_commit,runtime,frozen) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$9,$10,$11) RETURNING *",
+          [id, repo || null, project || null, kind, input, requestKey, requestedInput,
+            snapshot?.fingerprint || null, snapshot?.sourceCommit || null, snapshot?.runtime || null, snapshot?.frozen || null],
+        );
+      } catch (error) {
+        // A lost INSERT response can still have admitted this task. Never remove
+        // its frozen input unless a fresh read confirms it was not persisted.
+        if (snapshot) {
+          const saved = await this.db.one("SELECT id FROM tasks WHERE id=$1", [id]);
+          if (!saved) await fs.promises.rm(taskDirectory(this.data, id), { recursive: true, force: true });
+        }
+        throw error;
+      }
     };
-    // Serialize final admission with deletion, not only the earlier chat/UI check.
-    const admit = input.connection
-      ? () =>
-          this.db.lock(`connection:${input.connection}`, insert)
-      : insert;
-    return this.db.lock(repo ? `${repo}:${project}` : "tools-update", admit);
+    return this.db.lock(repo ? `${repo}:${project}` : "tools-update", insert);
   }
   async get(id) {
     const row = await this.db.one("SELECT * FROM tasks WHERE id=$1", [id]);
     if (!row) throw problem(404, "Task not found");
     return row;
+  }
+  async renderRuntime() {
+    if (process.env.FRAME_ROLE !== "api" || this.localProcesses)
+      return executionRuntime({ command: this.command });
+    const controller = await this.db.setting("controller-runtime"), current = await runtimeIdentity();
+    const runtime = controller?.executorRuntime;
+    if (!controller?.leader || !controller.docker?.ok || Date.now() - Number(controller.checked) > 40000 ||
+        controller.runtimeFingerprint !== current.fingerprint || runtime?.fingerprint !== current.fingerprint ||
+        !/^sha256:[a-f0-9]{64}$/.test(runtime?.image || ""))
+      throw problem(503, "导出控制器尚未就绪或与当前工作台版本不一致，请稍后重新提交导出。");
+    return structuredClone(runtime);
   }
   async summary(id) {
     const row = await this.db.one(
@@ -161,9 +162,9 @@ export class Tasks {
       "UPDATE tasks SET state=CASE WHEN state='queued' THEN 'cancelled' ELSE 'cancelling' END,finished=CASE WHEN state='queued' THEN now() ELSE finished END,expires=CASE WHEN state='queued' THEN now()+interval '7 days' ELSE expires END WHERE id=$1 AND state IN ('queued','running') RETURNING *",
       [id],
     );
-    if (changed?.state === "cancelled")
-      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [id]);
+    if (changed?.state === "cancelled") await this.cleanup(changed);
     const current = changed || await this.get(id);
+    if (current.state === "cancelling") this.validations.get(id)?.abort.abort(Error("验证已取消"));
     if (["publishing", "publish_failed"].includes(current.state))
       throw problem(409, "执行已经结束，结果正在保存或等待恢复，请使用重试发布而不是取消");
     return current;
@@ -173,7 +174,7 @@ export class Tasks {
       "UPDATE tasks SET state='cancelled',finished=now(),expires=now()+interval '7 days' WHERE id=$1 AND state IN ('queued','running','cancelling')",
       [id],
     );
-    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [id]);
+    await this.cleanup(await this.get(id));
   }
   host(relative) {
     return path.posix.join(process.env.FRAME_HOST_DATA || this.data, relative);
@@ -184,7 +185,16 @@ export class Tasks {
   }
   async start(t) {
     await this.assertLeadership();
-    const lock = this.db.lock ? fn => this.db.lock(t.repo ? `${t.repo}:${t.project}` : "tools-update", fn) : fn => fn();
+    if (t.kind === "validate") {
+      const claimed = await this.db.one(
+        "UPDATE tasks SET state='running',started=now(),container=NULL,controller_id=$2,progress=$3 WHERE id=$1 AND state='queued' RETURNING *",
+        [t.id, this.controllerId, { stage: "检查当前作品工作区" }],
+      );
+      if (claimed) this.launchValidation(claimed);
+      return;
+    }
+    // Frozen rendering needs no lock on the live work while preparing/encoding.
+    const lock = t.frozen || !this.db.lock ? fn => fn() : fn => this.db.lock(t.repo ? `${t.repo}:${t.project}` : "tools-update", fn);
     return lock(async () => {
       const container = "frame-task-" + t.id;
       const claimed = await this.db.one(
@@ -193,8 +203,7 @@ export class Tasks {
       );
       if (!claimed) return;
       try {
-        const launch = () => this.prepareAndLaunch(t, container);
-        return t.input.connection && this.db.lock ? await this.db.lock(`connection:${t.input.connection}`, launch) : await launch();
+        return await this.prepareAndLaunch(t, container);
       }
       catch (error) {
         const current = await this.get(t.id);
@@ -212,9 +221,11 @@ export class Tasks {
     await this.assertLeadership();
     const run = path.join(this.data, "runs", t.id);
     fs.mkdirSync(run, { recursive: true });
-    let fingerprint = null;
-    let sourceCommit = null;
-    if (t.repo && t.kind === "build" && t.input.version) {
+    let fingerprint = t.fingerprint || null;
+    let sourceCommit = t.source_commit || null;
+    if (t.kind === "render") {
+      await assertFrozenWorkspace(this.data, t);
+    } else if (t.repo && t.kind === "build" && t.input.version) {
       const destination = path.join(run, "projects", t.project);
       await snapshotVersion(this.repos, t, t.input.version, destination);
       fingerprint = await treeHash(destination);
@@ -236,104 +247,26 @@ export class Tasks {
         sourceCommit = await this.repos.checkpoint(
           t.repo,
           t.project,
-          t.kind === "agent" ? "AI 修改前自动保存" : "生成预览或导出前保存",
+          "生成只读预览前保存",
         );
     }
-    const reviewReference = await prepareReviewReference({ repos: this.repos, task: t, run, sourceCommit, fingerprint, data: this.data });
     await seedPreviewAudio({ db: this.db, data: this.data, task: t, run });
-    let config = {};
-    if (t.kind === "agent") {
-      if (t.input.connection)
-        config = t.execution ? await this.connections.resolve(t.input.connection) : await this.connections.selection(t.input.connection, t.input.model);
-      else {
-        const stored = await this.db.setting(t.input.provider);
-        config = stored?.encrypted
-          ? this.secrets.decrypt(stored.encrypted)
-          : {};
-      }
-      if (!config.apiKey && config.mode !== "official")
-        throw problem(
-          400,
-          "Configure this AI provider API key in Settings first",
-        );
-      config = resolveExecution(t.execution, config, t.input.provider);
-    }
-    const chat = t.chat
-      ? await this.db.one("SELECT * FROM chats WHERE id=$1", [t.chat])
-      : null;
-    const runtime = await executionRuntime({ data: this.data, task: t, command: this.command });
-    const continuation = t.kind === "agent" ? await continuationContext(this.db, t, chat, t.execution) : null;
-    if (continuation) runtime.continuation = { strategy: continuation.strategy, turns: continuation.turns.length };
-    const payload = {
-      runtime,
-      sourceCommit,
-      id: t.id,
-      project: t.project,
-      kind: t.kind,
-      input: t.input,
-      execution: t.execution || null,
-      reviewReference,
-      upstream: continuation?.upstream || null,
-      previousTurns: continuation?.turns || [],
-      model: config.model || null,
-      baseUrl: config.baseUrl || null,
-      authMode: config.mode || "api",
-    };
+    const runtime = t.frozen ? t.runtime : await executionRuntime({ command: this.command });
+    const payload = { runtime, sourceCommit, id: t.id, project: t.project, kind: t.kind, input: t.input,
+      ...(t.frozen ? { frozen: t.frozen } : {}) };
     fs.writeFileSync(path.join(run, "task.json"), JSON.stringify(payload));
+    await fs.promises.mkdir(path.join(run, ".cache", "home"), { recursive: true });
     if (!this.localProcesses) await this.command("chown", ["-R", "1000:1000", run]);
-    const session = t.chat || t.id,
-      sessionDir = path.join(this.data, "sessions", session);
-    fs.mkdirSync(path.join(sessionDir, ".codex"), { recursive: true });
-    if (!this.localProcesses) await this.command("chown", ["-R", "1000:1000", sessionDir]);
     const env = { FRAME_RUNTIME_IMAGE: runtime.image };
     const flags = ["-e", "FRAME_RUNTIME_IMAGE"];
-    if (!this.localProcesses && t.kind === "agent" && config.mode === "official") {
-      const auth = path.join(this.data, "auth", config.id);
-      if (!fs.existsSync(auth))
-        throw problem(409, "官方登录凭据不存在，请重新登录");
-      flags.push(
-        "-v",
-        this.host("auth/" + config.id) + ":/auth",
-        "-e",
-        t.input.provider === "codex"
-          ? "CODEX_HOME=/auth/codex"
-          : "CLAUDE_CONFIG_DIR=/auth/claude",
-      );
-    }
-    if (t.kind === "agent") {
-      const value = token();
-      await this.db.pool.query(
-        "INSERT INTO agent_tokens(hash,task) VALUES($1,$2)",
-        [hash(value), t.id],
-      );
-      env.FRAME_AGENT_TOKEN = value;
-      env.FRAME_AGENT_URL =
-        process.env.FRAME_AGENT_URL || process.env.FRAME_PUBLIC_URL;
-      flags.push("-e", "FRAME_AGENT_TOKEN", "-e", "FRAME_AGENT_URL");
-    }
-    if (config.apiKey) {
-      const name =
-        t.input.provider === "codex" ? "CODEX_API_KEY" : "ANTHROPIC_API_KEY";
-      env[name] = config.apiKey;
-      flags.push("-e", name);
-      if (config.baseUrl) {
-        const key =
-          t.input.provider === "codex"
-            ? "OPENAI_BASE_URL"
-            : "ANTHROPIC_BASE_URL";
-        env[key] = config.baseUrl;
-        flags.push("-e", key);
-      }
-    }
     const image = runtime.image;
     await this.assertLeadership();
     const prepared = await this.db.one(
-      "UPDATE tasks SET fingerprint=$2,source_commit=$3,base_commit=$3,runtime=$4,review_reference=$6,metrics=metrics||$7::jsonb WHERE id=$1 AND state='running' AND controller_id=$5 RETURNING id",
-      [t.id, fingerprint, sourceCommit, runtime, this.controllerId, reviewReference, { prepareMs: Math.round(performance.now() - preparationStarted) }],
+      "UPDATE tasks SET fingerprint=$2,source_commit=$3,base_commit=$3,runtime=$4,metrics=metrics||$6::jsonb WHERE id=$1 AND state='running' AND controller_id=$5 RETURNING id",
+      [t.id, fingerprint, sourceCommit, runtime, this.controllerId, { prepareMs: Math.round(performance.now() - preparationStarted) }],
     );
     if (!prepared) {
       if ((await this.get(t.id)).state === "cancelling") await this.finishCancellation(t.id);
-      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
       return;
     }
     if (this.localProcesses) {
@@ -371,13 +304,9 @@ export class Tasks {
       "--network",
       "bridge",
       "-e",
-      "HOME=/sessions",
-      "-e",
-      "CODEX_HOME=/sessions/.codex",
+      "HOME=/workspace/.cache/home",
       "-v",
       this.host("runs/" + t.id) + ":/workspace",
-      "-v",
-      this.host("sessions/" + session) + ":/sessions",
       "-v",
       this.host("tools") + ":/tools" + (t.kind === "tools-update" ? "" : ":ro"),
       ...flags,
@@ -413,17 +342,106 @@ export class Tasks {
   async publish(task) { await this.assertLeadership(); return this.publication.publish(task); }
   monitorWarning(task, phase, error) { return this.monitor.monitorWarning(task, phase, error); }
   observeTask(task) { return this.monitor.observeTask(task); }
-  collectEvents(task) { return this.monitor.collectEvents(task); }
+  launchValidation(task) {
+    if (this.validations.has(task.id)) return this.validations.get(task.id).promise;
+    const abort = new AbortController();
+    const promise = Promise.resolve().then(async () => {
+      if (task.state === "cancelling" && !task.result?.validationReportId) {
+        await this.finishCancellation(task.id);
+        return;
+      }
+      if (!this.validateWorkspace) throw Error("当前作品工作区验证服务尚未就绪。");
+      const onReport = async report => {
+        await this.assertLeadership();
+        await this.db.pool.query(
+          "UPDATE tasks SET result=$2,fingerprint=$3,progress=$4 WHERE id=$1 AND state IN ('running','cancelling')",
+          [task.id, { validationReportId: report.id, sourceRevision: report.revision }, report.revision,
+            { stage: report.state === "queued" ? "等待当前工作区验证" : "验证当前作品工作区" }],
+        );
+        if ((await this.get(task.id)).state === "cancelling") abort.abort(Error("验证已取消"));
+      };
+      const report = await this.validateWorkspace(task, { wait: true, signal: abort.signal,
+        reportId: task.result?.validationReportId, onReport });
+      if (this.closed) return;
+      await this.assertLeadership();
+      const current = await this.get(task.id);
+      const result = { ...report.result, validationReportId: report.id, sourceRevision: report.revision,
+        runtimeFingerprint: report.runtimeFingerprint, validationState: report.state, artifacts: [] };
+      if (current.state === "cancelling" || report.state === "cancelled") {
+        await this.db.pool.query("UPDATE tasks SET result=$2,fingerprint=$3 WHERE id=$1", [task.id, result, report.revision]);
+        await this.finishCancellation(task.id);
+        return;
+      }
+      if (report.state !== "passed") {
+        await this.db.pool.query("UPDATE tasks SET result=$2,fingerprint=$3 WHERE id=$1", [task.id, result, report.revision]);
+        await this.failTask(current, report.error || (report.state === "stale" ? "验证期间作品已更新，此报告已过时，请检查当前版本。" : "作品验证失败，请查看验证报告。"));
+        return;
+      }
+      const finished = await this.db.one(
+        "UPDATE tasks SET state='succeeded',result=$2,fingerprint=$3,error=NULL,finished=now(),expires=now()+interval '7 days',workspace_cleaned=now() WHERE id=$1 AND state='running' RETURNING id",
+        [task.id, result, report.revision],
+      );
+      if (finished) await this.db.event(task.id, "result", result);
+      else if ((await this.get(task.id)).state === "cancelling") await this.finishCancellation(task.id);
+    }).catch(async error => {
+      if (this.closed || error.leadershipLost) return;
+      const current = await this.get(task.id);
+      if (current.state === "cancelling" || abort.signal.aborted) await this.finishCancellation(task.id);
+      else await this.failTask(current, error.message);
+    }).finally(() => this.validations.delete(task.id));
+    this.validations.set(task.id, { abort, promise });
+    // Keep scheduler ticks responsive while the existing work runtime validates.
+    void promise.catch(error => console.error("Workspace task validation:", error.message));
+    return promise;
+  }
   async failTask(t, message) {
     const failed = await this.db.one(
       "UPDATE tasks SET state='failed',error=$2,monitor=NULL,finished=now(),expires=now()+interval '14 days' WHERE id=$1 AND state IN ('queued','running') RETURNING id",
       [t.id, message],
     );
     if (failed) {
-      await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
       await this.db.event(t.id, "error", { message });
+      await this.cleanup(await this.get(t.id));
     } else if ((await this.get(t.id)).state === "cancelling") {
       await this.finishCancellation(t.id);
+    }
+  }
+  async cleanup(task) {
+    if (!["succeeded", "failed", "cancelled", "publishing", "publish_failed"].includes(task.state) || task.workspace_cleaned ||
+        (task.kind === "new" && ["publishing", "publish_failed"].includes(task.state))) return false;
+    try {
+      if (task.container) {
+        if (this.localProcesses) {
+          // Missing exit records may mean a live orphan. Check the actual process,
+          // and keep input until its identity is no longer running.
+          try { if (this.localProcesses.inspect(task.id, task.container).Running) throw Error("执行进程仍在运行，待确认退出后清理。"); }
+          catch (error) {
+            if (!/not running and has no exit record/.test(error.message)) throw error;
+          }
+        } else {
+          let inspected;
+          try { inspected = JSON.parse(await this.command("docker", ["inspect", "--format", "{{json .}}", task.container], { timeout: 10000, max: 256 * 1024 })); }
+          catch (error) {
+            if (!/No such (?:object|container)/i.test(error.message)) throw error;
+            await this.command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 10000 });
+          }
+          if (inspected) {
+            const state = assertTaskContainer(inspected, task, this.host("runs/" + task.id));
+            if (state.Running) throw Error("执行容器仍在运行，待确认退出后清理。");
+            await this.command("docker", ["rm", task.container], { timeout: 10000 });
+          }
+        }
+      }
+      await cleanTaskWorkspace(this.data, task);
+      await this.db.pool.query("UPDATE tasks SET workspace_cleaned=now(),cleanup_error=NULL WHERE id=$1", [task.id]);
+      return true;
+    } catch (error) {
+      const message = String(error.message).slice(0, 2000);
+      if (message !== task.cleanup_error) {
+        await this.db.pool.query("UPDATE tasks SET cleanup_error=$2 WHERE id=$1", [task.id, message]);
+        await this.db.event(task.id, "cleanup-warning", { message });
+      }
+      return false;
     }
   }
   async tick() {
@@ -435,13 +453,22 @@ export class Tasks {
       for (const t of running) {
         await this.assertLeadership();
         try {
-          if (t.state === "publishing") {
+          if (t.kind === "validate" && !t.container) {
+            if (t.state === "cancelling") this.validations.get(t.id)?.abort.abort(Error("验证已取消"));
+            this.launchValidation(t);
+          }
+          else if (t.state === "publishing") {
             await this.complete(t, 0);
-            if (!this.localProcesses && (await this.get(t.id)).state === "succeeded" && t.container)
-              await this.command("docker", ["rm", t.container], { timeout: 10000 }).catch(() => {});
+            await this.cleanup(await this.get(t.id));
           } else await this.observeTask(t);
         }
         catch (e) { await this.monitorWarning(t, "controller", e); }
+      }
+      for (const task of await this.db.all("SELECT * FROM tasks WHERE workspace_cleaned IS NULL AND kind IN ('new','validate','frame','storyboard','render','build','tools-update') AND state IN ('succeeded','failed','cancelled','publishing','publish_failed') ORDER BY finished LIMIT 30"))
+        await this.cleanup(task);
+      if (!this.lastOrphanSweep || Date.now() - this.lastOrphanSweep > 60000) {
+        await cleanOrphanTaskWorkspaces({ data: this.data, db: this.db });
+        this.lastOrphanSweep = Date.now();
       }
       const count = await this.db.one("SELECT count(*)::int AS n FROM tasks WHERE state IN ('running','cancelling')");
       if (count.n < this.limits.concurrency) {
@@ -453,7 +480,7 @@ export class Tasks {
         }
         if (this.queueBlocked) return;
         const t = await this.db.one(
-          `SELECT t.* FROM tasks t WHERE t.state='queued' AND NOT EXISTS(SELECT 1 FROM tasks r WHERE (r.repo=t.repo AND r.project=t.project AND r.state IN ('running','cancelling','publishing','publish_failed')) OR (r.state IN ('running','cancelling') AND t.input->>'connection' IS NOT NULL AND r.input->>'connection'=t.input->>'connection'))
+          `SELECT t.* FROM tasks t WHERE t.state='queued' AND NOT EXISTS(SELECT 1 FROM tasks r WHERE (r.repo=t.repo AND r.project=t.project AND r.frozen IS NULL AND t.frozen IS NULL AND r.state IN ('running','cancelling','publishing','publish_failed')))
           AND NOT EXISTS(SELECT 1 FROM work_undos u JOIN works w ON w.id=u.work WHERE w.repo=t.repo AND w.project=t.project AND u.state IN ('applying','failed'))
           ORDER BY t.created LIMIT 1`,
         );
@@ -467,8 +494,7 @@ export class Tasks {
             if (["running", "cancelling"].includes(current.state) && current.container)
               await this.monitorWarning(current, "startup", e);
             else if (current.state === "queued") await this.failTask(current, e.message);
-            else if (current.state === "cancelled")
-              await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
+            else if (current.state === "cancelled") await this.cleanup(current);
           }
         }
       }
@@ -506,6 +532,8 @@ export class Tasks {
     this.closed = true;
     clearInterval(this.timer);
     await this.loopPromise?.catch(() => {});
+    for (const entry of this.validations.values()) entry.abort.abort(Error("工作台正在退出"));
+    await Promise.allSettled([...this.validations.values()].map(entry => entry.promise));
     await this.localProcesses?.close();
     this.lease?.close();
   }

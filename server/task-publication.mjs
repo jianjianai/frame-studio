@@ -1,15 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
 import { confined, problem } from "./security.mjs";
 import { treeHash } from "./project-files.mjs";
 import { applyProject } from "./apply-project.mjs";
-import { PREVIEW_VERSION } from "./preview-version.mjs";
+import { fileSha256 } from "./project-files.mjs";
 
 /** Durable publication is independent from worker/container lifetime. */
 export class TaskPublication {
-  constructor({ db, data, repos, get, finishCancellation }) {
-    Object.assign(this, { db, data, repos, get, finishCancellation });
+  constructor({ db, data, repos, get, finishCancellation, cleanup }) {
+    Object.assign(this, { db, data, repos, get, finishCancellation, cleanup });
   }
   async retryPublication(id) {
     const task = await this.db.one(
@@ -26,10 +25,9 @@ export class TaskPublication {
         t.id,
         "执行结果已保留，保存或发布尚未完成：" +
           String(error.message).slice(0, 2000),
-        { stage: "等待恢复结果发布（不会重新执行 AI）" },
+        { stage: "等待恢复结果保存（不会重新执行任务）" },
       ],
     );
-    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
   }
   async complete(t, exit) {
     t = await this.get(t.id);
@@ -62,13 +60,12 @@ export class TaskPublication {
       } catch (error) {
         throw Object.assign(error, { executionFailed: true });
       }
-      if (t.kind === "agent") result.previewTask = randomUUID();
       const claimed = await this.db.one(
         "UPDATE tasks SET state='publishing',result=$2,expires=NULL,error=NULL,monitor=NULL,progress=$3,metrics=metrics||$4::jsonb WHERE id=$1 AND state='running' RETURNING *",
         [
           t.id,
           result,
-          { stage: "正在保存版本并发布预览" },
+          { stage: "正在保存可下载结果" },
           { publicationStartedAt: new Date().toISOString() },
         ],
       );
@@ -86,17 +83,18 @@ export class TaskPublication {
     } catch (error) {
       await this.publicationError(t, error);
     }
+    await this.cleanup?.(await this.get(t.id));
   }
   async publish(t) {
     const run = path.join(this.data, "runs", t.id);
     let result = { ...t.result };
-    if (t.repo && ["agent", "new", "paseo"].includes(t.kind))
+    if (t.repo && t.kind === "new")
       await this.db.lock(`${t.repo}:${t.project}`, async () => {
         const { dir } = await this.repos.project(t.repo, t.project, {
           exists: false,
         });
         const source = confined(run, "projects/" + t.project);
-        const hashSource = t.kind === "paseo" ? file => treeHash(file, { includeExecutableMode: true }) : treeHash;
+        const hashSource = treeHash;
         await this.beforeApply?.(t);
         // After a process restart, an already applied identical result is safe to finish publishing.
         await this.repos.revisions?.invalidate(t.repo, t.project);
@@ -112,98 +110,42 @@ export class TaskPublication {
         result.commit = await this.repos.checkpoint(
           t.repo,
           t.project,
-          "AI · " + (t.input.prompt || "创建作品").slice(0, 120),
+          "创建作品",
         );
       });
-    if (t.chat && result.upstream)
-      await this.db.pool.query(
-        "UPDATE chats SET upstream=$2,upstream_execution=$3 WHERE id=$1",
-        [t.chat, result.upstream, t.execution?.sessionKey || null],
-      );
     const artifacts = [];
     const base = path.join(run, "projects", t.project || "", "exports");
-    const walk = (dir) => {
+    const walk = async (dir) => {
       if (!fs.existsSync(dir)) return;
       for (const item of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (item.isSymbolicLink()) continue;
+        if (item.isSymbolicLink() || item.name.startsWith(".") || /\.tmp(?:\.|$)/i.test(item.name)) continue;
         const file = path.join(dir, item.name);
-        if (item.isDirectory()) walk(file);
+        if (item.isDirectory()) await walk(file);
         else if (/\.(png|mp4|webm|wav|html|srt|json)$/.test(item.name))
           artifacts.push({
             name: path.relative(base, file).replaceAll("\\", "/"),
             path: path.relative(run, file).replaceAll("\\", "/"),
             bytes: fs.statSync(file).size,
+            ...(t.kind === "render" ? { sha256: await fileSha256(file) } : {}),
           });
       }
     };
-    walk(base);
+    await walk(base);
+    if (t.kind === "render" && !artifacts.some(file => /\.mp4$/i.test(file.path) && file.bytes > 0))
+      throw Error("导出执行结束但未找到可下载的成片，结果保存不能标记为完成。");
     result = {
       ...result,
       artifacts,
+      sourceRevision: t.frozen?.sourceRevision || t.fingerprint || null,
+      ...(t.frozen ? { frozenAt: t.frozen.acceptedAt, exportParameters: t.frozen.input } : {}),
       ...(t.kind === "build" && t.input.version
         ? { readonlyVersion: t.input.version }
         : {}),
     };
-    if (t.repo && ["agent", "paseo"].includes(t.kind)) {
-      await this.db.pool.query(
-        "UPDATE works SET updated=now() WHERE repo=$1 AND project=$2",
-        [t.repo, t.project],
-      );
-      // Source publication is observed by V8 live sessions. Retain compatibility
-      // with already completed pre-V8 turns that carry immutable preview artifacts.
-      if (result.previewArtifacts) {
-        const preview = result.previewTask,
-          previewRun = path.join(this.data, "runs", preview);
-        fs.mkdirSync(previewRun, { recursive: true });
-        const directories = new Set(
-          result.previewArtifacts.map((a) => path.posix.dirname(a.path)),
-        );
-        for (const relative of directories) {
-          if (!relative.startsWith(`projects/${t.project}/exports/`))
-            throw new Error("Invalid preview output");
-          await fs.promises.cp(
-            confined(run, relative),
-            confined(previewRun, relative),
-            {
-              recursive: true,
-              filter: (file) => !fs.lstatSync(file).isSymbolicLink(),
-            },
-          );
-        }
-        const { dir } = await this.repos.project(t.repo, t.project);
-        await this.db.pool.query(
-          "INSERT INTO tasks(id,repo,project,kind,state,input,result,fingerprint,source_commit,created,started,finished,expires) VALUES($1,$2,$3,'build','succeeded','{}',$4,$5,$6,now(),now(),now(),now()+interval '7 days') ON CONFLICT(id) DO NOTHING",
-          [
-            preview,
-            t.repo,
-            t.project,
-            {
-              previewVersion: result.previewVersion ?? PREVIEW_VERSION,
-              runtime: result.runtime || null,
-              runtimeFingerprint: result.runtimeFingerprint || null,
-              artifacts: result.previewArtifacts,
-            },
-            await treeHash(dir),
-            result.commit || t.source_commit,
-          ],
-        );
-      } else if (t.kind === "agent" && result.previewMode !== "live") {
-        // Compatibility for completed pre-V8 turns. V8 editing sessions already
-        // observe source publication and must never enqueue a full audio build.
-        await this.db.pool.query(
-          "INSERT INTO tasks(id,repo,project,kind,input) VALUES($1,$2,$3,'build','{}') ON CONFLICT(id) DO NOTHING",
-          [result.previewTask, t.repo, t.project],
-        );
-      }
+    if (t.repo && t.kind === "new") {
       await this.repos.onChange?.(t.repo, t.project);
+      if (!this.repos.onChange) await this.repos.revisions?.refresh(t.repo, t.project);
     }
-    if (
-      t.repo &&
-      !t.input.version &&
-      (["new", "build"].includes(t.kind) ||
-        (["agent", "paseo"].includes(t.kind) && !this.repos.onChange))
-    )
-      await this.repos.revisions?.refresh(t.repo, t.project);
     await this.db.pool.query(
       "INSERT INTO events(task,kind,data,source_offset) VALUES($1,'result',$2,-1) ON CONFLICT DO NOTHING",
       [t.id, result],
@@ -224,6 +166,5 @@ export class TaskPublication {
           : {},
       ],
     );
-    await this.db.pool.query("DELETE FROM agent_tokens WHERE task=$1", [t.id]);
   }
 }

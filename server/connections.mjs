@@ -289,7 +289,7 @@ export class Connections {
     finally { this.modelSyncs.delete(id); }
   }
   async usage(id) {
-    return providerUsage(this.db, id);
+    return providerUsage(this.db, id, key => this.nativeActivity?.(key, { refresh: false }));
   }
   async delete(args) {
     if (process.env.FRAME_LOCAL_MODE === "1")
@@ -446,24 +446,29 @@ export class Connections {
       }
       return;
     }
-    if (!(await this.db.one("SELECT id FROM connections LIMIT 1"))) {
+    await this.db.lock("legacy-provider-settings", async () => {
       for (const tool of ["codex", "claude"]) {
         const old = await this.db.setting(tool);
-        const c = old?.encrypted ? this.secrets.decrypt(old.encrypted) : {};
-        if (c.apiKey) {
-          const connection = await this.save({
-            name: tool === "codex" ? "Codex 默认连接" : "Claude 默认连接",
-            tool,
-            mode: "api",
-            ...c,
+        if (!old?.encrypted) continue;
+        const config = this.secrets.decrypt(old.encrypted);
+        if (config.apiKey) {
+          const baseUrl = normalizeProviderUrl(config.baseUrl || "", tool);
+          // A crash after saving but before deletion reuses the persisted credential.
+          // Existing user names, models and enabled state never get overwritten.
+          const matches = await this.db.all("SELECT config FROM connections WHERE tool=$1 AND mode='api' AND state<>'deleted'", [tool]);
+          const stored = matches.some(row => {
+            const current = this.secrets.decrypt(row.config);
+            return current.apiKey === config.apiKey && normalizeProviderUrl(current.baseUrl || "", tool) === baseUrl;
           });
-          await this.db.pool.query(
-            "UPDATE chats SET connection=$1 WHERE provider=$2 AND connection IS NULL",
-            [connection.id, tool],
-          );
+          if (!stored) await this.save({
+            name: tool === "codex" ? "Codex 旧版导入连接" : "Claude 旧版导入连接",
+            tool, mode: "api", ...config, baseUrl,
+          });
         }
+        // Delete only the inspected singleton after its credential was preserved.
+        await this.db.pool.query("DELETE FROM settings WHERE key=$1 AND value=$2", [tool, old]);
       }
-    }
+    });
     await this.db.pool.query(
       "UPDATE auth_flows SET state='expired' WHERE state='pending'",
     );

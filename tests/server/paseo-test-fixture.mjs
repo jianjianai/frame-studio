@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { command } from "../../server/process.mjs";
 import { sqliteDatabase } from "../../server/sqlite.mjs";
 import { PaseoStore } from "../../server/paseo-store.mjs";
 import { PaseoWork } from "../../server/paseo-work.mjs";
@@ -24,6 +25,13 @@ export async function fixture(t) {
     { mode: 0o644 },
   );
   await fs.writeFile(path.join(canonical, "public/sample.bin"), "sample-one");
+  const canonicalRoot = path.dirname(path.dirname(canonical));
+  const git = args => command("git", args, { cwd: canonicalRoot });
+  await git(["init", "-b", "main"]);
+  await git(["config", "user.name", "FRAME Test"]);
+  await git(["config", "user.email", "frame@localhost"]);
+  await git(["add", "--", "projects/fixture"]);
+  await git(["commit", "-m", "Fixture baseline"]);
   const db = await sqliteDatabase(path.join(directory, "database.sqlite"));
   const work = {
     id: randomUUID(),

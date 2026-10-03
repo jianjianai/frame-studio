@@ -7,7 +7,7 @@ import { Client } from "pg";
 import { database } from "../../server/db.mjs";
 import { createApp } from "../../server/app.mjs";
 import { ControllerLease } from "../../server/controller-lease.mjs";
-import { PaseoPublication } from "../../server/paseo-publication.mjs";
+import { PaseoValidation } from "../../server/paseo-validation.mjs";
 import {
   fixture as filmFixture,
   repo as platformRoot,
@@ -17,12 +17,12 @@ import { holdSharedSpeechPreparation } from "./paseo-speech-model-fixture.mjs";
 
 export async function nativeWorkflowFixture(
   t,
-  { port = Number(process.env.FRAME_TEST_PORT || 59488) } = {},
+  { port = Number(process.env.FRAME_TEST_PORT || 59488), databasePrefix = "frame_test_native_workflow_" } = {},
 ) {
   const originalUrl = new URL(process.env.FRAME_TEST_DATABASE_URL);
   assert.match(originalUrl.pathname, /^\/frame_test/);
-  const dbName =
-    "frame_test_native_workflow_" + randomUUID().replaceAll("-", "");
+  assert.match(databasePrefix, /^frame_test_[a-z_]+_$/);
+  const dbName = databasePrefix + randomUUID().replaceAll("-", "");
   const adminUrl = new URL(originalUrl);
   adminUrl.pathname = "/postgres";
   const ownUrl = new URL(originalUrl);
@@ -66,6 +66,7 @@ export async function nativeWorkflowFixture(
   const data = path.join(directory, "data"),
     origin = "http://127.0.0.1:" + port;
   let app,
+    db,
     services,
     created = false,
     film,
@@ -73,41 +74,57 @@ export async function nativeWorkflowFixture(
     speechPreparation;
   t.after(async () => {
     const children = [...(services?.paseoManager?.children.values() || [])];
-    try {
-      await closeBrowser?.();
-      await app?.close();
-      await speechPreparation?.close();
-      if (speechPreparation?.calls)
+    const errors = [];
+    const cleanup = async (callback) => {
+      try { await callback(); }
+      catch (error) { errors.push(error); }
+    };
+    await cleanup(() => closeBrowser?.());
+    await cleanup(() => app?.close());
+    await cleanup(() => speechPreparation?.close());
+    if (speechPreparation?.calls)
+      await cleanup(() =>
         assert.equal(
           speechPreparation.aborted,
           true,
           "Owned pending speech preparation must stop",
-        );
-      for (const child of children) {
-        if (child.exitCode !== null || child.signalCode !== null) continue;
+        ),
+      );
+    for (const child of children) {
+      if (child.exitCode !== null || child.signalCode !== null) continue;
+      await cleanup(async () => {
         await until(
           () => child.exitCode !== null || child.signalCode !== null,
           "Owned native supervisor did not exit",
           8000,
         ).catch(() => child.kill("SIGKILL"));
-      }
-    } finally {
-      await speechPreparation?.close();
-      if (created) {
-        await admin.query(
+      });
+    }
+    // Services normally end both pools. If setup or app shutdown failed first,
+    // release this fixture's lease and close only pools that have not begun to
+    // end. Double-ending pg pools fails and must not interrupt later cleanup.
+    await cleanup(() => services?.tasks?.lease?.close());
+    await cleanup(async () => {
+      if (db && !db.pool.ending && !db.pool.ended) await db.pool.end();
+      else if (db?.lockPool && !db.lockPool.ending && !db.lockPool.ended)
+        await db.lockPool.end();
+    });
+    if (created) {
+      await cleanup(() => admin.query(
           "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()",
           [dbName],
-        );
-        await admin.query('DROP DATABASE "' + dbName + '"');
-      }
-      await admin.end();
-      film?.close();
-      await fs.rm(directory, { recursive: true, force: true });
-      for (const key of envKeys)
-        oldEnv[key] === undefined
-          ? delete process.env[key]
-          : (process.env[key] = oldEnv[key]);
+        ));
+      await cleanup(() => admin.query('DROP DATABASE "' + dbName + '"'));
     }
+    await cleanup(() => admin.end());
+    await cleanup(() => film?.close());
+    await cleanup(() => fs.rm(directory, { recursive: true, force: true }));
+    for (const key of envKeys)
+      oldEnv[key] === undefined
+        ? delete process.env[key]
+        : (process.env[key] = oldEnv[key]);
+    if (errors.length)
+      throw new AggregateError(errors, "Owned native workflow fixture cleanup failed");
   });
   await admin.connect();
   await admin.query('CREATE DATABASE "' + dbName + '"');
@@ -119,7 +136,7 @@ export async function nativeWorkflowFixture(
   process.env.FRAME_AGENT_URL = origin;
   process.env.FRAME_PASEO_ROOT = selectedRuntime;
   process.env.FRAME_PASEO_UI = selectedUI;
-  const db = await database(ownUrl.href, "owned-native-workflow-password");
+  db = await database(ownUrl.href, "owned-native-workflow-password");
   const application = await createApp({
     db,
     data,
@@ -133,16 +150,14 @@ export async function nativeWorkflowFixture(
     paseoManager: application.paseo.manager,
     paseoWork: application.paseo.work,
     paseoStore: application.paseo.store,
-    paseoDrafts: application.paseo.drafts,
+    paseoWorkspace: application.paseo.workspace,
   };
   app = application.app;
   await app.ready();
   // Only the owned daemon and validation worker run locally. API authentication
   // and provider admission retain their production semantics.
   services.paseoManager.localMode = true;
-  const publication = new PaseoPublication({
-    db,
-    data,
+  const validator = new PaseoValidation({
     repos: services.repos,
     works: services.actions.works,
     tasks: services.tasks,
@@ -150,11 +165,8 @@ export async function nativeWorkflowFixture(
     store: services.paseoStore,
     localMode: true,
   });
-  services.paseoDrafts.validate = (candidate, options) =>
-    publication.validate(candidate, options);
-  services.paseoDrafts.publish = (candidate) => publication.publish(candidate);
-  services.tasks.publication.beforeApply = (task) =>
-    publication.beforeApply(task);
+  services.paseoWorkspace.validate = (report, options) =>
+    validator.validate(report, options);
   services.tasks.lease = new ControllerLease(db.pool);
   assert.equal(
     await services.tasks.lease.acquire(),
@@ -170,6 +182,11 @@ export async function nativeWorkflowFixture(
     name: "Native workflow fixture",
   });
   film = filmFixture({ browser: true, renderer: "canvas" });
+  await fs.writeFile(
+    path.join(directory, "owned-resources.json"),
+    JSON.stringify({ database: dbName, filmRoot: film.root }),
+    { mode: 0o600 },
+  );
   await fs.mkdir(path.join(data, "repos", repo.id, "projects"), {
     recursive: true,
   });
@@ -245,13 +262,13 @@ export async function nativeWorkflowFixture(
   const agent = await client.createAgent({
     provider: profileId,
     model: "owned-model",
-    cwd: ready.draftRoot,
+    cwd: ready.workspaceRoot,
     workspaceId: ready.workspaceId,
     title: "Native Frame workflow",
     modeId: "auto",
   });
   assert(agent.id);
-  await services.paseoDrafts.start(work.id);
+  await services.paseoWorkspace.start(work.id);
   const captured = async () => {
     try {
       return (await fs.readFile(capture, "utf8"))

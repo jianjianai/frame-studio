@@ -6,10 +6,6 @@ import { problem } from "./security.mjs";
 
 const uuid = z.uuid();
 const sha = z.string().regex(/^[a-f0-9]{64}$/);
-const commit = z
-  .string()
-  .regex(/^[a-f0-9]{40}$/)
-  .nullable();
 const slug = z
   .string()
   .regex(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/)
@@ -34,29 +30,6 @@ export const paseoRuntimeStates = [
   "stopped",
   "failed",
 ];
-export const paseoCandidateStates = [
-  "queued_validation",
-  "validating",
-  "verified",
-  "publishing",
-  "applied",
-  "invalid",
-  "publish_failed",
-  "conflict",
-  "superseded",
-];
-const state = z.enum(paseoCandidateStates);
-const edges = {
-  queued_validation: ["validating", "superseded"],
-  validating: ["verified", "invalid", "superseded", "queued_validation"],
-  verified: ["publishing", "superseded", "conflict"],
-  publishing: ["applied", "publish_failed", "verified"],
-  invalid: ["queued_validation", "superseded"],
-  publish_failed: ["verified", "superseded", "conflict"],
-  conflict: ["superseded"],
-  applied: [],
-  superseded: [],
-};
 const planRoot = fileURLToPath(new URL("./paseo-migrations/", import.meta.url));
 const json = (value, maximum = 2_100_000) => {
   if (value === undefined || value === null) return null;
@@ -86,10 +59,7 @@ const bindingDTO = (row) =>
     workId: row.work_id,
     repo: row.repo,
     project: row.project,
-    baselineFingerprint: row.baseline_fingerprint,
-    baselineModeFingerprint: row.baseline_mode_fingerprint,
-    baselineCommit: row.baseline_commit,
-    draftRevision: row.draft_revision,
+    revision: row.revision,
     generation: String(row.generation),
     requested: !!row.requested,
     state: row.state,
@@ -110,31 +80,10 @@ const bindingDTO = (row) =>
     updated: date(row.updated),
     touched: date(row.touched),
   };
-const candidateDTO = (row) =>
-  row && {
-    id: row.id,
-    workId: row.work_id,
-    repo: row.repo,
-    project: row.project,
-    generation: String(row.generation),
-    revision: row.revision,
-    baselineFingerprint: row.baseline_fingerprint,
-    baselineModeFingerprint: row.baseline_mode_fingerprint,
-    baselineCommit: row.baseline_commit,
-    runId: row.run_id,
-    snapshotFingerprint: row.snapshot_fingerprint,
-    snapshotModeFingerprint: row.snapshot_mode_fingerprint,
-    runtimeFingerprint: row.runtime_fingerprint,
-    origin: row.origin,
-    state: row.state,
-    result:
-      typeof row.result === "string" ? JSON.parse(row.result) : row.result,
-    error: row.error,
-    sourceRevision: row.source_revision,
-    commit: row.commit,
-    created: date(row.created),
-    updated: date(row.updated),
-  };
+const validationDTO = row => row && ({ id: row.id, workId: row.work_id,
+  revision: row.revision, generation: String(row.generation), runtimeFingerprint: row.runtime_fingerprint,
+  state: row.state, result: typeof row.result === "string" ? JSON.parse(row.result) : row.result,
+  error: row.error, created: date(row.created), updated: date(row.updated) });
 const messageDTO = (row) =>
   row && {
     workId: row.work_id,
@@ -187,13 +136,36 @@ const runtimeColumns = {
   nativeSummary: "native_summary",
 };
 
-/** Separate additive ledger lets an 8.1 application reopen the same core database. */
+/** Dedicated ledger versions the native-session and sole-workspace metadata. */
 export async function migratePaseo(db, plan = migrationPlan(planRoot)) {
   const options = { ledger: "paseo_schema_migrations" };
   if (db.kind === "sqlite") {
     const { sqliteMigration } = await import("./sqlite.mjs");
     options.dialect = "sqlite";
-    options.transformSql = sqliteMigration;
+    options.transformSql = sql => {
+      if (/CREATE TABLE paseo_message_assets\b/.test(sql)) {
+        const ddl = sql.slice(0, sql.indexOf("INSERT INTO paseo_message_assets"));
+        return sqliteMigration(ddl) + `
+          INSERT INTO paseo_message_assets(work_id,agent_id,message_id,asset)
+          SELECT DISTINCT m.work_id,m.agent_id,m.message_id,a.id
+          FROM paseo_message_contexts m
+          JOIN paseo_work_bindings b ON b.work_id=m.work_id
+          JOIN json_each(CASE WHEN json_type(m.review_reference,'$.materials')='array'
+            THEN json_extract(m.review_reference,'$.materials') ELSE '[]' END) material
+          JOIN assets a ON a.id=lower(json_extract(material.value,'$.id'))
+          JOIN asset_repos ar ON ar.asset=a.id AND ar.repo=b.repo
+          WHERE a.sha=json_extract(material.value,'$.sha256')
+            AND CAST(a.bytes AS TEXT)=CAST(json_extract(material.value,'$.bytes') AS TEXT)
+          ON CONFLICT DO NOTHING;`;
+      }
+      const translated = sqliteMigration(sql);
+      // SQLite removes procedural PostgreSQL blocks, so enforce the same destructive-upgrade guard in SQL.
+      if (!/\bDROP TABLE paseo_candidates\s*;/i.test(translated)) return translated;
+      return `CREATE TEMP TABLE paseo_retirement_guard (
+        candidates integer CONSTRAINT "Audit retained Paseo candidates and stop old validation workers before migration" CHECK(candidates=0));
+        INSERT INTO paseo_retirement_guard SELECT count(*) FROM paseo_candidates;
+        DROP TABLE paseo_retirement_guard;` + translated;
+    };
   }
   await migrate(db.pool, plan, options);
 }
@@ -230,26 +202,20 @@ export class PaseoStore {
         workId: uuid,
         repo: uuid,
         project: slug,
-        baselineFingerprint: sha,
-        baselineModeFingerprint: sha,
-        baselineCommit: commit.optional(),
-        draftRevision: sha,
+        revision: sha,
         runtimeFingerprint: sha.nullable().optional(),
       })
       .parse(input);
     return this.transaction(async (client) => {
       await client.query(
         `INSERT INTO paseo_work_bindings
-        (work_id,repo,project,baseline_fingerprint,baseline_mode_fingerprint,baseline_commit,draft_revision,runtime_fingerprint,requested)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,true) ON CONFLICT(work_id) DO NOTHING`,
+        (work_id,repo,project,revision,runtime_fingerprint,requested)
+        VALUES($1,$2,$3,$4,$5,true) ON CONFLICT(work_id) DO NOTHING`,
         [
           value.workId,
           value.repo,
           value.project,
-          value.baselineFingerprint,
-          value.baselineModeFingerprint,
-          value.baselineCommit ?? null,
-          value.draftRevision,
+          value.revision,
           value.runtimeFingerprint ?? null,
         ],
       );
@@ -264,7 +230,7 @@ export class PaseoStore {
       if (binding.repo !== value.repo || binding.project !== value.project)
         throw problem(
           409,
-          "Paseo work identity changed; retained draft requires explicit recovery",
+          "Paseo work identity changed; retained workspace requires explicit recovery",
         );
       return binding;
     });
@@ -346,12 +312,12 @@ export class PaseoStore {
       ) || null
     );
   }
-  async markDraft(workId, { revision }) {
+  async markRevision(workId, { revision }) {
     uuid.parse(workId);
     sha.parse(revision);
     return this.transaction(async (client) => {
       await client.query(
-        "UPDATE paseo_work_bindings SET draft_revision=$2,generation=generation+1,updated=now() WHERE work_id=$1 AND draft_revision<>$2",
+        "UPDATE paseo_work_bindings SET revision=$2,generation=generation+1,updated=now() WHERE work_id=$1 AND revision<>$2",
         [workId, revision],
       );
       const binding = bindingDTO(
@@ -432,232 +398,80 @@ export class PaseoStore {
           409,
           "Paseo message ID already has a different frozen intent",
         );
+      if (inserted.rowCount) {
+        const materials = z.array(z.object({ id: uuid.transform(value => value.toLowerCase()), sha256: sha, bytes: decimal }))
+          .max(20).parse(reference?.materials ?? []);
+        const unique = new Map();
+        for (const material of materials) {
+          const previous = unique.get(material.id);
+          if (previous && (previous.sha256 !== material.sha256 || previous.bytes !== material.bytes))
+            throw problem(409, "引用素材的身份已变化，请重新选择后发送");
+          unique.set(material.id, material);
+        }
+        if (unique.size) {
+          // Lock the bounded selected set through pin insertion. A simultaneous trash/delete
+          // either happens first and rejects this message, or waits for its retaining FK.
+          const rows = (await client.query(
+            `SELECT a.id,a.sha,a.bytes FROM assets a
+             JOIN asset_repos ar ON ar.asset=a.id
+             JOIN paseo_work_bindings b ON b.repo=ar.repo
+             WHERE b.work_id=$1 AND a.id=ANY($2) AND NOT a.deleted
+             ORDER BY a.id` + (this.db.kind === "sqlite" ? "" : " FOR UPDATE OF a"),
+            [value.workId, [...unique.keys()].sort()],
+          )).rows;
+          if (rows.length !== unique.size || rows.some(asset => {
+            const material = unique.get(asset.id);
+            return !material || asset.sha !== material.sha256 || decimal.parse(asset.bytes) !== material.bytes;
+          })) throw problem(409, "引用素材已删除、更新或不属于当前仓库，请重新选择后发送");
+          const params = [value.workId, value.agentId, value.messageId];
+          const values = [...unique.keys()].sort().map(asset => {
+            params.push(asset);
+            return `($1,$2,$3,$${params.length})`;
+          });
+          await client.query(
+            "INSERT INTO paseo_message_assets(work_id,agent_id,message_id,asset) VALUES " +
+            values.join(",") + " ON CONFLICT DO NOTHING", params,
+          );
+        }
+      }
       return { created: !!inserted.rowCount, message };
     });
   }
-  async createCandidate(input) {
-    const value = z
-      .strictObject({
-        id: uuid.optional(),
-        workId: uuid,
-        repo: uuid,
-        project: slug,
-        generation: decimal,
-        revision: sha,
-        baselineFingerprint: sha,
-        baselineModeFingerprint: sha,
-        baselineCommit: commit.optional(),
-        runId: uuid,
-        snapshotFingerprint: sha,
-        snapshotModeFingerprint: sha,
-        runtimeFingerprint: sha.nullable().optional(),
-        origin: z.enum(["manual", "agent", "recovery"]).default("manual"),
-      })
-      .parse(input);
-    if (value.revision !== value.snapshotModeFingerprint)
-      throw Error("Candidate revision differs from captured source");
-    return this.transaction(async (client) => {
-      const binding = bindingDTO(
-        (
-          await client.query(
-            "SELECT * FROM paseo_work_bindings WHERE work_id=$1 FOR UPDATE",
-            [value.workId],
-          )
-        ).rows[0],
-      );
-      if (
-        !binding ||
-        binding.repo !== value.repo ||
-        binding.project !== value.project ||
-        binding.generation !== value.generation ||
-        binding.draftRevision !== value.revision ||
-        binding.baselineFingerprint !== value.baselineFingerprint ||
-        binding.baselineModeFingerprint !== value.baselineModeFingerprint
-      )
-        throw problem(
-          409,
-          "Draft or canonical baseline changed before candidate registration",
-        );
-      const inserted = await client.query(
-        `INSERT INTO paseo_candidates
-        (id,work_id,repo,project,generation,revision,baseline_fingerprint,baseline_mode_fingerprint,baseline_commit,run_id,
-        snapshot_fingerprint,snapshot_mode_fingerprint,runtime_fingerprint,origin)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
-        ON CONFLICT(work_id,generation,revision) DO NOTHING RETURNING *`,
-        [
-          value.id || randomUUID(),
-          value.workId,
-          value.repo,
-          value.project,
-          value.generation,
-          value.revision,
-          value.baselineFingerprint,
-          value.baselineModeFingerprint,
-          value.baselineCommit ?? null,
-          value.runId,
-          value.snapshotFingerprint,
-          value.snapshotModeFingerprint,
-          value.runtimeFingerprint ?? null,
-          value.origin,
-        ],
-      );
-      const candidate = candidateDTO(
-        inserted.rows[0] ||
-          (
-            await client.query(
-              "SELECT * FROM paseo_candidates WHERE work_id=$1 AND generation=$2 AND revision=$3",
-              [value.workId, value.generation, value.revision],
-            )
-          ).rows[0],
-      );
-      if (
-        candidate.snapshotFingerprint !== value.snapshotFingerprint ||
-        candidate.runtimeFingerprint !== (value.runtimeFingerprint ?? null)
-      )
-        throw problem(
-          409,
-          "Candidate identity already refers to a different snapshot",
-        );
-      return { created: !!inserted.rowCount, candidate };
-    });
+  async createValidation({ workId, revision, generation, runtimeFingerprint }) {
+    uuid.parse(workId); sha.parse(revision); decimal.parse(generation); sha.parse(runtimeFingerprint);
+    const reportId = randomUUID();
+    const inserted = await this.db.one(`INSERT INTO paseo_validations
+      (id,work_id,revision,generation,runtime_fingerprint,state) VALUES($1,$2,$3,$4,$5,'queued')
+      ON CONFLICT(work_id,revision,runtime_fingerprint) DO UPDATE SET generation=EXCLUDED.generation,
+      state=CASE WHEN paseo_validations.state IN ('stale','cancelled') THEN 'queued' ELSE paseo_validations.state END,updated=now()
+      WHERE paseo_validations.generation<EXCLUDED.generation RETURNING *`,
+      [reportId, workId, revision, generation, runtimeFingerprint]);
+    const report = inserted || await this.db.one("SELECT * FROM paseo_validations WHERE work_id=$1 AND revision=$2 AND runtime_fingerprint=$3",
+      [workId, revision, runtimeFingerprint]);
+    return validationDTO(report);
   }
-  async getCandidate(candidateId) {
-    uuid.parse(candidateId);
-    return candidateDTO(
-      await this.db.one("SELECT * FROM paseo_candidates WHERE id=$1", [
-        candidateId,
-      ]),
-    );
+  async getValidation(reportId) {
+    uuid.parse(reportId);
+    return validationDTO(await this.db.one("SELECT * FROM paseo_validations WHERE id=$1", [reportId]));
   }
-  async getCandidateByRun(runId) {
-    uuid.parse(runId);
-    return candidateDTO(
-      await this.db.one("SELECT * FROM paseo_candidates WHERE run_id=$1", [
-        runId,
-      ]),
-    );
-  }
-  async listCandidates(workId, { states, limit = 100 } = {}) {
-    uuid.parse(workId);
-    z.number().int().min(1).max(1000).parse(limit);
-    const params = [workId];
-    let filter = "";
+  async listValidations(workId, { states, limit = 20 } = {}) {
+    uuid.parse(workId); z.number().int().min(1).max(200).parse(limit);
+    const params = [workId], filter = [];
     if (states) {
-      z.array(state).min(1).parse(states);
-      params.push(states);
-      filter = " AND state=ANY($2)";
+      z.array(z.enum(["queued", "running", "passed", "failed", "stale", "cancelled"])).min(1).parse(states);
+      params.push(states); filter.push("state=ANY($" + params.length + ")");
     }
     params.push(limit);
-    return (
-      await this.db.all(
-        "SELECT * FROM paseo_candidates WHERE work_id=$1" +
-          filter +
-          " ORDER BY generation DESC,created DESC,id DESC LIMIT $" +
-          params.length,
-        params,
-      )
-    ).map(candidateDTO);
+    return (await this.db.all("SELECT * FROM paseo_validations WHERE work_id=$1" +
+      (filter.length ? " AND " + filter.join(" AND ") : "") + " ORDER BY generation DESC,updated DESC LIMIT $" + params.length, params)).map(validationDTO);
   }
-  async transitionCandidate(candidateId, { from, state: next, patch = {} }) {
-    uuid.parse(candidateId);
-    z.array(state).min(1).parse(from);
-    state.parse(next);
-    for (const old of from)
-      if (!edges[old].includes(next))
-        throw Error(
-          "Unsupported Paseo candidate state transition: " +
-            old +
-            " -> " +
-            next,
-        );
-    const value = z
-      .strictObject({
-        result: z.json().nullable().optional(),
-        error: z.string().max(2000).nullable().optional(),
-      })
-      .parse(patch);
-    const params = [candidateId, from, next],
-      assignments = ["state=$3", "updated=now()"];
-    for (const [key, item] of Object.entries(value)) {
-      params.push(key === "result" ? json(item, 8 * 1024 * 1024) : item);
-      assignments.push(key + "=$" + params.length);
-    }
-    return (
-      candidateDTO(
-        await this.db.one(
-          "UPDATE paseo_candidates SET " +
-            assignments.join(",") +
-            " WHERE id=$1 AND state=ANY($2) RETURNING *",
-          params,
-        ),
-      ) || null
-    );
-  }
-  async appliedCandidate(
-    candidateId,
-    { sourceRevision, commit: appliedCommit = null },
-  ) {
-    uuid.parse(candidateId);
-    sha.parse(sourceRevision);
-    commit.parse(appliedCommit);
-    return this.transaction(async (client) => {
-      const candidate = candidateDTO(
-        (
-          await client.query(
-            "SELECT * FROM paseo_candidates WHERE id=$1 FOR UPDATE",
-            [candidateId],
-          )
-        ).rows[0],
-      );
-      if (!candidate) throw problem(404, "Paseo candidate not found");
-      if (candidate.state === "applied") {
-        if (
-          candidate.sourceRevision !== sourceRevision ||
-          candidate.commit !== appliedCommit
-        )
-          throw problem(409, "Paseo apply receipt changed");
-        return candidate;
-      }
-      if (
-        candidate.state !== "publishing" ||
-        candidate.snapshotFingerprint !== sourceRevision
-      )
-        throw problem(
-          409,
-          "Paseo candidate is not publishing this frozen source",
-        );
-      const binding = bindingDTO(
-        (
-          await client.query(
-            "SELECT * FROM paseo_work_bindings WHERE work_id=$1 FOR UPDATE",
-            [candidate.workId],
-          )
-        ).rows[0],
-      );
-      if (
-        binding.baselineFingerprint !== candidate.baselineFingerprint ||
-        binding.baselineModeFingerprint !== candidate.baselineModeFingerprint
-      )
-        throw problem(
-          409,
-          "Paseo canonical baseline changed during publication",
-        );
-      await client.query(
-        "UPDATE paseo_work_bindings SET baseline_fingerprint=$2,baseline_mode_fingerprint=$3,baseline_commit=$4,updated=now() WHERE work_id=$1",
-        [
-          candidate.workId,
-          candidate.snapshotFingerprint,
-          candidate.snapshotModeFingerprint,
-          appliedCommit,
-        ],
-      );
-      const row = (
-        await client.query(
-          "UPDATE paseo_candidates SET state='applied',source_revision=$2,\"commit\"=$3,updated=now() WHERE id=$1 RETURNING *",
-          [candidateId, sourceRevision, appliedCommit],
-        )
-      ).rows[0];
-      return candidateDTO(row);
-    });
+  async updateValidation(reportId, { from, state, result, error }) {
+    uuid.parse(reportId);
+    const validState = z.enum(["queued", "running", "passed", "failed", "stale", "cancelled"]);
+    z.array(validState).min(1).parse(from); validState.parse(state);
+    const params = [reportId, state, from], sets = ["state=$2", "updated=now()"];
+    if (result !== undefined) { params.push(json(result, 128000)); sets.push("result=$" + params.length); }
+    if (error !== undefined) { params.push(error == null ? null : z.string().max(2000).parse(error)); sets.push("error=$" + params.length); }
+    return validationDTO(await this.db.one("UPDATE paseo_validations SET " + sets.join(",") + " WHERE id=$1 AND state=ANY($3) RETURNING *", params)) || null;
   }
 }

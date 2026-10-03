@@ -46,7 +46,7 @@ export async function validateProject({
     async () => {
       const checked = JSON.parse(
         await run("node", [
-          path.join(work, "scripts/film.mjs"),
+          path.join(core, "scripts/film.mjs"),
           "typecheck",
           project,
           "--json",

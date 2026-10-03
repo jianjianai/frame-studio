@@ -47,6 +47,8 @@ test("restart resumes the applied result after Git commit failed without rerunni
     await new Tasks(db, data, repos, {}, options).complete(row, 0);
     assert.equal(row.state, "succeeded");
     assert.equal(row.result.commit, "a".repeat(40));
-    assert.equal(fs.readFileSync(path.join(run, "original-project", "project.ts"), "utf8"), "original");
+    assert.equal(fs.existsSync(path.join(run, "original-project")), false, "completed task removes its temporary rollback/source tree");
+    assert.equal(fs.existsSync(source), false, "canonical work keeps the result while task source is removed");
+    assert.equal(fs.existsSync(path.join(run, "result.json")), true);
   } finally { fs.rmSync(data, { recursive: true, force: true }); }
 });

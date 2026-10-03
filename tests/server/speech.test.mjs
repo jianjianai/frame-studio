@@ -100,7 +100,7 @@ async function fixture(origin = "http://frame.test") {
       }),
     ],
   );
-  const { app, actions } = await createApp({
+  const { app, actions, paseo } = await createApp({
     db,
     data,
     masterKey: key,
@@ -110,6 +110,7 @@ async function fixture(origin = "http://frame.test") {
   return {
     app,
     actions,
+    paseo,
     db,
     data,
     requests,
@@ -244,16 +245,12 @@ test(
         engines.find((e) => e.id === custom.id).config.configured,
         true,
       );
-      const agentId = randomUUID(),
-        token = "speech-task-credential";
-      await db.pool.query(
-        "INSERT INTO tasks(id,repo,project,kind,state,input) VALUES($1,$2,'draft','agent','running','{}')",
-        [agentId, repo.id],
-      );
-      await db.pool.query("INSERT INTO agent_tokens(hash,task) VALUES($1,$2)", [
-        hash(token),
-        agentId,
-      ]);
+      const nativeRoot = (await f.paseo.work.prepare(work.id)).workspace.workspaceRoot;
+      const token = "speech-native-credential";
+      f.paseo.manager.agentContext = async credential => credential === token ? {
+        kind: "paseo", repo: work.repo, project: work.project,
+        paseoWork: work.id, paseoAgent: "native-speech-agent", runRoot: nativeRoot,
+      } : null;
       const agent = (name, args) =>
         app.inject({
           method: "POST",
@@ -275,7 +272,7 @@ test(
       const aiTest = await agent("engine_test", input);
       assert.equal(aiTest.statusCode, 200, aiTest.body);
       assert(
-        fs.existsSync(path.join(data, "runs", agentId, aiTest.json().path)),
+        fs.existsSync(path.join(nativeRoot, aiTest.json().path)),
       );
       assert.equal((await db.one("SELECT count(*) FROM assets")).count, "2");
       const tok = await call("tokens_create", { name: "mcp-speech" }),
@@ -317,7 +314,7 @@ test(
   "speech settings browser: built-in audition, voice/speed, custom API lifecycle, guided model upload and mobile",
   { skip: !url, timeout: 90000 },
   async () => {
-    const port = Number(process.env.FRAME_SPEECH_TEST_PORT || 55186),
+    const port = Number(process.env.FRAME_SPEECH_TEST_PORT || process.env.FRAME_TEST_PORT || 55186),
       origin = `http://127.0.0.1:${port}`,
       f = await fixture(origin);
     let browser;

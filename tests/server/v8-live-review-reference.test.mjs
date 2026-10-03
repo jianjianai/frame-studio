@@ -49,6 +49,7 @@ async function fixture() {
           task.review_reference?.mode === "live" &&
           task.review_reference.liveSessionId === args[2] &&
           task.review_reference.sourceRevision === args[3] &&
+          (!args[4] || task.review_reference.compiledRevision === args[4]) &&
           ([
             "queued",
             "running",
@@ -99,6 +100,7 @@ async function fixture() {
     shotId: "opening",
     liveSessionId: session.id,
     sourceRevision: displayed,
+    compiledRevision: session.manifest.compiledRevision,
   };
   const freeze = (value = context, overrides = {}) =>
     freezeReviewReference({
@@ -193,67 +195,18 @@ test("live review keeps the exact displayed source and media after a newer synta
   }
 });
 
-test("live session references enforce repository/project ownership and identify the exact AI task", async () => {
+test("live session references enforce ownership and only accept the authoritative source", async () => {
   const f = await fixture();
   try {
-    await assert.rejects(
-      f.freeze(f.context, { repo: randomUUID() }),
-      /does not belong/,
-    );
-    await assert.rejects(
-      f.freeze(f.context, { project: "other-film" }),
-      /does not belong/,
-    );
-    await assert.rejects(
-      f.freeze({ ...f.context, draftTask: randomUUID() }),
-      /draft does not belong/,
-    );
-    const taskId = randomUUID(),
-      otherTask = randomUUID();
-    const task = {
-      id: taskId,
-      repo: f.work.repo,
-      project,
-      kind: "agent",
-      state: "running",
-    };
-    f.tasks.set(taskId, task);
-    const draft = path.join(f.data, "runs", taskId, "projects", project);
-    await copyTree(f.dir, draft);
-    await fs.writeFile(
-      path.join(draft, "scene.ts"),
-      "export const color='draft';",
-    );
-    const link = await f.livePreview.start({ work: f.work, task: taskId });
-    const session = f.livePreview.sessions.get(link.sessionId),
-      revision = await f.publish(session);
-    const context = {
-      time: 2,
-      liveSessionId: session.id,
-      sourceRevision: revision,
-      draftTask: taskId,
-    };
-    const frozen = await f.freeze(context);
-    assert.equal(frozen.source, "task");
-    assert.equal(frozen.draftTask, taskId);
-    await assert.rejects(
-      f.freeze({ ...context, draftTask: otherTask }),
-      /draft does not belong/,
-    );
-    const { draftTask: _task, ...missing } = context;
-    await assert.rejects(f.freeze(missing), /must identify its task/);
-    f.tasks.set(otherTask, { ...task, id: otherTask, repo: randomUUID() });
-    await assert.rejects(
-      f.livePreview.start({ work: f.work, task: otherTask }),
-      /does not belong/,
-    );
-    await assert.rejects(
-      f.freeze({ ...context, sourceRevision: "f".repeat(64) }),
-      /expired/,
-    );
-  } finally {
-    await f.close();
-  }
+    await assert.rejects(f.freeze(f.context, { repo: randomUUID() }), /does not belong/);
+    await assert.rejects(f.freeze(f.context, { project: "other-film" }), /does not belong/);
+    await assert.rejects(f.livePreview.start({ work: f.work, task: randomUUID() }), /唯一工作区/);
+    await assert.rejects(f.freeze({ ...f.context, sourceRevision: "f".repeat(64) }), /expired/);
+    await assert.rejects(f.freeze({ ...f.context, compiledRevision: "f".repeat(64) }), /expired/);
+    const frozen = await f.freeze();
+    assert.equal(frozen.source, "work");
+    assert.equal(frozen.compiledRevision, f.context.compiledRevision);
+  } finally { await f.close(); }
 });
 
 test("public review context accepts one complete live or immutable identity and rejects forged mixed fields", () => {
@@ -261,7 +214,7 @@ test("public review context accepts one complete live or immutable identity and 
     time: 1,
     liveSessionId: randomUUID(),
     sourceRevision: "a".repeat(64),
-    draftTask: randomUUID(),
+    compiledRevision: "c".repeat(64),
   };
   assert.equal(reviewContextSchema.safeParse(live).success, true);
   assert.equal(
@@ -277,7 +230,7 @@ test("public review context accepts one complete live or immutable identity and 
     { ...live, previewTask: randomUUID() },
     { time: 1, liveSessionId: live.liveSessionId },
     { time: 1, sourceRevision: live.sourceRevision },
-    { time: 1, draftTask: live.draftTask },
+    { time: 1, compiledRevision: live.compiledRevision },
     { ...live, liveSessionId: "../../other" },
     { ...live, sourceRevision: "../../other" },
     { ...live, snapshotPath: "../../credentials" },
@@ -466,7 +419,7 @@ test("concurrent freezes share one complete immutable snapshot without leaking t
       ),
     );
     const parent = path.join(f.data, "live-preview-references", f.session.id);
-    assert.deepEqual(await fs.readdir(parent), [f.displayed]);
+    assert.deepEqual(await fs.readdir(parent), [f.displayed + "-" + f.context.compiledRevision]);
     assert.equal(
       await fs.readFile(
         path.join(f.data, values[0].snapshotPath, "public/image.bin"),
@@ -538,8 +491,8 @@ test("saved live reference lookup remains bound to retained same-work task recor
       /does not belong/,
     );
     await assert.rejects(
-      f.freeze({ ...f.context, draftTask: randomUUID() }),
-      /draft does not belong/,
+      f.freeze({ ...f.context, compiledRevision: "f".repeat(64) }),
+      /does not belong/,
     );
     await assert.rejects(
       f.freeze({ ...f.context, sourceRevision: "f".repeat(64) }),
@@ -578,41 +531,17 @@ test("saved live reference lookup remains bound to retained same-work task recor
   }
 });
 
-test("saved draft references require their original task after the live session closes", async () => {
+test("saved compiled references retain their exact identity after the live session closes", async () => {
   const f = await fixture();
   try {
-    const taskId = randomUUID();
-    f.tasks.set(taskId, {
-      id: taskId,
-      repo: f.work.repo,
-      project,
-      kind: "agent",
-      state: "running",
-    });
-    const draft = path.join(f.data, "runs", taskId, "projects", project);
-    await copyTree(f.dir, draft);
-    const link = await f.livePreview.start({ work: f.work, task: taskId });
-    const session = f.livePreview.sessions.get(link.sessionId);
-    const revision = await f.publish(session);
-    const context = {
-      time: 2,
-      liveSessionId: session.id,
-      sourceRevision: revision,
-      draftTask: taskId,
-    };
-    const reference = await f.freeze(context);
+    const reference = await f.freeze();
     f.saveReference(reference);
-    await f.livePreview.stop(session.id);
-    assert.deepEqual(await f.freeze(context), reference);
-    await assert.rejects(
-      f.freeze({ ...context, draftTask: randomUUID() }),
-      /draft does not belong/,
-    );
-    const { draftTask: _task, ...missing } = context;
-    await assert.rejects(f.freeze(missing), /draft does not belong/);
-  } finally {
-    await f.close();
-  }
+    await f.livePreview.stop(f.session.id);
+    assert.deepEqual(await f.freeze(), reference);
+    const { compiledRevision: _compiled, ...incomplete } = f.context;
+    await assert.rejects(f.freeze(incomplete), /编译版本/);
+    await assert.rejects(f.freeze({ ...f.context, compiledRevision: "f".repeat(64) }), /does not belong/);
+  } finally { await f.close(); }
 });
 
 test("creator handoff identifies the exact live reference without leaking task credentials", async () => {
@@ -625,7 +554,7 @@ test("creator handoff identifies the exact live reference without leaking task c
       path.join(root, "task.json"),
       JSON.stringify({
         id: task,
-        kind: "agent",
+        kind: "frame",
         project,
         input: { context: f.context },
         credential: "private-fixture-credential",

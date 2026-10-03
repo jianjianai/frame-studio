@@ -1,12 +1,12 @@
-import { ingestAgentEvents } from "./agent-event-store.mjs";
 import fs from "node:fs";
 import path from "node:path";
 import { confined } from "./security.mjs";
+import { assertTaskContainer } from "./task-workspace.mjs";
 
 /** Observability failures do not imply execution failures; cursors are persisted in SQL. */
 export class TaskMonitor {
-  constructor({ db, data, command, get, complete, failTask, localProcesses = null }) {
-    Object.assign(this, { db, data, command, get, complete, failTask, localProcesses });
+  constructor({ db, data, command, get, complete, failTask, cleanup, localProcesses = null }) {
+    Object.assign(this, { db, data, command, get, complete, failTask, cleanup, localProcesses });
     this.logs = new Map();
     this.monitorWarnings = new Map();
     this.missingContainers = new Map();
@@ -57,36 +57,36 @@ export class TaskMonitor {
         if (!this.localProcesses)
           await this.command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 10000 });
         await this.failTask(t, this.localProcesses
-          ? "本机执行进程连续多次确认不存在；工作副本已保留，请检查后重试。"
-          : "执行容器连续多次确认不存在；工作副本已保留，请检查后重试。");
+          ? "本机执行进程连续多次确认不存在，任务已失败，临时执行文件将清理。"
+          : "执行容器连续多次确认不存在，任务已失败，临时执行文件将清理。");
       }
       return;
     }
     t = await this.get(t.id);
-    const timedOut = t.state === "running" && Date.now() - new Date(t.started).getTime() - Number(t.input_wait_ms || 0) - (t.input_wait_started ? Math.max(0, Date.now() - new Date(t.input_wait_started).getTime()) : 0) >
+    const timedOut = t.state === "running" && Date.now() - new Date(t.started).getTime() >
       Math.max(600, Math.min(604800, Number(process.env.FRAME_TASK_TIMEOUT_SECONDS) || 21600)) * 1000;
     if (state.Running && (t.state === "cancelling" || timedOut)) {
       // Successful stop is followed by a fresh inspect on the next tick. A failed
       // stop is a monitoring problem, not permission to force-remove the container.
       if (this.localProcesses) await this.localProcesses.stop(t.id, t.container);
-      else await this.command("docker", ["stop", "-t", "5", t.container], { timeout: 20000 });
+      else {
+        const inspected = JSON.parse(await this.command("docker", ["inspect", "--format", "{{json .}}", t.container], { timeout: 10000, max: 256 * 1024 }));
+        const fresh = assertTaskContainer(inspected, t, path.join(process.env.FRAME_HOST_DATA || this.data, "runs", t.id));
+        if (fresh.Running) await this.command("docker", ["stop", "-t", "5", t.container], { timeout: 20000 });
+      }
       return;
     }
     if (timedOut && !state.Running) {
-      await this.failTask(t, "创作超过服务器配置的运行时限，隔离工作区产物已保留，可重新继续。");
+      await this.failTask(t, "任务超过服务器配置的运行时限，临时执行文件将清理。");
     } else {
       try {
-        if (t.kind === "agent") {
-          do { if (!(await this.collectEvents(t))) break; } while (!state.Running);
-        } else {
-          const log = this.localProcesses ? this.localProcesses.logs(t.id)
-            : await this.command("docker", ["logs", "--tail", "1500", t.container], { timeout: 10000, max: 1024 * 1024, combined: true });
-          if (log !== this.logs.get(t.id)) {
-            const old = this.logs.get(t.id) || "";
-            const delta = log.startsWith(old) ? log.slice(old.length) : log;
-            if (delta) await this.db.event(t.id, "log", { text: delta.slice(-64000) });
-            this.logs.set(t.id, log);
-          }
+        const log = this.localProcesses ? this.localProcesses.logs(t.id)
+          : await this.command("docker", ["logs", "--tail", "1500", t.container], { timeout: 10000, max: 1024 * 1024, combined: true });
+        if (log !== this.logs.get(t.id)) {
+          const old = this.logs.get(t.id) || "";
+          const delta = log.startsWith(old) ? log.slice(old.length) : log;
+          if (delta) await this.db.event(t.id, "log", { text: delta.slice(-64000) });
+          this.logs.set(t.id, log);
         }
       } catch (e) {
         diagnosticError = true;
@@ -105,13 +105,9 @@ export class TaskMonitor {
       this.monitorWarnings.delete(t.id);
     }
     if (!state.Running && ["succeeded", "failed", "cancelled"].includes((await this.get(t.id)).state)) {
-      if (!this.localProcesses)
-        await this.command("docker", ["rm", t.container], { timeout: 10000 }).catch(() => {});
+      await this.cleanup?.(await this.get(t.id));
       this.logs.delete(t.id);
       this.missingContainers.delete(t.id);
     }
-  }
-  async collectEvents(task) {
-    return ingestAgentEvents(this.db, this.data, task);
   }
 }

@@ -25,7 +25,7 @@ export function workResultOperations({ add, db, data, works, repos, tasks }) {
     async ({ id, task: taskId }) => {
       const work = await works.get(id);
       const task = await db.one(
-        "SELECT * FROM tasks WHERE id=$1 AND repo=$2 AND project=$3 AND kind IN ('agent','paseo')",
+        "SELECT * FROM tasks WHERE id=$1 AND repo=$2 AND project=$3 AND kind='paseo'",
         [taskId, work.repo, work.project],
       );
       if (!task) throw problem(404, "创作结果不属于当前作品");

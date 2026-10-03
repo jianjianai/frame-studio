@@ -7,6 +7,7 @@ import {
   Square,
   Image,
   FileText,
+  Copy,
 } from "lucide-react";
 import {
   api,
@@ -24,6 +25,52 @@ import {
   date,
 } from "./ui";
 import { reviewTime } from "./review-text";
+
+const sourceRevision = (task) =>
+  task?.frozen?.sourceRevision ||
+  task?.sourceRevision ||
+  task?.result?.sourceRevision ||
+  task?.sourceCommit ||
+  task?.source_commit ||
+  task?.result?.sourceCommit;
+function ExportRevision({ task, notify }) {
+  const revision = sourceRevision(task);
+  const compiledRevision =
+    task?.compiledRevision || task?.result?.compiledRevision;
+  if (!revision) return null;
+  return (
+    <details className="export-revision" aria-label="导出源码版本">
+      <summary>
+        源码版本 <code>{revision.slice(0, 8)}</code>
+      </summary>
+      <div>
+        <code>{revision}</code>
+        <Button
+          type="button"
+          icon={Copy}
+          onClick={async () => {
+            try {
+              await navigator.clipboard.writeText(revision);
+              notify("版本标识已复制");
+            } catch {
+              notify(
+                "无法写入剪贴板，可以选择并复制上方的完整版本标识。",
+                "error",
+              );
+            }
+          }}
+        >
+          复制版本
+        </Button>
+      </div>
+      {compiledRevision && (
+        <div>
+          编译版本 <code>{compiledRevision}</code>
+        </div>
+      )}
+    </details>
+  );
+}
 
 export const exportState = (task) =>
   task.cleaned
@@ -70,6 +117,9 @@ export function Exports({
   work,
   notify,
   position = {},
+  previewReference = {},
+  unsavedEditors = [],
+  onReturnToEditor,
   previewReady,
   browserJob,
   onBrowserExport,
@@ -111,6 +161,29 @@ export function Exports({
       <p>
         统一选择画面参数，再选择导出位置。导出使用作品原始音轨设置；预览中的临时调音不会影响成片。
       </p>
+      {unsavedEditors.length > 0 && (
+        <section
+          className="export-unsaved"
+          aria-label="导出前未保存修改"
+          role="status"
+        >
+          <strong>当前有未保存的编辑</strong>
+          <p>
+            导出只包含已保存的内容。请先返回保存，或继续导出已保存版本；编辑输入会保留。
+          </p>
+          <div className="row">
+            {unsavedEditors.map((key) => (
+              <Button
+                key={key}
+                type="button"
+                onClick={() => onReturnToEditor?.(key)}
+              >
+                返回{key === "audio" ? "音频" : "合成"}保存
+              </Button>
+            ))}
+          </div>
+        </section>
+      )}
       <Form
         protect={false}
         busy={busy}
@@ -125,13 +198,16 @@ export function Exports({
               throw new Error("请设置有效的导出起止时间");
             if (format === "webm") onBrowserExport(settings);
             else {
-              await api("works_task", {
+              const task = await api("works_task", {
                 id: work.id,
                 kind: "render",
                 input: settings,
               });
               query.refresh();
-              notify("导出已加入后台队列，可关闭本标签页");
+              const revision = sourceRevision(task);
+              notify(
+                `导出${revision ? "版本 " + revision.slice(0, 8) + " " : ""}已加入后台队列，可继续编辑或关闭本标签页`,
+              );
             }
           })
         }
@@ -240,9 +316,12 @@ export function Exports({
         </label>
         <p className="export-explanation">
           {format === "mp4"
-            ? "后台导出按任务执行时的作品源码生成，关闭浏览器仍会继续；保留期限见下方文件记录。"
+            ? "后台导出锁定提交时已保存的作品源码和素材。排队和编码时可以继续创作；关闭浏览器仍会继续。"
             : "本机导出使用当前已加载预览的作品版本。可以关闭此弹窗，但请勿关闭或刷新作品标签页。大文件建议后台导出。"}
         </p>
+        {format === "webm" && (
+          <ExportRevision task={previewReference} notify={notify} />
+        )}
         {format === "webm" && !previewReady && (
           <p role="status">请等待播放器加载完成后再使用本机导出。</p>
         )}
@@ -269,6 +348,7 @@ export function Exports({
                 : exportState(browserJob)}
             </span>
           </div>
+          <ExportRevision task={browserJob} notify={notify} />
           {browserBusy && (
             <ExportProgress value={browserJob.progress} label="本机导出进度" />
           )}
@@ -315,6 +395,7 @@ export function Exports({
                   reviewTime(task.input.end)
                 : " · 全片"}
             </p>
+            <ExportRevision task={task} notify={notify} />
             {!task.cleaned && isRunning(task.state) && (
               <ExportProgress value={task.progress} label="后台导出进度" />
             )}

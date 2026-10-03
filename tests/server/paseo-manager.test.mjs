@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { once } from "node:events";
 import { fixture, until } from "./paseo-test-fixture.mjs";
-import { command } from "../../server/process.mjs";
+import { holdSharedSpeechPreparation } from "./paseo-speech-model-fixture.mjs";
 import { PaseoManager, paseoProcessEnvironment } from "../../server/paseo-manager.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
@@ -37,10 +37,11 @@ async function managedFixture(t, options = {}) {
   process.env.FRAME_PASEO_ROOT = selectedRuntime;
   t.after(() => { if (previous === undefined) delete process.env.FRAME_PASEO_ROOT; else process.env.FRAME_PASEO_ROOT = previous; });
   manager = new PaseoManager({ ...f, localMode: true, tasks: {}, connections: { list: async () => [] }, startTimeoutMs: 45000, ...options });
+  await holdSharedSpeechPreparation(manager, { runtimeRoot: selectedRuntime });
   return { ...f, manager, selectedRuntime };
 }
 
-test("Actual pinned daemon SDK registers one work, opens native worktrees, cancels terminals and restarts with history intact", { timeout: 120000 }, async t => {
+test("Actual pinned daemon SDK registers one work, rejects alternate workspaces, cancels terminals and restarts with history intact", { timeout: 120000 }, async t => {
   const f = await managedFixture(t);
   const ready = await Promise.all(Array.from({ length: 4 }, () => f.manager.ensure(f.work)));
   assert.equal(new Set(ready.map(value => value.generation)).size, 1);
@@ -58,16 +59,11 @@ test("Actual pinned daemon SDK registers one work, opens native worktrees, cance
   const control = await f.manager.control(f.work.id);
   assert.equal(await f.manager.authorize(f.work.id, control.capability), true);
   assert.equal((await fs.stat(await f.manager.controlPath(f.work.id))).mode & 0o077, 0);
-  const worktree = await client.createPaseoWorktree({ cwd: ready[0].draftRoot, worktreeSlug: "test-native-worktree", action: "branch-off", refName: "frame-draft" });
-  assert.equal(worktree.error, null, JSON.stringify(worktree));
-  assert.ok(worktree.workspace?.workspaceDirectory, JSON.stringify(worktree));
-  const checkout = worktree.workspace.workspaceDirectory;
+  const checkout = ready[0].workspaceRoot;
   const resolved = await f.manager.resolveAgentWorkspace(f.work.id, checkout);
   assert.equal(resolved.checkoutRoot, checkout);
   assert.equal(resolved.hostCwd, checkout);
-  const scriptResult = JSON.parse(await command(process.execPath, ["scripts/work-tool.mjs", "capabilities"], { cwd: checkout, timeout: 10000 }));
-  assert.equal(scriptResult.schemaVersion, 1);
-  assert.ok(scriptResult.items?.length, "Official worktree must preserve FRAME tooling");
+  await assert.rejects(f.manager.resolveAgentWorkspace(f.work.id, path.join(f.data, "paseo", f.work.id, "home/.paseo/worktrees/alternate")), error => error.statusCode === 403);
   const originalAgent = f.manager.agent;
   f.manager.agent = async (_id, agentId) => ({ id: agentId, status: "running", cwd: checkout });
   const credential = await f.manager.agentCredential(f.work.id, "active-worktree-agent");
@@ -76,9 +72,11 @@ test("Actual pinned daemon SDK registers one work, opens native worktrees, cance
   const other = await f.manager.agentCredential(f.work.id, "other-agent");
   assert.notEqual(other, credential);
   f.manager.agent = originalAgent;
-  const terminal = await client.createTerminal(ready[0].draftRoot, "Owned long-running terminal", undefined,
-    { workspaceId: first.workspaceId, command: process.execPath, args: ["-e", "process.stdout.write('owned-test');setInterval(()=>{},1000)"] });
+  const terminal = await client.createTerminal(ready[0].workspaceRoot, "Owned long-running terminal", undefined,
+    { workspaceId: first.workspaceId, command: process.execPath, args: ["-e", "const fs=require('node:fs');fs.mkdirSync('projects/fixture/.cache',{recursive:true});fs.writeFileSync('projects/fixture/.cache/runtime-env.json',JSON.stringify({root:process.env.FRAME_SHARED_RUNTIME_ROOT,fingerprint:process.env.FRAME_SHARED_RUNTIME_FINGERPRINT}));process.stdout.write('owned-test');setInterval(()=>{},1000)"] });
   assert.ok(terminal.terminal?.id, JSON.stringify(terminal));
+  const nativeEnvironment = await until(async () => fs.readFile(path.join(f.canonical, ".cache/runtime-env.json"), "utf8").then(JSON.parse).catch(error => { if (error.code === "ENOENT") return null; throw error; }));
+  assert.deepEqual(nativeEnvironment, { root: path.resolve(root), fingerprint: first.runtimeFingerprint });
   await until(async () => (await f.manager.observe(f.work.id, { refresh: true })).activeTerminals > 0, "Native terminal was never observed working", 10000);
   const active = await f.manager.active({ repo: f.work.repo, project: f.work.project });
   assert.equal(active.length, 1);
@@ -87,7 +85,7 @@ test("Actual pinned daemon SDK registers one work, opens native worktrees, cance
   assert.equal(cancelled.stopped, 1);
   await until(async () => (await f.manager.observe(f.work.id, { refresh: true })).activeTerminals === 0, "Native terminal remained active after cancel", 10000);
   const prepared = await f.workService.prepare(f.work.id);
-  await fs.writeFile(path.join(prepared.draft.projectRoot, "scene.ts"), "export const durableManualEdit=true;");
+  await fs.writeFile(path.join(prepared.workspace.projectRoot, "scene.ts"), "export const durableManualEdit=true;");
   const child = f.manager.children.get(f.work.id);
   await f.manager.stop(f.work.id);
   if (child.exitCode === null && child.signalCode === null) await once(child, "exit");
@@ -95,15 +93,15 @@ test("Actual pinned daemon SDK registers one work, opens native worktrees, cance
   assert.equal(stopped.state, "stopped");
   const reopened = await f.manager.ensure(f.work.id);
   assert.equal(BigInt(reopened.generation), BigInt(stopped.daemonGeneration) + 1n);
-  assert.equal(await fs.readFile(path.join(prepared.draft.projectRoot, "scene.ts"), "utf8"), "export const durableManualEdit=true;");
+  assert.equal(await fs.readFile(path.join(prepared.workspace.projectRoot, "scene.ts"), "utf8"), "export const durableManualEdit=true;");
   assert.equal((await f.manager.control(f.work.id)).capability, control.capability);
 });
 
-function stateManager({ summary = {}, row = {}, schedules = [], candidates = [] } = {}) {
+function stateManager({ summary = {}, row = {}, schedules = [], validations = [] } = {}) {
   const binding = { workId: "owned-work", repo: "repo", project: "film", state: "ready", daemonGeneration: "1",
     endpoint: "http://owned.invalid", workspaceId: "workspace", touched: new Date(0).toISOString(), runtimeFingerprint: "old", ...row };
   const changes = [], actions = [];
-  const store = { getWork: async () => binding, listWorks: async () => [binding], listCandidates: async () => candidates,
+  const store = { getWork: async () => binding, listWorks: async () => [binding], listValidations: async () => validations,
     updateRuntime: async (_id, patch) => { changes.push(patch); Object.assign(binding, patch); return binding; } };
   const manager = new PaseoManager({ store, data: "/unused", localMode: true, tasks: {}, db: { setting: async () => null },
     workService: { works: { get: async () => ({ id: binding.workId }) } }, connections: { list: async () => [] } });
@@ -121,7 +119,7 @@ function stateManager({ summary = {}, row = {}, schedules = [], candidates = [] 
   return { manager, binding, actions, changes };
 }
 
-test("Idle eviction and runtime upgrades respect active agents, permissions, terminals, schedules, candidates and incomplete pagination", async () => {
+test("Idle eviction and runtime upgrades respect active agents, permissions, terminals, schedules, validations and incomplete pagination", async () => {
   for (const summary of [{ agents: [{ id: "a", status: "running" }] }, { agents: [{ id: "a", status: "idle", pendingPermissions: [{}] }] },
     { terminals: [{ id: "t", activity: { state: "working" } }] }, { terminals: [{ id: "unknown-terminal", activity: null }] },
     { terminals: [{ id: "waiting-terminal", activity: { state: "idle", attentionReason: "needs_input" } }] }, { incomplete: true }]) {
@@ -129,7 +127,7 @@ test("Idle eviction and runtime upgrades respect active agents, permissions, ter
     await f.manager.tick();
     assert.deepEqual(f.actions, []);
   }
-  const candidate = stateManager({ candidates: [{ state: "validating" }] });
+  const candidate = stateManager({ validations: [{ state: "running" }] });
   await candidate.manager.tick();
   assert.deepEqual(candidate.actions, []);
   const idle = stateManager();

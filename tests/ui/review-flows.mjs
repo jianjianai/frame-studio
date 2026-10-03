@@ -73,10 +73,13 @@ export async function flowChecks(h) {
     ).toHaveCount(0);
     await dialog.getByRole("button", { name: /返回对话/ }).click();
     await expect(
-      page.getByRole("button", { name: "节奏参考.wav ×", exact: true }),
+      page.getByRole("button", {
+        name: "移除素材引用 节奏参考.wav",
+        exact: true,
+      }),
     ).toBeVisible();
   });
-  await check("先试听再采用原音频，编排只写入AI草稿", async () => {
+  await check("先试听再采用原音频，编排要求只带入Paseo输入框", async () => {
     await more("配音");
     const dialog = page.getByRole("complementary", {
       name: "配音",
@@ -221,6 +224,15 @@ export async function flowChecks(h) {
       start: 0.5,
       end: 1.5,
     });
+    await expect(
+      dialog.locator('.export-item details[aria-label="导出源码版本"]'),
+    ).toContainText(state.live.sourceRevision.slice(0, 8));
+    await dialog
+      .locator('.export-item details[aria-label="导出源码版本"] summary')
+      .click();
+    await expect(
+      dialog.locator('.export-item details[aria-label="导出源码版本"]'),
+    ).toContainText(state.live.sourceRevision);
     await dialog.getByRole("button", { name: "停止导出", exact: true }).click();
     await expect(
       dialog.getByRole("button", { name: "停止导出", exact: true }),

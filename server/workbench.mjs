@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { operationContracts, workIdRequestSchema, workSyncStatusRequestSchema, workChatTurnsRequestSchema } from "../src/contracts/platform.mjs";
+import { operationContracts, workIdRequestSchema, workSyncStatusRequestSchema } from "../src/contracts/platform.mjs";
 import {
   modelIdSchema,
   providerModelsSchema,
@@ -7,6 +7,7 @@ import {
 import { problem } from "./security.mjs";
 import { RuntimeStatus } from "./runtime-status.mjs";
 import { workQueueStatus } from "./task-diagnostics.mjs";
+import { paseoPublicValidation } from "./paseo-work.mjs";
 
 export function workbenchOperations({
   add,
@@ -28,6 +29,12 @@ export function workbenchOperations({
   });
   add("works_queue_status", "Explain queued work from current blockers, controller heartbeat and capacity without re-running a task", workIdRequestSchema,
     ({ id }) => workQueueStatus({ db, works, tasks, id }));
+  add("works_paseo_status", "Read the single work workspace and its revision-bound validation report", workIdRequestSchema,
+    ({ id }) => works.paseo.work.status(id));
+  add("works_paseo_validate", "Retry verification of the current work revision in its existing runtime", workIdRequestSchema,
+    async ({ id }) => {
+      return paseoPublicValidation(await works.paseo.workspace.request(id, { wait: false }));
+    });
   add(
     "system_status",
     "Read execution readiness, task backlog, disk capacity and migration versions",
@@ -111,9 +118,19 @@ export function workbenchOperations({
     const result = await db.all(
       `SELECT w.*,r.name AS storage_name,jsonb_agg(jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'created',t.created,'started',t.started) ORDER BY t.created) AS tasks FROM tasks t JOIN works w ON w.repo=t.repo AND w.project=t.project JOIN repos r ON r.id=w.repo WHERE t.state IN ('queued','running','cancelling','publishing','publish_failed') GROUP BY w.id,r.name ORDER BY min(t.created)`,
     );
-    for (const native of await tasks.externalActivity?.() || []) {
-      let row = result.find(work => work.id === native.workId);
-      if (!row) { row = { ...(await works.get(native.workId)), tasks: [] }; result.push(row); }
+    const byId = new Map(result.map(work => [work.id, work]));
+    const activity = await tasks.externalActivity?.({ refresh: false }) || [];
+    const missing = activity.filter(native => !byId.has(native.workId)).map(native => native.workId);
+    if (missing.length) {
+      for (const work of await db.all("SELECT w.*,r.name AS storage_name FROM works w JOIN repos r ON r.id=w.repo WHERE w.id=ANY($1::uuid[]) AND NOT w.deleted", [missing])) {
+        const row = { ...work, tasks: [] };
+        result.push(row);
+        byId.set(work.id, row);
+      }
+    }
+    for (const native of activity) {
+      const row = byId.get(native.workId);
+      if (!row) continue;
       row.nativeActivity = native;
     }
     return result;
@@ -305,30 +322,13 @@ export function workbenchOperations({
     (a) => connections.submit(a.id, a.code),
   );
   add(
-    "works_chat_turns",
-    "Paginate one conversation independently of other work activity",
-    workChatTurnsRequestSchema,
-    async (a) => {
-      const w = await works.get(a.id);
-      const chat = await db.one(
-        "SELECT id FROM chats WHERE id=$1 AND repo=$2 AND project=$3",
-        [a.chat, w.repo, w.project],
-      );
-      if (!chat) throw problem(404, "Conversation not found");
-      return db.all(
-        "SELECT * FROM tasks WHERE chat=$1 AND ($2::uuid IS NULL OR (created,id)<(SELECT created,id FROM tasks WHERE id=$2 AND chat=$1)) ORDER BY created DESC,id DESC LIMIT $3",
-        [a.chat, a.before || null, a.limit],
-      );
-    },
-  );
-  add(
     "works_exports",
     "List temporary video exports and expiration dates",
     workIdRequestSchema,
     async (a) => {
       const w = await works.get(a.id);
       return db.all(
-        "SELECT id,state,error,result,input,progress,created,expires,cleaned FROM tasks WHERE repo=$1 AND project=$2 AND (kind='render' OR (kind IN ('agent','paseo') AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(result->'artifacts','[]'::jsonb)) artifact WHERE lower(right(artifact->>'path',4))='.mp4' OR lower(right(artifact->>'path',5))='.webm'))) ORDER BY created DESC LIMIT 50",
+        "SELECT id,state,error,result,input,progress,created,expires,cleaned,source_commit,fingerprint,frozen,workspace_cleaned,cleanup_error FROM tasks WHERE repo=$1 AND project=$2 AND (kind='render' OR (kind='paseo' AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(result->'artifacts','[]'::jsonb)) artifact WHERE lower(right(artifact->>'path',4))='.mp4' OR lower(right(artifact->>'path',5))='.webm'))) ORDER BY created DESC LIMIT 50",
         [w.repo, w.project],
       );
     },

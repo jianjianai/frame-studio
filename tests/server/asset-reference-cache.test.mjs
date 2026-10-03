@@ -188,28 +188,37 @@ test("asset digests detect same-size inode replacements and refuse links after c
 
 test("nanosecond changes invalidate digests even when millisecond attributes coincide", async (t) => {
   const assets = fixture(t);
-  const file = path.join(assets.data, "media.bin");
-  fs.writeFileSync(file, "old");
-  assert.equal(await assets.digestFile(file), hash("old"));
-  const prior = await fsp.lstat(file, { bigint: true });
-  fs.writeFileSync(file, "new");
-  const original = fsp.lstat;
-  fsp.lstat = async (...args) => {
-    const stat = await original(...args);
-    if (args[0] !== file || !args[1]?.bigint) return stat;
-    // Model two metadata updates inside the same millisecond; the hasher still
-    // opens and verifies the actual file independently using regular stats.
-    return Object.assign(Object.create(stat), {
-      mtimeMs: prior.mtimeMs,
-      ctimeMs: prior.ctimeMs,
-      mtimeNs: prior.mtimeNs + 1n,
-      ctimeNs: prior.ctimeNs + 1n,
-    });
-  };
-  try {
+  const metadata = new Map(), originalLstat = fsp.lstat, originalOpen = fsp.open;
+  const observed = (file, stat) => metadata.has(file)
+    ? Object.assign(Object.create(stat), metadata.get(file)) : stat;
+  t.mock.method(fsp, "lstat", async (...args) => {
+    const stat = await originalLstat(...args);
+    return args[1]?.bigint ? observed(args[0], stat) : stat;
+  });
+  t.mock.method(fsp, "open", async (...args) => {
+    const handle = await originalOpen(...args);
+    if (metadata.has(args[0])) {
+      const originalStat = handle.stat.bind(handle);
+      t.mock.method(handle, "stat", async options => {
+        const stat = await originalStat(options);
+        return options?.bigint ? observed(args[0], stat) : stat;
+      });
+    }
+    return handle;
+  });
+  for (const changed of ["mtimeNs", "ctimeNs"]) {
+    const file = path.join(assets.data, changed + ".bin");
+    fs.writeFileSync(file, "old");
+    const prior = await originalLstat(file, { bigint: true });
+    const initial = { mtimeMs: prior.mtimeMs, ctimeMs: prior.ctimeMs,
+      mtimeNs: prior.mtimeMs * 1000000n + 100n, ctimeNs: prior.ctimeMs * 1000000n + 100n };
+    metadata.set(file, initial);
+    assert.equal(await assets.digestFile(file), hash("old"));
+    fs.writeFileSync(file, "new");
+    // Path and descriptor observe one stable inode. Change each timestamp
+    // independently by one nanosecond while both millisecond values stay fixed.
+    metadata.set(file, { ...initial, [changed]: initial[changed] + 1n });
     assert.equal(await assets.digestFile(file), hash("new"));
-  } finally {
-    fsp.lstat = original;
   }
 });
 

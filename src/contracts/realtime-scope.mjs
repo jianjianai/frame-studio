@@ -4,11 +4,10 @@ export const notificationSchema = z.object({
   repo: z.string().uuid().nullish(),
   work: z.string().uuid().nullish(),
   task: z.string().uuid().nullish(),
-  chat: z.string().uuid().nullish(),
   project: z.string().max(64).nullish(),
 });
 /** @typedef {import("zod").infer<typeof notificationSchema>} Change */
-/** @typedef {{repo?: string, project?: string, work?: string, task?: string, chat?: string}} Scope */
+/** @typedef {{repo?: string, project?: string, work?: string, task?: string}} Scope */
 /** Invalid notifications conservatively resynchronize; legacy table names still work. @param {string | null} payload @returns {Change | null} */
 export function decodeNotification(payload) {
   if (payload === null) return null;
@@ -29,7 +28,6 @@ export function notificationMatches(change, tables, scope = {}) {
     "project",
     "work",
     "task",
-    "chat",
   ]))
     if (scope[key] && change[key] && scope[key] !== change[key]) return false;
   return true;

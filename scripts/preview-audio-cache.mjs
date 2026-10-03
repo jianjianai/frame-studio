@@ -5,6 +5,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { parse } from "@babel/parser";
 import { readProject, visitNodes } from "./project-metadata.mjs";
 import { projectPath, assetPath, inside } from "./project-paths.mjs";
+import { sharedRuntime } from "./shared-runtime.mjs";
 
 const digest = value => createHash("sha256").update(value).digest("hex");
 const ignored = new Set(["exports", ".cache", ".history", "records", ".git", "node_modules", "test-results", "playwright-report"]);
@@ -40,9 +41,16 @@ export async function audioCacheKeys(root, id, runtime = {}) {
   root = path.resolve(root);
   const projectFile = projectPath(root, id, "project.ts"), record = readProject(projectFile);
   const tracks = [...(record.meta.audioTracks ?? (record.meta.audio ? [{ id: "main", kind: "file", src: record.meta.audio }] : [])), ...visualAudioTracks(record.meta.visual)];
-  const common = new Map();
-  for (const name of ["src/engine", "src/contracts", "public", "package.json", "pnpm-lock.yaml", "scripts/preview-audio.mjs", "scripts/preview-audio-cache.mjs"])
+  const common = new Map(), shared = sharedRuntime(root);
+  const pinnedCommon = name => shared?.names.has(name.split("/")[0]);
+  if (shared) common.set("runtimeFingerprint", shared.fingerprint);
+  for (const name of ["src/engine", "src/contracts", "public", "package.json", "pnpm-lock.yaml", "scripts/preview-audio.mjs", "scripts/preview-audio-cache.mjs"]) {
+    // Only verified top-level runtime links use the immutable runtime identity.
+    // Authored files/media and ordinary CLI inputs still require their own bytes.
+    if (pinnedCommon(name)) continue;
     await inventory(root, common, path.join(root, name));
+  }
+  const lockFile = path.join(pinnedCommon("pnpm-lock.yaml") ? shared.root : root, "pnpm-lock.yaml");
   const generated = new Map(), visited = new Set();
   let conservative = false;
   const visit = async file => {
@@ -70,7 +78,7 @@ export async function audioCacheKeys(root, id, runtime = {}) {
       } else if (node.type === "CallExpression" && ["glob", "globEager", "require", "eval"].includes(node.callee?.property?.name || node.callee?.name)) conservative = true;
     });
     for (const dep of dependencies) {
-      if (!dep.startsWith(".")) { if (dep.startsWith("/") || dep.includes(":") || !(await stat(path.join(root, "pnpm-lock.yaml")))) conservative = true; continue; }
+      if (!dep.startsWith(".")) { if (dep.startsWith("/") || dep.includes(":") || !(await stat(lockFile))) conservative = true; continue; }
       const dependency = await resolveModule(path.resolve(path.dirname(file), dep.split(/[?#]/)[0]));
       if (dependency) await visit(dependency); else conservative = true;
     }

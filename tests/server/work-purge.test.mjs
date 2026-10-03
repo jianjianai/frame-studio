@@ -90,23 +90,14 @@ for (const backend of ["sqlite", "postgres"]) {
         const asset = await call("upload_finish", { id: upload.id });
         await call("works_use_asset", { id: a.id, asset: asset.id });
         await call("works_use_asset", { id: b.id, asset: asset.id });
-        const chat = randomUUID(),
-          task = randomUUID(),
+        const task = randomUUID(),
           version = randomUUID(),
           undo = randomUUID();
         await db.pool.query(
-          "INSERT INTO chats(id,repo,project,provider,title) VALUES($1,$2,$3,'codex','fixture')",
-          [chat, repo.id, a.project],
+          "INSERT INTO tasks(id,repo,project,kind,state,input,finished) VALUES($1,$2,$3,'paseo','succeeded',$4,now())",
+          [task, repo.id, a.project, {}],
         );
-        await db.pool.query(
-          "INSERT INTO tasks(id,repo,project,kind,state,input,chat,finished) VALUES($1,$2,$3,'agent','succeeded',$4,$5,now())",
-          [task, repo.id, a.project, {}, chat],
-        );
-        await db.event(task, "message", { text: "fixture" });
-        await db.pool.query(
-          "INSERT INTO agent_tokens(hash,task) VALUES($1,$2)",
-          ["fixture-token", task],
-        );
+        await db.event(task, "log", { text: "fixture" });
         await db.pool.query(
           "INSERT INTO work_versions(id,work,name) VALUES($1,$2,'fixture')",
           [version, a.id],
@@ -119,7 +110,6 @@ for (const backend of ["sqlite", "postgres"]) {
         for (const folder of [
           path.join(data, "runs", task),
           path.join(data, "sessions", task),
-          path.join(data, "sessions", chat),
           path.join(data, "versions", version),
           path.join(data, "restores", "undo-" + undo),
         ]) {
@@ -244,11 +234,9 @@ for (const backend of ["sqlite", "postgres"]) {
             await assert.rejects(actions.works.get(a.id), { statusCode: 404 });
             for (const [table, column, value] of [
               ["tasks", "id", task],
-              ["chats", "id", chat],
               ["work_versions", "work", a.id],
               ["work_undos", "work", a.id],
               ["events", "task", task],
-              ["agent_tokens", "task", task],
             ])
               assert.equal(
                 (
@@ -265,10 +253,6 @@ for (const backend of ["sqlite", "postgres"]) {
             assert.equal(fs.existsSync(path.join(data, "runs", task)), false);
             assert.equal(
               fs.existsSync(path.join(data, "versions", version)),
-              false,
-            );
-            assert.equal(
-              fs.existsSync(path.join(data, "sessions", chat)),
               false,
             );
             assert.equal(

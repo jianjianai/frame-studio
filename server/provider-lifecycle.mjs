@@ -3,22 +3,22 @@ import fs from "node:fs";
 import path from "node:path";
 import { hash, problem } from "./security.mjs";
 
-export async function providerUsage(db, id) {
+export async function providerUsage(db, id, nativeActivity) {
   const row = await db.one("SELECT state FROM connections WHERE id=$1", [id]);
   if (!row || row.state === "deleted")
     throw problem(404, "提供商已删除或不存在");
-  return db.one(
+  const usage = await db.one(
     `SELECT
-    (SELECT count(*)::int FROM chats WHERE connection=$1) AS chats,
     (SELECT count(*)::int FROM tasks t WHERE
-      (t.input->>'connection'=$1::text OR t.chat IN (SELECT id FROM chats WHERE connection=$1))
+      (t.input->>'connection'=$1::text OR t.execution->>'connection'=$1::text)
       AND t.state IN ('queued','running','cancelling','publishing','publish_failed')) AS "activeTasks",
-    (SELECT count(*)::int FROM auth_flows WHERE target=$1 AND state='pending') AS "pendingLogins"`,
+    (SELECT count(*)::int FROM auth_flows WHERE target=$1::uuid AND state='pending') AS "pendingLogins"`,
     [id],
   );
+  return { ...usage, nativeActive: !!(await nativeActivity?.(id)) };
 }
 
-/** A secret-free tombstone preserves chat/task identity; it can never resolve or be re-enabled. */
+/** A secret-free tombstone preserves provider identity; it can never resolve or be re-enabled. */
 export async function deleteProvider(
   connections,
   { id, expectedRevision, confirmName },
@@ -83,7 +83,6 @@ export async function deleteProvider(
     return {
       id,
       deleted: true,
-      preservedChats: usage.chats,
       ...(warning ? { warning } : {}),
     };
   });

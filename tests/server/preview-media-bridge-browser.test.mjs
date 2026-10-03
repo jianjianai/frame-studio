@@ -126,6 +126,7 @@ test(
       },
       server: {
         hmr: false,
+        watch: null,
         host: "127.0.0.1",
         port: Number(process.env.FRAME_TEST_PORT || 55845),
         strictPort: true,

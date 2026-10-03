@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
 import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { expect } from "@playwright/test";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
@@ -12,7 +13,6 @@ import {
 } from "../ui/paseo-boundary-fixture.mjs";
 
 const workId = "e68a0b4b-0a63-463e-861b-7f3403220255";
-const taskId = "485dc032-fdb9-43e2-b8ec-e383d5bcb424";
 const component = `
 import React from 'react';
 import {createRoot} from 'react-dom/client';
@@ -66,11 +66,12 @@ addEventListener('message',event=>{
 });
 </script></body></html>`;
 
-function installBackend({ workId, taskId }) {
+function installBackend({ workId }) {
   const Native = WebSocket;
   window.fixtureCalls = [];
   window.fixtureTasks = [];
   window.fixtureSockets = [];
+  window.fixturePreviewGeneration = 0;
   const resultFor = (name, args) => {
     if (name === "works_open")
       return {
@@ -94,12 +95,12 @@ function installBackend({ workId, taskId }) {
       return { remote: false, dirty: 0, ahead: 0, behind: 0 };
     if (name === "works_live_preview")
       return {
-        url: "/__media-player?source=" + (args.task ? "task" : "work"),
-        sessionId: args.task
+        url: "/__media-player?source=work&generation=" + window.fixturePreviewGeneration,
+        sessionId: window.fixturePreviewGeneration
           ? "c46d6bcd-bca7-40fb-b454-b25b078e55e7"
           : "b79b5738-b9ab-46ca-953b-168e1bfc9c60",
         sourceRevision: "a".repeat(64),
-        source: args.task ? "task" : "work",
+        source: "work",
         state: "ready",
         revision: 1,
         expires: new Date(Date.now() + 3600000).toISOString(),
@@ -161,19 +162,7 @@ function installBackend({ workId, taskId }) {
           });
     }
   };
-  window.joinDraft = () => {
-    window.fixtureTasks = [
-      {
-        id: taskId,
-        kind: "agent",
-        state: "running",
-        work_id: workId,
-        chat: "other-chat",
-        created_at: new Date().toISOString(),
-      },
-    ];
-    for (const socket of window.fixtureSockets) socket.pushTasks();
-  };
+  window.replacePreviewSession = () => { window.fixturePreviewGeneration++; };
 }
 
 test(
@@ -181,10 +170,8 @@ test(
   { timeout: 120000 },
   async () => {
     const virtualFile = path.resolve("tests/ui/preview-media-fixture.jsx");
-    const cacheDir = path.resolve(".cache/tests/preview-media-" + process.pid);
-    const screenshots = path.resolve(
-      ".cache/frontend-validation/preview-media",
-    );
+    const cacheDir = path.resolve(".cache/tests/preview-media-" + randomUUID());
+    const screenshots = path.join(cacheDir, "screenshots");
     const server = await createServer({
       configFile: false,
       root: process.cwd(),
@@ -196,7 +183,7 @@ test(
         port: Number(process.env.FRAME_TEST_PORT || 55841),
         strictPort: true,
         cors: true,
-        watch: { ignored: ["**/.cache/**", "**/exports/**"] },
+        watch: null,
       },
       plugins: [
         react(),
@@ -244,7 +231,7 @@ test(
         if (message.type() === "error")
           console.error("media-console", message.text());
       });
-      await page.addInitScript(installBackend, { workId, taskId });
+      await page.addInitScript(installBackend, { workId });
       const origin = "http://127.0.0.1:" + server.httpServer.address().port;
       const paseo = paseoBoundaryBootstrap({ workId, origin });
       await page.route("**/api/paseo/**", (route) => {
@@ -550,10 +537,14 @@ test(
         "material settings open on the right",
       );
 
-      // On a different AI draft attachment, late state carrying the prior nonce
+      // After reconnecting the canonical preview, late state carrying the prior nonce
       // must be ignored even if posted by the new iframe's WindowProxy.
-      await page.evaluate(() => window.joinDraft());
-      await expect(iframe).toHaveAttribute("src", /source=task/);
+      await page.evaluate(() => window.replacePreviewSession());
+      await frame.evaluate(() => parent.postMessage({
+        type: "frame-live-preview", state: "error", error: "Fixture connection lost",
+      }, "*"));
+      await page.getByRole("button", { name: "重新连接实时预览", exact: true }).click();
+      await expect(iframe).toHaveAttribute("src", /source=work&generation=1/);
       frame = await currentFrame();
       await frame.waitForFunction(() => window.fixtureReady && window.channel);
       assert.notEqual(
@@ -603,7 +594,11 @@ test(
       await expect(pane.locator("summary")).toBeVisible();
       for (const width of [390, 274]) {
         await page.setViewportSize({ width, height: 844 });
-        await page.keyboard.press("Escape");
+        if (await pane.isVisible()) {
+          await expect(page.locator("#work-dock")).toHaveAttribute("role", "dialog");
+          await expect(radio("完整缓存")).toBeFocused();
+          await page.keyboard.press("Escape");
+        }
         await expect(pane).toBeHidden();
         const menu = page.getByRole("button", {
           name: "作品工具菜单",

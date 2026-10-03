@@ -1,0 +1,15 @@
+diff --git a/packages/server/src/server/worktree-session.ts b/packages/server/src/server/worktree-session.ts
+--- a/packages/server/src/server/worktree-session.ts
++++ b/packages/server/src/server/worktree-session.ts
+@@ -613,6 +613,11 @@ export async function createPaseoWorktreeWorkflow(
+     setupContinuation?: CreatePaseoWorktreeSetupContinuationInput;
+   },
+ ): Promise<CreatePaseoWorktreeWorkflowResult> {
++  // All native RPC and MCP creation paths share this workflow.
++  if (process.env.FRAME_PASEO_WORK_ID) {
++    throw new Error("FRAME 的所有 Agent 共用作品共享工作区，不能创建额外 worktree。");
++  }
++
+   const createdWorktree = await dependencies.createPaseoWorktree(
+     {
+       ...input,

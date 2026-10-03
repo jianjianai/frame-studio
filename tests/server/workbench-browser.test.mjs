@@ -1,7 +1,6 @@
 import { sourceControlFlow } from "../ui/source-control-flow.mjs";
 import { runtimeIdentity } from "../../scripts/runtime-identity.mjs";
 import test from "node:test";
-import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -27,7 +26,7 @@ test(
     await db.pool.query(
       "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
     );
-    const { app, actions, tasks } = await createApp({
+    const { app, actions, tasks, paseo } = await createApp({
       db,
       data,
       masterKey: "33".repeat(32),
@@ -229,23 +228,8 @@ test(
         path: path.join(platformRoot, ".cache/validation/workbench-mobile.png"),
       });
       await page.setViewportSize({ width: 1500, height: 1000 });
-      const connection = await call("connections_save", {
-          name: "测试连接",
-          tool: "codex",
-          mode: "api",
-          apiKey: "test-fixture-only",
-          model: "fixture",
-        }),
-        chat = await insertLegacyChat(db, work, {
-          id: work.id,
-          connection: connection.id,
-          title: "后台连续性",
-        });
-      const queued = await legacyAgentTask(tasks, work, {
-        id: work.id,
-        chat: chat.id,
-        prompt: "继续制作",
-        requestKey: randomUUID(),
+      const queued = await call("works_task", {
+        id: work.id, kind: "render", requestKey: randomUUID(),
       });
       await page.getByRole("button", { name: "后台任务", exact: true }).click();
       await page.getByRole("progressbar", { name: "后台任务进度" }).waitFor();
@@ -276,10 +260,32 @@ test(
       );
       await reopened.getByRole("button", { name: "停止", exact: true }).click();
       await reopened.getByText("当前没有在后台运行的项目。").waitFor();
+      await paseo.store.ensureWork({ workId: work.id, repo: repo.id, project: work.project, revision: "b".repeat(64) });
+      let nativeRunning = true;
+      const nativeActivity = tasks.externalActivity;
+      const nativeCancel = paseo.manager.cancelWork;
+      tasks.externalActivity = async () => nativeRunning ? [{ workId: work.id, repo: repo.id, project: work.project,
+        state: "ready", activeAgents: ["owned-native-agent"], activeTerminals: 1, pendingPermissions: 1, incomplete: false }] : [];
+      paseo.manager.cancelWork = async id => {
+        assert.equal(id, work.id);
+        nativeRunning = false;
+        await paseo.store.updateRuntime(id, { state: "stopped" });
+        return { stopped: 2 };
+      };
+      await paseo.store.updateRuntime(work.id, { state: "ready" });
+      await reopened.getByText("Paseo · 1 个对话正在运行", { exact: true }).waitFor();
+      await reopened.getByText("终端 · 1 项正在运行", { exact: true }).waitFor();
+      await reopened.getByText("Paseo · 等待权限确认", { exact: true }).waitFor();
+      assert.equal(await reopened.getByRole("button", { name: "停止", exact: true }).isEnabled(), true);
+      assert.equal((await call("works_background"))[0].storage_name, "作品浏览器测试");
+      await reopened.getByRole("button", { name: "停止", exact: true }).click();
+      await reopened.getByText("当前没有在后台运行的项目。").waitFor();
+      tasks.externalActivity = nativeActivity;
+      paseo.manager.cancelWork = nativeCancel;
       await reopened.goto(origin + "/#/repository/" + repo.id);
       await reopened.getByLabel("MCP 测试操作").click();
       await reopened
-        .getByRole("menuitem", { name: "移入回收站", exact: true })
+        .getByRole("menuitem", { name: "删除", exact: true })
         .click();
       const confirm = reopened.getByRole("dialog", { name: "移入回收站" });
       const trash = confirm.getByRole("button", {

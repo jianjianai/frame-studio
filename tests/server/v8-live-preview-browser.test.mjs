@@ -655,38 +655,21 @@ test(
           interruptedURL.split("/").pop(),
       );
 
-      // An actual isolated agent task draft is a second source; it must neither publish
-      // nor overwrite the source project merely because the user previews it.
-      const taskId = randomUUID(),
-        runDir = path.join(data, "runs", taskId, "projects/test-film");
-      fs.cpSync(projectDir, runDir, { recursive: true });
-      fs.writeFileSync(path.join(runDir, "scene.ts"), scene(colors.green));
-      await db.pool.query(
-        "INSERT INTO tasks(id,repo,project,kind,state,input) VALUES($1,$2,'test-film','agent','running','{}')",
-        [taskId, repository.id],
-      );
-      const draft = await actions.call("works_live_preview", {
+      // A retired task selector cannot create a competing live source. Reopening
+      // the work retains its canonical session and the accepted source revision.
+      await assert.rejects(actions.call("works_live_preview", {
         id: work.id,
-        task: taskId,
-      });
-      assert.notEqual(draft.sessionId, live.sessionId);
-      const draftPage = await context.newPage();
-      await draftPage.goto(origin + draft.url + "?debug=1", {
-        waitUntil: "domcontentloaded",
-      });
-      await draftPage.waitForFunction(
-        () => window.__FRAME_STUDIO__?.ready,
-        null,
-        { timeout: 90000 },
-      );
-      await waitColor(draftPage, colors.green);
-      fs.writeFileSync(path.join(runDir, "scene.ts"), scene(colors.blue));
-      await waitColor(draftPage, colors.blue);
+        task: randomUUID(),
+      }), (error) => error.name === "ZodError" && error.issues.some(
+        (issue) => issue.code === "unrecognized_keys" && issue.keys.includes("task"),
+      ));
+      const reopened = await actions.call("works_live_preview", { id: work.id });
+      assert.equal(reopened.sessionId, live.sessionId);
       await waitColor(page, "#0f766e");
       assert.equal(
         fs.readFileSync(path.join(projectDir, "scene.ts"), "utf8"),
         scene("#0f766e"),
-        "draft preview never modifies work source",
+        "rejected alternate preview never modifies canonical work source",
       );
       assert.equal(
         Number(
@@ -698,7 +681,6 @@ test(
         ),
         0,
       );
-      await draftPage.close();
 
       assert.deepEqual(
         consoleErrors.filter(

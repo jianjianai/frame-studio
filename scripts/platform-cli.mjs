@@ -112,8 +112,6 @@ try {
         "task_create",
         "works_browser",
         "works_version_preview",
-        "works_chat_send",
-        "chat_send",
         "task_retry_publish",
       ].includes(name.replace(/^frame_/, ""))
     )

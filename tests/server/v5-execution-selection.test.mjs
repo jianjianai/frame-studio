@@ -4,8 +4,6 @@ import { randomUUID } from "node:crypto";
 import {
   freezeExecution,
   resolveExecution,
-  resumableSession,
-  continuationContext,
 } from "../../server/execution-selection.mjs";
 
 test("execution selection freezes model without persisting credentials and ignores a display-name change", async () => {
@@ -85,38 +83,4 @@ test("official login identity changes cannot silently reuse a queued selection",
       ),
     (e) => e.code === "EXECUTION_SELECTION_CHANGED",
   );
-  assert.equal(
-    resumableSession(
-      { upstream: "thread", upstream_execution: selection.sessionKey },
-      selection,
-    ),
-    "thread",
-  );
-  assert.equal(
-    resumableSession(
-      { upstream: "thread", upstream_execution: "other" },
-      selection,
-    ),
-    null,
-  );
-  assert.equal(resumableSession({ upstream: "legacy" }, null), "legacy");
-});
-
-test("a changed execution session carries bounded prior context, not an incompatible upstream id", async () => {
-  const db = {
-    all: async (sql) =>
-      sql.includes("FROM tasks")
-        ? [{ id: "t", input: { prompt: "p".repeat(30000) } }]
-        : [{ kind: "message", data: { id: "m", text: "a".repeat(30000) } }],
-  };
-  const result = await continuationContext(
-    db,
-    { id: "current", chat: "chat" },
-    { upstream: "old", upstream_execution: "old" },
-    { sessionKey: "new" },
-  );
-  assert.equal(result.upstream, null);
-  assert.equal(result.strategy, "new-with-context");
-  assert.equal(result.turns[0].prompt.length, 4000);
-  assert.equal(result.turns[0].answer.length, 4000);
 });

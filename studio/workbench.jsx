@@ -1,6 +1,6 @@
 import { Component, lazy, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { AgentNotificationProvider, AgentNotificationBell } from "./agent/AgentNotifications";
+import { clearRetiredChatStorage } from "./paseo-session.mjs";
 import {
   Film,
   FolderGit2,
@@ -27,20 +27,42 @@ import {
   kinds,
   Notification,
 } from "./ui";
-const WorkLibrary = lazy(() => import("./library").then(module => ({ default: module.WorkLibrary })));
-const Repositories = lazy(() => import("./library").then(module => ({ default: module.Repositories })));
-const Creation = lazy(() => import("./creation").then(module => ({ default: module.Creation })));
-const Materials = lazy(() => import("./materials").then(module => ({ default: module.Materials })));
-const Settings = lazy(() => import("./accounts").then(module => ({ default: module.Settings })));
+const WorkLibrary = lazy(() =>
+  import("./library").then((module) => ({ default: module.WorkLibrary })),
+);
+const Repositories = lazy(() =>
+  import("./library").then((module) => ({ default: module.Repositories })),
+);
+const Creation = lazy(() =>
+  import("./creation").then((module) => ({ default: module.Creation })),
+);
+const Materials = lazy(() =>
+  import("./materials").then((module) => ({ default: module.Materials })),
+);
+const Settings = lazy(() =>
+  import("./accounts").then((module) => ({ default: module.Settings })),
+);
 import "./workbench.css";
 import "./workspace.css";
 import "./work-tools.css";
 
 class PageBoundary extends Component {
   state = { error: null };
-  static getDerivedStateFromError(error) { return { error }; }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
   render() {
-    return this.state.error ? <section role="alert"><h2>页面暂时无法打开</h2><p>服务器更新或网络中断可能使页面资源暂时不可用。创作任务仍保存在服务器，刷新前请保留尚未提交的输入。</p><Button onClick={() => location.reload()}>重新加载页面</Button></section> : this.props.children;
+    return this.state.error ? (
+      <section role="alert">
+        <h2>页面暂时无法打开</h2>
+        <p>
+          服务器更新或网络中断可能使页面资源暂时不可用。创作任务仍保存在服务器，刷新前请保留尚未提交的输入。
+        </p>
+        <Button onClick={() => location.reload()}>重新加载页面</Button>
+      </section>
+    ) : (
+      this.props.children
+    );
   }
 }
 
@@ -51,7 +73,11 @@ function Background({ notify, localMode }) {
     <>
       <div className="page-heading">
         <h1>后台项目</h1>
-        <p>{localMode ? "这些作品正在这台电脑上制作。收起到托盘后会继续运行。" : "这些作品仍在服务器上制作，关闭浏览器不会中断。"}</p>
+        <p>
+          {localMode
+            ? "这些作品正在这台电脑上制作。收起到托盘后会继续运行。"
+            : "这些作品仍在服务器上制作，关闭浏览器不会中断。"}
+        </p>
       </div>
       <ErrorNote error={query.error} />
       {query.data?.map((w) => (
@@ -64,6 +90,21 @@ function Background({ notify, localMode }) {
             </a>
             <p>{w.storage_name}</p>
             <div className="row">
+              {w.nativeActivity?.state === "starting" && (
+                <span className="badge queued">Paseo · 正在连接</span>
+              )}
+              {!!w.nativeActivity?.activeAgents?.length && (
+                <span className="badge running">Paseo · {w.nativeActivity.activeAgents.length} 个对话正在运行</span>
+              )}
+              {!!w.nativeActivity?.activeTerminals && (
+                <span className="badge running">终端 · {w.nativeActivity.activeTerminals} 项正在运行</span>
+              )}
+              {!!w.nativeActivity?.pendingPermissions && (
+                <span className="badge queued">Paseo · 等待权限确认</span>
+              )}
+              {w.nativeActivity?.incomplete && w.nativeActivity.state !== "starting" && (
+                <span className="badge failed">Paseo · 连接状态待核对</span>
+              )}
               {w.tasks.map((t) => (
                 <span className={"badge " + t.state} key={t.id}>
                   {kinds[t.kind]} · {states[t.state]}
@@ -84,9 +125,9 @@ function Background({ notify, localMode }) {
               icon={Square}
               disabled={
                 busy ||
-                !w.tasks.some((t) =>
+                (!w.nativeActivity && !w.tasks.some((t) =>
                   ["queued", "running", "cancelling"].includes(t.state),
-                )
+                ))
               }
               onClick={() =>
                 run(async () => {
@@ -140,9 +181,13 @@ function App() {
     [loginError, setLoginError] = useState(""),
     [logging, setLogging] = useState(false);
   useEffect(() => {
+    clearRetiredChatStorage([localStorage, sessionStorage]);
     request("/api/me")
       .then(setMe)
-      .catch(error => { setLoginError(error.message); setMe(null); });
+      .catch((error) => {
+        setLoginError(error.message);
+        setMe(null);
+      });
     const listener = () =>
       setRoute(location.hash.replace(/^#\/?/, "").split("/"));
     window.addEventListener("hashchange", listener);
@@ -164,16 +209,33 @@ function App() {
     const report = () => {
       const event = new Event("beforeunload", { cancelable: true });
       window.dispatchEvent(event);
-      void request("/api/desktop/activity", { method: "POST", body: JSON.stringify({ session, dirty: event.defaultPrevented }) }).catch(() => {});
+      void request("/api/desktop/activity", {
+        method: "POST",
+        body: JSON.stringify({ session, dirty: event.defaultPrevented }),
+      }).catch(() => {});
     };
-    const release = () => navigator.sendBeacon("/api/desktop/activity", new Blob([JSON.stringify({ session, dirty: false })], { type: "application/json" }));
+    const release = () =>
+      navigator.sendBeacon(
+        "/api/desktop/activity",
+        new Blob([JSON.stringify({ session, dirty: false })], {
+          type: "application/json",
+        }),
+      );
     const changed = () => setTimeout(report, 0);
-    report(); const timer = setInterval(report, 5000);
+    report();
+    const timer = setInterval(report, 5000);
     window.addEventListener("pagehide", release);
     window.addEventListener("pageshow", report);
     document.addEventListener("visibilitychange", report);
     document.addEventListener("input", changed);
-    return () => { clearInterval(timer); release(); window.removeEventListener("pagehide", release); window.removeEventListener("pageshow", report); document.removeEventListener("visibilitychange", report); document.removeEventListener("input", changed); };
+    return () => {
+      clearInterval(timer);
+      release();
+      window.removeEventListener("pagehide", release);
+      window.removeEventListener("pageshow", report);
+      document.removeEventListener("visibilitychange", report);
+      document.removeEventListener("input", changed);
+    };
   }, [me?.localMode]);
   useEffect(() => {
     if (!notice || notice.type === "error") return;
@@ -186,7 +248,25 @@ function App() {
   const notify = (text, type = "success") =>
     setNotice({ text, type, id: Date.now() });
   if (me === undefined) return <Loading />;
-  if (!me && sessionStorage.getItem("frame.local-mode") === "1") return <main className="login-page"><section className="login-card"><div className="brand"><Film size={28} /> FRAME</div><h1>工作台正在恢复连接</h1><p>本机服务暂时没有响应。你的作品仍保存在这台电脑。可从托盘打开 Windows 控制中心检查运行状态。</p><ErrorNote error={loginError} /><Button className="primary" onClick={() => location.reload()}>重新连接</Button></section></main>;
+  if (!me && sessionStorage.getItem("frame.local-mode") === "1")
+    return (
+      <main className="login-page">
+        <section className="login-card">
+          <div className="brand">
+            <Film size={28} /> FRAME
+          </div>
+          <h1>工作台正在恢复连接</h1>
+          <p>
+            本机服务暂时没有响应。你的作品仍保存在这台电脑。可从托盘打开 Windows
+            控制中心检查运行状态。
+          </p>
+          <ErrorNote error={loginError} />
+          <Button className="primary" onClick={() => location.reload()}>
+            重新连接
+          </Button>
+        </section>
+      </main>
+    );
   if (!me)
     return (
       <main className="login-page">
@@ -242,7 +322,6 @@ function App() {
       ["settings", Settings2, "设置"],
     ];
   return (
-    <AgentNotificationProvider>
     <div
       className={
         "workbench " +
@@ -276,7 +355,6 @@ function App() {
             ))}
           </nav>
           <footer>
-            <AgentNotificationBell label />
             <Button
               icon={collapsed ? PanelLeftOpen : PanelLeftClose}
               aria-label={collapsed ? "展开导航" : "收起导航"}
@@ -284,44 +362,57 @@ function App() {
             >
               <span>{collapsed ? "展开" : "收起导航"}</span>
             </Button>
-            {!me.localMode && <Button
-              icon={LogOut}
-              aria-label="退出登录"
-              onClick={async () => {
-                await request("/api/logout", { method: "POST" });
-                setMe(null);
-              }}
-            >
-              <span>退出登录</span>
-            </Button>}
+            {!me.localMode && (
+              <Button
+                icon={LogOut}
+                aria-label="退出登录"
+                onClick={async () => {
+                  await request("/api/logout", { method: "POST" });
+                  setMe(null);
+                }}
+              >
+                <span>退出登录</span>
+              </Button>
+            )}
           </footer>
         </aside>
       )}
       <main className={isWork ? "workspace" : "page"}>
-        <PageBoundary key={section + ":" + (route[1] || "")}><Suspense fallback={<Loading />}>
-        {section === "work" ? (
-          <Creation key={route[1]} id={route[1]} notify={notify} />
-        ) : section === "repository" ? (
-          <RepositoryWorks key={route[1]} id={route[1]} notify={notify} localMode={me.localMode} />
-        ) : section === "repositories" ? (
-          <Repositories
-            notify={notify}
-            onOpen={(r) => go("repository/" + r.id)}
-          />
-        ) : section === "background" ? (
-          <Background notify={notify} localMode={me.localMode} />
-        ) : section === "materials" ? (
-          <Materials notify={notify} />
-        ) : section === "settings" ? (
-          <Settings notify={notify} localMode={!!me.localMode} />
-        ) : (
-          <WorkLibrary key={section} recent={section === "recent"} notify={notify} localMode={me.localMode} />
-        )}
-        </Suspense></PageBoundary>
+        <PageBoundary key={section + ":" + (route[1] || "")}>
+          <Suspense fallback={<Loading />}>
+            {section === "work" ? (
+              <Creation key={route[1]} id={route[1]} notify={notify} />
+            ) : section === "repository" ? (
+              <RepositoryWorks
+                key={route[1]}
+                id={route[1]}
+                notify={notify}
+                localMode={me.localMode}
+              />
+            ) : section === "repositories" ? (
+              <Repositories
+                notify={notify}
+                onOpen={(r) => go("repository/" + r.id)}
+              />
+            ) : section === "background" ? (
+              <Background notify={notify} localMode={me.localMode} />
+            ) : section === "materials" ? (
+              <Materials notify={notify} />
+            ) : section === "settings" ? (
+              <Settings notify={notify} localMode={!!me.localMode} />
+            ) : (
+              <WorkLibrary
+                key={section}
+                recent={section === "recent"}
+                notify={notify}
+                localMode={me.localMode}
+              />
+            )}
+          </Suspense>
+        </PageBoundary>
       </main>
       <Notification notice={notice} onClose={() => setNotice(null)} />
     </div>
-    </AgentNotificationProvider>
   );
 }
 createRoot(document.getElementById("root")).render(<App />);

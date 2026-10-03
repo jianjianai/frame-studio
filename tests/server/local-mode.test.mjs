@@ -30,28 +30,21 @@ test("local mode accepts alternate hosts and missing or opaque origins", async (
   }
 });
 
-test("SQLite keeps work revisions and agent interaction state", async () => {
+test("SQLite keeps work revisions and ordinary task state", async () => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-sqlite-state-"));
   const db = await sqliteDatabase(path.join(data, "frame.sqlite"));
   const repo = "10000000-0000-4000-8000-000000000001";
   const work = "10000000-0000-4000-8000-000000000002";
   const task = "10000000-0000-4000-8000-000000000003";
-  const question = "10000000-0000-4000-8000-000000000004";
   try {
     await db.pool.query("INSERT INTO repos(id,name) VALUES($1,$2)", [repo, "Local"]);
     await db.pool.query("INSERT INTO works(id,repo,project,title) VALUES($1,$2,$3,$4)", [work, repo, "sample", "First"]);
     await db.pool.query("UPDATE works SET title=$2 WHERE id=$1", [work, "Second"]);
     assert.equal((await db.one("SELECT source_generation FROM works WHERE id=$1", [work])).source_generation, 1);
     await db.pool.query("INSERT INTO tasks(id,repo,project,kind,state,input) VALUES($1,$2,$3,$4,$5,$6)",
-      [task, repo, "sample", "agent", "running", {}]);
-    await db.pool.query("INSERT INTO agent_questions(id,task,request_key,payload) VALUES($1,$2,$3,$4)",
-      [question, task, "one", { title: "A question" }]);
-    assert.equal((await db.one("SELECT interaction FROM tasks WHERE id=$1", [task])).interaction.id, question);
-    assert.equal((await db.one("SELECT count(*) AS n FROM agent_notifications WHERE task=$1 AND kind='question'", [task])).n, 1);
-    await db.pool.query("UPDATE agent_questions SET state='answered' WHERE id=$1", [question]);
-    assert.equal((await db.one("SELECT interaction FROM tasks WHERE id=$1", [task])).interaction, null);
-    await db.pool.query("UPDATE tasks SET state='succeeded' WHERE id=$1", [task]);
-    assert.equal((await db.one("SELECT count(*) AS n FROM agent_notifications WHERE task=$1 AND kind='completed'", [task])).n, 1);
+      [task, repo, "sample", "render", "running", {}]);
+    assert.equal((await db.one("SELECT state FROM tasks WHERE id=$1", [task])).state, "running");
+    assert.equal((await db.all("SELECT name FROM sqlite_master WHERE name='agent_questions'")).length, 0);
   } finally {
     await db.pool.end();
     fs.rmSync(data, { recursive: true, force: true });
@@ -119,7 +112,6 @@ test("Windows local mode creates a work and renders a frame without Docker or a 
       ["20000000-0000-4000-8000-000000000001", "Test asset", "a".repeat(64), 0, "text/plain", "test"]);
     assert.deepEqual((await call("assets_list", {}))[0].refs, []);
     assert.equal((await call("engines_list", {})).length, 3);
-    assert.deepEqual(await call("works_chats", { id: work.id }), []);
     await call("works_versions", { id: work.id });
     await call("works_context", { id: work.id });
     if (!providers[0].configured)
@@ -129,7 +121,6 @@ test("Windows local mode creates a work and renders a frame without Docker or a 
       payload: { name: "works_chat_create", args: { id: work.id, connection: providers[0].id, title: "Retired API" } } });
     assert.notEqual(retired.statusCode, 200);
     assert.match(retired.body, /Unknown/);
-    assert.deepEqual(await call("works_chats", { id: work.id }), []);
     const task = await call("works_task", { id: work.id, kind: "frame", input: { time: 0, width: 640 } });
     assert.ok(Array.isArray(await call("works_background", {})));
     assert.equal((await call("works_page", {})).items[0].activity?.id, task.id);

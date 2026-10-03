@@ -5,7 +5,6 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { randomUUID } from "node:crypto";
-import { hash } from "../../server/security.mjs";
 import { sqliteDatabase } from "../../server/sqlite.mjs";
 import { createApp } from "../../server/app.mjs";
 const wave = () => {
@@ -233,16 +232,19 @@ test(
         beforeEmptyVoice,
         "missing default voice must fail before provider request",
       );
-      const agentId = randomUUID(),
-        agentToken = "fixture-task-only";
-      await db.pool.query(
-        "INSERT INTO tasks(id,repo,project,kind,state,input) VALUES($1,$2,$3,$4,$5,$6)",
-        [agentId, repo.id, work.project, "agent", "running", {}],
-      );
-      await db.pool.query("INSERT INTO agent_tokens(task,hash) VALUES($1,$2)", [
-        agentId,
-        hash(agentToken),
-      ]);
+      const agentToken = "fixture-native-paseo-only";
+      const workspaceRoot = (await f.paseo.work.prepare(work.id)).workspace.workspaceRoot;
+      f.paseo.manager.agentContext = async (credential) =>
+        credential === agentToken
+          ? {
+              kind: "paseo",
+              repo: repo.id,
+              project: work.project,
+              paseoWork: work.id,
+              paseoAgent: "fixture-native-tts",
+              runRoot: workspaceRoot,
+            }
+          : null;
       const bridge = await app.inject({
         method: "POST",
         url: "/api/agent/action",

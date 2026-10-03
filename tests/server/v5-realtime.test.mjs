@@ -18,7 +18,6 @@ import {
   clientOperationError,
   uncertainOperation,
 } from "../../src/contracts/errors.mjs";
-import { operationContracts } from "../../src/contracts/platform.mjs";
 
 async function until(fn) {
   for (let i = 0; i < 150; i++) {
@@ -94,7 +93,6 @@ test("shared errors preserve recovery semantics and hide internal failures; unce
   assert(!operationError(Object.assign(Error("private upstream body"), { statusCode: 502 })).error.includes("private"));
   assert.equal(uncertainOperation("Response lost").code, "OPERATION_UNCERTAIN");
   assert.equal(uncertainOperation("Response lost").retryable, false);
-  assert(Object.keys(operationContracts).length >= 20);
 });
 
 const url = process.env.FRAME_TEST_DATABASE_URL;
@@ -106,7 +104,7 @@ test(
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-v5-stream-"));
     const db = await database(url, "v5-stream-fixture-password");
     await db.pool.query(
-      "TRUNCATE repos,tasks,events,chats,works,connections,assets,engines,auth_flows CASCADE",
+      "TRUNCATE repos,tasks,events,works,connections,assets,engines,auth_flows CASCADE",
     );
     const origin = "http://v5-stream.test";
     const { app, actions } = await createApp({
@@ -261,7 +259,8 @@ test(
       );
       assert.equal(
         (await actions.call("works_queue_status", { id: a.id })).items[0].code,
-        "connection-busy",
+        "capacity",
+        "Retired connection metadata must not create a model-session blocker",
       );
     } finally {
       ws?.terminate();

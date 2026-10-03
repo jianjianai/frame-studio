@@ -1,8 +1,5 @@
 import { usePreviewSession, decodePlayerMessage } from "./preview-session";
-import { activePreviewTask } from "./live-preview-session.mjs";
-import { readAgentTarget } from "./agent/agent-navigation";
 import { useBrowserExport } from "./browser-export-session";
-import { RevisionPreview } from "./revision-preview";
 import { PaseoChat } from "./paseo-chat";
 import { WorkTools } from "./work-tools";
 import { WorkDock } from "./work-dock";
@@ -50,6 +47,7 @@ import {
   useMediaQuery,
 } from "./ui";
 import { Materials, Details, Voice, Exports } from "./work-panels";
+import { readPaseoReference, paseoReferenceMatch, paseoReferencePosition, paseoReferenceLabel } from "./paseo-reference.mjs";
 
 const SourceControl = lazy(() =>
   import("./source-control").then((module) => ({
@@ -66,15 +64,56 @@ export function Creation({ id, notify }) {
     iframe = useRef(null),
     split = useRef(null);
   const [playerElement, setPlayerElement] = useState(null);
-  const [paseoAgent, setPaseoAgent] = useState(null);
-  const [previewSource, setPreviewSource] = useState(undefined);
   const [paseoExpanded, setPaseoExpanded] = useState(false);
+  const [messageReference, setMessageReference] = useState(null),
+    [messageReferenceError, setMessageReferenceError] = useState(""),
+    [referenceLocated, setReferenceLocated] = useState(false);
+  const referenceApplied = useRef(false);
+  useEffect(() => {
+    const read = () => {
+      referenceApplied.current = false;
+      setReferenceLocated(false);
+      try {
+        setMessageReference(readPaseoReference(location.href, id));
+        setMessageReferenceError("");
+      } catch (error) {
+        setMessageReference(null);
+        setMessageReferenceError(error.message);
+      }
+    };
+    read();
+    window.addEventListener("popstate", read);
+    window.addEventListener("hashchange", read);
+    return () => {
+      window.removeEventListener("popstate", read);
+      window.removeEventListener("hashchange", read);
+    };
+  }, [id]);
+  const [editorDirty, setEditorDirty] = useState({
+    audio: false,
+    composition: false,
+  });
+  const onAudioDirtyChange = useCallback(
+    (dirty) =>
+      setEditorDirty((previous) =>
+        previous.audio === dirty ? previous : { ...previous, audio: dirty },
+      ),
+    [],
+  );
+  const onCompositionDirtyChange = useCallback(
+    (dirty) =>
+      setEditorDirty((previous) =>
+        previous.composition === dirty
+          ? previous
+          : { ...previous, composition: dirty },
+      ),
+    [],
+  );
   const bindPlayer = useCallback((element) => {
     iframe.current = element;
     setPlayerElement(element);
   }, []);
   const [panel, setPanel] = useState(""),
-    [referenceReview, setReferenceReview] = useState(null),
     [tool, setTool] = useState(() => {
       const fallback = readPreference(
         "frame.chat-open",
@@ -128,8 +167,6 @@ export function Creation({ id, notify }) {
     [suggestion, setSuggestion] = useState(null),
     [run, busy] = useAction(notify);
   useEffect(() => {
-    setPaseoAgent(null);
-    setPreviewSource(undefined);
     setPaseoExpanded(false);
   }, [id]);
   useEffect(() => {
@@ -171,9 +208,6 @@ export function Creation({ id, notify }) {
     workId: id,
     latest,
     mode: "live",
-    taskId: paseoAgent ? undefined : activePreviewTask(tasks, id),
-    source: previewSource,
-    paseoAgent,
     blocked: browserBusy,
     notify,
   });
@@ -197,15 +231,6 @@ export function Creation({ id, notify }) {
         previous[tool] ? previous : { ...previous, [tool]: true },
       );
   }, [tool]);
-  useEffect(() => {
-    const openTarget = (event) => {
-      const target = event?.detail || readAgentTarget();
-      if (target?.work === id) openTool("ai");
-    };
-    openTarget();
-    window.addEventListener("frame-agent-navigate", openTarget);
-    return () => window.removeEventListener("frame-agent-navigate", openTarget);
-  }, [id]);
   const closeTool = () => {
     setTool("");
     requestAnimationFrame(() => {
@@ -301,6 +326,20 @@ export function Creation({ id, notify }) {
       { type: "frame-player-command", command, ...extra },
       "*",
     );
+  const referenceMatch = messageReference ? paseoReferenceMatch(messageReference, previewReference) : null;
+  const referenceReady = Boolean(playerElement && preview && !browserBusy &&
+    (preview.live ? liveStatus === "ready" : !previewStage));
+  const locateMessageReference = () => {
+    if (!messageReference || !referenceReady) return;
+    sendPlayer("pause");
+    sendPlayer("seek", paseoReferencePosition(messageReference));
+    referenceApplied.current = true;
+    setReferenceLocated(true);
+  };
+  useEffect(() => {
+    if (referenceReady && referenceMatch === "matched" && !referenceApplied.current)
+      locateMessageReference();
+  }, [referenceReady, referenceMatch, messageReference]);
   const closeChat = closeTool;
   const retryPreview = () => {
     if (browserBusy) return;
@@ -557,27 +596,30 @@ export function Creation({ id, notify }) {
           className="preview-pane"
           inert={compact && dockOpen ? true : undefined}
         >
-          {previewSource === "paseo" && (
-            <div
-              className="preview-version-note live-preview-note paseo-preview-source"
-              role="status"
-            >
+          <ErrorNote error={messageReferenceError} />
+          {messageReference && (
+            <div className="preview-version-note live-preview-note" role="status" aria-label="对话中的画面引用">
+              <strong>对话引用 · {paseoReferenceLabel(messageReference)}</strong>
               <span>
-                {paseoAgent ? "当前对话工作区预览" : "Paseo 主工作区预览"}
+                {referenceMatch === "matched"
+                  ? referenceLocated ? "已定位引用对应的预览版本。" : "正在定位引用画面…"
+                  : referenceMatch === "pending" ? "正在核对引用记录的预览版本…"
+                  : referenceMatch === "unversioned" ? "此引用未记录源码版本，尚未定位。"
+                  : referenceLocated ? "已按你的选择定位当前版本；引用仍属于记录的较早版本。"
+                  : "引用记录的版本与当前预览不同，尚未定位。"}
               </span>
-              <Button
-                onClick={() => {
-                  setPreviewSource(undefined);
-                  setPaseoAgent(null);
-                }}
-              >
-                返回作品预览
-              </Button>
-              {paseoAgent && (
-                <Button onClick={() => setPaseoAgent(null)}>
-                  主工作区预览
-                </Button>
+              {(messageReference.sourceRevision || messageReference.sourceCommit) && (
+                <details style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
+                  <summary>查看引用版本</summary>
+                  <p>记录源码：{messageReference.sourceRevision || messageReference.sourceCommit}</p>
+                  {messageReference.compiledRevision && <p>记录画面：{messageReference.compiledRevision}</p>}
+                  <p>当前源码：{previewReference.sourceRevision || previewReference.sourceCommit || "正在获取"}</p>
+                  {messageReference.compiledRevision && <p>当前画面：{previewReference.compiledRevision || "正在获取"}</p>}
+                </details>
               )}
+              <Button disabled={!referenceReady || referenceMatch === "pending"} onClick={locateMessageReference}>
+                {referenceMatch === "matched" ? "重新定位引用" : "在当前版本定位此时间"}
+              </Button>
             </div>
           )}
           {(previewError || preview?.fallback) && (
@@ -709,39 +751,7 @@ export function Creation({ id, notify }) {
               compact={compact}
               expanded={paseoExpanded}
               onExpand={() => setPaseoExpanded((value) => !value)}
-              onPreviewAgent={(agentId) => {
-                setPreviewSource("paseo");
-                setPaseoAgent(agentId || null);
-                setPaseoExpanded(false);
-              }}
-              onRecall={(context) => {
-                if (
-                  context.liveSessionId &&
-                  context.sourceRevision !== preview?.observedRevision
-                ) {
-                  sendPlayer("pause");
-                  notify(
-                    "这条引用对应的实时预览已变更，当前播放器不能准确回放该版本。",
-                    "error",
-                  );
-                  return;
-                }
-                if (
-                  context.sourceCommit &&
-                  context.sourceCommit !== preview?.sourceCommit
-                ) {
-                  sendPlayer("pause");
-                  setReferenceReview(context);
-                  return;
-                }
-                sendPlayer("seek", {
-                  time: context.start ?? context.time ?? 0,
-                  ...(context.end > context.start
-                    ? { selection: { start: context.start, end: context.end } }
-                    : {}),
-                });
-                if (compact) closeChat();
-              }}
+              onPreviewWork={() => setPaseoExpanded(false)}
               onRemoveAsset={(id) =>
                 setAssets((old) => old.filter((a) => a.id !== id))
               }
@@ -764,6 +774,7 @@ export function Creation({ id, notify }) {
                   visible={tool === "audio"}
                   position={position}
                   disabled={browserBusy}
+                  onDirtyChange={onAudioDirtyChange}
                   onSeek={(time) => sendPlayer("seek", { time })}
                   onSaved={() => {
                     syncQuery.refresh();
@@ -785,6 +796,7 @@ export function Creation({ id, notify }) {
                   visible={tool === "composition"}
                   position={position}
                   disabled={browserBusy}
+                  onDirtyChange={onCompositionDirtyChange}
                   onSeek={(time) => sendPlayer("seek", { time })}
                   onSaved={() => {
                     syncQuery.refresh();
@@ -893,12 +905,7 @@ export function Creation({ id, notify }) {
                     <span>{states[task.state]}</span>
                     <small>{date(task.created)}</small>
                   </div>
-                  <p>
-                    {task.progress?.stage ||
-                      (task.kind === "agent" && active(task)
-                        ? "AI 正在分析和制作作品"
-                        : states[task.state])}
-                  </p>
+                  <p>{task.progress?.stage || states[task.state]}</p>
                   {active(task) && (
                     <progress
                       aria-label="后台任务进度"
@@ -981,25 +988,6 @@ export function Creation({ id, notify }) {
           )}
         </WorkDock>
       </div>
-      {referenceReview && (
-        <Modal
-          title="引用版本审片"
-          wide
-          onClose={() => setReferenceReview(null)}
-        >
-          <p>
-            此处显示引用时的源码版本 {referenceReview.sourceCommit?.slice(0, 7)}
-            ，不恢复或覆盖当前作品。
-          </p>
-          <RevisionPreview
-            work={work}
-            version={referenceReview.sourceCommit}
-            previewTask={referenceReview.previewTask}
-            context={referenceReview}
-            label="引用版本播放器"
-          />
-        </Modal>
-      )}
       {panel && (
         <Modal
           title={title}
@@ -1013,12 +1001,20 @@ export function Creation({ id, notify }) {
               work={work}
               notify={notify}
               position={position}
+              previewReference={previewReference}
+              unsavedEditors={Object.entries(editorDirty)
+                .filter(([, dirty]) => dirty)
+                .map(([key]) => key)}
+              onReturnToEditor={(key) => {
+                setPanel("");
+                openTool(key);
+              }}
               previewReady={!!preview && !previewStage && !!position.duration}
               browserJob={browserJob}
               onBrowserExport={(options) => {
                 if (browserBusy || !preview || previewStage)
                   throw new Error("请等待播放器就绪或当前导出完成");
-                browserExport.start(options);
+                browserExport.start(options, previewReference);
               }}
               onBrowserCancel={browserExport.cancel}
               onBrowserDownload={browserExport.download}

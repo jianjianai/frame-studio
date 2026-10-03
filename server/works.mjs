@@ -108,7 +108,7 @@ export class Works {
     const rows = await this.db.all(
       `SELECT w.*, r.name AS storage_name, r.url AS remote,
       (SELECT jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'finished',t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.input->>'version' IS NULL ORDER BY (t.state IN ('queued','running','cancelling','publishing','publish_failed')) DESC,t.created DESC LIMIT 1) AS activity,
-      greatest(w.updated,COALESCE((SELECT max(t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.kind IN ('agent','new','paseo') AND t.state='succeeded'),w.updated)) AS modified
+      greatest(w.updated,COALESCE((SELECT max(t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.kind IN ('new','paseo') AND t.state='succeeded'),w.updated)) AS modified
       FROM works w JOIN repos r ON r.id=w.repo WHERE w.deleted=$1 AND (w.title ILIKE $2 OR w.description ILIKE $2) AND ($3='' OR w.category=$3) AND ($4='' OR w.status=$4) AND ($5::uuid IS NULL OR w.repo=$5) AND (NOT $6 OR w.opened IS NOT NULL)
       ORDER BY ${ordering},w.id LIMIT $7 OFFSET $8`,
       [
@@ -421,7 +421,7 @@ export class Works {
   async version(id, name) {
     const w = await this.get(id, { active: true });
     return this.db.lock(`${w.repo}:${w.project}`, async () => {
-      await this.repos.writable(w.repo, w.project);
+      await this.repos.writable(w.repo, w.project, { exclusive: true });
       const commit = await this.repos.checkpoint(w.repo, w.project, name, {
         named: true,
       });
@@ -475,7 +475,7 @@ export class Works {
     )
       throw problem(404, "Version not found");
     return this.db.lock(`${w.repo}:${w.project}`, async () => {
-      await this.repos.writable(w.repo, w.project);
+      await this.repos.writable(w.repo, w.project, { exclusive: true });
       if (expectedRevision) {
         const source = await assertSourceRevision(
           this.repos,
@@ -524,7 +524,7 @@ export class Works {
   }
   async restoreCommit(w, version, expectedRevision) {
     await this.db.lock(`${w.repo}:${w.project}`, async () => {
-      await this.repos.writable(w.repo, w.project);
+      await this.repos.writable(w.repo, w.project, { exclusive: true });
       if (expectedRevision) {
         const source = await assertSourceRevision(
           this.repos,

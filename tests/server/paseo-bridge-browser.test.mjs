@@ -1,8 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { createServer } from "vite";
 import { launchBrowser } from "../../scripts/browser.mjs";
+import { readPaseoReference } from "../../studio/paseo-reference.mjs";
 import {
   paseoBoundaryBootstrap,
   paseoBoundaryHtml,
@@ -14,13 +17,14 @@ test(
   { timeout: 60000 },
   async () => {
     let bootstrap;
+    const cacheDir = path.resolve(".cache/tests/paseo-bridge-" + randomUUID());
     const server = await createServer({
       configFile: false,
       root: process.cwd(),
-      cacheDir: path.resolve(".cache/tests/paseo-bridge-" + process.pid),
+      cacheDir,
       logLevel: "error",
       appType: "custom",
-      server: { host: "127.0.0.1", port: 0 },
+      server: { host: "127.0.0.1", port: 0, watch: null },
       plugins: [
         {
           name: "paseo-parent-boundary",
@@ -116,6 +120,10 @@ test(
         await page.evaluate(() => window.trace.contextCalls),
         before + 1,
       );
+      await frame.evaluate(() => window.__FRAME_REVIEW_PASEO__.request("context.attach", { agentId: "owned-agent" }));
+      await frame.waitForFunction(() => window.__FRAME_REVIEW_PASEO__.attachments.length === 1);
+      const attachedUrl = await frame.evaluate(() => window.__FRAME_REVIEW_PASEO__.attachments[0].url);
+      assert.deepEqual(readPaseoReference(attachedUrl, workId), { time: 5 });
       const input = {
         agentId: "owned-agent",
         messageId,
@@ -167,6 +175,7 @@ test(
     } finally {
       await browser?.close();
       await server.close();
+      await fs.rm(cacheDir, { recursive: true, force: true });
     }
   },
 );

@@ -1,7 +1,4 @@
-import { randomUUID } from "node:crypto";
-import { waitForAgentAnswer } from "./agent-question-client.mjs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { isCliMain } from "./cli-main.mjs";
 import {
   workToolHelp,
   readToolInput,
@@ -52,13 +49,6 @@ export async function runWorkTool(
       ? readAuthoringReference(root, args.name)
       : { schemaVersion: 1, references: referenceCatalog() };
   }
-  if (name === "ask") {
-    const answer = await waitForAgentAnswer(
-      { ...args, requestKey: args.requestKey || randomUUID() },
-      { env },
-    );
-    return { questions: answer.payload.questions, answers: answer.answers };
-  }
   if (["context", "check"].includes(name)) {
     const allowed =
       name === "context" ? ["project"] : ["project", "runtime", "start", "end"];
@@ -89,10 +79,7 @@ export async function runWorkTool(
   return callWorkTool(name, args, { env });
 }
 
-if (
-  process.argv[1] &&
-  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
-) {
+if (isCliMain(import.meta.url)) {
   try {
     const result = await runWorkTool(process.argv.slice(2));
     console.log(redactToolText(JSON.stringify(result)));

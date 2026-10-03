@@ -57,6 +57,7 @@ export function ToneEffectEditor({ fx, index, disabled, onChange }) {
   return (
     <section
       className="tone-effect-editor"
+      data-json-dirty={json.dirty ? "true" : undefined}
       role="region"
       aria-label={"Tone 效果 " + (index + 1)}
     >

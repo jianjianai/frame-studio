@@ -12,7 +12,7 @@ test(
   { timeout: 60000 },
   async () => {
     const root = path.resolve(import.meta.dirname, "../.."),
-      report = path.join(root, ".cache/tool-settings-review");
+      report = path.join(root, ".cache/tool-settings-review", randomUUID());
     fs.mkdirSync(report, { recursive: true });
     const port = Number(process.env.FRAME_TEST_PORT || 56843);
     const ui = await createServer({
@@ -20,7 +20,7 @@ test(
       configLoader: "runner",
       cacheDir: path.join(report, "vite"),
       logLevel: "warn",
-      server: { host: "127.0.0.1", port, strictPort: true },
+      server: { host: "127.0.0.1", port, strictPort: true, watch: null },
     });
     let browser;
     const calls = [],
@@ -98,8 +98,6 @@ test(
         task.state = "publishing";
         return task;
       }
-      if (name === "agent_notifications")
-        return { items: [], unread: 0, next: null };
       if (name === "system_status") return { warnings: [] };
       return [];
     };
@@ -282,6 +280,7 @@ test(
     } finally {
       await browser?.close();
       await ui.close();
+      fs.rmSync(report, { recursive: true, force: true });
     }
   },
 );

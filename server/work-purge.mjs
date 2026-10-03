@@ -45,7 +45,7 @@ export async function purgeWork(works, id, confirm) {
       throw problem(409, "作品预览或导出正在读取，请关闭后重试");
 
     if (works.paseo) {
-      await works.paseo.drafts.stop(id);
+      await works.paseo.workspace.stop(id);
       // A deleted work cannot admit a new native session; its daemon is stopped by the controller.
       const native = await works.paseo.store.getWork(id);
       if (native?.container) throw problem(409, "Paseo 正在关闭此作品环境，请稍后重试永久删除。");
@@ -58,10 +58,6 @@ export async function purgeWork(works, id, confirm) {
       "SELECT id FROM tasks WHERE repo=$1 AND project=$2",
       [work.repo, work.project],
     );
-    const chats = await db.all(
-      "SELECT id FROM chats WHERE repo=$1 AND project=$2",
-      [work.repo, work.project],
-    );
     const versions = await db.all(
       "SELECT id FROM work_versions WHERE work=$1",
       [id],
@@ -72,7 +68,6 @@ export async function purgeWork(works, id, confirm) {
         ownedPath(data, "runs", id),
         ownedPath(data, "sessions", id),
       ]),
-      ...chats.map(({ id }) => ownedPath(data, "sessions", id)),
       ...(works.paseo ? [ownedPath(data, "paseo", id)] : []),
       ...versions.map(({ id }) => ownedPath(data, "versions", id)),
       ...undos.map(({ id }) => path.join(data, "restores", "undo-" + id)),
@@ -166,9 +161,6 @@ export async function purgeWork(works, id, confirm) {
         await client.query("DELETE FROM work_undos WHERE work=$1", [id]);
         await client.query("DELETE FROM work_versions WHERE work=$1", [id]);
         for (const task of tasks) {
-          await client.query("DELETE FROM agent_tokens WHERE task=$1", [
-            task.id,
-          ]);
           await client.query("DELETE FROM events WHERE task=$1", [task.id]);
           await client.query(
             "DELETE FROM settings WHERE (key LIKE 'preview:%' OR key LIKE 'preview-link:%') AND value->>'task'=$1",
@@ -176,10 +168,6 @@ export async function purgeWork(works, id, confirm) {
           );
         }
         await client.query("DELETE FROM tasks WHERE repo=$1 AND project=$2", [
-          work.repo,
-          work.project,
-        ]);
-        await client.query("DELETE FROM chats WHERE repo=$1 AND project=$2", [
           work.repo,
           work.project,
         ]);

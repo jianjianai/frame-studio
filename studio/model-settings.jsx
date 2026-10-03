@@ -672,7 +672,7 @@ export function ProviderSettings({ notify, LoginDialog, localMode = false }) {
             connections.refresh();
             notify(
               result.warning ||
-                `提供商已删除，保留 ${result.preservedChats} 个历史对话`,
+                "提供商已删除",
             );
           }}
         />

@@ -5,23 +5,23 @@ import path from "node:path";
 import { fixture } from "./paseo-test-fixture.mjs";
 import { fixture as browserFixture, repo } from "../mcp/helpers.mjs";
 import {
-  validatePaseoCandidate,
+  validatePaseoWorkspace,
   probePaseoRuntime,
 } from "../../server/paseo-validate.mjs";
 import { treeHash } from "../../server/project-files.mjs";
 const commit = "a".repeat(40);
 
-test("Candidate validation preserves scope/structure/test/type order before actual runtime and rejects changed snapshots", async (t) => {
+test("Workspace validation preserves scope/structure/test/type order before actual runtime and rejects changed revisions", async (t) => {
   const f = await fixture(t);
-  const { draft } = await f.workService.prepare(f.work.id);
+  const { workspace } = await f.workService.prepare(f.work.id);
   const calls = [];
-  const result = await validatePaseoCandidate({
+  const result = await validatePaseoWorkspace({
     core: repo,
-    work: draft.draftRoot,
+    work: workspace.workspaceRoot,
     project: f.work.project,
     baselineCommit: commit,
-    fingerprint: await treeHash(draft.projectRoot),
-    modeFingerprint: await treeHash(draft.projectRoot, {
+    fingerprint: await treeHash(workspace.projectRoot),
+    modeFingerprint: await treeHash(workspace.projectRoot, {
       includeExecutableMode: true,
     }),
     run: async (bin, args) => {
@@ -43,35 +43,28 @@ test("Candidate validation preserves scope/structure/test/type order before actu
     "--json",
   ]);
   await assert.rejects(
-    validatePaseoCandidate({
+    validatePaseoWorkspace({
       core: repo,
-      work: draft.draftRoot,
+      work: workspace.workspaceRoot,
       project: f.work.project,
       baselineCommit: commit,
       fingerprint: "f".repeat(64),
     }),
-    /differs from its frozen snapshot/,
+    /changed before validation/,
   );
   let runtime = false;
-  await assert.rejects(
-    validatePaseoCandidate({
-      core: repo,
-      work: draft.draftRoot,
-      project: f.work.project,
-      baselineCommit: commit,
-      run: async (_bin, args) =>
-        args.includes("typecheck") ? '{"status":"failed"}' : "",
-      runtimeProbe: async () => {
-        runtime = true;
-      },
-    }),
-    /type validation failed/,
-  );
+  const failed = await validatePaseoWorkspace({ core: repo, work: workspace.workspaceRoot,
+    project: f.work.project, baselineCommit: commit,
+    run: async (_bin, args) => args.includes("typecheck") ? '{"status":"failed"}' : "",
+    runtimeProbe: async () => { runtime = true; },
+  });
+  assert.equal(failed.status, "failed");
+  assert.match(failed.error, /type validation failed/);
   assert.equal(runtime, false);
   await assert.rejects(
-    validatePaseoCandidate({
+    validatePaseoWorkspace({
       core: repo,
-      work: draft.draftRoot,
+      work: workspace.workspaceRoot,
       project: "../foreign",
       baselineCommit: commit,
     }),
@@ -81,7 +74,7 @@ test("Candidate validation preserves scope/structure/test/type order before actu
 
 test("Runtime probe rejects non-finite PCM and always releases its page and session", async (t) => {
   const f = await fixture(t);
-  const { draft } = await f.workService.prepare(f.work.id);
+  const { workspace } = await f.workService.prepare(f.work.id);
   const pcm = Buffer.alloc(8);
   pcm.writeFloatLE(NaN, 0);
   let pageClosed = 0,
@@ -106,7 +99,7 @@ test("Runtime probe rejects non-finite PCM and always releases its page and sess
   });
   await assert.rejects(
     probePaseoRuntime({
-      work: draft.draftRoot,
+      work: workspace.workspaceRoot,
       project: f.work.project,
       sessionFactory,
     }),
@@ -125,7 +118,7 @@ test("Runtime probe rejects non-finite PCM and always releases its page and sess
   };
   await assert.rejects(
     probePaseoRuntime({
-      work: draft.draftRoot,
+      work: workspace.workspaceRoot,
       project: f.work.project,
       sessionFactory: brokenClose,
     }),
@@ -135,7 +128,7 @@ test("Runtime probe rejects non-finite PCM and always releases its page and sess
 });
 
 test(
-  "The candidate runtime gate renders real frames and finite short generated-audio chunks without a movie export",
+  "The workspace runtime gate renders real frames and finite short generated-audio chunks without a movie export",
   { timeout: 120000 },
   async () => {
     const f = browserFixture({ browser: true });

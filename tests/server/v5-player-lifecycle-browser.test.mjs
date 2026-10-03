@@ -1,6 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { expect } from "@playwright/test";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
@@ -64,10 +66,11 @@ test(
     let capabilityRequests = 0;
     let allowCapability = false;
     const virtualFile = path.resolve("tests/ui/v5-lifecycle-fixture.jsx");
+    const cacheDir = path.resolve(".cache/tests/v5-player-lifecycle-" + randomUUID());
     const server = await createServer({
       configFile: false,
       root: process.cwd(),
-      cacheDir: path.resolve(".cache/tests/v5-player-lifecycle-" + process.pid),
+      cacheDir,
       logLevel: "error",
       appType: "custom",
       optimizeDeps: {
@@ -80,7 +83,7 @@ test(
           "zod",
         ],
       },
-      server: { host: "127.0.0.1", port: 0 },
+      server: { host: "127.0.0.1", port: 0, watch: null },
       plugins: [
         react(),
         {
@@ -224,6 +227,7 @@ test(
     } finally {
       await browser?.close();
       await server.close();
+      await fs.rm(cacheDir, { recursive: true, force: true });
     }
   },
 );

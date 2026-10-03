@@ -36,7 +36,7 @@ const works = Array.from({ length: 27 }, (_, index) => ({
   deleted: false,
   duration: 62 + index * 3,
   composition: { width: 1920, height: 1080 },
-  activity: index === 0 ? { kind: "agent", state: "running" } : null,
+  activity: index === 0 ? { kind: "paseo", state: "running" } : null,
   cover: index === 1 ? "/api/broken-cover" : null,
 }));
 works.push({
@@ -51,8 +51,6 @@ const errors = [],
 let browser, server;
 const action = (name, args) => {
   state.calls.push({ name, args });
-  if (name === "agent_notifications")
-    return { items: [], unread: 0, next: null };
   if (name === "github_accounts") return [];
   if (name === "repositories_page") return { items: [repo], total: 1 };
   if (name === "repositories_get") return repo;
@@ -113,11 +111,6 @@ const action = (name, args) => {
     assert(!args.deleted || args.confirm === work.title);
     work.deleted = args.deleted;
     return work;
-  }
-  if (name === "works_duplicate") {
-    const copy = { ...work, id: randomUUID(), title: args.title, opened: null };
-    works.push(copy);
-    return copy;
   }
   if (name === "works_purge") {
     if (!work?.deleted || args.confirm !== work.title)
@@ -256,11 +249,15 @@ try {
       .click();
   });
   await check(
-    "菜单键盘、点击外部关闭、失败保留输入、作品信息保存",
+    "卡片菜单仅重命名与删除、键盘关闭、失败保留名称",
     async () => {
+      const title = await cards.first().locator("h3").textContent();
+      const selected = works.find(work => work.title === title);
+      const details = { description: selected.description, status: selected.status };
       const menuButton = cards.first().getByRole("button", { name: /操作$/ });
       await menuButton.click();
       await expect(library.getByRole("menu")).toBeVisible();
+      await expect(library.getByRole("menuitem")).toHaveText(["重命名", "删除"]);
       await page.keyboard.press("Escape");
       await expect(library.getByRole("menu")).toHaveCount(0);
       await expect(menuButton).toBeFocused();
@@ -270,24 +267,28 @@ try {
         .click();
       await expect(library.getByRole("menu")).toHaveCount(0);
       await menuButton.click();
-      await library.getByRole("menuitem", { name: "编辑作品信息" }).click();
+      await library.getByRole("menuitem", { name: "重命名", exact: true }).click();
       const dialog = page.getByRole("dialog", {
-        name: "作品信息",
+        name: "重命名作品",
         exact: true,
       });
+      await expect(dialog.getByLabel("制作状态", { exact: true })).toHaveCount(0);
+      await expect(dialog.getByLabel("作品简介", { exact: true })).toHaveCount(0);
       await dialog.getByLabel("作品名称").fill("已保存的新作品名");
       state.failSave = true;
-      await dialog.getByRole("button", { name: "保存作品信息" }).click();
+      await dialog.getByRole("button", { name: "保存名称" }).click();
       await expect(dialog.getByLabel("作品名称")).toHaveValue(
         "已保存的新作品名",
       );
       await expect(dialog.getByRole("alert").first()).toContainText("保存失败");
       state.failSave = false;
-      await dialog
-        .getByLabel("制作状态", { exact: true })
-        .selectOption("finished");
-      await dialog.getByRole("button", { name: "保存作品信息" }).click();
+      await dialog.getByRole("button", { name: "保存名称" }).click();
       await expect(dialog).toHaveCount(0);
+      assert.deepEqual(
+        Object.keys(state.calls.filter(call => call.name === "works_update").at(-1).args).sort(),
+        ["expectedRevision", "id", "title"],
+      );
+      assert.deepEqual({ description: selected.description, status: selected.status }, details);
       await library
         .getByLabel("搜索作品", { exact: true })
         .fill("已保存的新作品名");
@@ -296,16 +297,16 @@ try {
       await page.getByRole("button", { name: "关闭通知" }).click();
     },
   );
-  await check("并发资料保存拒绝旧版本并保留输入", async () => {
+  await check("并发重命名拒绝旧版本并保留名称与其他资料", async () => {
     const work = works.find((item) => item.title === "已保存的新作品名");
     const revision = work.metadataRevision;
     await cards.first().getByRole("button", { name: /操作$/ }).click();
-    await library.getByRole("menuitem", { name: "编辑作品信息" }).click();
-    const dialog = page.getByRole("dialog", { name: "作品信息", exact: true });
+    await library.getByRole("menuitem", { name: "重命名", exact: true }).click();
+    const dialog = page.getByRole("dialog", { name: "重命名作品", exact: true });
     work.description = "另一窗口刚保存的简介";
     work.metadataRevision = "concurrent-revision";
     await dialog.getByLabel("作品名称").fill("不应覆盖其他窗口");
-    await dialog.getByRole("button", { name: "保存作品信息" }).click();
+    await dialog.getByRole("button", { name: "保存名称" }).click();
     await expect(dialog.getByRole("alert").first()).toContainText("资料已更新");
     await expect(dialog.getByLabel("作品名称")).toHaveValue("不应覆盖其他窗口");
     assert.equal(work.description, "另一窗口刚保存的简介");
@@ -320,25 +321,13 @@ try {
       .fill("已保存的新作品名");
     await expect(cards).toHaveCount(1);
   });
-  await check("创建副本与浏览器拦截新窗口后的打开入口", async () => {
-    await cards.first().getByRole("button", { name: /操作$/ }).click();
-    await library.getByRole("menuitem", { name: "创建副本" }).click();
-    const dialog = page.getByRole("dialog", {
-      name: "创建作品副本",
-      exact: true,
-    });
-    await dialog.getByLabel("副本名称").fill("创作副本");
-    await dialog.getByRole("button", { name: "创建并打开副本" }).click();
-    await expect(dialog.getByRole("link", { name: "打开副本" })).toBeVisible();
-    await dialog.getByRole("button", { name: "关闭弹窗" }).click();
-  });
   await check("移入回收站精确确认、直接恢复、最近范围独立", async () => {
     await library
       .getByLabel("搜索作品", { exact: true })
       .fill("已保存的新作品名");
     await expect(cards).toHaveCount(1);
     await cards.first().getByRole("button", { name: /操作$/ }).click();
-    await library.getByRole("menuitem", { name: "移入回收站" }).click();
+    await library.getByRole("menuitem", { name: "删除", exact: true }).click();
     const dialog = page.getByRole("dialog", {
       name: "移入回收站",
       exact: true,
@@ -470,7 +459,7 @@ try {
     await expect(cards).toHaveCount(1);
     const title = await cards.first().getByRole("heading").innerText();
     await cards.first().getByRole("button", { name: /操作$/ }).click();
-    await library.getByRole("menuitem", { name: "移入回收站" }).click();
+    await library.getByRole("menuitem", { name: "删除", exact: true }).click();
     const dialog = page.getByRole("dialog", {
       name: "移入回收站",
       exact: true,

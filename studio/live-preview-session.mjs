@@ -58,12 +58,7 @@ export function createPreviewSessionController({
     try {
       if (!live && !snapshot.latest) return;
       const link = live
-        ? await loadLive({
-            id: snapshot.workId,
-            ...(snapshot.taskId ? { task: snapshot.taskId } : {}),
-            ...(snapshot.source ? { source: snapshot.source } : {}),
-            ...(snapshot.paseoAgent ? { paseoAgent: snapshot.paseoAgent } : {}),
-          })
+        ? await loadLive({ id: snapshot.workId })
         : await loadStable(snapshot.latest);
       if (!current(version)) return;
       if (
@@ -84,7 +79,6 @@ export function createPreviewSessionController({
             observedRevision: same
               ? state.preview?.observedRevision || null
               : null,
-            requestedTask: snapshot.taskId || null,
           }
         : {
             ...link,
@@ -100,7 +94,7 @@ export function createPreviewSessionController({
           status: link.state === "error" ? "error" : "updating",
           error:
             link.state === "error"
-              ? "新草稿尚无法预览，继续显示上次可用画面"
+              ? "当前修改尚无法预览，继续显示上次可用画面"
               : "",
         });
         later(link.state === "error" ? 5000 : 1500);
@@ -169,9 +163,6 @@ export function createPreviewSessionController({
       const key = [
         next.workId,
         next.mode || "immutable",
-        next.taskId || "",
-        next.source || "",
-        next.paseoAgent || "",
         next.mode === "live" ? "" : next.latest?.id || "",
       ].join(":");
       const changed = target !== key,
@@ -219,6 +210,7 @@ export function createPreviewSessionController({
                 ...state.preview,
                 sourceRevision: message.sourceRevision,
                 observedRevision: message.sourceRevision,
+                compiledRevision: message.compiledRevision,
               },
             }
           : {}),
@@ -247,23 +239,4 @@ export function createPreviewSessionController({
       clear();
     },
   };
-}
-
-/** A draft must belong to the open work; only a running authoring task has a workspace. */
-export function activePreviewTask(tasks, workId) {
-  return (tasks || [])
-    .filter(
-      (task) =>
-        task.kind === "agent" &&
-        task.state === "running" &&
-        (!task.work || task.work === workId) &&
-        (!task.work_id || task.work_id === workId),
-    )
-    .sort((a, b) =>
-      String(
-        b.started_at || b.started || b.created_at || b.created || "",
-      ).localeCompare(
-        String(a.started_at || a.started || a.created_at || a.created || ""),
-      ),
-    )[0]?.id;
 }

@@ -22,7 +22,7 @@ export function paseoUnavailable(state, detail = "") {
   const stage = /^Paseo startup \((\w+)\):/.exec(String(detail))?.[1];
   const message = state === "waiting"
     ? "创作服务正在排队或启动，请稍后重新连接此作品。"
-    : "创作服务启动失败" + (stages[stage] ? "（" + stages[stage] + "）" : "") + "，草稿和历史已保留，请重新连接重试。";
+    : "创作服务启动失败" + (stages[stage] ? "（" + stages[stage] + "）" : "") + "，作品和对话历史已保留，请重新连接重试。";
   return Object.assign(Error(message), { statusCode: 503, expose: true, code: state === "waiting" ? "PASEO_START_WAITING" : "PASEO_START_FAILED",
     recovery: "reconnect", retryable: true });
 }

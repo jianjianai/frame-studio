@@ -557,6 +557,7 @@ export function DeleteProviderDialog({ provider, onClose, onDeleted }) {
   const blocked =
     !usage.data ||
     usage.error ||
+    usage.data.nativeActive ||
     usage.data.activeTasks > 0 ||
     usage.data.pendingLogins > 0;
   return (
@@ -564,16 +565,15 @@ export function DeleteProviderDialog({ provider, onClose, onDeleted }) {
       <p className="settings-help">
         删除 <strong>{provider.name}</strong> 及其{" "}
         {provider.models?.length || 0}{" "}
-        个模型目录项，并清除此连接的密钥与登录凭据。此操作不能撤销，不会删除作品或历史对话。
+        个模型目录项，并清除此连接的密钥与登录凭据。此操作不能撤销，作品内容会保留。
       </p>
       {usage.loading && !usage.data && <Loading />}
       <ErrorNote error={usage.error} />
       {usage.data && (
         <div className="provider-delete-impact">
-          <p>
-            保留 {usage.data.chats}{" "}
-            个历史对话。原对话仍可查看，继续创作需选择其他提供商并新建对话。
-          </p>
+          {usage.data.nativeActive && (
+            <p role="alert">Paseo 正在使用此提供商创作，请先完成或停止。</p>
+          )}
           {usage.data.activeTasks > 0 && (
             <p role="alert">
               还有 {usage.data.activeTasks}{" "}

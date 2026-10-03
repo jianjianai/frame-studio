@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1.14
-FROM node:24-bookworm-slim AS paseo-builder
+ARG PASEO_MODE=source
+FROM node:24-bookworm-slim AS paseo-base
 RUN apt-get update && apt-get install -y --no-install-recommends git python3 build-essential ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /opt/frame
 COPY integrations/paseo/source.json integrations/paseo/PASEO-LICENSE ./integrations/paseo/
@@ -8,7 +9,16 @@ COPY integrations/paseo/frame-plugin ./integrations/paseo/frame-plugin
 COPY integrations/paseo/runtime ./integrations/paseo/runtime
 COPY scripts/build-paseo.mjs ./scripts/build-paseo.mjs
 COPY server/local-tools.mjs ./server/local-tools.mjs
+FROM paseo-base AS paseo-source
 RUN --mount=type=cache,id=frame-paseo-npm,target=/root/.npm node scripts/build-paseo.mjs --runtime=/opt/paseo --output=/tmp/frame-paseo-bundle
+
+# Reuse a source-verified bundle from CI/local acceptance without rebuilding Expo.
+# The installer rejects any changed pin, patch, plugin, dependency or bundle bytes.
+FROM paseo-base AS paseo-prebuilt
+COPY --from=paseo-prepared / /tmp/frame-paseo-bundle/
+RUN --mount=type=cache,id=frame-paseo-npm,target=/root/.npm node scripts/build-paseo.mjs --prebuilt=/tmp/frame-paseo-bundle --runtime=/opt/paseo
+
+FROM paseo-${PASEO_MODE} AS paseo-builder
 
 FROM node:24-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs gh ffmpeg chromium fonts-noto-cjk ca-certificates curl tini bzip2 && rm -rf /var/lib/apt/lists/*

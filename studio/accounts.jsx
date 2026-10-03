@@ -33,7 +33,7 @@ import {
   Empty,
 } from "./ui";
 import { ProviderSettings, ToolSettings } from "./model-settings";
-import "./ai-workbench.css";
+import "./settings.css";
 import { SpeechSettings } from "./speech";
 import { SystemStatus } from "./system-status";
 import { AccessSettings } from "./access-settings";

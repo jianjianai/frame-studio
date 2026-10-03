@@ -64,9 +64,9 @@ export class WorkUndo {
             );
           if (row.state === "succeeded") return summary(row);
         } else {
-          await this.repos.writable(work.repo, work.project);
+          await this.repos.writable(work.repo, work.project, { exclusive: true });
           const task = await this.db.one(
-            "SELECT * FROM tasks WHERE id=$1 AND repo=$2 AND project=$3 AND kind IN ('agent','paseo') AND state='succeeded'",
+            "SELECT * FROM tasks WHERE id=$1 AND repo=$2 AND project=$3 AND kind='paseo' AND state='succeeded'",
             [args.task, work.repo, work.project],
           );
           if (!task) throw problem(404, "没有可撤销的创作结果");

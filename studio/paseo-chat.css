@@ -10,7 +10,7 @@
 }
 .paseo-toolbar,
 .paseo-context-strip,
-.paseo-candidate {
+.paseo-validation {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -22,13 +22,22 @@
 .paseo-toolbar {
   justify-content: space-between;
 }
-.paseo-toolbar nav {
+.paseo-toolbar-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
 }
-.paseo-toolbar button[aria-pressed="true"] {
-  background: var(--green, #244638);
-  color: #fff;
+.paseo-open-tab {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.paseo-validation {
+  max-height: 30dvh;
+  overflow: auto;
+}
+.paseo-validation > small {
+  width: 100%;
+  color: var(--muted);
 }
 .paseo-context-strip {
   max-height: min(160px, 25dvh);
@@ -70,59 +79,22 @@
   pointer-events: none;
   font-size: 13px;
 }
-.paseo-candidate {
+.paseo-validation {
   font-size: 12px;
 }
-.paseo-candidate span {
+.paseo-validation span {
   margin-right: auto;
 }
-.paseo-candidate details {
+.paseo-validation details {
   width: 100%;
 }
-.paseo-candidate pre {
+.paseo-validation pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   max-height: 200px;
   overflow: auto;
   padding: 12px;
   background: #fff4e2;
-}
-.paseo-branch-note {
-  margin: 0;
-  padding: 9px 12px;
-  color: #745322;
-  background: #fff5df;
-  font-size: 12px;
-  flex-shrink: 0;
-}
-.paseo-history {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  padding: 16px;
-}
-.paseo-history > header {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  justify-content: space-between;
-}
-.paseo-help {
-  font-size: 12px;
-  line-height: 1.6;
-  color: #657367;
-}
-.paseo-history-turn {
-  padding: 16px 0;
-  border-bottom: 1px solid #dfe4d9;
-}
-.paseo-history-turn h4 {
-  font-size: 12px;
-  color: #657367;
-}
-.paseo-history-turn .agent-human-text {
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
 .work-dock.paseo-expanded {
   position: fixed;
@@ -147,7 +119,8 @@
     padding: 6px 10px;
   }
   .paseo-context-strip button,
-  .paseo-toolbar button {
+  .paseo-toolbar button,
+  .paseo-toolbar .button {
     min-height: 44px;
   }
   .paseo-toolbar {

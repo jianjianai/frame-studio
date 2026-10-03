@@ -10,7 +10,7 @@ import {
   creatorTaskIgnores,
   creatorPrompt,
 } from "../../server/creator-workspace.mjs";
-import { agentTools } from "../../server/agent-tools.mjs";
+import { workTools } from "../../server/work-tools.mjs";
 import {
   readCreatorContext,
   creatorSampleRange,
@@ -99,7 +99,7 @@ test("context identifies the active work and does not expose task credentials or
       path.join(f.root, "task.json"),
       JSON.stringify({
         id: "fixture",
-        kind: "agent",
+        kind: "paseo",
         project: "test-film",
         input: {
           prompt: "private-user-prompt",
@@ -240,7 +240,7 @@ test("work tools expose structured help and reject malformed or ambiguous input 
 test("task assets honor pagination but cannot override the repository", async () => {
   let route;
   const calls = [];
-  agentTools({
+  workTools({
     app: {
       post(_url, handler) {
         route = handler;
@@ -255,7 +255,7 @@ test("task assets honor pagination but cannot override the repository", async ()
   });
   const request = (args) =>
     route({
-      agentTask: { repo: "current-repo" },
+      agentTask: { kind: "paseo", repo: "current-repo" },
       body: { name: "assets", args },
     });
   await request({ limit: 15, offset: 60, search: "背景", repo: "other-repo" });
@@ -484,7 +484,7 @@ test("creator task instructions participate in the frozen executor fingerprint",
     const after = await runtimeIdentity(f.root, { refresh: true });
     assert.notEqual(before.fingerprint, after.fingerprint);
     let prior = after;
-    for (const name of ["agent-runtime.mjs", "agent-stream.mjs", "agent-public-data.mjs", "agent-file-changes.mjs"]) {
+    for (const name of ["public-data.mjs", "paseo-manager.mjs", "paseo-runtime-options.mjs", "paseo-validate.mjs"]) {
       fs.copyFileSync(path.join(repo, "server", name), path.join(f.root, "server", name));
       const current = await runtimeIdentity(f.root, { refresh: true });
       assert.notEqual(prior.fingerprint, current.fingerprint, name + " must be pinned in the runtime identity");

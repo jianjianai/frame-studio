@@ -8,7 +8,7 @@ import { operations } from "../../server/operations.mjs";
 import {
   isMcpOperation,
   toolAnnotations,
-} from "../../server/agent-toolkit.mjs";
+} from "../../server/platform-toolkit.mjs";
 import {
   getAuthoringCapabilities,
   authoringCapabilitySummary,

@@ -18,6 +18,7 @@ export type LivePreviewStatus = {
   state: "ready" | "updating" | "error" | "reconnecting";
   revision?: number;
   sourceRevision?: string;
+  compiledRevision?: string;
   sessionId: string;
   error?: string;
   mediaMode?: PreviewMediaMode;
@@ -107,6 +108,7 @@ export function createLivePreviewClient(
       mediaMode: cache.mode(),
       revision: applied?.revision,
       sourceRevision: applied?.sourceRevision,
+      compiledRevision: applied?.compiledRevision,
       ...(error ? { error } : {}),
     };
     window.__FRAME_LIVE_STATUS__ = value;

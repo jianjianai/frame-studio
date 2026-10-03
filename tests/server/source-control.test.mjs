@@ -216,7 +216,7 @@ test("SCM stale same-status edits and busy tasks are rejected before mutation", 
     f.change("stage", ["scene.ts"], { expectedRevision: old.revision }),
     /已变化/,
   );
-  f.busy({ id: "busy", state: "running", kind: "agent" });
+  f.busy({ id: "busy", state: "running", kind: "render" });
   assert.match((await f.status()).blocked, /只读/);
   await assert.rejects(f.change("stage", ["scene.ts"]), /busy/);
   assert.equal(f.git("diff", "--cached", "--name-only"), "");

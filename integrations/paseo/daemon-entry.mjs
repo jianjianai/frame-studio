@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
-import { command } from "../../server/process.mjs";
 import { prepareDaemonSpeechModels } from "./speech-models.mjs";
 
 const control = JSON.parse(
@@ -27,18 +26,9 @@ const env = {
   CODEX_HOME: path.join(process.env.HOME, ".codex"),
   CLAUDE_CONFIG_DIR: path.join(process.env.HOME, ".claude"),
 };
-if (!(await fs.stat(path.join(process.cwd(), ".git")).catch(() => null))) {
-  await command("git", ["init", "-b", "frame-draft"]);
-  await command("git", ["config", "user.name", "FRAME"]);
-  await command("git", ["config", "user.email", "frame@localhost"]);
-  await command("git", ["add", "--", "."]);
-  await command("git", [
-    "commit",
-    "--allow-empty",
-    "-m",
-    "FRAME work baseline",
-  ]);
-}
+// The mounted repository is FRAME's authoritative work branch. Never initialize another Git index.
+if (!(await fs.stat(path.join(process.cwd(), ".git")).catch(() => null)))
+  throw Error("FRAME authoritative work repository is missing");
 const entry = path.join(
   process.env.FRAME_PASEO_ROOT,
   "node_modules/@getpaseo/server/dist/scripts/supervisor-entrypoint.js",

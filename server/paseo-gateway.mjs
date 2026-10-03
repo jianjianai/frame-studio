@@ -30,7 +30,7 @@ const hopHeaders = new Set(["connection", "keep-alive", "proxy-authenticate", "p
   "transfer-encoding", "upgrade", "cookie", "authorization", "host"]);
 
 /** Transparent transport to the complete upstream daemon; FRAME does not parse native conversations. */
-export async function installPaseoGateway({ app, manager, workService, store, drafts, authenticate,
+export async function installPaseoGateway({ app, manager, workService, store, workspace, authenticate,
   connections, db, data, secrets, localMode = false, uiRoot = process.env.FRAME_PASEO_UI || path.join(root, ".cache/paseo-runtime/web") }) {
   const bootstrap = async (req, workId, nonce) => {
     // Both the session response and deep-route HTML belong to this accessed origin.
@@ -56,14 +56,10 @@ export async function installPaseoGateway({ app, manager, workService, store, dr
     const agentId = z.string().min(1).max(256).parse(req.query.agentId);
     const agent = await manager.agent(workId, agentId);
     if (!agent) throw problem(404, "Native agent does not belong to this work");
-    const workspace = await manager.resolveAgentWorkspace(workId, agent.cwd);
-    const worktree = workspace.checkoutRoot !== workspace.prepared.draft.draftRoot;
+    await manager.resolveAgentWorkspace(workId, agent.cwd);
     return { ...status, selectedAgent: { id: agent.id, workspaceId: agent.workspaceId || null,
-      kind: worktree ? "worktree" : "main", label: worktree ? "独立工作树" : "主工作区", previewAllowed: true } };
+      kind: "main", label: "作品工作区", previewAllowed: true } };
   });
-  app.get("/api/paseo/works/:workId/history", req => workService.legacyChats(z.uuid().parse(req.params.workId)));
-  app.get("/api/paseo/works/:workId/history/:chatId", req =>
-    workService.legacyHistory(z.uuid().parse(req.params.workId), z.uuid().parse(req.params.chatId)));
 
   app.post("/api/paseo/works/:workId/messages/freeze", req => workService.freeze(z.uuid().parse(req.params.workId), req.body));
   app.get("/api/paseo/works/:workId/messages/:messageId", async req => {
@@ -74,11 +70,11 @@ export async function installPaseoGateway({ app, manager, workService, store, dr
     if (!message) throw problem(404, "Frozen native submission not found");
     return { ...message.envelope, state: "frozen", recovery: "Inspect the native Paseo receipt before retrying this same message ID" };
   });
-  for (const operation of ["retry", "apply"]) app.post("/api/paseo/works/:workId/candidates/:candidateId/" + operation, async req => {
-    const workId = z.uuid().parse(req.params.workId), candidateId = z.uuid().parse(req.params.candidateId);
+  app.post("/api/paseo/works/:workId/validations/:validationId/retry", async req => {
+    const workId = z.uuid().parse(req.params.workId), validationId = z.uuid().parse(req.params.validationId);
     await workService.works.get(workId, { active: true });
-    if (!drafts) throw problem(503, "Draft verification is unavailable");
-    return drafts[operation](workId, candidateId);
+    if (!workspace) throw problem(503, "Workspace verification is unavailable");
+    return workspace.retry(workId, validationId);
   });
 
   const internal = async req => {

@@ -1,10 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import path from "node:path";
+import fs from "node:fs/promises";
 import { expect } from "@playwright/test";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
 import { launchBrowser } from "../../scripts/browser.mjs";
+import { readPaseoReference } from "../../studio/paseo-reference.mjs";
 import {
   paseoBoundaryBootstrap,
   paseoBoundaryHtml,
@@ -27,13 +29,15 @@ const player = `<!doctype html><html><body><div id="frame">Last good frame</div>
 window.instance=crypto.randomUUID();
 window.state={time:0,duration:60,fps:30,playing:false,buffering:false,rate:1,loop:false,volume:0.7,muted:false,subtitles:true,selection:{}};
 window.emitState=(patch)=>{Object.assign(window.state,patch);parent.postMessage({type:'frame-player-state',...window.state},'*');};
-window.emitRevision=(state,hash,error)=>parent.postMessage({type:'frame-live-preview',state,sourceRevision:hash,...(error?{error}: {})},'*');
+window.emitRevision=(state,hash,error)=>parent.postMessage({type:'frame-live-preview',state,sourceRevision:hash,compiledRevision:'c'.repeat(64),...(error?{error}: {})},'*');
 addEventListener('message',({data})=>{
  if(data.type==='frame-live-retry'){window.retryCount=(window.retryCount||0)+1;return;}
  if(data.type!=='frame-player-command')return;
+ if(data.command==='export-start')window.exportId=data.id;
  if(data.command==='configure-work')window.context=data.context;
  if(data.command==='configure-view')window.preferences=data.preferences;
  if(data.command==='restore-session'){window.restored=data.state;window.emitState(data.state);}
+ if(data.command==='seek'){window.seeks=(window.seeks||[]).concat([data]);window.emitState({time:data.time,selection:data.selection||{}});}
 });
 parent.postMessage({type:'frame-player-ready'},'*');
 parent.postMessage({type:'frame-preview-loading',message:''},'*');
@@ -41,17 +45,18 @@ window.emitRevision('ready','a'.repeat(64));
 </script></body></html>`;
 
 test(
-  "Creation uses live preview without build, preserves iframe through revisions and restores state when joining AI draft",
+  "Creation uses live preview without build, preserves the canonical player while background tasks run and opens the same Paseo conversation in a separate tab",
   { timeout: 60000 },
   async () => {
     const virtualFile = path.resolve("tests/ui/live-creation-fixture.jsx");
+    const cacheDir = path.resolve(".cache/tests/live-creation-" + process.pid);
     const server = await createServer({
       configFile: false,
       root: process.cwd(),
-      cacheDir: path.resolve(".cache/tests/live-creation-" + process.pid),
+      cacheDir,
       logLevel: "error",
       appType: "custom",
-      server: { host: "127.0.0.1", port: 0 },
+      server: { host: "127.0.0.1", port: 0, watch: null },
       plugins: [
         react(),
         {
@@ -65,7 +70,7 @@ test(
           },
           configureServer(vite) {
             vite.middlewares.use((req, res, next) => {
-              if (req.url === "/__creation") {
+              if (req.url?.startsWith("/__creation")) {
                 res.setHeader("Content-Type", "text/html");
                 void vite
                   .transformIndexHtml(
@@ -101,6 +106,18 @@ test(
           const Native = WebSocket;
           window.fixtureCalls = [];
           window.fixtureTasks = [];
+          window.fixturePaseoStatus = {
+            version: 1,
+            workId,
+            native: {
+              state: "ready",
+              activeAgents: [],
+              activeTerminals: 0,
+              pendingPermissions: 0,
+            },
+            sourceRevision: "d".repeat(64),
+            validation: null,
+          };
           window.fixtureSockets = [];
           const resultFor = (name, args) => {
             if (name === "works_open")
@@ -111,6 +128,7 @@ test(
                 title: "Live creation",
               };
             if (name === "works_tasks") return window.fixtureTasks;
+            if (name === "works_paseo_status") return window.fixturePaseoStatus;
             if (name === "works_preview_status")
               return {
                 runtimeFingerprint: "fixture",
@@ -190,20 +208,19 @@ test(
                   });
             }
           };
-          window.joinDraft = () => {
+          window.startBackgroundExport = () => {
             window.fixtureTasks = [
               {
                 id: taskId,
-                kind: "agent",
+                kind: "render",
                 state: "running",
                 work_id: workId,
-                chat: "other-chat",
                 created_at: new Date().toISOString(),
               },
             ];
             for (const ws of window.fixtureSockets) ws.pushTasks();
           };
-          window.leaveDraft = () => {
+          window.finishBackgroundExport = () => {
             window.fixtureTasks = [];
             for (const ws of window.fixtureSockets) ws.pushTasks();
           };
@@ -234,7 +251,7 @@ test(
                 scheduled: 0,
                 incomplete: false,
               },
-              candidate: null,
+              validation: null,
             },
           });
         return route.fulfill({
@@ -242,7 +259,7 @@ test(
           json: { error: "Unexpected fixture request" },
         });
       });
-      await page.route("**/paseo/**", (route) => {
+      await page.context().route("**/paseo/**", (route) => {
         if (!new URL(route.request().url()).pathname.startsWith(paseo.basePath))
           return route.fallback();
         return route.fulfill({
@@ -320,40 +337,182 @@ test(
       );
       assert.equal(reference.liveSessionId, sessionWork);
       assert.equal(reference.sourceRevision, "d".repeat(64));
+      assert.equal(reference.compiledRevision, "c".repeat(64));
       assert.equal(reference.sourceCommit, undefined);
-      await page.evaluate(() => window.joinDraft());
-      await expect(page.locator('iframe[title="作品播放器"]')).toHaveAttribute(
-        "src",
-        /source=task/,
+      await page.evaluate(() => window.startBackgroundExport());
+      await page.evaluate(() => {
+        window.fixturePaseoStatus.native.activeAgents = ["current"];
+        for (const ws of window.fixtureSockets)
+          for (const call of ws.subs.values())
+            if (call.name === "works_paseo_status")
+              ws.onmessage?.({
+                data: JSON.stringify({
+                  type: "update",
+                  id: call.id,
+                  result: window.fixturePaseoStatus,
+                }),
+              });
+      });
+      const stopWork = page.getByRole("button", {
+        name: "停止本作品后台工作",
+        exact: true,
+      });
+      await expect(stopWork).toBeVisible();
+      await expect(stopWork).toHaveAccessibleDescription(
+        "AI、终端及排队和运行中的任务（含导出）都会停止。",
       );
-      frame = await currentFrame();
-      await frame.waitForFunction(() => window.restored?.time === 17);
-      assert.deepEqual(
-        await frame.evaluate(() => ({
-          time: window.restored.time,
-          rate: window.restored.rate,
-          loop: window.restored.loop,
-          muted: window.restored.muted,
-          selection: window.restored.selection,
-        })),
-        {
-          time: 17,
-          rate: 1.5,
-          loop: true,
-          muted: true,
-          selection: { start: 12, end: 22 },
-        },
+      await stopWork.click();
+      await page.waitForFunction(
+        (id) =>
+          window.fixtureCalls.some(
+            (call) => call.name === "works_stop" && call.args.id === id,
+          ),
+        workId,
       );
-      await frame.waitForFunction(
-        () => window.context?.previewSource === "task",
-      );
-      await page.evaluate(() => window.leaveDraft());
       await expect(page.locator('iframe[title="作品播放器"]')).toHaveAttribute(
         "src",
         /source=work/,
       );
-      frame = await currentFrame();
-      await frame.waitForFunction(() => window.restored?.time === 17);
+      assert.equal(
+        await (await currentFrame()).evaluate(() => window.instance),
+        instance,
+      );
+      assert.equal(await frame.evaluate(() => window.state.time), 17);
+      await frame.waitForFunction(
+        () => window.context?.previewSource === "work",
+      );
+      await page.evaluate(() => window.finishBackgroundExport());
+      assert.equal(
+        await (await currentFrame()).evaluate(() => window.instance),
+        instance,
+      );
+      await expect(
+        page.getByRole("button", { name: "旧版记录", exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: "主工作区预览", exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: "预览当前对话", exact: true }),
+      ).toHaveCount(0);
+      const nativeRoute =
+        paseo.basePath +
+        "h/fixture/workspace/main?open=agent%3Acurrent&frameNonce=" +
+        paseo.nonce;
+      await nativeElement.evaluate((element, url) => {
+        element.src = url;
+      }, nativeRoute);
+      const currentNative = await (
+        await nativeElement.elementHandle()
+      ).contentFrame();
+      await currentNative.waitForFunction(
+        () => window.__FRAME_REVIEW_PASEO__?.ready,
+      );
+      const popupPromise = page.waitForEvent("popup");
+      await page
+        .getByRole("link", { name: "在新标签页打开 Paseo", exact: true })
+        .click();
+      const popup = await popupPromise;
+      await popup.waitForLoadState();
+      const popupUrl = new URL(popup.url());
+      assert.equal(
+        popupUrl.pathname,
+        paseo.basePath + "h/fixture/workspace/main",
+      );
+      assert.equal(popupUrl.searchParams.get("open"), "agent:current");
+      assert.equal(popupUrl.searchParams.get("frameNonce"), paseo.nonce);
+      assert.equal(popupUrl.searchParams.get("frameStandalone"), "1");
+      assert.equal(await popup.evaluate(() => window.opener), null);
+      await popup.close();
+      await page
+        .getByRole("button", { name: "关闭 AI 对话", exact: true })
+        .last()
+        .click();
+      await expect(nativeElement).toBeHidden();
+      await page
+        .getByRole("button", { name: "打开 AI 对话", exact: true })
+        .click();
+      await expect(nativeElement).toHaveAttribute("src", nativeRoute);
+      assert.equal(
+        await (await currentFrame()).evaluate(() => window.instance),
+        instance,
+      );
+      await page.locator('[data-tool-key="exports"]').click();
+      const exportDialog = page.getByRole("dialog", {
+        name: "导出",
+        exact: true,
+      });
+      await exportDialog.getByLabel("导出格式与位置").selectOption("webm");
+      await exportDialog
+        .getByRole("button", { name: "开始本机导出 WebM", exact: true })
+        .click();
+      await frame.waitForFunction(() => !!window.exportId);
+      await frame.evaluate(() =>
+        parent.postMessage(
+          {
+            type: "frame-export-state",
+            id: window.exportId,
+            state: "running",
+            sourceRevision: "e".repeat(64),
+            compiledRevision: "f".repeat(64),
+          },
+          "*",
+        ),
+      );
+      await expect(
+        exportDialog.locator(
+          '.local-export details[aria-label="导出源码版本"]',
+        ),
+      ).toContainText("e".repeat(8));
+      await expect(exportDialog.locator(".local-export")).toContainText(
+        "f".repeat(64),
+      );
+      await frame.evaluate(() =>
+        parent.postMessage(
+          {
+            type: "frame-export-state",
+            id: window.exportId,
+            state: "cancelled",
+            sourceRevision: "e".repeat(64),
+            compiledRevision: "f".repeat(64),
+          },
+          "*",
+        ),
+      );
+      await expect(exportDialog.locator(".local-export")).toContainText(
+        "已停止",
+      );
+      await exportDialog
+        .getByRole("button", { name: "关闭弹窗", exact: true })
+        .click();
+      await page.getByRole("button", { name: "引用当前画面", exact: true }).click();
+      await currentNative.waitForFunction(() => window.__FRAME_REVIEW_PASEO__.attachments.length > 0);
+      const sentLink = await currentNative.evaluate(() => window.__FRAME_REVIEW_PASEO__.attachments.at(-1).url);
+      const sentReference = readPaseoReference(sentLink, workId);
+      assert.equal(sentReference.sourceRevision, "d".repeat(64));
+      assert.equal(sentReference.compiledRevision, "c".repeat(64));
+      assert.deepEqual({ start: sentReference.start, end: sentReference.end }, { start: 12, end: 22 });
+      await page.evaluate(url => {
+        history.replaceState(null, "", url);
+        dispatchEvent(new PopStateEvent("popstate"));
+      }, sentLink);
+      await frame.waitForFunction(() => window.seeks?.length === 1);
+      assert.deepEqual(await frame.evaluate(() => window.seeks[0].selection), { start: 12, end: 22 });
+      await expect(page.getByRole("status", { name: "对话中的画面引用" })).toContainText("已定位引用对应的预览版本");
+      await frame.evaluate(() => {
+        window.emitState({ time: 26 });
+        window.emitRevision("ready", "e".repeat(64));
+      });
+      await page.evaluate(() => dispatchEvent(new PopStateEvent("popstate")));
+      const referenceNotice = page.getByRole("status", { name: "对话中的画面引用" });
+      await expect(referenceNotice).toContainText("版本与当前预览不同，尚未定位");
+      assert.equal(await frame.evaluate(() => window.seeks.length), 1, "a saved old link never silently seeks the new version");
+      assert.equal(await frame.evaluate(() => window.state.time), 26);
+      await referenceNotice.getByRole("button", { name: "在当前版本定位此时间", exact: true }).click();
+      await frame.waitForFunction(() => window.seeks.length === 2);
+      assert.equal(await frame.evaluate(() => window.state.time), 12);
+      await expect(referenceNotice).toContainText("引用仍属于记录的较早版本");
+      assert.equal(await frame.evaluate(() => window.instance), instance, "reference navigation keeps the one canonical player");
       const calls = await page.evaluate(() => window.fixtureCalls);
       assert.equal(
         calls.filter(
@@ -363,15 +522,26 @@ test(
         "no automatic full build is submitted",
       );
       assert(
+        calls
+          .filter((call) => call.name === "works_live_preview")
+          .every(
+            (call) =>
+              !call.args.task && !call.args.source && !call.args.paseoAgent,
+          ),
+        "all live preview requests use the canonical work",
+      );
+      assert(
         calls.some(
           (call) =>
-            call.name === "works_live_preview" && call.args.task === taskId,
+            call.type === "subscribe" && call.name === "works_paseo_status",
         ),
+        "Paseo status is updated by the platform WebSocket",
       );
       assert.deepEqual(errors, []);
     } finally {
       await browser?.close();
       await server.close();
+      await fs.rm(cacheDir, { recursive: true, force: true });
     }
   },
 );

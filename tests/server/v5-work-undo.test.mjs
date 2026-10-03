@@ -16,7 +16,7 @@ async function fixture(run) {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-v5-undo-"));
   const db = await database(url, "v5-undo-fixture-password");
   await db.pool.query(
-    "TRUNCATE repos,tasks,events,chats,works,connections,assets,engines,auth_flows CASCADE",
+    "TRUNCATE repos,tasks,events,works,connections,assets,engines,auth_flows CASCADE",
   );
   const services = await createApp({
     db,
@@ -44,7 +44,7 @@ async function fixture(run) {
     const after = await repos.checkpoint(repo.id, work.project, "AI change");
     const task = randomUUID();
     await db.pool.query(
-      "INSERT INTO tasks(id,repo,project,kind,state,input,base_commit,result,finished) VALUES($1,$2,$3,'agent','succeeded',$4,$5,$6,now())",
+      "INSERT INTO tasks(id,repo,project,kind,state,input,base_commit,result,finished) VALUES($1,$2,$3,'paseo','succeeded',$4,$5,$6,now())",
       [
         task,
         repo.id,
@@ -278,7 +278,7 @@ test(
       assert.equal(
         (
           await f.db.one(
-            "SELECT count(*)::int AS n FROM tasks WHERE kind='agent'",
+            "SELECT count(*)::int AS n FROM tasks WHERE kind='paseo'",
           )
         ).n,
         1,

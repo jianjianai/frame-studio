@@ -64,12 +64,12 @@ export function Player({
 }: {
   project: AnimationProject;
   embedded?: boolean;
-  liveUpdate?: { revision: number; changes: { visual: boolean; audio: boolean; metadata: boolean }; signal?: AbortSignal };
+  liveUpdate?: { revision: number; sourceRevision?: string; compiledRevision?: string; changes: { visual: boolean; audio: boolean; metadata: boolean }; signal?: AbortSignal };
   onLiveUpdate?: (result: { revision: number; success: boolean; error?: string }) => void;
 }) {
   const [project, setProject] = useState(requestedProject);
   const playerSession = useRef<ReturnType<typeof createPlayerSession> | null>(null);
-  const applied = useRef({ project: requestedProject, quality: "" as string, revision: 0 });
+  const applied = useRef({ project: requestedProject, quality: "" as string, revision: 0, sourceRevision: liveUpdate?.sourceRevision, compiledRevision: liveUpdate?.compiledRevision });
   const liveCallback = useRef(onLiveUpdate);
   liveCallback.current = onLiveUpdate;
   const [workContext, setWorkContext] = useState<{
@@ -421,7 +421,7 @@ export function Player({
         setTrackControls((previous) => ({ ...previous, [id]: control })),
     });
     playerSession.current = session;
-    applied.current = { project, quality, revision: liveUpdate?.revision ?? 0 };
+    applied.current = { project, quality, revision: liveUpdate?.revision ?? 0, sourceRevision: liveUpdate?.sourceRevision, compiledRevision: liveUpdate?.compiledRevision };
     transport.current = session.audio;
     renderer.current = session.renderer;
     void session.ready.then(() => {
@@ -451,7 +451,7 @@ export function Player({
       audioChanged: projectChanged && (liveUpdate?.changes.audio ?? true),
       quality, revision, signal: liveUpdate?.signal ? AbortSignal.any([cancel.signal, liveUpdate.signal]) : cancel.signal,
       onCommit: () => {
-        applied.current = { project: requestedProject, quality, revision };
+        applied.current = { project: requestedProject, quality, revision, sourceRevision: liveUpdate?.sourceRevision, compiledRevision: liveUpdate?.compiledRevision };
         setProject(requestedProject);
         liveCallback.current?.({ revision, success: true });
       },
@@ -506,6 +506,8 @@ export function Player({
   });
   async function renderWebm(options?: Parameters<typeof exportPlayerVideo>[1]) {
     if (!loading && !exportAbort.current) playerSession.current?.api.pause();
+    const sourceRevision = applied.current.sourceRevision;
+    const compiledRevision = applied.current.compiledRevision;
     return exportPlayerVideo(
       {
         project: applied.current.project,
@@ -521,7 +523,7 @@ export function Player({
         exportFps,
         subtitleRef,
         loading,
-        reportExport,
+        reportExport: (id, result) => reportExport(id, { ...result, ...(sourceRevision ? { sourceRevision } : {}), ...(compiledRevision ? { compiledRevision } : {}) }),
         lastExport,
       },
       options,

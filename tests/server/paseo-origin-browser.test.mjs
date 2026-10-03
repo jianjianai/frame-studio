@@ -30,7 +30,7 @@ test("Actual request-origin bootstrap passes the strict production iframe bridge
     vite = await createServer({
       configFile: false, root: process.cwd(), cacheDir: path.join(directory, "vite"),
       logLevel: "error", appType: "custom",
-      server: { middlewareMode: true, hmr: false, allowedHosts: true },
+      server: { middlewareMode: true, hmr: false, allowedHosts: true, watch: null },
     });
     app = Fastify({ trustProxy: true });
     await installPaseoGateway({

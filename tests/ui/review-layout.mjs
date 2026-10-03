@@ -135,7 +135,7 @@ export async function layoutChecks(h) {
       .getByRole("slider", { name: "时间轴可视范围", exact: true })
       .press("0");
   });
-  await check("Frame选段上下文、旧记录Markdown和安全链接", async () => {
+  await check("Frame选段上下文绑定实际预览，旧聊天入口已移除", async () => {
     const native = page.frames().find((f) => f.url().includes("/paseo/"));
     await native.waitForFunction(() => window.__FRAME_REVIEW_PASEO__?.ready);
     const reference = await native.evaluate(() =>
@@ -143,21 +143,15 @@ export async function layoutChecks(h) {
     );
     assert.equal(reference.start, 0.5);
     assert.equal(reference.end, 1.5);
-    await page.getByRole("button", { name: "旧版记录", exact: true }).click();
     await expect(
-      page
-        .locator(".paseo-history-turn")
-        .getByRole("heading", { name: "修改结果", exact: true }),
-    ).toHaveText("修改结果");
-    await expect(page.locator(".paseo-history-turn strong").first()).toHaveText(
-      "动作已调整",
-    );
-    assert.equal(
-      await page.locator('.paseo-history-turn a[href^="javascript:"]').count(),
-      0,
-    );
-    assert.equal(await page.evaluate(() => window.INJECTED), undefined);
-    await page.getByRole("button", { name: "Paseo", exact: true }).click();
+      page.getByRole("button", { name: "旧版记录", exact: true }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("region", { name: "旧版创作记录" }),
+    ).toHaveCount(0);
+    await expect(
+      page.getByRole("link", { name: "在新标签页打开 Paseo", exact: true }),
+    ).toBeVisible();
   });
 }
 export async function responsiveChecks(h) {

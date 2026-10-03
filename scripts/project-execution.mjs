@@ -8,6 +8,7 @@ import { projectAssets } from "./project-assets.mjs";
 import { projectPath } from "./project-paths.mjs";
 import { checkProjects } from "./check-projects.mjs";
 import { inputManifest } from "./production-input.mjs";
+import { sharedRuntime } from "./shared-runtime.mjs";
 import { browserOptions } from "./browser.mjs";
 import { buildPreviewAudio, previewProgress } from "./preview-audio.mjs";
 
@@ -68,9 +69,16 @@ export function runProcess(
 }
 export function projectConfig(root, id, outDir) {
   projectPath(root, id);
+  const runtime = sharedRuntime(root);
   return {
     root,
     configFile: false,
+    // Keep pnpm's normal realpath resolution for transitive dependencies. The
+    // selected catalog import alone resolves to this task's frozen project.
+    ...(runtime ? { resolve: { alias: [{
+      find: new RegExp("^\\.\\./\\.\\./projects/" + id + "/project$"),
+      replacement: path.join(root, "projects", id, "project.ts"),
+    }] } } : {}),
     logLevel: "error",
     base: "./",
     define: {
@@ -100,7 +108,7 @@ export function projectConfig(root, id, outDir) {
     server: {
       // Query imports such as Signalsmith ?raw must also reach shared dependencies
       // when the isolated project links node_modules outside its Vite root.
-      fs: { allow: [root, fs.realpathSync(path.join(root, "node_modules"))] },
+      fs: { allow: [root, fs.realpathSync(path.join(root, "node_modules")), ...(runtime ? [runtime.root] : [])] },
       host: "127.0.0.1",
       port: 0,
       strictPort: false,

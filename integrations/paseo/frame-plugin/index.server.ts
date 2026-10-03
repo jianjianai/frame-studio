@@ -5,8 +5,15 @@ import { createFrameBackend } from "./server/backend";
 export default function contribute(server: PluginServerContext) {
   const backend = createFrameBackend();
   const remove: Array<() => void> = [];
+  remove.push(server.before("workspace.create", ({ request }) => {
+    if (request.source.kind !== "directory" || request.source.path !== process.cwd())
+      throw new Error("FRAME 作品只使用一个共享工作区；请在当前作品中新建对话。");
+    return request;
+  }));
   remove.push(
     server.before("agent.create", async ({ request }, { signal }) => {
+      if (request.config.cwd !== process.cwd())
+        throw new Error("FRAME 对话必须使用当前作品的共享工作区。");
       const context = await backend.context(signal);
       const existing = request.config.systemPrompt?.trim();
       return {
@@ -16,7 +23,7 @@ export default function contribute(server: PluginServerContext) {
           systemPrompt: [
             existing,
             context.instructions,
-            "FRAME Git workflow: the main work workspace is the only draft automatically verified and applied to the published work. Managed Git worktrees remain isolated. Use native Paseo Git tools to finish and merge a worktree into the main workspace before FRAME validation and application. Worktree previews and FRAME work-tools use the selected agent checkout; they do not implicitly publish or merge that branch.",
+            "FRAME uses this checkout as the sole editable work workspace. All conversations, the editor, preview and work tools share these files and the same Git index. Do not create or switch worktrees or copy a draft for editing. Saved changes appear in the live preview directly. FRAME validates this exact revision in the current runtime; failed validation retains your changes. Long exports freeze a temporary read-only input and never write back to this workspace.",
           ]
             .filter(Boolean)
             .join("\n\n"),

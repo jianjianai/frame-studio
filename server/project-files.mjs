@@ -22,27 +22,38 @@ export async function confinedAsync(base, relative) {
   }
   return current;
 }
-/** Bounded buffers and async reads: large media must not block the API event loop. */
-export async function fileSha256(file) {
-  const before = regular(await fsp.lstat(file));
+const digestCache = new Map();
+const maxDigestCache = 32768;
+const fileSignature = stat => [stat.dev, stat.ino, stat.mode, stat.nlink, stat.size, stat.mtimeNs, stat.ctimeNs].join(":");
+/** Content digests reuse unchanged inode metadata, with nanosecond race checks and a bounded LRU. */
+export async function fileSha256(file, { cache = true } = {}) {
+  const before = regular(await fsp.lstat(file, { bigint: true }));
   if (!before.isFile()) throw problem(400, "Expected a regular file");
+  const signature = fileSignature(before);
   const handle = await fsp.open(file, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
   try {
-    const opened = regular(await handle.stat());
-    if (opened.dev !== before.dev || opened.ino !== before.ino) throw problem(409, "File changed while opening");
-    const digest = createHash("sha256"), buffer = Buffer.allocUnsafe(1024 * 1024);
-    for (;;) {
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (!bytesRead) break;
-      digest.update(buffer.subarray(0, bytesRead));
+    const opened = regular(await handle.stat({ bigint: true }));
+    if (fileSignature(opened) !== signature) throw problem(409, "File changed while opening");
+    const cached = cache && digestCache.get(file);
+    let value;
+    if (cached?.signature === signature) value = cached.value;
+    else {
+      const digest = createHash("sha256"), buffer = Buffer.allocUnsafe(Math.min(1024 * 1024, Number(before.size) || 1));
+      for (;;) {
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+        if (!bytesRead) break;
+        digest.update(buffer.subarray(0, bytesRead));
+      }
+      value = digest.digest("hex");
     }
-    const after = await handle.stat();
-    const current = regular(await fsp.lstat(file));
-    if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || after.ctimeMs !== opened.ctimeMs ||
-        current.dev !== opened.dev || current.ino !== opened.ino || current.size !== after.size ||
-        current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs)
+    const after = await handle.stat({ bigint: true }), current = regular(await fsp.lstat(file, { bigint: true }));
+    if (fileSignature(after) !== signature || fileSignature(current) !== signature)
       throw problem(409, "File changed while hashing");
-    return digest.digest("hex");
+    if (cache) {
+      digestCache.delete(file); digestCache.set(file, { signature, value });
+      if (digestCache.size > maxDigestCache) digestCache.delete(digestCache.keys().next().value);
+    }
+    return value;
   } finally { await handle.close(); }
 }
 const ignored = new Set([".git", "node_modules", ".cache", ".history", "exports"]);
@@ -55,12 +66,14 @@ export async function projectInventory(root, { includeExecutableMode = false, in
     const names = (await fsp.readdir(dir)).filter(name => includeIgnored || !ignored.has(name)).sort();
     for (const name of names) {
       const rel = relative ? relative + "/" + name : name;
-      const file = await confinedAsync(root, rel), stat = regular(await fsp.lstat(file));
+      const file = await confinedAsync(root, rel), stat = regular(await fsp.lstat(file, { bigint: true }));
       if (stat.isDirectory()) await walk(file, rel);
       else {
         const entry = [rel, await fileSha256(file)];
-        // Preview/content fingerprints stay compatible; undo additionally tracks Git executable modes.
-        if (includeExecutableMode) entry.push(stat.mode & 0o100 ? "100755" : "100644");
+        if (fileSignature(regular(await fsp.lstat(file, { bigint: true }))) !== fileSignature(stat))
+          throw problem(409, "Project file changed while hashing");
+        // Content-only snapshots stay compatible; authoritative revisions additionally track Git executable mode.
+        if (includeExecutableMode) entry.push(stat.mode & 0o100n ? "100755" : "100644");
         files.push(entry);
       }
     }

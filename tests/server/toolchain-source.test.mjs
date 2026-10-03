@@ -464,7 +464,7 @@ test(
         },
       );
       await t.test(
-        "HTTP CLI discovers exact schemas and obeys active-work locks",
+        "HTTP CLI discovers exact schemas, allows edits during validation and obeys exclusive task locks",
         async () => {
           await app.listen({ host: "127.0.0.1", port: 0 });
           const env = {
@@ -498,14 +498,29 @@ test(
           assert(JSON.parse(line.stdout).nextLine > 1);
           assert.equal((await cli(["works_page", "[]"])).code, 1);
           assert.equal((await cli(["works_write", "{}"])).code, 1);
-          const task = await call("works_task", {
+          const validation = await call("works_task", {
             id: work.id,
             kind: "validate",
           });
-          const source = await call("works_read", {
+          let source = await call("works_read", {
             id: work.id,
             path: "scene.ts",
           });
+          const edit = await call("works_edit", {
+            id: work.id,
+            changes: [{
+              path: source.path,
+              expectedSha256: source.sha256,
+              content: source.content + "\n// editing while workspace validation is queued",
+            }],
+          });
+          assert.equal(edit.applied, true);
+          await call("task_cancel", { id: validation.id });
+          const task = await call("works_task", {
+            id: work.id,
+            kind: "frame",
+          });
+          source = await call("works_read", { id: work.id, path: "scene.ts" });
           await assert.rejects(
             call("works_edit", {
               id: work.id,

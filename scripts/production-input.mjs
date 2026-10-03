@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { projectPath, inside } from "./project-paths.mjs";
+import { sharedRuntime, linkSharedRuntime } from "./shared-runtime.mjs";
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 // SHA-256 remains authoritative. Metadata only decides whether a verified digest
@@ -88,6 +89,7 @@ const excluded = new Set([
 ]);
 export function inputFiles(root, id) {
   projectPath(root, id);
+  const runtime = sharedRuntime(root);
   const files = [];
   function walk(relative) {
     const file = path.join(root, relative);
@@ -119,10 +121,11 @@ export function inputFiles(root, id) {
     ".npmrc",
     "projects/" + id,
   ])
-    walk(name);
+    if (!runtime?.names.has(name)) walk(name);
   return files.sort();
 }
 export function inputManifest(root, id) {
+  const runtime = sharedRuntime(root);
   const files = inputFiles(root, id).map((file) => ({
     path: file,
     sha256: fileSha256(path.join(root, file)),
@@ -130,8 +133,9 @@ export function inputManifest(root, id) {
   return {
     schemaVersion: 1,
     project: id,
-    fingerprint: hash(JSON.stringify(files)),
+    fingerprint: hash(JSON.stringify(runtime ? { files, runtime: runtime.fingerprint } : files)),
     files,
+    ...(runtime ? { runtimeFingerprint: runtime.fingerprint } : {}),
   };
 }
 function snapshotClose(root, id, directory, workspace) {
@@ -184,6 +188,10 @@ export function captureInput(root, id, { workspace = false } = {}) {
     }
     if (inputManifest(root, id).fingerprint !== before.fingerprint)
       throw new Error("Input changed during capture; retry");
+    const runtime = sharedRuntime(root);
+    // Render sessions replace their tiny entry HTML, never the shared core HTML.
+    if (runtime) linkSharedRuntime(directory, runtime.root, { mutableIndex: true, names: runtime.names });
+    if (!fs.existsSync(path.join(directory, "node_modules")))
     fs.symlinkSync(
       fs.realpathSync(path.join(root, "node_modules")),
       path.join(directory, "node_modules"),

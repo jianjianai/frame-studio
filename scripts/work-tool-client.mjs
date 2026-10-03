@@ -38,13 +38,7 @@ export const workToolHelp = {
     },
   },
   remote: {
-    preview: { note: "No arguments; opens the current work and isolated active task draft with incremental live preview, without a full build." },
-    ask: {
-      title: "optional short creative clarification",
-      questions:
-        "1..4 questions with id, question, optional options, multiSelect and allowOther; waits for human answers in the SAME task",
-      requestKey: "optional stable id for resuming the same question",
-    },
+    preview: { note: "No arguments; opens the unique current work workspace with incremental live preview, without a full build." },
     assets: {
       search: "optional text",
       limit: "1..200, default 60",
@@ -98,7 +92,7 @@ export const workToolHelp = {
     },
   },
   notes: [
-    "Local capabilities/context/reference/check do not need platform credentials. Remote actions require an active platform task.",
+    "Local capabilities/context/reference/check do not need platform credentials. Remote actions require an active Paseo session.",
     "engines lists real model capabilities. Discover configured voice catalogs before auditioning. Chinese pronunciation/pauses are provider-specific; unsupported controls are rejected, never fabricated. Built-ins cannot be replaced.",
     "engine_test creates temporary audition audio; speech creates a material. Neither automatically edits audioTracks or subtitles.",
     "Remote writes are never retried automatically; after a timeout their outcome may be unknown. Inspect assets before repeating speech.",
@@ -192,7 +186,7 @@ export async function callWorkTool(
   if (!env.FRAME_AGENT_URL || !env.FRAME_AGENT_TOKEN)
     throw toolError(
       "TASK_REQUIRED",
-      "This action is available only inside an active platform AI task.",
+      "This action is available only inside an active Paseo session.",
       "Local context/check and pnpm film remain available without task credentials.",
     );
   let url;

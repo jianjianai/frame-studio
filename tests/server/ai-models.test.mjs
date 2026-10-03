@@ -1,5 +1,5 @@
 import test from "node:test";
-import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
+import { freezePaseoExecution } from "../../server/paseo-selection.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -273,63 +273,19 @@ test(
         repo: repo.id,
         title: "模型测试",
       });
-      const chat = await insertLegacyChat(db, work, {
-        id: work.id,
-        connection: connection.id,
-        title: "多模型同一提供商",
+      const freeze = async model => freezePaseoExecution({ db, connections: tasks.connections, secrets: tasks.secrets,
+        connection: connection.id, model,
       });
-      const args = {
-        id: work.id,
-        chat: chat.id,
-        prompt: "调整动作",
-        model: models[1].id,
-        requestKey: randomUUID(),
-        context: { time: 2 },
-      };
-      const first = await legacyAgentTask(tasks, work, args);
-      assert.equal(first.input.model, models[1].id);
-      assert.equal(first.input.connection, connection.id);
-      const second = await legacyAgentTask(tasks, work, {
-        ...args,
-        model: models[0].id,
-        requestKey: randomUUID(),
-      });
-      assert.equal(second.chat, first.chat);
-      assert.equal(second.input.model, models[0].id);
-      await call("connections_save", {
-        ...input,
-        id: connection.id,
-        name: connection.name,
-        model: models[1].id,
-      });
-      assert.equal((await tasks.get(first.id)).input.model, models[1].id);
-      assert.equal((await tasks.get(second.id)).input.model, models[0].id);
-      await assert.rejects(
-        legacyAgentTask(tasks, work, {
-          ...args,
-          requestKey: randomUUID(),
-          model: "foreign-model",
-        }),
-        /不属于/,
-      );
+      const first = await freeze(models[1].id), second = await freeze(models[0].id);
+      assert.equal(first.model, models[1].id);
+      assert.equal(first.connection, connection.id);
+      assert.equal(second.model, models[0].id);
+      await call("connections_save", { ...input, id: connection.id, name: connection.name, model: models[1].id });
+      assert.equal(first.model, models[1].id);
+      assert.equal(second.model, models[0].id);
+      await assert.rejects(freeze("foreign-model"), /不属于/);
       await call("connections_enabled", { id: connection.id, enabled: false });
-      await assert.rejects(
-        legacyAgentTask(tasks, work, { ...args, requestKey: randomUUID() }),
-        /停用/,
-      );
-      assert.equal(
-        (await legacyAgentTask(tasks, work, args)).id,
-        first.id,
-        "lost acknowledgement remains recoverable after provider disable",
-      );
-      await assert.rejects(
-        legacyAgentTask(tasks, work, { ...args, prompt: "different" }),
-        /request key/,
-      );
-      await assert.rejects(
-        legacyAgentTask(tasks, work, { ...args, model: models[0].id }),
-        /request key/,
-      );
+      await assert.rejects(freeze(models[0].id), /停用/);
       await call("connections_enabled", { id: connection.id, enabled: true });
       const tested = await call("connections_test", {
         id: connection.id,

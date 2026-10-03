@@ -101,24 +101,27 @@ export async function dockerRuntimeFixture(t) {
       uuid.test(id) &&
       ledger.owner === owner &&
       ledger.works?.includes(id) &&
+      container.Name === "/" + name &&
       container.Config.Labels?.["frame.paseo.work"] === id &&
       container.Mounts.some(
         (mount) =>
           mount.Destination === "/workspace" &&
-          mount.Source === hostDirectory + "/paseo/" + id + "/draft",
-      );
+          mount.Type === "bind" && mount.RW === true &&
+          mount.Source === hostDirectory + "/works/" + id,
+      ) && container.Mounts.every(mount => !mount.RW ||
+        mount.Type === "bind" && mount.Source.startsWith(hostDirectory + "/"));
     assert(
       ordinary || native,
       "Refusing to remove a container without this fixture's exact identity",
     );
     if (container.State.Running)
-      await command("docker", ["stop", "--time", "10", name], {
+      await command("docker", ["stop", "--time", "10", container.Id], {
         timeout: 25000,
       });
-    const stopped = await inspect("container", name);
+    const stopped = await inspect("container", container.Id);
     assert.equal(stopped.Id, container.Id);
     assert.equal(stopped.State.Running, false);
-    await command("docker", ["rm", name], { timeout: 10000 });
+    await command("docker", ["rm", container.Id], { timeout: 10000 });
     assert.equal(await optionalInspect("container", name), null);
     cleanupActions.push(name);
   };
@@ -251,6 +254,7 @@ export async function dockerRuntimeFixture(t) {
     [
       "run",
       "-d",
+      "--init",
       "--name",
       controller,
       "--label",
@@ -276,6 +280,12 @@ export async function dockerRuntimeFixture(t) {
       "--read-only",
       "--tmpfs",
       "/tmp:rw,size=256m",
+      // Standalone verification may update only this test driver against an existing candidate.
+      // Release verification uses the driver's copy already included in the rebuilt image.
+      ...(process.env.FRAME_TEST_RUNTIME_FIXTURE === "1" ? ["--mount",
+        "type=bind,source=" + path.posix.join(process.env.FRAME_TEST_HOST_ROOT,
+          "tests/server/paseo-docker-runtime-fixture.mjs") +
+        ",target=/opt/frame/tests/server/paseo-docker-runtime-fixture.mjs,readonly"] : []),
       "--mount",
       "type=bind,source=" + hostDirectory + ",target=/data",
       "--mount",
@@ -310,7 +320,7 @@ export async function dockerRuntimeFixture(t) {
   try {
     exit = (
       await command("docker", ["wait", controller], {
-        timeout: 180000,
+        timeout: 240000,
         max: 1024,
       })
     ).trim();
@@ -343,6 +353,7 @@ export async function dockerRuntimeFixture(t) {
   assert.equal(exit, "0", report.error || "Owned Docker controller failed");
   assert.equal(report.status, "passed", report.error);
   assert.equal(report.imageId, image.Id);
+  assert.equal(report.testDriverHash, hash(await fs.readFile(here)));
   assert.equal(
     report.sourceRevision,
     image.Config.Labels["org.opencontainers.image.revision"],
@@ -385,6 +396,16 @@ async function worker() {
     services = await createApp({ data, scheduler: false, localMode: false });
     manager = services.paseo.manager;
     assert.equal(manager.localMode, false);
+    const start = manager.start.bind(manager);
+    manager.start = async (...args) => {
+      try { return await start(...args); }
+      catch (error) {
+        const binding = await services.paseo.store.getWork(args[0]);
+        (report.startFailures ||= []).push({ work: args[0], state: binding?.state,
+          generation: binding?.daemonGeneration, error: error.message, stack: error.stack });
+        throw error;
+      }
+    };
     manager.startTimeoutMs = 20000;
     services.tasks.lease = new ControllerLease(services.db.pool);
     assert.equal(await services.tasks.lease.acquire(), true);
@@ -471,8 +492,9 @@ async function worker() {
     ticking = null;
     await Promise.all(pending);
     assert.deepEqual(tickErrors, []);
-    // This target verifies production transport and native credentials. The existing full-stack target owns publication.
-    for (const work of works) await services.paseo.drafts.stop(work.id);
+    assert.deepEqual(report.startFailures || [], []);
+    // Bound this proof's checks to the primary work while retaining all six ready daemons.
+    for (const work of works) await services.paseo.workspace.stop(work.id);
     const primary = works[0],
       ready = await manager.ensure(primary);
     const binding = await services.paseo.store.getWork(primary.id);
@@ -510,6 +532,19 @@ async function worker() {
       assert.deepEqual(Object.keys(native.NetworkSettings.Networks), network);
       assert.equal(native.Config.Labels["frame.paseo.work"], work.id);
       assert.equal(native.Config.Labels["frame.paseo.generation"], "1");
+      const canonicalRoot = path.join(data, "works", work.id);
+      for (const destination of ["/workspace", canonicalRoot]) {
+        const mount = native.Mounts.find(value => value.Destination === destination);
+        assert.equal(mount.Type, "bind");
+        assert.equal(mount.RW, true);
+        assert.equal(mount.Source, process.env.FRAME_HOST_DATA + "/works/" + work.id);
+      }
+      const gitCommon = (await command("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        { cwd: canonicalRoot, timeout: 10000 })).trim();
+      const commonMount = native.Mounts.find(mount => mount.Destination === gitCommon);
+      assert.equal(commonMount.Type, "bind");
+      assert.equal(commonMount.RW, true);
+      assert.equal(commonMount.Source, path.join(process.env.FRAME_HOST_DATA, path.relative(data, gitCommon)));
       assert(
         native.Mounts.every((mount) => !mount.Source.includes("docker.sock")),
       );
@@ -676,9 +711,22 @@ async function worker() {
       path.join(canonical, "scene.ts"),
       "utf8",
     );
+    const otherScenes = await Promise.all(works.slice(1).map(async work => {
+      const { dir } = await services.repos.project(work.repo, work.project);
+      return { dir, scene: await fs.readFile(path.join(dir, "scene.ts"), "utf8") };
+    }));
+    assert.equal(ready.projectRoot, canonical);
+    assert.equal(ready.workspaceRoot, path.dirname(path.dirname(canonical)));
+    const git = args => command("git", args, { cwd: ready.workspaceRoot, timeout: 10000 });
+    const nativeGit = args => command("docker", ["exec", "--workdir", "/workspace", binding.container,
+      "git", ...args], { timeout: 10000 });
+    const head = await git(["rev-parse", "HEAD"]);
+    const index = await git(["rev-parse", "--path-format=absolute", "--git-path", "index"]);
+    assert.equal(await nativeGit(["rev-parse", "HEAD"]), head);
+    assert.equal(await nativeGit(["rev-parse", "--path-format=absolute", "--git-path", "index"]), index);
     await gatewayClient.sendAgentMessage(
       agent.id,
-      "Owned Docker native turn: inspect FRAME context/assets/preview and edit only this draft.",
+      "Owned Docker native turn: inspect FRAME context/assets/preview and edit this work's canonical source.",
       { messageId: randomUUID() },
     );
     const captured = await until(
@@ -716,23 +764,65 @@ async function worker() {
     const accepted = captured.find((row) => row.kind === "accepted-turn");
     assert.equal(accepted.project, primary.project);
     assert.equal(accepted.cwd, "/workspace");
-    assert.equal(accepted.framePreview.paseoAgent, agent.id);
-    assert.equal(accepted.framePreview.source, "paseo");
+    assert.equal(accepted.framePreview.source, "work");
+    assert.equal(accepted.framePreview.paseoAgent, undefined);
+    assert.equal(accepted.scenePath, "/workspace/projects/" + primary.project + "/scene.ts");
     assert.match(accepted.prompt, /Owned Docker native turn/);
-    assert.equal(
-      await fs.readFile(path.join(canonical, "scene.ts"), "utf8"),
-      sceneBefore,
-    );
-    assert(
-      (
-        await fs.readFile(path.join(ready.projectRoot, "scene.ts"), "utf8")
-      ).includes(accepted.marker),
-    );
+    const sceneAfter = await fs.readFile(path.join(canonical, "scene.ts"), "utf8");
+    assert.equal(sceneAfter, sceneBefore + "\n" + accepted.marker + "\n");
+    const scenePath = "projects/" + primary.project + "/scene.ts";
+    await nativeGit(["add", "--", scenePath]);
+    assert.equal(await git(["diff", "--cached", "--name-only"]), scenePath);
+    assert.equal(await git(["show", ":" + scenePath]), sceneAfter.trim());
+    await git(["reset", "--", scenePath]);
+    assert.equal(await nativeGit(["diff", "--cached", "--name-only"]), "");
+    await until(async () => {
+      const native = await manager.observe(primary.id, { refresh: true });
+      return !native.incomplete && !native.activeAgents.length && !native.activeTerminals && !native.pendingPermissions;
+    }, "The native turn did not reach idle before canonical validation", 30000);
+    const validation = await services.paseo.workspace.request(primary.id,
+      { wait: true, signal: AbortSignal.timeout(120000) });
+    assert.equal(validation.state, "passed", JSON.stringify(validation));
+    assert.deepEqual(validation.result.validation.map(check => check.name),
+      ["scope", "structure", "project-tests", "project-types", "runtime"]);
+    assert(validation.result.validation.every(check => check.status === "passed"));
+    const { treeHash } = await import("../../server/project-files.mjs");
+    const sourceRevision = await treeHash(canonical, { includeExecutableMode: true });
+    assert.equal(validation.revision, sourceRevision);
+    assert.equal(validation.runtimeFingerprint, ready.runtimeFingerprint);
+    assert.equal(validation.result.modeFingerprint, sourceRevision);
+    assert.equal(validation.result.stale, false);
+    const manifestUrl = new URL(accepted.framePreview.url, "http://studio:3000");
+    manifestUrl.pathname = manifestUrl.pathname.replace(/index\.html$/, "manifest.json");
+    manifestUrl.search = "";
+    const { livePreviewManifestSchema } = await import("../../src/contracts/live-preview.mjs");
+    const manifest = await until(async () => {
+      const response = await fetch(manifestUrl);
+      assert.equal(response.status, 200);
+      const value = await response.json();
+      if (value.state === "error") throw Error(JSON.stringify(value));
+      return value.sourceRevision === sourceRevision && livePreviewManifestSchema.parse(value);
+    }, "The agent's live preview did not compile the canonical revision", 30000);
+    assert.equal(manifest.workId, primary.id);
+    assert.equal(manifest.projectId, primary.project);
+    assert.equal(manifest.source, "work");
+    assert.equal(manifest.sessionId, accepted.framePreview.sessionId);
+    assert.equal(await git(["rev-parse", "HEAD"]), head);
+    assert.equal(await fs.readFile(path.join(canonical, "scene.ts"), "utf8"), sceneAfter);
+    for (const other of otherScenes)
+      assert.equal(await fs.readFile(path.join(other.dir, "scene.ts"), "utf8"), other.scene);
+    assert.equal((await services.paseo.store.getWork(primary.id)).daemonGeneration, "1");
+    assert.equal((await inspect("container", binding.container)).Id, containers[0].id);
+    assert.deepEqual(await services.db.all("SELECT id FROM tasks WHERE kind='paseo'"), []);
+    report.sharedGitIndexVerified = true;
+    report.canonicalValidation = { revision: validation.revision, state: validation.state,
+      checks: validation.result.validation.map(check => check.name), runtimeFingerprint: validation.runtimeFingerprint };
     report.checks.push(
-      "full official daemon/plugin and authenticated gateway WebSocket reach fake native CLI with only the selected credentials; real HMAC context/assets/live-preview tools address this draft",
+      "full official daemon/plugin and authenticated gateway reach the selected native CLI; HMAC tools, canonical source, native Git index and all five validation gates share one existing runtime",
     );
     report.status = "passed";
     report.imageId = process.env.FRAME_EXECUTOR_IMAGE;
+    report.testDriverHash = hash(await fs.readFile(here));
     report.sourceRevision = process.env.FRAME_REVISION;
     report.runtimeFingerprint = (await runtimeIdentity()).fingerprint;
     report.readyWorks = containers;
@@ -744,6 +834,7 @@ async function worker() {
     report.noPaidProvider = true;
   } catch (error) {
     report.error = error.message;
+    report.errorStack = error.stack;
     process.exitCode = 1;
   } finally {
     clearInterval(ticking);

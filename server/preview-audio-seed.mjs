@@ -4,7 +4,7 @@ import { confinedAsync, fileSha256 } from "./project-files.mjs";
 
 /** Copy only verified, bounded audio cache bytes; never mount another task's workspace. */
 export async function seedPreviewAudio({ db, data, task, run }) {
-  if (!task.repo || !["agent", "build"].includes(task.kind)) return;
+  if (!task.repo || task.kind !== "build") return;
   const latest = await db.one(
     "SELECT id,result FROM tasks WHERE repo=$1 AND project=$2 AND kind='build' AND state='succeeded' AND cleaned IS NULL ORDER BY created DESC,id DESC LIMIT 1",
     [task.repo, task.project],

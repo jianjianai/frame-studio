@@ -5,7 +5,7 @@ import {
   readRequestBody,
   isJsonContentType,
 } from "@modelcontextprotocol/server";
-import { isMcpOperation, toolAnnotations } from "./agent-toolkit.mjs";
+import { isMcpOperation, toolAnnotations } from "./platform-toolkit.mjs";
 
 function freezeJson(value) {
   if (value && typeof value === "object" && !Object.isFrozen(value)) {

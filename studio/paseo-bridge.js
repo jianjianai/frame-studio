@@ -7,6 +7,7 @@ import {
   FrameFreezeResponseSchema,
   FrameContextAttachmentEventSchema,
 } from "../integrations/paseo/frame-plugin/shared/bridge.mjs";
+import { paseoReferenceUrl } from "./paseo-reference.mjs";
 const agentId = (value) =>
   typeof value === "string" && value.length > 0 && value.length <= 256;
 const uuid =
@@ -113,7 +114,7 @@ export function paseoBridge({
                 ? `作品 ${context.start.toFixed(2)}–${context.end.toFixed(2)} 秒`
                 : `作品 ${(context.time ?? 0).toFixed(2)} 秒`,
             subtitle: `${context.assets?.length ?? 0} 个所选素材`,
-            url: location.href,
+            url: paseoReferenceUrl(config.workId, context, location.href),
             text: JSON.stringify({ workId: config.workId, context }, null, 2),
             resourceType: "frame-reference",
           };

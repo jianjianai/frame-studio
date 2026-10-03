@@ -8,16 +8,14 @@ import {
 import { notifyTaskStatus } from "./task-status-wait.mjs";
 
 const watched = {
-  agent_questions: ["agent_questions", "tasks"],
-  agent_notifications: ["agent_notifications", "works"],
   connections_list: ["connections"],
-  connections_usage: ["connections", "tasks", "auth_flows", "chats"],
+  connections_usage: ["connections", "tasks", "auth_flows", "paseo_work_bindings"],
   engines_list: ["engines"],
   works_tasks: ["tasks"],
   works_queue_status: ["tasks", "settings", "work_undos"],
   works_preview_status: ["works", "previews"],
-  works_chat_turns: ["tasks"],
-  works_background: ["tasks"],
+  works_paseo_status: ["paseo_work_bindings", "paseo_validations", "works"],
+  works_background: ["tasks", "paseo_work_bindings"],
   works_exports: ["tasks"],
   auth_state: ["auth_flows"],
   task_get: ["events", "tasks"],
@@ -201,17 +199,12 @@ export async function installRealtime(
           subscriptions.set(message.id, sub);
           let scope = {};
           if (message.name === "task_get") scope = { task: args.id };
-          else if (message.name === "agent_questions")
-            scope = { task: args.task, work: args.work };
-          else if (message.name === "agent_notifications" && args.work)
-            scope = { work: args.work };
           else if (message.name.startsWith("works_") && args.id) {
             const work = await actions.works.get(args.id);
             scope = {
               work: work.id,
               repo: work.repo,
               project: work.project,
-              ...(args.chat ? { chat: args.chat } : {}),
             };
           }
           if (subscriptions.get(message.id) !== sub || ws.readyState !== 1)

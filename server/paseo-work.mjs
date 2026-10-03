@@ -6,17 +6,12 @@ import {
   FrameFreezeInputSchema,
   FrameFreezeResponseSchema,
 } from "../integrations/paseo/frame-plugin/shared/bridge.mjs";
-import { confinedAsync, copyTree, exists, treeHash } from "./project-files.mjs";
+import { confinedAsync, exists, treeHash } from "./project-files.mjs";
 import { hash, problem } from "./security.mjs";
 import { freezePaseoExecution } from "./paseo-selection.mjs";
 import { freezeReviewReference } from "./review-reference.mjs";
 import { exportPaseoReference } from "./paseo-references.mjs";
-import {
-  paseoLegacyChats,
-  paseoLegacyHistory,
-  paseoLegacyImportDescriptor,
-} from "./paseo-history.mjs";
-import { publicAgentText } from "./agent-public-data.mjs";
+import { publicText } from "./public-data.mjs";
 
 const uuid = z.string().uuid();
 const projectId = z
@@ -51,158 +46,74 @@ export function paseoIntentHash(value) {
   );
 }
 
-export async function paseoPaths(data, workId, project) {
-  uuid.parse(workId);
-  projectId.parse(project);
-  const base = await confinedAsync(data, "paseo/" + workId);
-  return {
-    base,
-    draftRoot: await confinedAsync(data, "paseo/" + workId + "/draft"),
-    projectRoot: await confinedAsync(
-      data,
-      "paseo/" + workId + "/draft/projects/" + project,
-    ),
-    preparation: await confinedAsync(
-      data,
-      "paseo/" + workId + "/prepared.json",
-    ),
-  };
-}
-
-async function atomicJson(file, value) {
-  const temporary = file + "." + randomUUID() + ".tmp";
-  const handle = await fs.open(temporary, "wx", 0o600);
-  try {
-    await handle.writeFile(JSON.stringify(value));
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  await fs.rename(temporary, file);
-}
-
-/** Only initial preparation writes a draft; reopening never discards agent or terminal edits. */
-async function prepareDraft({
-  data,
-  work,
-  source,
-  expectedFingerprint,
-  signal,
-}) {
-  const paths = await paseoPaths(data, work.id, work.project);
+async function workspaceRecord({ data, work, source, signal }) {
+  uuid.parse(work.id);
+  projectId.parse(work.project);
   signal?.throwIfAborted();
-  await fs.mkdir(paths.base, { recursive: true, mode: 0o700 });
-  await paseoPaths(data, work.id, work.project); // Recheck after creating ancestors.
-  if (await exists(paths.draftRoot)) {
-    if (!(await exists(path.join(paths.projectRoot, "project.ts"))))
-      throw problem(
-        409,
-        "Paseo draft preparation is incomplete; retained for recovery",
-      );
-    if (!(await exists(paths.preparation)))
-      throw problem(
-        409,
-        "Paseo draft has no trusted preparation record; retained for recovery",
-      );
-    const prepared = JSON.parse(await fs.readFile(paths.preparation, "utf8"));
-    if (
-      prepared.version !== 1 ||
-      prepared.workId !== work.id ||
-      prepared.project !== work.project
-    )
-      throw problem(409, "Paseo draft preparation identity changed");
-    return {
-      ...paths,
-      ...prepared,
-      created: false,
-      draftRevision: await treeHash(paths.projectRoot, {
-        includeExecutableMode: true,
-      }),
-    };
-  }
-  const fingerprint = await treeHash(source);
-  if (expectedFingerprint && fingerprint !== expectedFingerprint)
-    throw problem(409, "Work changed before Paseo draft preparation");
-  const modeFingerprint = await treeHash(source, {
-    includeExecutableMode: true,
+  const projectRoot = path.resolve(source);
+  if (!(await exists(path.join(projectRoot, "project.ts"))))
+    throw problem(409, "作品工作区尚未准备完成");
+  const base = await confinedAsync(data, "paseo/" + work.id);
+  const marker = await confinedAsync(base, "workspace.json");
+  const record = await fs.readFile(marker, "utf8").then(JSON.parse).catch(error => {
+    if (error.code !== "ENOENT") throw error;
+    return null;
   });
-  const stageName = "draft-" + randomUUID() + ".pending";
-  const stage = await confinedAsync(data, "paseo/" + work.id + "/" + stageName);
-  try {
-    await fs.mkdir(path.join(stage, "projects"), {
-      recursive: true,
-      mode: 0o700,
-    });
-    await copyTree(source, path.join(stage, "projects", work.project));
-    signal?.throwIfAborted();
-    if (
-      (await treeHash(source)) !== fingerprint ||
-      (await treeHash(path.join(stage, "projects", work.project))) !==
-        fingerprint ||
-      (await treeHash(source, { includeExecutableMode: true })) !==
-        modeFingerprint ||
-      (await treeHash(path.join(stage, "projects", work.project), {
-        includeExecutableMode: true,
-      })) !== modeFingerprint
-    )
-      throw problem(409, "Work changed while preparing Paseo draft");
-    const prepared = {
-      version: 1,
-      workId: work.id,
-      project: work.project,
-      baselineFingerprint: fingerprint,
-      baselineModeFingerprint: modeFingerprint,
-    };
-    // The record lives outside /workspace and is not writable by the sandbox.
-    await atomicJson(paths.preparation, prepared);
-    await fs.rename(stage, paths.draftRoot);
-    return {
-      ...paths,
-      ...prepared,
-      created: true,
-      draftRevision: modeFingerprint,
-    };
-  } finally {
-    // This exact UUID stage is owned by this call; never remove a stable draft.
-    await fs.rm(stage, { recursive: true, force: true });
-  }
+  if (record && (record.version !== 2 || record.workId !== work.id || record.project !== work.project || record.projectRoot !== projectRoot))
+    throw problem(409, "作品工作区身份发生变化，请先检查保留的源码");
+  return { base, marker, projectRoot, record };
+}
+const workspaceDTO = ({ base, projectRoot, record }) => ({ base,
+  workspaceRoot: path.dirname(path.dirname(projectRoot)), projectRoot, migration: record.migration });
+
+/** Read an existing workspace without advisory locks, directory writes or revision scans. */
+export async function readPaseoWorkspace(options) {
+  const stored = await workspaceRecord(options);
+  return stored.record ? workspaceDTO(stored) : null;
 }
 
-const preparations = new Map();
-export async function preparePaseoDraft(options) {
-  const key = path.resolve(options.data) + ":" + uuid.parse(options.work.id);
-  const previous = preparations.get(key) || Promise.resolve();
-  const pending = previous.catch(() => {}).then(() => prepareDraft(options));
-  preparations.set(key, pending);
-  try {
-    return await pending;
-  } finally {
-    if (preparations.get(key) === pending) preparations.delete(key);
+/** The repository checkout is the only editable source. Paseo owns private runtime state only. */
+export async function preparePaseoWorkspace(options) {
+  const { work, signal } = options;
+  const stored = await workspaceRecord(options), { base, marker, projectRoot } = stored;
+  let { record } = stored;
+  if (!record) {
+    await fs.mkdir(base, { recursive: true, mode: 0o700 });
+    // Existing source is never overwritten. Differing historical drafts remain recoverable and visible.
+    const legacy = await confinedAsync(base, "draft/projects/" + work.project);
+    let migration = null;
+    if (await exists(legacy)) {
+      const [canonicalRevision, legacyRevision] = await Promise.all([
+        treeHash(projectRoot, { includeExecutableMode: true }),
+        treeHash(legacy, { includeExecutableMode: true }),
+      ]);
+      migration = { state: canonicalRevision === legacyRevision ? "identical" : "pending",
+        canonicalRevision, legacyRevision, retained: "paseo/" + work.id + "/draft/projects/" + work.project };
+    }
+    const trees = await confinedAsync(base, "home/.paseo/worktrees");
+    if (await exists(trees)) {
+      const entries = await fs.readdir(trees);
+      if (entries.length) migration = { ...migration, state: "pending", retainedWorktrees: entries.length };
+    }
+    record = { version: 2, workId: work.id, project: work.project, projectRoot, migration };
+    const temporary = marker + "." + randomUUID() + ".tmp";
+    try {
+      await fs.writeFile(temporary, JSON.stringify(record), { mode: 0o600, flag: "wx" });
+      await fs.rename(temporary, marker);
+    } finally { await fs.rm(temporary, { force: true }); }
   }
+  signal?.throwIfAborted();
+  return workspaceDTO({ base, projectRoot, record });
 }
 
-export function paseoPublicCandidate(candidate) {
-  if (!candidate) return null;
-  return {
-    id: candidate.id,
-    state: candidate.state,
-    generation: String(candidate.generation),
-    revision: candidate.revision,
-    error: candidate.error
-      ? publicAgentText(candidate.error, { limit: 2000 })
-      : null,
-    sourceRevision: candidate.sourceRevision || null,
-    commit: candidate.commit || null,
-    created: candidate.created,
-    updated: candidate.updated,
-    validation: (candidate.result?.validation || []).map(
-      ({ name, status, durationMs }) => ({
-        name,
-        status,
-        ...(Number.isFinite(durationMs) ? { durationMs } : {}),
-      }),
-    ),
-  };
+export function paseoPublicValidation(report) {
+  if (!report) return null;
+  return { id: report.id, state: report.state, revision: report.revision,
+    runtimeFingerprint: report.runtimeFingerprint,
+    error: report.error ? publicText(report.error, { limit: 2000 }) : null,
+    created: report.created, updated: report.updated,
+    checks: (report.result?.validation || []).map(({ name, status, durationMs }) => ({ name, status,
+      ...(Number.isFinite(durationMs) ? { durationMs } : {}) })) };
 }
 export function paseoPublicNative(native) {
   return {
@@ -225,12 +136,11 @@ const publicReview = (reference) =>
       "status",
       "mode",
       "sourceRevision",
+      "compiledRevision",
       "sourceCommit",
       "liveSessionId",
-      "draftTask",
       "fingerprint",
       "shotId",
-      "paseoAgent",
     ]
       .filter((key) => reference[key] !== undefined)
       .map((key) => [key, reference[key]]),
@@ -372,7 +282,7 @@ export async function freezePaseoSubmission({
         title: "FRAME work reference",
         text: [
           "FRAME work: " + work.project + " (" + work.id + ").",
-          "The following reference was frozen when this message was submitted. Compare it with current source; do not reinterpret old timecodes against a newer draft.",
+          "The following reference was frozen when this message was submitted. Compare it with current source; do not reinterpret old timecodes against a newer workspace revision.",
           JSON.stringify({ context, reference, materials }),
           "Frozen source: /frame-references/messages/" +
             request.messageId +
@@ -422,61 +332,55 @@ export async function freezePaseoSubmission({
 export class PaseoWork {
   constructor(options) {
     Object.assign(this, options);
+    this.preparing = new Map();
+  }
+  async resolve(workId, { signal, binding } = {}) {
+    signal?.throwIfAborted();
+    const [work, current] = await Promise.all([
+      this.works.get(workId, { active: true }), binding ? Promise.resolve(binding) : this.store.getWork(workId),
+    ]);
+    if (!current) return null;
+    if (current.repo !== work.repo || current.project !== work.project)
+      throw problem(409, "Paseo work identity changed");
+    const { dir } = await this.repos.project(work.repo, work.project);
+    const workspace = await readPaseoWorkspace({ data: this.data, work, source: dir, signal });
+    return workspace ? { work, workspace, binding: current } : null;
   }
   async prepare(workId, { signal } = {}) {
+    const existing = await this.resolve(workId, { signal });
+    if (existing) return existing;
+    if (this.preparing.has(workId)) return this.preparing.get(workId);
     const prepare = async () => {
       const work = await this.works.get(workId, { active: true });
       const { dir } = await this.repos.project(work.repo, work.project);
-      const draft = await preparePaseoDraft({
-        data: this.data,
-        work,
-        source: dir,
-        signal,
-      });
-      const binding = await this.store.ensureWork({
-        workId,
-        repo: work.repo,
-        project: work.project,
-        baselineFingerprint: draft.baselineFingerprint,
-        baselineModeFingerprint: draft.baselineModeFingerprint,
-        draftRevision: draft.draftRevision,
-      });
-      return { work, draft, binding };
+      const workspace = await preparePaseoWorkspace({ data: this.data, work, source: dir, signal });
+      let binding = await this.store.getWork(workId);
+      if (!binding) binding = await this.store.ensureWork({ workId, repo: work.repo, project: work.project,
+        revision: await treeHash(dir, { includeExecutableMode: true }) });
+      if (binding.repo !== work.repo || binding.project !== work.project)
+        throw problem(409, "Paseo work identity changed");
+      return { work, workspace, binding };
     };
-    return this.db?.lock
-      ? this.db.lock("paseo-draft:" + workId, prepare)
-      : prepare();
+    const operation = this.db?.lock ? this.db.lock("paseo-workspace:" + workId, prepare) : prepare();
+    this.preparing.set(workId, operation);
+    try { return await operation; }
+    finally { if (this.preparing.get(workId) === operation) this.preparing.delete(workId); }
   }
   async freeze(workId, submission) {
     const work = await this.works.get(workId, { active: true });
     return freezePaseoSubmission({ ...this, work, submission });
   }
-  async legacyChats(workId, options = {}) {
-    const work = await this.works.get(workId, { active: true });
-    return paseoLegacyChats({ ...this, work, ...options });
-  }
-  async legacyHistory(workId, chatId, options = {}) {
-    const work = await this.works.get(workId, { active: true });
-    return paseoLegacyHistory({ ...this, work, chatId, ...options });
-  }
-  async legacyImportDescriptor(workId, chatId) {
-    const work = await this.works.get(workId, { active: true });
-    return paseoLegacyImportDescriptor({ ...this, work, chatId });
-  }
   async status(workId) {
     await this.works.get(workId, { active: true });
-    const [binding, native, candidates] = await Promise.all([
-      this.store.getWork(workId),
+    const [native, validations, prepared] = await Promise.all([
       this.manager.observe(workId),
-      this.store.listCandidates(workId, { limit: 1 }),
+      this.store.listValidations(workId, { limit: 1 }), this.prepare(workId),
     ]);
-    return {
-      version: 1,
-      workId,
-      native: paseoPublicNative(native),
-      draftRevision: binding?.draftRevision || null,
-      generation: String(binding?.generation || "0"),
-      candidate: paseoPublicCandidate(candidates[0]),
-    };
+    const binding = prepared.binding, validation = paseoPublicValidation(validations[0]);
+    if (validation && (validation.revision !== binding.revision ||
+      binding.runtimeFingerprint && validation.runtimeFingerprint !== binding.runtimeFingerprint)) validation.state = "stale";
+    return { version: 2, workId, native: paseoPublicNative(native),
+      sourceRevision: binding?.revision || null, updated: binding?.updated || null, generation: String(binding?.generation || "0"),
+      validation, migration: prepared.workspace.migration };
   }
 }

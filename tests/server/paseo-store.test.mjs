@@ -9,7 +9,6 @@ import { migrate, migrationPlan } from "../../server/migrations.mjs";
 import { PaseoStore, migratePaseo } from "../../server/paseo-store.mjs";
 
 const sha = (digit) => digit.repeat(64);
-const commit = "a".repeat(40);
 async function fixture(t) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "frame-paseo-store-"));
   const file = path.join(dir, "local.sqlite");
@@ -35,10 +34,7 @@ async function fixture(t) {
     workId,
     repo,
     project: "fixture",
-    baselineFingerprint: sha("a"),
-    baselineModeFingerprint: sha("b"),
-    baselineCommit: commit,
-    draftRevision: sha("b"),
+    revision: sha("b"),
   };
   await store.ensureWork(input);
   return {
@@ -53,33 +49,12 @@ async function fixture(t) {
     },
   };
 }
-const candidateInput = (input, overrides = {}) => ({
-  workId: input.workId,
-  repo: input.repo,
-  project: input.project,
-  baselineFingerprint: input.baselineFingerprint,
-  baselineModeFingerprint: input.baselineModeFingerprint,
-  baselineCommit: input.baselineCommit,
-  generation: "0",
-  revision: input.draftRevision,
-  runId: randomUUID(),
-  snapshotFingerprint: sha("c"),
-  snapshotModeFingerprint: input.draftRevision,
-  runtimeFingerprint: sha("d"),
-  origin: "manual",
-  ...overrides,
-});
 
-test("Paseo migrations keep the core ledger and existing work/history intact for an old core reopen", async (t) => {
+test("Paseo migrations keep the core ledger and existing work intact on a core reopen", async (t) => {
   const { db, store, input, coreLedger, reopenCore } = await fixture(t);
   const workBefore = await db.one("SELECT * FROM works WHERE id=$1", [
     input.workId,
   ]);
-  const chatId = randomUUID();
-  await db.pool.query(
-    "INSERT INTO chats(id,repo,project,provider,title) VALUES($1,$2,'fixture','codex','legacy')",
-    [chatId, input.repo],
-  );
   await migratePaseo(db);
   assert.deepEqual(
     await db.all("SELECT id,checksum FROM frame_schema_migrations ORDER BY id"),
@@ -87,7 +62,7 @@ test("Paseo migrations keep the core ledger and existing work/history intact for
   );
   assert.equal(
     (await db.all("SELECT id FROM paseo_schema_migrations")).length,
-    2,
+    4,
   );
   const oldCore = await reopenCore();
   assert.deepEqual(
@@ -95,13 +70,9 @@ test("Paseo migrations keep the core ledger and existing work/history intact for
     workBefore,
   );
   assert.equal(
-    (await oldCore.one("SELECT id FROM chats WHERE id=$1", [chatId])).id,
-    chatId,
-  );
-  assert.equal(
     (await new PaseoStore({ db: oldCore }).getWork(input.workId))
-      .baselineFingerprint,
-    input.baselineFingerprint,
+      .revision,
+    input.revision,
   );
   assert.ok(store);
 });
@@ -168,32 +139,30 @@ test("Frozen message is atomic under concurrent same-ID submissions; changed int
   );
 });
 
-test("Draft generations remain exact decimal strings and same-revision observations are idempotent", async (t) => {
+test("Workspace generations remain exact decimal strings and same-revision observations are idempotent", async (t) => {
   const { db, store, input } = await fixture(t);
   await db.pool.query(
     "UPDATE paseo_work_bindings SET generation=$2 WHERE work_id=$1",
     [input.workId, 9007199254740993n],
   );
   assert.equal(
-    (await store.markDraft(input.workId, { revision: input.draftRevision }))
+    (await store.markRevision(input.workId, { revision: input.revision }))
       .generation,
     "9007199254740993",
   );
   assert.equal(
-    (await store.markDraft(input.workId, { revision: sha("e") })).generation,
+    (await store.markRevision(input.workId, { revision: sha("e") })).generation,
     "9007199254740994",
   );
   assert.equal(
-    (await store.markDraft(input.workId, { revision: sha("e") })).generation,
+    (await store.markRevision(input.workId, { revision: sha("e") })).generation,
     "9007199254740994",
   );
   const reused = await store.ensureWork({
     ...input,
-    baselineFingerprint: sha("f"),
-    draftRevision: sha("f"),
+    revision: sha("f"),
   });
-  assert.equal(reused.baselineFingerprint, input.baselineFingerprint);
-  assert.equal(reused.draftRevision, sha("e"));
+  assert.equal(reused.revision, sha("e"));
   await assert.rejects(
     store.updateRuntime(input.workId, { daemonGeneration: 9007199254740992 }),
   );
@@ -240,92 +209,51 @@ test("Runtime generation CAS blocks old controllers and explicit reconnect reset
   );
 });
 
-test("Candidates use CAS transitions and exactly one apply receipt without overwriting newer draft state", async (t) => {
+test("Validation claims are atomic, revision-bound, and cannot replace current workspace state", async t => {
   const { store, input } = await fixture(t);
-  const candidate = candidateInput(input);
-  const first = await store.createCandidate(candidate);
-  const duplicate = await store.createCandidate({
-    ...candidate,
-    runId: randomUUID(),
-  });
-  assert.equal(first.created, true);
-  assert.equal(duplicate.created, false);
-  assert.equal(duplicate.candidate.id, first.candidate.id);
-  const claims = await Promise.all(
-    Array.from({ length: 10 }, () =>
-      store.transitionCandidate(first.candidate.id, {
-        from: ["queued_validation"],
-        state: "validating",
-      }),
-    ),
-  );
+  const report = await store.createValidation({ workId: input.workId, revision: input.revision, generation: "0", runtimeFingerprint: sha("d") });
+  const duplicate = await store.createValidation({ workId: input.workId, revision: input.revision, generation: "0", runtimeFingerprint: sha("d") });
+  assert.equal(duplicate.id, report.id);
+  const claims = await Promise.all(Array.from({ length: 10 }, () => store.updateValidation(report.id, { from: ["queued"], state: "running" })));
   assert.equal(claims.filter(Boolean).length, 1);
-  await assert.rejects(
-    store.transitionCandidate(first.candidate.id, {
-      from: ["validating"],
-      state: "applied",
-    }),
-    /Unsupported/,
-  );
-  await store.transitionCandidate(first.candidate.id, {
-    from: ["validating"],
-    state: "verified",
-    patch: { result: { status: "passed" } },
-  });
-  await store.transitionCandidate(first.candidate.id, {
-    from: ["verified"],
-    state: "publishing",
-  });
-  await store.markDraft(input.workId, { revision: sha("f") });
-  const receipt = await store.appliedCandidate(first.candidate.id, {
-    sourceRevision: candidate.snapshotFingerprint,
-    commit,
-  });
-  assert.equal(receipt.state, "applied");
-  const binding = await store.getWork(input.workId);
-  assert.equal(binding.baselineFingerprint, candidate.snapshotFingerprint);
-  assert.equal(
-    binding.baselineModeFingerprint,
-    candidate.snapshotModeFingerprint,
-  );
-  assert.equal(binding.draftRevision, sha("f"));
-  assert.equal(binding.generation, "1");
-  assert.deepEqual(
-    await store.appliedCandidate(first.candidate.id, {
-      sourceRevision: candidate.snapshotFingerprint,
-      commit,
-    }),
-    receipt,
-  );
-  await assert.rejects(
-    store.appliedCandidate(first.candidate.id, {
-      sourceRevision: sha("d"),
-      commit,
-    }),
-    /receipt changed/,
-  );
+  await store.markRevision(input.workId, { revision: sha("f") });
+  await store.updateValidation(report.id, { from: ["running"], state: "stale", result: { status: "passed" } });
+  assert.equal((await store.getWork(input.workId)).revision, sha("f"));
+  assert.equal((await store.getValidation(report.id)).state, "stale");
+  assert.equal(await store.updateValidation(report.id, { from: ["running"], state: "passed" }), null);
 });
-
-test("Candidate registration rejects a stale captured generation and tables follow only their work owner", async (t) => {
+test("Native contexts and validation reports follow only their work owner", async t => {
   const { db, store, input } = await fixture(t);
-  const candidate = candidateInput(input);
-  await store.markDraft(input.workId, { revision: sha("f") });
-  await assert.rejects(
-    store.createCandidate(candidate),
-    /before candidate registration/,
-  );
-  await store.freezeMessage({
-    workId: input.workId,
-    agentId: "agent",
-    messageId: randomUUID(),
-    intentHash: sha("a"),
-    envelope: {},
-  });
+  await store.createValidation({ workId: input.workId, revision: input.revision, generation: "0", runtimeFingerprint: sha("d") });
+  await store.freezeMessage({ workId: input.workId, agentId: "agent", messageId: randomUUID(), intentHash: sha("a"), envelope: {} });
   await db.pool.query("DELETE FROM works WHERE id=$1", [input.workId]);
   assert.equal((await db.all("SELECT * FROM paseo_work_bindings")).length, 0);
-  assert.equal(
-    (await db.all("SELECT * FROM paseo_message_contexts")).length,
-    0,
-  );
+  assert.equal((await db.all("SELECT * FROM paseo_message_contexts")).length, 0);
+  assert.equal((await db.all("SELECT * FROM paseo_validations")).length, 0);
   assert.equal((await db.all("SELECT * FROM repos")).length, 1);
+});
+
+
+test("workspace migration refuses to discard any retained candidate identity and rolls back the entire upgrade", async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "frame-paseo-upgrade-"));
+  const db = await sqliteDatabase(path.join(directory, "local.sqlite"));
+  t.after(async () => { await db.pool.end(); await fs.rm(directory, { recursive: true, force: true }); });
+  const plan = migrationPlan(path.resolve("server/paseo-migrations"));
+  assert.match(plan[2].sql, /LOCK TABLE paseo_candidates IN ACCESS EXCLUSIVE MODE/);
+  assert.match(plan[2].sql, /IF EXISTS \(SELECT 1 FROM paseo_candidates\)[\s\S]*RAISE EXCEPTION/);
+  await migratePaseo(db, plan.slice(0, 2));
+  const work = randomUUID(), repo = randomUUID(), candidate = randomUUID(), run = randomUUID();
+  await db.pool.query("INSERT INTO repos(id,name) VALUES($1,'fixture')", [repo]);
+  await db.pool.query("INSERT INTO works(id,repo,project,title) VALUES($1,$2,'fixture','fixture')", [work, repo]);
+  await db.pool.query("INSERT INTO paseo_work_bindings(work_id,repo,project,baseline_fingerprint,baseline_mode_fingerprint,draft_revision) VALUES($1,$2,'fixture',$3,$3,$3)", [work, repo, sha("a")]);
+  await db.pool.query("INSERT INTO paseo_candidates(id,work_id,repo,project,generation,revision,baseline_fingerprint,baseline_mode_fingerprint,run_id,snapshot_fingerprint,snapshot_mode_fingerprint,origin,state) VALUES($1,$2,$3,'fixture',0,$4,$4,$4,$5,$4,$4,'recovery','validating')", [candidate, work, repo, sha("a"), run]);
+  await assert.rejects(migratePaseo(db), /Audit retained Paseo candidates and stop old validation workers/);
+  assert.equal((await db.one("SELECT run_id FROM paseo_candidates WHERE id=$1", [candidate])).run_id, run);
+  assert.equal((await db.one("SELECT draft_revision FROM paseo_work_bindings WHERE work_id=$1", [work])).draft_revision, sha("a"));
+  assert.equal((await db.all("SELECT id FROM paseo_schema_migrations")).length, 2);
+  // Test-only records represent an explicitly reviewed/completed old worker; no production data is removed.
+  await db.pool.query("DELETE FROM paseo_candidates WHERE id=$1", [candidate]);
+  await migratePaseo(db);
+  assert.equal((await db.one("SELECT revision FROM paseo_work_bindings WHERE work_id=$1", [work])).revision, sha("a"));
+  assert.equal((await db.all("SELECT id FROM paseo_schema_migrations")).length, 4);
 });

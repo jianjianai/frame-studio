@@ -43,7 +43,7 @@ test(
         import React from 'react'; import {createRoot} from 'react-dom/client';
         import {ProviderSettings} from '/studio/model-settings.jsx';
         import {LoginFlow} from '/studio/accounts.jsx';
-        import '/studio/workbench.css'; import '/studio/ai-workbench.css';
+        import '/studio/workbench.css'; import '/studio/settings.css';
         function Fixture(){ const [notice,setNotice]=React.useState('');
           return React.createElement('main', {style:{maxWidth:1120,margin:'0 auto',padding:20}},
             React.createElement(ProviderSettings, {notify:setNotice, LoginDialog:LoginFlow}),

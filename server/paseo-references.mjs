@@ -10,6 +10,7 @@ import {
   treeHash,
 } from "./project-files.mjs";
 import { versionTree } from "./version-review.mjs";
+import { liveReviewSnapshotPath } from "./live-review-snapshot.mjs";
 import { problem } from "./security.mjs";
 
 const excluded = new Set([
@@ -186,13 +187,7 @@ async function exportReference({
   let codeBytes = 0;
   try {
     if (reference?.mode === "live") {
-      const expected =
-        "live-preview-references/" +
-        reference.liveSessionId +
-        "/" +
-        reference.sourceRevision +
-        "/projects/" +
-        work.project;
+      const expected = liveReviewSnapshotPath(reference, work.project);
       if (reference.snapshotPath !== expected)
         throw problem(400, "Invalid frozen reference source");
       const source = await confinedAsync(data, expected);
@@ -276,11 +271,11 @@ async function exportReference({
               "status",
               "mode",
               "sourceRevision",
+              "compiledRevision",
               "sourceCommit",
               "liveSessionId",
               "fingerprint",
               "shotId",
-              "paseoAgent",
             ]
               .filter((key) => reference[key] !== undefined)
               .map((key) => [key, reference[key]]),

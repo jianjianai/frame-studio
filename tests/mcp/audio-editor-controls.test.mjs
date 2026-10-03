@@ -268,6 +268,20 @@ test(
     await pendingJson.fill(pendingJsonText);
     await gain.fill(".7");
     await save.click();
+    assert.equal(
+      await editCalls(),
+      1,
+      "Save must not silently omit unapplied JSON",
+    );
+    assert.match(
+      await audio.getByRole("alert").innerText(),
+      /JSON 参数.*先应用或恢复/,
+    );
+    assert.equal(await pendingJson.inputValue(), pendingJsonText);
+    await audio
+      .getByRole("button", { name: "应用 JSON 参数", exact: true })
+      .click();
+    await save.click();
     await page.waitForFunction(
       () =>
         auditCalls.filter((call) => call.name === "works_audio_edit").length ===
@@ -276,10 +290,13 @@ test(
     assert.equal((await saved()).master.gain, 0.7);
     assert.deepEqual(
       (await saved()).master.processors[0].options,
-      optionsBeforeJson,
-      "Save leaves unapplied advanced JSON outside the canonical document",
+      { ...optionsBeforeJson, decay: 12 },
+      "Apply JSON then Save commits all numeric and advanced parameter edits",
     );
-    assert.equal(await pendingJson.inputValue(), pendingJsonText);
+    assert.deepEqual(
+      JSON.parse(await pendingJson.inputValue()),
+      JSON.parse(pendingJsonText),
+    );
     await gain.fill("-");
     await save.click();
     assert.equal(await gain.getAttribute("aria-invalid"), "true");

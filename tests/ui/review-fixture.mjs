@@ -47,12 +47,6 @@ export async function mockApi(context, playerUrl, uiUrl) {
     models: [{ id: "fixture-model", name: "验收模型", enabled: true }],
     state: "ready",
   };
-  const chat = {
-    id: randomUUID(),
-    connection: connection.id,
-    title: "精确审片",
-    provider: "codex",
-  };
   const build = {
     id: randomUUID(),
     kind: "build",
@@ -61,23 +55,11 @@ export async function mockApi(context, playerUrl, uiUrl) {
     result: { previewVersion: PREVIEW_VERSION },
     created: now,
   };
-  const turn = {
-    id: randomUUID(),
-    kind: "agent",
-    state: "succeeded",
-    chat: chat.id,
-    input: {
-      prompt: "调整这段动画",
-      context: { time: 0.5, start: 0.5, end: 1.5 },
-    },
-    created: now,
-  };
   const queued = {
     id: randomUUID(),
-    kind: "agent",
+    kind: "render",
     state: "queued",
-    chat: chat.id,
-    input: { prompt: "下一步继续制作" },
+    input: { width: 1280, fps: 24 },
     created: now,
   };
   const assets = [
@@ -165,11 +147,11 @@ export async function mockApi(context, playerUrl, uiUrl) {
     speechJobs: new Map(),
     repo,
     work,
-    chat,
     assets,
     works: [work],
     repos: [repo],
-    tasks: [build, turn, queued],
+    tasks: [build, queued],
+    validation: null,
     exports: [
       {
         id: randomUUID(),
@@ -240,7 +222,7 @@ export async function mockApi(context, playerUrl, uiUrl) {
         if (state.failLive) throw Error("验收：实时预览连接失败");
         return {
           ...state.live,
-          source: args.task ? "task" : "work",
+          source: "work",
           mediaMode: args.mediaMode || "compressed",
           url: playerUrl + "?fixtureLive=" + state.live.sessionId,
           expires: new Date(Date.now() + 3600000).toISOString(),
@@ -276,14 +258,35 @@ export async function mockApi(context, playerUrl, uiUrl) {
               blocker: null,
             })),
         };
-      case "works_chats":
-        return [chat];
       case "connections_list":
         return [connection];
-      case "agent_notifications":
-        return { items: [], unread: 0, next: null };
-      case "works_chat_turns":
-        return state.tasks.filter((t) => t.chat === args.chat);
+      case "works_paseo_status":
+        return {
+          version: 1,
+          workId: work.id,
+          sourceRevision: state.live.sourceRevision,
+          native: {
+            state: "ready",
+            activeAgents: [],
+            activeTerminals: 0,
+            pendingPermissions: 0,
+          },
+          validation: state.validation,
+        };
+      case "works_paseo_validate":
+        state.validation = {
+          state: "passed",
+          revision: state.live.sourceRevision,
+          checkedAt: now,
+          checks: [
+            "scope",
+            "structure",
+            "project-tests",
+            "project-types",
+            "runtime",
+          ].map((name) => ({ name, status: "passed" })),
+        };
+        return {};
       case "works_scm_status":
         return {
           revision: (state.scmFiles?.length ? "d" : "b").repeat(64),
@@ -365,19 +368,7 @@ export async function mockApi(context, playerUrl, uiUrl) {
       case "task_get":
         return {
           task: state.tasks.find((t) => t.id === args.id),
-          events:
-            args.id === turn.id
-              ? [
-                  {
-                    id: 1,
-                    kind: "message",
-                    data: {
-                      id: "m1",
-                      text: "## 修改结果\n**动作已调整**\n1. 加速与减速衔接。\n2. 检查 00:01。\n<script>window.INJECTED=true</script>\n[非法链接](javascript:alert)",
-                    },
-                  },
-                ]
-              : [],
+          events: [],
         };
       case "works_update":
         if (state.failSave) throw Error("验收：保存失败，输入已保留");
@@ -398,6 +389,9 @@ export async function mockApi(context, playerUrl, uiUrl) {
           kind: args.kind,
           state: "queued",
           input: args.input || {},
+          ...(args.kind === "render"
+            ? { frozen: { sourceRevision: state.live.sourceRevision } }
+            : {}),
           created: new Date().toISOString(),
         };
         state.tasks.push(t);
@@ -526,7 +520,7 @@ export async function mockApi(context, playerUrl, uiUrl) {
     if (!url.pathname.startsWith(paseoBootstrap.basePath))
       return route.fallback();
     if (
-      url.pathname !== paseoBootstrap.basePath ||
+      !url.pathname.startsWith(paseoBootstrap.basePath) ||
       url.searchParams.get("frameNonce") !== paseoBootstrap.nonce
     )
       return route.fulfill({ status: 403, body: "Invalid fixture scope" });
@@ -544,56 +538,6 @@ export async function mockApi(context, playerUrl, uiUrl) {
           bootstrap: paseoBootstrap,
           uiUrl:
             paseoBootstrap.basePath + "?frameNonce=" + paseoBootstrap.nonce,
-        },
-      });
-    if (url.pathname === paseoPrefix + "/status")
-      return route.fulfill({
-        json: {
-          version: 1,
-          workId: work.id,
-          draftRevision: null,
-          generation: "0",
-          native: {
-            state: "ready",
-            activeAgents: [],
-            activeTerminals: 0,
-            pendingPermissions: 0,
-            scheduled: 0,
-            incomplete: false,
-          },
-          candidate: null,
-        },
-      });
-    if (url.pathname === paseoPrefix + "/history")
-      return route.fulfill({
-        json: [
-          {
-            id: chat.id,
-            title: chat.title,
-            provider: chat.provider,
-            created: chat.created,
-            readOnly: true,
-          },
-        ],
-      });
-    if (url.pathname === paseoPrefix + "/history/" + chat.id)
-      return route.fulfill({
-        json: {
-          version: 1,
-          chat,
-          turns: [
-            {
-              id: turn.id,
-              state: turn.state,
-              created: now,
-              prompt: turn.input.prompt,
-              response:
-                "## 修改结果\n**动作已调整**\n<script>window.INJECTED=true</script>\n[非法链接](javascript:alert)",
-              error: null,
-            },
-          ],
-          readOnly: true,
-          truncated: false,
         },
       });
     if (url.pathname === "/api/me")

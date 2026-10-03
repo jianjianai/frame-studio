@@ -8,23 +8,24 @@ import {
   PaseoWork,
   freezePaseoSubmission,
   paseoIntentHash,
-  preparePaseoDraft,
+  preparePaseoWorkspace,
 } from "../../server/paseo-work.mjs";
 import { treeHash } from "../../server/project-files.mjs";
 import { freezeReviewReference } from "../../server/review-reference.mjs";
 import { LivePreviewSessions } from "../../server/live-preview.mjs";
 
 const sha = (digit) => digit.repeat(64);
-test("Concurrent preparation creates one stable draft with mode identity and reopening preserves manual edits", async (t) => {
+test("Concurrent preparation resolves the authoritative source and reopening preserves manual edits", async (t) => {
   const f = await fixture(t);
   const results = await Promise.all(
     Array.from({ length: 12 }, () =>
-      preparePaseoDraft({ data: f.data, work: f.work, source: f.canonical }),
+      preparePaseoWorkspace({ data: f.data, work: f.work, source: f.canonical }),
     ),
   );
-  assert.equal(results.filter((result) => result.created).length, 1);
+  assert.equal(new Set(results.map(result => result.projectRoot)).size, 1);
+  assert.equal(results[0].projectRoot, f.canonical);
   assert.equal(
-    results[0].draftRevision,
+    await treeHash(results[0].projectRoot, { includeExecutableMode: true }),
     await treeHash(f.canonical, { includeExecutableMode: true }),
   );
   await fs.writeFile(
@@ -32,21 +33,21 @@ test("Concurrent preparation creates one stable draft with mode identity and reo
     "export const color='manual';",
   );
   const reopened = await f.workService.prepare(f.work.id);
-  assert.equal(reopened.draft.created, false);
+  assert.equal(reopened.workspace.projectRoot, f.canonical);
   assert.match(
     await fs.readFile(
-      path.join(reopened.draft.projectRoot, "scene.ts"),
+      path.join(reopened.workspace.projectRoot, "scene.ts"),
       "utf8",
     ),
     /manual/,
   );
   assert.equal(
-    reopened.binding.baselineFingerprint,
-    await treeHash(f.canonical),
+    reopened.binding.revision,
+    await treeHash(f.canonical, { includeExecutableMode: true }),
   );
 });
 
-test("Initial preparation rejects out-of-scope links and retains no partially prepared stable draft", async (t) => {
+test("Initial revision rejects out-of-scope links and creates no alternate source", async (t) => {
   const f = await fixture(t);
   await fs.symlink(
     path.join(f.directory, "database.sqlite"),
@@ -93,7 +94,7 @@ async function frozenFixture(t) {
   const reference = {
     dir: snapshot,
     sourceRevision,
-    source: "paseo",
+    source: "work",
     sessionId,
     task: null,
     fingerprint: await treeHash(snapshot, { includeIgnored: true }),
@@ -291,7 +292,7 @@ test("Paseo frozen review survives an expired live session with exact work owner
     livePreview: expired,
   };
   const reference = await freezeReviewReference(options);
-  assert.equal(reference.source, "paseo");
+  assert.equal(reference.source, "work");
   assert.equal(reference.fingerprint, f.reference.fingerprint);
   await assert.rejects(
     freezeReviewReference({ ...options, repo: randomUUID() }),
@@ -300,9 +301,9 @@ test("Paseo frozen review survives an expired live session with exact work owner
   await assert.rejects(
     freezeReviewReference({
       ...options,
-      context: { ...options.context, draftTask: randomUUID() },
+      context: { ...options.context, compiledRevision: "f".repeat(64) },
     }),
-    /does not belong/,
+    /Expired/,
   );
   await fs.writeFile(
     path.join(f.reference.dir, "scene.ts"),
@@ -311,199 +312,33 @@ test("Paseo frozen review survives an expired live session with exact work owner
   await assert.rejects(freezeReviewReference(options), /missing or changed/);
 });
 
-test("Work status projects public candidate and native metadata without leaking private run and launch values", async (t) => {
+test("Work status projects only revision validation and native summary without private runtime values", async t => {
   const f = await fixture(t);
   await f.workService.prepare(f.work.id);
   const binding = await f.store.getWork(f.work.id);
-  const candidate = await f.store.createCandidate({
-    workId: f.work.id,
-    repo: f.work.repo,
-    project: f.work.project,
-    generation: binding.generation,
-    revision: binding.draftRevision,
-    runId: randomUUID(),
-    baselineFingerprint: binding.baselineFingerprint,
-    baselineModeFingerprint: binding.baselineModeFingerprint,
-    baselineCommit: null,
-    snapshotFingerprint: binding.baselineFingerprint,
-    snapshotModeFingerprint: binding.draftRevision,
-    runtimeFingerprint: sha("d"),
-    origin: "manual",
-  });
-  await f.store.transitionCandidate(candidate.candidate.id, {
-    from: ["queued_validation"],
-    state: "validating",
-  });
-  await f.store.transitionCandidate(candidate.candidate.id, {
-    from: ["validating"],
-    state: "verified",
-    patch: {
-      result: {
-        status: "passed",
-        absoluteSource: f.canonical,
-        env: { DUMMY_KEY: "private" },
-        validation: [{ name: "runtime", status: "passed", durationMs: 2 }],
-      },
-    },
-  });
-  f.workService.manager = {
-    observe: async () => ({
-      state: "ready",
-      activeAgents: ["agent-one"],
-      activeTerminals: 1,
-      endpoint: "http://private:6767",
-      env: { DUMMY_KEY: "private" },
-    }),
-  };
+  const report = await f.store.createValidation({ workId: f.work.id, generation: binding.generation, revision: binding.revision, runtimeFingerprint: sha("d") });
+  await f.store.updateValidation(report.id, { from: ["queued"], state: "passed", result: {
+    status: "passed", absoluteSource: f.canonical, env: { DUMMY_KEY: "private" },
+    validation: [{ name: "runtime", status: "passed", durationMs: 2 }] } });
+  f.workService.manager = { observe: async () => ({ state: "ready", activeAgents: ["agent-one"], activeTerminals: 1,
+    endpoint: "http://private:6767", env: { DUMMY_KEY: "private" } }) };
   const status = await f.workService.status(f.work.id);
-  assert.equal(status.candidate.state, "verified");
-  assert.equal(status.native.activeTerminals, 1);
-  assert.doesNotMatch(
-    JSON.stringify(status),
-    /runId|baselineFingerprint|absoluteSource|endpoint|DUMMY_KEY|private/,
-  );
+  assert.equal(status.sourceRevision, binding.revision); assert.equal("revision" in status, false);
+  assert.equal(typeof status.updated, "string");
+  assert.equal(status.validation.state, "passed"); assert.equal(status.native.activeTerminals, 1);
+  assert.doesNotMatch(JSON.stringify(status), /runId|baselineFingerprint|absoluteSource|endpoint|DUMMY_KEY|private/);
+  await f.store.markRevision(f.work.id, { revision: sha("f") });
+  assert.equal((await f.workService.status(f.work.id)).validation.state, "stale");
 });
-
-test("Live preview selects only this work's stable Paseo draft and leaves the canonical preview selection explicit", async (t) => {
-  const f = await fixture(t);
-  const { draft } = await f.workService.prepare(f.work.id);
-  const live = new LivePreviewSessions({
-    ...f,
-    sourceResolver: async () => ({ projectDir: draft.projectRoot }),
-    bundleFactory: async () => ({ close: async () => {} }),
-  });
-  t.after(() => live.close());
-  assert.equal((await live.source(f.work, null)).projectDir, f.canonical);
-  assert.equal((await live.source(f.work, null, "paseo")).source, "paseo");
-  const link = await live.start({
-    work: f.work,
-    source: "paseo",
-    mediaMode: "original",
-  });
-  assert.equal(link.source, "paseo");
-  assert.equal(link.mediaMode, "original");
-  live.sourceResolver = async () => ({ projectDir: f.canonical });
-  await assert.rejects(
-    live.source(f.work, null, "paseo"),
-    /Invalid Paseo draft source/,
-  );
-  await assert.rejects(
-    live.start({ work: f.work, source: "paseo", task: randomUUID() }),
-    /Invalid live preview source/,
-  );
-});
-
-test("Native checkout previews isolate agents, re-resolve moved worktrees and freeze their exact source identity", async (t) => {
-  const f = await fixture(t);
-  const { draft } = await f.workService.prepare(f.work.id);
-  const treeRoot = path.join(
-    f.data,
-    "paseo",
-    f.work.id,
-    "home/.paseo/worktrees",
-  );
-  const first = path.join(treeRoot, "first/projects/fixture"),
-    second = path.join(treeRoot, "second/projects/fixture");
-  for (const dir of [first, second]) {
-    await fs.mkdir(dir, { recursive: true });
-    await fs.copyFile(
-      path.join(draft.projectRoot, "project.ts"),
-      path.join(dir, "project.ts"),
-    );
-    await fs.writeFile(
-      path.join(dir, "scene.ts"),
-      "export const checkout=" +
-        JSON.stringify(dir === first ? "first" : "second") +
-        ";",
-    );
-  }
-  let selected = first;
-  const live = new LivePreviewSessions({
-    ...f,
-    maxSessions: 8,
-    sourceResolver: async (_work, { agentId }) => ({
-      projectDir: agentId ? selected : draft.projectRoot,
-      agentId,
-    }),
-    bundleFactory: async () => ({ close: async () => {} }),
-  });
-  t.after(() => live.close());
-  const main = await live.start({ work: f.work, source: "paseo" });
-  const one = await live.start({
-    work: f.work,
-    source: "paseo",
-    paseoAgent: "native-one",
-  });
-  const two = await live.start({
-    work: f.work,
-    source: "paseo",
-    paseoAgent: "native-two",
-  });
-  assert.notEqual(main.sessionId, one.sessionId);
-  assert.notEqual(one.sessionId, two.sessionId);
-  assert.equal(
-    (
-      await live.start({
-        work: f.work,
-        source: "paseo",
-        paseoAgent: "native-one",
-      })
-    ).sessionId,
-    one.sessionId,
-  );
-  assert.equal(one.paseoAgent, "native-one");
-  const session = live.sessions.get(one.sessionId),
-    sourceRevision = sha("f");
-  session.sourceSnapshots.set(sourceRevision, {
-    codeDir: first,
-    entries: [],
-    manifest: { revision: 1 },
-  });
-  const frozen = await live.freezeReference({
-    sessionId: one.sessionId,
-    sourceRevision,
-    repo: f.work.repo,
-    project: f.work.project,
-  });
-  assert.equal(frozen.paseoAgent, "native-one");
-  assert.equal(frozen.task, null);
-  assert.match(
-    await fs.readFile(path.join(frozen.dir, "scene.ts"), "utf8"),
-    /first/,
-  );
-  const reference = await freezeReviewReference({
-    db: f.db,
-    repos: f.repos,
-    data: f.data,
-    repo: f.work.repo,
-    project: f.work.project,
-    livePreview: live,
-    context: { time: 0.5, liveSessionId: one.sessionId, sourceRevision },
-  });
-  assert.equal(reference.paseoAgent, "native-one");
-  selected = second;
-  assert.notEqual(
-    (
-      await live.start({
-        work: f.work,
-        source: "paseo",
-        paseoAgent: "native-one",
-      })
-    ).sessionId,
-    one.sessionId,
-  );
-  selected = f.canonical;
-  await assert.rejects(
-    live.start({ work: f.work, source: "paseo", paseoAgent: "native-one" }),
-    /Invalid Paseo draft source/,
-  );
-  await assert.rejects(
-    live.start({ work: f.work, paseoAgent: "native-one" }),
-    /Invalid live preview source/,
-  );
-  live.sourceResolver = async () => ({ projectDir: first, agentId: "foreign" });
-  await assert.rejects(
-    live.start({ work: f.work, source: "paseo", paseoAgent: "native-one" }),
-    /source identity/,
-  );
+test("Preparation audits historical drafts and preserves differing source and worktrees without overwriting the sole checkout", async t => {
+  const f = await fixture(t), draft = path.join(f.data, "paseo", f.work.id, "draft/projects/fixture");
+  await fs.mkdir(draft, { recursive: true });
+  await fs.writeFile(path.join(draft, "scene.ts"), "export const retained=true;");
+  await fs.mkdir(path.join(f.data, "paseo", f.work.id, "home/.paseo/worktrees/old-tree"), { recursive: true });
+  const prepared = await f.workService.prepare(f.work.id);
+  assert.equal(prepared.workspace.projectRoot, f.canonical);
+  assert.equal(prepared.workspace.migration.state, "pending");
+  assert.equal(prepared.workspace.migration.retainedWorktrees, 1);
+  assert.match(await fs.readFile(path.join(f.canonical, "scene.ts"), "utf8"), /initial/);
+  assert.match(await fs.readFile(path.join(draft, "scene.ts"), "utf8"), /retained/);
 });

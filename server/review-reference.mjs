@@ -4,6 +4,7 @@ import { confinedAsync, copyTree, treeHash } from "./project-files.mjs";
 import { problem } from "./security.mjs";
 import { snapshotVersion, versionTree } from "./version-review.mjs";
 import { readProject } from "../scripts/project-metadata.mjs";
+import { liveReviewSnapshotPath } from "./live-review-snapshot.mjs";
 
 /** Resolve a viewer's reference against server records, never trust a client-supplied commit for another work. */
 export async function freezeReviewReference({
@@ -30,6 +31,7 @@ export async function freezeReviewReference({
       frozen = await livePreview.freezeReference({
         sessionId: context.liveSessionId,
         sourceRevision: context.sourceRevision,
+        compiledRevision: context.compiledRevision,
         repo,
         project,
       });
@@ -45,33 +47,18 @@ export async function freezeReviewReference({
       if (!saved) throw error;
       frozen = saved;
     }
-    if (context.draftTask && frozen.task !== context.draftTask)
-      throw problem(
-        400,
-        "Live review draft does not belong to this preview session",
-      );
-    if (!context.draftTask && frozen.source === "task")
-      throw problem(400, "Live draft review must identify its task");
-    const expected = path.join(
-      data,
-      "live-preview-references",
-      context.liveSessionId,
-      context.sourceRevision,
-      "projects",
-      project,
-    );
+    const expected = path.join(data, liveReviewSnapshotPath({ ...context, compiledRevision: frozen.compiledRevision }, project));
     if (path.resolve(frozen.dir) !== path.resolve(expected))
       throw problem(500, "Invalid live review snapshot");
     return {
       status: "versioned",
       mode: "live",
       sourceRevision: frozen.sourceRevision,
+      ...(frozen.compiledRevision ? { compiledRevision: frozen.compiledRevision } : {}),
       source: frozen.source,
       liveSessionId: frozen.sessionId,
-      ...(frozen.paseoAgent ? { paseoAgent: frozen.paseoAgent } : {}),
       fingerprint: frozen.fingerprint,
       snapshotPath: path.relative(data, frozen.dir).replaceAll("\\", "/"),
-      ...(context.draftTask ? { draftTask: context.draftTask } : {}),
       ...(context.shotId ? { shotId: context.shotId } : {}),
     };
   }
@@ -111,14 +98,14 @@ export async function freezeReviewReference({
 /** A persisted task authenticates a frozen reference after its ephemeral session disappears. */
 async function savedLiveReviewReference({ db, data, repo, project, context }) {
   let row = await db.one(
-    "SELECT review_reference FROM tasks WHERE repo=$1 AND project=$2 AND cleaned IS NULL AND review_reference->>'status'='versioned' AND review_reference->>'mode'='live' AND review_reference->>'liveSessionId'=$3 AND review_reference->>'sourceRevision'=$4 AND (state IN ('queued','running','cancelling','publishing','publish_failed') OR expires>now()) ORDER BY created DESC LIMIT 1",
-    [repo, project, context.liveSessionId, context.sourceRevision],
+    "SELECT review_reference FROM tasks WHERE repo=$1 AND project=$2 AND cleaned IS NULL AND review_reference->>'status'='versioned' AND review_reference->>'mode'='live' AND review_reference->>'liveSessionId'=$3 AND review_reference->>'sourceRevision'=$4 AND ($5::text IS NULL OR review_reference->>'compiledRevision'=$5) AND (state IN ('queued','running','cancelling','publishing','publish_failed') OR expires>now()) ORDER BY created DESC LIMIT 1",
+    [repo, project, context.liveSessionId, context.sourceRevision, context.compiledRevision || null],
   );
   if (!row?.review_reference) {
     try {
       row = await db.one(
-        "SELECT m.review_reference FROM paseo_message_contexts m JOIN paseo_work_bindings b ON b.work_id=m.work_id JOIN works w ON w.id=b.work_id WHERE w.repo=$1 AND w.project=$2 AND NOT w.deleted AND m.review_reference->>'status'='versioned' AND m.review_reference->>'mode'='live' AND m.review_reference->>'liveSessionId'=$3 AND m.review_reference->>'sourceRevision'=$4 ORDER BY m.created DESC LIMIT 1",
-        [repo, project, context.liveSessionId, context.sourceRevision],
+        "SELECT m.review_reference FROM paseo_message_contexts m JOIN paseo_work_bindings b ON b.work_id=m.work_id JOIN works w ON w.id=b.work_id WHERE w.repo=$1 AND w.project=$2 AND NOT w.deleted AND m.review_reference->>'status'='versioned' AND m.review_reference->>'mode'='live' AND m.review_reference->>'liveSessionId'=$3 AND m.review_reference->>'sourceRevision'=$4 AND ($5::text IS NULL OR m.review_reference->>'compiledRevision'=$5) ORDER BY m.created DESC LIMIT 1",
+        [repo, project, context.liveSessionId, context.sourceRevision, context.compiledRevision || null],
       );
     } catch (error) {
       // The integration is optional in a local database created by an earlier FRAME version.
@@ -127,38 +114,24 @@ async function savedLiveReviewReference({ db, data, repo, project, context }) {
   }
   const reference = row?.review_reference;
   if (!reference) return null;
+  if (reference.compiledRevision && !context.compiledRevision)
+    throw problem(409, "引用缺少已显示画面的编译版本，请重新选择当前画面");
   if (
     reference.status !== "versioned" ||
     reference.mode !== "live" ||
     reference.liveSessionId !== context.liveSessionId ||
     reference.sourceRevision !== context.sourceRevision ||
+    (context.compiledRevision && reference.compiledRevision !== context.compiledRevision) ||
+    (reference.compiledRevision && !/^[0-9a-f]{64}$/.test(reference.compiledRevision)) ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(
       reference.liveSessionId,
     ) ||
     !/^[0-9a-f]{64}$/.test(reference.sourceRevision) ||
     !/^[0-9a-f]{64}$/.test(reference.fingerprint || "") ||
-    !["work", "task", "paseo"].includes(reference.source) ||
-    reference.paseoAgent !== undefined && (reference.source !== "paseo" ||
-      typeof reference.paseoAgent !== "string" || !reference.paseoAgent.length || reference.paseoAgent.length > 256)
+    reference.source !== "work"
   )
     throw problem(400, "Invalid saved live review source");
-  if (
-    (reference.source === "task" &&
-      (!reference.draftTask || !context.draftTask)) ||
-    (reference.draftTask || undefined) !== context.draftTask ||
-    (["work", "paseo"].includes(reference.source) && reference.draftTask)
-  )
-    throw problem(
-      400,
-      "Live review draft does not belong to this preview session",
-    );
-  const expected =
-    "live-preview-references/" +
-    reference.liveSessionId +
-    "/" +
-    reference.sourceRevision +
-    "/projects/" +
-    project;
+  const expected = liveReviewSnapshotPath(reference, project);
   if (reference.snapshotPath !== expected)
     throw problem(400, "Invalid saved live review source");
   const dir = await confinedAsync(data, expected);
@@ -174,10 +147,9 @@ async function savedLiveReviewReference({ db, data, repo, project, context }) {
     dir,
     fingerprint: reference.fingerprint,
     sourceRevision: reference.sourceRevision,
+    ...(reference.compiledRevision ? { compiledRevision: reference.compiledRevision } : {}),
     sessionId: reference.liveSessionId,
     source: reference.source,
-    task: reference.draftTask || null,
-    ...(reference.paseoAgent ? { paseoAgent: reference.paseoAgent } : {}),
   };
 }
 
@@ -209,13 +181,7 @@ export async function prepareReviewReference({
     : path.join(run, "review", "reference", "projects", task.project);
   if (!current) {
     if (reference.mode === "live") {
-      const expected =
-        "live-preview-references/" +
-        reference.liveSessionId +
-        "/" +
-        reference.sourceRevision +
-        "/projects/" +
-        task.project;
+      const expected = liveReviewSnapshotPath(reference, task.project);
       if (!data || reference.snapshotPath !== expected)
         throw problem(400, "Invalid live review source");
       const source = await confinedAsync(data, expected);

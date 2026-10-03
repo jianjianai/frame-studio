@@ -8,9 +8,9 @@ import { liveResourceType } from "./live-preview-resources.mjs";
 
 export function livePreviewOperations({ add, works, livePreview }) {
   add("works_live_preview",
-    "Open or renew an automatically updated source preview; optional task selects this work's isolated AI draft; source=paseo with paseoAgent selects that owned native checkout. Modes: original bypasses media conversion; compressed lazily uses proxies; cached downloads and verifies originals in the browser. No full build or audio pre-encoding.",
-    { id: z.string().uuid(), task: z.string().uuid().optional(), source: z.enum(["work", "paseo"]).default("work"), paseoAgent: z.string().min(1).max(256).optional(), ai: z.boolean().default(false), mediaMode: livePreviewMediaModeSchema.default("compressed") },
-    async ({ id, task, source, paseoAgent, ai, mediaMode }) => livePreview.start({ work: await works.get(id, { active: true }), task, source, paseoAgent, ai, mediaMode }));
+    "Open or renew the current work's unique source preview. Modes: original media, compressed proxies, or cached browser resources. No full build or audio pre-encoding.",
+    { id: z.string().uuid(), source: z.literal("work").default("work"), ai: z.boolean().default(false), mediaMode: livePreviewMediaModeSchema.default("compressed") },
+    async ({ id, source, ai, mediaMode }) => livePreview.start({ work: await works.get(id, { active: true }), source, ai, mediaMode }));
 }
 
 export function installLivePreview(app, livePreview) {

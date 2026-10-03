@@ -1,0 +1,62 @@
+diff --git a/packages/app/src/components/message.tsx b/packages/app/src/components/message.tsx
+--- a/packages/app/src/components/message.tsx
++++ b/packages/app/src/components/message.tsx
+@@ -1,3 +1,4 @@
++import { openExternalUrl } from "@/utils/open-external-url";
+ import { LoadingSpinner } from "@/components/ui/loading-spinner";
+ import { TaskListRow } from "@/components/task-list-row";
+ import {
+@@ -527,9 +528,15 @@
+             <View style={attachmentPreviewContainerStyle}>
+               {attachments.map((attachment, index) => {
+                 const content = getAgentAttachmentPillContent(attachment, t);
++                const referenceUrl = attachment.type === "text" &&
++                  attachment.externalResource?.provider === "frame" &&
++                  attachment.externalResource.resourceType === "frame-reference"
++                    ? attachment.externalResource.url : null;
+                 return (
+                   <AttachmentFrame
+                     key={`${attachment.type}:${"number" in attachment ? attachment.number : index}`}
++                    onPress={referenceUrl ? () => void openExternalUrl(referenceUrl) : undefined}
++                    accessibilityLabel={referenceUrl ? `打开 ${content.title}` : undefined}
+                   >
+                     <AttachmentLabel
+                       icon={content.icon}
+diff --git a/packages/app/src/frame/submission.web.ts b/packages/app/src/frame/submission.web.ts
+--- a/packages/app/src/frame/submission.web.ts
++++ b/packages/app/src/frame/submission.web.ts
+@@ -1,3 +1,4 @@
++import { frameReviewUrl } from "../../../../plugin-examples/frame/shared/bridge";
+ import AsyncStorage from "@react-native-async-storage/async-storage";
+ import { useSessionStore } from "@/stores/session-store";
+ import { getFrameBootstrap } from "./bootstrap";
+@@ -35,7 +36,20 @@
+     activeTurnBehavior: input.activeTurnBehavior,
+     attachmentsFingerprint: await fingerprintFrameSubmission(input.wireContent),
+   });
+-  return { messageId: result.messageId, attachment: result.attachment ?? null };
++  const hasPosition = result.context.time !== undefined || result.context.start !== undefined;
++  const label = result.context.start !== undefined
++    ? `作品 ${result.context.start.toFixed(2)}–${result.context.end!.toFixed(2)} 秒`
++    : `作品 ${(result.context.time ?? 0).toFixed(2)} 秒`;
++  const attachment = result.attachment && hasPosition ? {
++    ...result.attachment,
++    title: label,
++    externalResource: {
++      provider: "frame", providerLabel: "FRAME", resourceType: "frame-reference",
++      id: result.messageId, identifier: "frame-preview", title: label,
++      url: frameReviewUrl(config.workId, result.context, config.parentOrigin + "/"),
++    },
++  } : result.attachment ?? null;
++  return { messageId: result.messageId, attachment };
+ }
+ export async function acceptFrameMessage(agentId: string, messageId: string): Promise<void> {
+   if (!getFrameBootstrap()) return;
+@@ -47,6 +61,6 @@
+   }
+   const bridge = getFrameBridge();
+   if (!bridge) return;
+-  // Acceptance is a refresh hint; Frame publication still requires its durable validation proof.
++  // Acceptance is a refresh hint; the shared workspace has its own revision-bound validation report.
+   void bridge.request("message.accepted", { agentId, messageId }).catch(() => {});
+ }

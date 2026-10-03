@@ -17,7 +17,7 @@ import {
   CLIENT_CAPABILITIES_META_KEY,
 } from "@modelcontextprotocol/server";
 import { createPreparedMcpHandler } from "../../server/mcp-catalog.mjs";
-import { agentToolkitOperations } from "../../server/agent-toolkit.mjs";
+import { platformToolkitOperations } from "../../server/platform-toolkit.mjs";
 import { Tasks } from "../../server/tasks.mjs";
 import { sqliteDatabase } from "../../server/sqlite.mjs";
 import {
@@ -39,7 +39,7 @@ const decode = async (response) => {
 };
 function registryStatus(db, tasks) {
   const registry = {};
-  agentToolkitOperations({
+  platformToolkitOperations({
     add(name, description, shape, fn) {
       registry[name] = (args) => fn(z.object(shape).parse(args));
     },

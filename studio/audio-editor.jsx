@@ -78,6 +78,7 @@ export function AudioEditor({
   position: playerPosition,
   onSeek,
   onSaved,
+  onDirtyChange,
   disabled = false,
 }) {
   const position =
@@ -169,6 +170,10 @@ export function AudioEditor({
     [doc, state?.document],
   );
   const dirty = canonicalDirty || numericDirty;
+  useEffect(() => {
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
   const blocked = disabled || busy;
   const load = async (restoreDraft = false) => {
     const request = ++loadRequest.current;
@@ -283,6 +288,14 @@ export function AudioEditor({
   };
   const save = async () => {
     if (blocked || !flushNumericPending(editorElement.current)) return;
+    const pendingJson = editorElement.current?.querySelector(
+      '[data-json-dirty="true"]',
+    );
+    if (pendingJson) {
+      setError("有尚未应用的 JSON 参数，请先应用或恢复参数，再保存混音。");
+      pendingJson.querySelector("textarea")?.focus();
+      return;
+    }
     const latest = current.current;
     if (
       state.declared &&

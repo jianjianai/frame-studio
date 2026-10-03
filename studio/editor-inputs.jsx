@@ -216,6 +216,8 @@ export function NumberInput({
 /** One draft state keeps text and its merge base together. External quick controls
  * refresh a clean draft; a dirty draft stays intact until explicit merge/apply. */
 export function useJsonDraft(value, identity) {
+  const scope = useContext(NumericDraftContext);
+  const token = useRef({});
   const signature = stableJson(value);
   const [state, setState] = useState(() => ({
     identity,
@@ -223,6 +225,11 @@ export function useJsonDraft(value, identity) {
     text: JSON.stringify(value, null, 2),
   }));
   const clean = state.text === JSON.stringify(state.base, null, 2);
+  const report = scope?.report;
+  useEffect(() => {
+    report?.(token.current, !clean);
+    return () => report?.(token.current, false);
+  }, [report, clean]);
   useEffect(() => {
     setState((previous) =>
       previous.identity !== identity ||

@@ -649,7 +649,7 @@ export class SourceControl {
   }) {
     const work = await this.works.get(id, { active: true });
     return this.locked(work, async () => {
-      await this.repos.writable(work.repo, work.project);
+      await this.repos.writable(work.repo, work.project, { exclusive: true });
       const state = await assertSourceRevision(
         this.repos,
         work,
@@ -776,7 +776,7 @@ export class SourceControl {
     try {
       return await this.locked(work, async () => {
         if (action !== "fetch")
-          await this.repos.writable(work.repo, work.project);
+          await this.repos.writable(work.repo, work.project, { exclusive: true });
         const initial = await assertSourceRevision(
           this.repos,
           work,

@@ -92,7 +92,7 @@ test(
         appType: "custom",
         logLevel: "error",
         optimizeDeps: { include: ["mediabunny", "zod"] },
-        server: { host: "127.0.0.1", port: 0 },
+        server: { host: "127.0.0.1", port: 0, watch: null },
         plugins: [
           {
             name: "v8-shared-clock-fixture",

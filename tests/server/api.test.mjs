@@ -19,7 +19,7 @@ test(
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-api-")),
       db = await database(url, "test-password-at-least-14");
     await db.pool.query(
-      "TRUNCATE events,tasks,chats,asset_refs,assets,repos,tokens,sessions,engines RESTART IDENTITY CASCADE",
+      "TRUNCATE events,tasks,asset_refs,assets,repos,tokens,sessions,engines RESTART IDENTITY CASCADE",
     );
     const { app, actions, tasks } = await createApp({
       db,

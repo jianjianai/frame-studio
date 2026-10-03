@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { isMcpOperation, toolAnnotations } from "./agent-toolkit.mjs";
+import { isMcpOperation, toolAnnotations } from "./platform-toolkit.mjs";
 export { isMcpOperation, toolAnnotations };
 const schemas = new WeakMap();
 export function operationDescription(name, op, { schema = false } = {}) {

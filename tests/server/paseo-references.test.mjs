@@ -111,23 +111,8 @@ test("Frozen reference export rejects altered snapshots and never copies code fr
 test("An immutable Git version exports code blobs and media digests without checking out or copying full audio", async (t) => {
   const f = await fixture(t);
   const gitRoot = path.dirname(path.dirname(f.canonical));
-  await command("git", ["init", "-b", "main"], { cwd: gitRoot });
-  await command("git", ["add", "--", "."], { cwd: gitRoot });
-  await command(
-    "git",
-    [
-      "-c",
-      "user.name=FRAME",
-      "-c",
-      "user.email=frame@localhost",
-      "-c",
-      "core.hooksPath=/dev/null",
-      "commit",
-      "-m",
-      "Fixture version",
-    ],
-    { cwd: gitRoot },
-  );
+  // The canonical-work fixture already commits its source and media baseline.
+  // Reference that real version before making the current work diverge below.
   const commit = await command("git", ["rev-parse", "HEAD"], { cwd: gitRoot });
   const oldCode = await fs.readFile(path.join(f.canonical, "scene.ts"), "utf8");
   const mediaHash = await fileSha256(

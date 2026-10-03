@@ -4,6 +4,7 @@ import path from "node:path";
 import { createServices } from "./services.mjs";
 import { command } from "./process.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
+import { executionRuntime } from "./execution-runtime.mjs";
 
 /** No HTTP routes: only this private process has access to Docker's control socket. */
 export async function startController(options = {}) {
@@ -17,15 +18,19 @@ export async function startController(options = {}) {
     if (closed || reporting) return;
     reporting = true;
     try {
-      let leader = false, docker = { ok: false };
+      let leader = false, docker = { ok: false }, executorRuntime = null;
       if (tasks.lease?.held) {
         await tasks.assertLeadership();
         leader = true;
         try { docker = { ok: true, version: (await command("docker", ["info", "--format", "{{.ServerVersion}}"], { timeout: 3000, max: 65536 })).trim() }; }
         catch (error) { docker.error = error.message.slice(0, 300); }
+        if (docker.ok) {
+          try { executorRuntime = await executionRuntime({ command }); }
+          catch (error) { docker = { ok: false, error: error.message.slice(0, 300) }; }
+        }
       } else await db.one("SELECT 1");
       const value = { checked: Date.now(), controllerId: tasks.controllerId, leader, docker,
-        limits: tasks.limits, queueBlocked: tasks.queueBlocked, runtimeFingerprint: runtime.fingerprint };
+        limits: tasks.limits, queueBlocked: tasks.queueBlocked, runtimeFingerprint: runtime.fingerprint, executorRuntime };
       if (leader) {
         await tasks.assertLeadership();
         await db.setting("controller-runtime", value);

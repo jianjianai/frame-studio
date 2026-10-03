@@ -94,24 +94,19 @@ test("capability resource routes never expose source, other projects, dependenci
   } finally { await app.close(); await f.close(); }
 });
 
-test("AI draft selection validates work ownership, source readiness and cleanup", async () => {
+test("Live preview rejects isolated AI drafts and additional native workspaces", async () => {
   const f = await fixture();
   try {
-    const id = randomUUID();
-    f.tasks.set(id, { id, repo: randomUUID(), project: f.work.project, kind: "agent", state: "running" });
-    await assert.rejects(f.manager.start({ work: f.work, task: id }), /does not belong/);
-    f.tasks.set(id, { id, repo: f.work.repo, project: f.work.project, kind: "agent", state: "queued" });
-    await assert.rejects(f.manager.start({ work: f.work, task: id }), /not started/);
-    f.tasks.get(id).state = "running";
-    const draft = path.join(f.data, "runs", id, "projects", f.work.project);
-    await fsp.mkdir(draft, { recursive: true }); await fsp.writeFile(path.join(draft, "project.ts"), "export default {}");
-    const selected = await f.manager.start({ work: f.work, task: id, ai: true });
-    assert.equal(selected.source, "task"); assert.match(selected.url, /\?ai=1$/);
+    await assert.rejects(f.manager.start({ work: f.work, task: randomUUID() }), /唯一工作区/);
+    await assert.rejects(f.manager.start({ work: f.work, source: "paseo" }), /唯一工作区/);
+    await assert.rejects(f.manager.start({ work: f.work, paseoAgent: "other-agent" }), /唯一工作区/);
+    const selected = await f.manager.start({ work: f.work, ai: true });
+    assert.equal(selected.source, "work"); assert.equal(selected.sessionId, f.link.sessionId);
   } finally { await f.close(); }
 });
 
 test("content revisions survive copied files and sessions stop after viewers detach", async () => {
-  const f = await fixture({ idleMs: 100 });
+  const f = await fixture({ idleMs: 1000 });
   try {
     await f.publish();
     const first = await liveSourceInventory(f.projectDir, "test-film");
@@ -121,9 +116,9 @@ test("content revisions survive copied files and sessions stop after viewers det
     assert.equal(second.sourceRevision, first.sourceRevision);
     assert.equal(second.assets["films/test-film/image.bin"].revision, first.assets["films/test-film/image.bin"].revision);
     const detach = f.manager.attach(f.session, () => {});
-    f.session.lastUsed = Date.now() - 1000; await f.manager.sweep();
+    f.session.lastUsed = Date.now() - 10000; await f.manager.sweep();
     assert.equal(f.manager.sessions.size, 1);
-    detach(); f.session.lastUsed = Date.now() - 1000; await f.manager.sweep();
+    detach(); f.session.lastUsed = Date.now() - 10000; await f.manager.sweep();
     assert.equal(f.manager.sessions.size, 0);
     assert.equal(fs.existsSync(f.session.outDir), false);
   } finally { await f.close(); }
@@ -139,15 +134,17 @@ test("imported runtime modules in artifact directories participate in revisions 
     await fsp.writeFile(dependency, "export const value=1");
     await fsp.writeFile(ignoredOutput, "unrelated exported movie");
     await f.publish([dependency]);
-    const first = f.session.manifest.sourceRevision;
+    const first = f.session.manifest.sourceRevision, compiledRevision = f.session.manifest.compiledRevision;
     const frozen = await f.manager.freezeReference({ sessionId: f.session.id, sourceRevision: first, repo: f.work.repo, project: f.work.project });
     assert.equal(await fsp.readFile(path.join(frozen.dir, ".cache/runtime.ts"), "utf8"), "export const value=1");
     assert.equal(fs.existsSync(path.join(frozen.dir, "exports/unrelated.mov")), false);
     await fsp.writeFile(dependency, "export const value=2");
     await f.publish([dependency]);
-    assert.notEqual(f.session.manifest.sourceRevision, first);
+    assert.equal(f.session.manifest.sourceRevision, first);
+    assert.notEqual(f.session.manifest.compiledRevision, compiledRevision);
+    await assert.rejects(f.manager.freezeReference({ sessionId: f.session.id, sourceRevision: first, repo: f.work.repo, project: f.work.project }), /多个已显示编译版本/);
     await fsp.writeFile(path.join(frozen.dir, ".cache/runtime.ts"), "tampered");
-    await assert.rejects(f.manager.freezeReference({ sessionId: f.session.id, sourceRevision: first, repo: f.work.repo, project: f.work.project }), /modified/);
+    await assert.rejects(f.manager.freezeReference({ sessionId: f.session.id, sourceRevision: first, compiledRevision, repo: f.work.repo, project: f.work.project }), /modified/);
   } finally { await f.close(); }
 });
 

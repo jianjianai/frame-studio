@@ -5,8 +5,8 @@ import { migrationPlan } from "./migrations.mjs";
 
 const jsonColumns = new Set([
   "value", "input", "result", "data", "metadata", "sync_state", "progress",
-  "monitor", "runtime", "request_input", "execution", "review_reference",
-  "metrics", "interaction", "payload", "answers", "info", "redirects",
+  "monitor", "runtime", "frozen", "request_input", "execution", "review_reference",
+  "metrics", "info", "redirects",
   "blocker", "tasks", "activity", "refs", "envelope", "native_summary",
 ]);
 const booleanColumns = new Set(["deleted", "enabled", "revoked", "ready", "ok", "requested"]);
@@ -49,6 +49,7 @@ export function sqliteMigration(sql) {
     .replace(/CREATE(?: OR REPLACE)? FUNCTION[\s\S]*?\$\$;/gi, "")
     .replace(/DO \$\$[\s\S]*?\$\$;/gi, "")
     .replace(/(?:CREATE|DROP) TRIGGER[^;]*;/gi, "")
+    .replace(/DROP FUNCTION[^;]*;/gi, "")
     .replace(/\buuid\b/gi, "text")
     .replace(/\btimestamptz\b/gi, "text")
     .replace(/\bjsonb\b/gi, "json")
@@ -60,7 +61,7 @@ export function sqliteMigration(sql) {
     .replace(/\bnow\(\)/gi, "frame_now()")
     .replace(/DEFAULT\s+frame_now\(\)/gi, "DEFAULT (frame_now())")
     .replace(/DEFAULT\s+(frame_date_add\(frame_now\(\),'[^']+'\))/gi, "DEFAULT ($1)")
-    .replace(/::json/gi, "")
+    .replace(/::(?:json|text)/gi, "")
     .replace(/\bcommit\s+text\b/gi, '"commit" text')
     .replace(/INSERT INTO asset_repos\(asset,repo,catalog_id\) SELECT DISTINCT asset,repo,asset FROM asset_refs ON CONFLICT DO NOTHING/gi,
       "INSERT OR IGNORE INTO asset_repos(asset,repo,catalog_id) SELECT DISTINCT asset,repo,asset FROM asset_refs");
@@ -123,8 +124,14 @@ export async function sqliteDatabase(file) {
   }
   for (const item of plan) {
     if (raw.prepare("SELECT 1 FROM frame_schema_migrations WHERE id=?").get(item.id)) continue;
+    if (item.id === "0010-remove-legacy-ai") {
+      const active = raw.prepare("SELECT id FROM tasks WHERE kind='agent' AND state IN ('queued','running','cancelling','publishing','publish_failed') LIMIT 1").get();
+      if (active) { raw.close(); throw Error("Stop or finish legacy FRAME AI tasks before retiring the legacy schema"); }
+    }
     raw.exec("BEGIN IMMEDIATE");
     try {
+      if (item.id === "0010-remove-legacy-ai")
+        raw.exec("DROP TRIGGER IF EXISTS frame_question_insert_local; DROP TRIGGER IF EXISTS frame_question_update_local; DROP TRIGGER IF EXISTS frame_agent_task_local");
       for (const statement of sqliteMigration(item.sql).split(";").map((s) => s.trim()).filter(Boolean)) {
         try { raw.exec(statement); }
         catch (error) {
@@ -148,47 +155,6 @@ export async function sqliteDatabase(file) {
     BEGIN
       UPDATE works SET source_generation=OLD.source_generation+1,
         source_revision=NULL,source_indexed_at=NULL WHERE id=NEW.id;
-    END;
-    CREATE TRIGGER IF NOT EXISTS frame_question_insert_local AFTER INSERT ON agent_questions
-    BEGIN
-      UPDATE tasks SET
-        interaction=(SELECT json_object('id',q.id,'title',q.payload->>'title',
-          'created',q.created,'count',(SELECT count(*) FROM agent_questions
-          WHERE task=NEW.task AND state='pending')) FROM agent_questions q
-          WHERE q.task=NEW.task AND q.state='pending' ORDER BY q.created,q.id LIMIT 1),
-        input_wait_started=coalesce(input_wait_started,frame_now()) WHERE id=NEW.task;
-      INSERT OR IGNORE INTO agent_notifications(task,question,kind,source)
-        SELECT NEW.task,NEW.id,'question','question:'||NEW.id WHERE NEW.state='pending';
-    END;
-    CREATE TRIGGER IF NOT EXISTS frame_question_update_local AFTER UPDATE OF state ON agent_questions
-    BEGIN
-      UPDATE tasks SET
-        interaction=(SELECT json_object('id',q.id,'title',q.payload->>'title',
-          'created',q.created,'count',(SELECT count(*) FROM agent_questions
-          WHERE task=NEW.task AND state='pending')) FROM agent_questions q
-          WHERE q.task=NEW.task AND q.state='pending' ORDER BY q.created,q.id LIMIT 1),
-        input_wait_ms=input_wait_ms+CASE WHEN NOT EXISTS
-          (SELECT 1 FROM agent_questions WHERE task=NEW.task AND state='pending')
-          AND input_wait_started IS NOT NULL
-          THEN max(0,cast((julianday(frame_now())-julianday(input_wait_started))*86400000 AS integer))
-          ELSE 0 END,
-        input_wait_started=CASE WHEN EXISTS
-          (SELECT 1 FROM agent_questions WHERE task=NEW.task AND state='pending')
-          THEN coalesce(input_wait_started,frame_now()) ELSE NULL END WHERE id=NEW.task;
-      UPDATE agent_notifications SET read_at=coalesce(read_at,frame_now())
-        WHERE question=NEW.id AND NEW.state<>'pending';
-    END;
-    CREATE TRIGGER IF NOT EXISTS frame_agent_task_local AFTER UPDATE OF state ON tasks
-    WHEN NEW.kind='agent' AND NEW.state IS NOT OLD.state
-    BEGIN
-      UPDATE agent_questions SET state='cancelled' WHERE task=NEW.id
-        AND state='pending' AND NEW.state NOT IN ('running','queued');
-      UPDATE agent_notifications SET read_at=coalesce(read_at,frame_now())
-        WHERE task=NEW.id AND NEW.state='succeeded';
-      INSERT OR IGNORE INTO agent_notifications(task,kind,source)
-        SELECT NEW.id,CASE WHEN NEW.state='succeeded' THEN 'completed' ELSE 'failed' END,
-          'task:'||NEW.id||':'||NEW.state
-        WHERE NEW.state IN ('succeeded','failed','publish_failed');
     END;
   `);
 

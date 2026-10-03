@@ -1,28 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  workChatCreateSchema,
   reviewContextSchema,
   playerCommandSchema,
   previewMessageSchema,
   taskStateSchema,
 } from "../../src/contracts/platform.mjs";
 const id = "e119cb8c-6933-43f3-9f3d-a3ea99cd23cb";
-test("chat connections are explicit and review ranges are complete", () => {
-  assert.equal(workChatCreateSchema.safeParse({ id }).success, false);
-  assert.equal(
-    workChatCreateSchema.safeParse({ id, connection: id, provider: "codex" })
-      .success,
-    false,
-  );
-  assert.equal(
-    workChatCreateSchema.safeParse({ id, connection: id }).success,
-    true,
-  );
-  assert.equal(
-    workChatCreateSchema.safeParse({ id, provider: "codex" }).success,
-    true,
-  );
+test("review ranges are complete and version-bound", () => {
   assert.equal(reviewContextSchema.safeParse({ start: 4 }).success, false);
   assert.equal(
     reviewContextSchema.safeParse({ start: 4, end: 2 }).success,
@@ -53,6 +38,9 @@ test("stored speech auditions are readable without becoming executable jobs", as
   const { taskKindSchema, executableTaskKindSchema } =
     await import("../../src/contracts/platform.mjs");
   assert.equal(taskKindSchema.safeParse("speech-test").success, true);
+  assert.equal(taskKindSchema.safeParse("paseo").success, true);
+  assert.equal(taskKindSchema.safeParse("agent").success, false);
+  assert.equal(executableTaskKindSchema.safeParse("paseo").success, false);
   assert.equal(
     executableTaskKindSchema.safeParse("speech-test").success,
     false,

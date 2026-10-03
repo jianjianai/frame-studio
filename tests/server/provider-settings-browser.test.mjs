@@ -1,5 +1,4 @@
 import test from "node:test";
-import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -289,17 +288,8 @@ test(
         repo: repo.id,
         title: "History",
       });
-      const chat = await insertLegacyChat(db, work, {
-        id: work.id,
-        connection: provider.id,
-        title: "Keep this conversation",
-      });
-      const task = await legacyAgentTask(tasks, work, {
-        id: work.id,
-        chat: chat.id,
-        prompt: "Deletion guard fixture",
-        model: "model-fast",
-      });
+      let nativeBusy = true;
+      tasks.connections.nativeActivity = async id => id === provider.id && nativeBusy;
       await page
         .getByRole("button", { name: "删除提供商", exact: true })
         .click();
@@ -318,14 +308,15 @@ test(
         provider.id,
       );
       dialog = page.getByRole("dialog", { name: "删除提供商", exact: true });
-      await expect(dialog).toContainText("还有 1 个任务");
+      await expect(dialog).toContainText("Paseo");
       await dialog
         .getByLabel("输入提供商名称以确认", { exact: true })
         .fill("团队创作 API");
       await expect(
         dialog.getByRole("button", { name: "永久删除提供商", exact: true }),
       ).toBeDisabled();
-      await call("task_cancel", { id: task.id });
+      nativeBusy = false;
+      await dialog.getByRole("button", { name: "重新检查使用情况", exact: true }).click();
       await expect(
         dialog.getByRole("button", { name: "永久删除提供商", exact: true }),
       ).toBeEnabled();
@@ -348,7 +339,7 @@ test(
       await expect(
         page.getByRole("button", { name: "连接第一个提供商", exact: true }),
       ).toBeVisible();
-      assert.equal((await call("works_chats", { id: work.id })).length, 1);
+      assert.equal((await call("works_open", { id: work.id })).id, work.id);
       assert.equal((await call("connections_list")).length, 0);
       const preferences = await page.evaluate(() =>
         JSON.parse(localStorage.getItem("frame.ai-preferences.v1")),
@@ -362,7 +353,7 @@ test(
             JSON.stringify(["other-provider", "keep"]),
           ],
         },
-        "Retiring old chat controls must preserve historical browser preferences",
+        "Provider deletion keeps unrelated browser preferences",
       );
       assert.equal(
         requests.length,

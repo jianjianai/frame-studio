@@ -1,5 +1,4 @@
 import test from "node:test";
-import { insertLegacyChat, legacyAgentTask } from "./legacy-agent-fixture.mjs";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
@@ -11,7 +10,7 @@ import { command } from "../../server/process.mjs";
 import { hash } from "../../server/security.mjs";
 const url = process.env.FRAME_TEST_DATABASE_URL;
 test(
-  "work branches isolate history, active tasks, materials and durable chat retries",
+  "work branches isolate history, active tasks, materials and durable task retries",
   { skip: !url },
   async () => {
     assert.match(new URL(url).pathname, /frame_test/);
@@ -204,21 +203,8 @@ test(
       assert(
         !JSON.stringify(await call("connections_list")).includes("test-secret"),
       );
-      const chat = await insertLegacyChat(db, a, {
-          id: a.id,
-          connection: connection.id,
-          title: "Creation",
-        }),
-        requestKey = randomUUID();
-      const args = {
-        id: a.id,
-        chat: chat.id,
-        prompt: "make a film",
-        requestKey,
-        context: { time: 1 },
-      };
-      const first = await legacyAgentTask(tasks, a, args),
-        retry = await legacyAgentTask(tasks, a, args);
+      const args = { id: a.id, kind: "frame", requestKey: randomUUID(), input: { time: 1 } };
+      const first = await call("works_task", args), retry = await call("works_task", args);
       assert.equal(first.id, retry.id);
       assert.equal((await call("works_background")).length, 1);
       assert.equal((await call("works_stop", { id: a.id })).stopped, 1);
@@ -226,24 +212,8 @@ test(
         call("password_change", { oldPassword: "a", newPassword: "b" }),
         /Unknown/,
       );
-      const eventDir = path.join(data, "runs", first.id);
-      fs.mkdirSync(eventDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(eventDir, "events.ndjson"),
-        JSON.stringify({ type: "message", id: "one", text: "你好" }) + "\n",
-      );
-      const task = await tasks.get(first.id);
-      await tasks.collectEvents(task);
-      await tasks.collectEvents(task);
-      assert.equal(
-        (
-          await db.one(
-            "SELECT count(*)::int AS n FROM events WHERE task=$1 AND kind='message'",
-            [first.id],
-          )
-        ).n,
-        1,
-      );
+      await db.event(first.id, "log", { text: "你好" });
+      assert.equal((await call("task_get", { id: first.id })).events.length, 1);
     } finally {
       await app.close();
       fs.rmSync(data, { recursive: true, force: true });

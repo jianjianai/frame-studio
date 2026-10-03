@@ -22,7 +22,7 @@ export async function paseoSessionEnvironment({ workId, request, manager, workSe
   const canonicalCwd = path.resolve(input.cwd);
   const binding = await manager.store.getWork(workId);
   if (binding?.workspaceId && input.workspaceId && input.workspaceId !== binding.workspaceId &&
-      workspace.nativeCheckout === (localMode ? workspace.prepared.draft.draftRoot : "/workspace"))
+      workspace.nativeCheckout === (localMode ? workspace.prepared.workspace.workspaceRoot : "/workspace"))
     throw problem(409, "Native workspace identity changed");
   let agent = null;
   if (input.reason !== "create" && input.reason !== "import") {

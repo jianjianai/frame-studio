@@ -12,6 +12,7 @@ import { createLivePreviewWorker } from "./live-preview-worker.mjs";
 import { LivePreviewMedia } from "./live-preview-media.mjs";
 import { liveSourceInventory } from "../scripts/live-preview-bundle.mjs";
 import { bundleResources, runtimeResources, liveResource } from "./live-preview-resources.mjs";
+import { liveReviewRevision } from "./live-review-snapshot.mjs";
 import { livePreviewMediaModeSchema } from "../src/contracts/live-preview.mjs";
 
 const runtimeRoot = fileURLToPath(new URL("../", import.meta.url));
@@ -25,8 +26,7 @@ const AUDIO = /\.(?:wav|mp3|ogg|opus|flac|m4a|aac|aiff?|pcm)$/i;
 export class LivePreviewSessions {
   constructor({ db, data, repos, root = runtimeRoot, bundleFactory = createLivePreviewWorker,
     idleMs = 10 * 60 * 1000, leaseMs = 60 * 60 * 1000, maxSessions = 4,
-    maxBundleBytes = 512 * 1024 * 1024, maxRuntimeBytes = 32 * 1024 * 1024, media, sourceResolver } = {}) {
-    this.sourceResolver = sourceResolver;
+    maxBundleBytes = 512 * 1024 * 1024, maxRuntimeBytes = 32 * 1024 * 1024, media } = {}) {
     this.db = db; this.data = data; this.repos = repos; this.root = root; this.bundleFactory = bundleFactory;
     this.idleMs = idleMs; this.leaseMs = leaseMs; this.maxSessions = maxSessions; this.maxBundleBytes = maxBundleBytes; this.maxRuntimeBytes = maxRuntimeBytes;
     this.sessions = new Map(); this.keys = new Map(); this.capabilities = new Map(); this.pending = new Map(); this.closed = false;
@@ -35,37 +35,8 @@ export class LivePreviewSessions {
     this.timer = setInterval(() => { void this.sweep(); }, Math.min(30000, Math.max(100, idleMs / 2)));
     this.timer.unref();
   }
-  async source(work, taskId, kind = "work", agentId = null) {
-    if (kind === "paseo") {
-      if (taskId) throw problem(400, "Paseo source cannot mix a task draft");
-      if (!this.sourceResolver) throw problem(503, "Paseo draft source is unavailable");
-      const resolved = await this.sourceResolver(work, { agentId });
-      const main = await confinedAsync(this.data, "paseo/" + work.id + "/draft/projects/" + work.project);
-      const trees = await confinedAsync(this.data, "paseo/" + work.id + "/home/.paseo/worktrees");
-      if (!resolved?.projectDir || (resolved.agentId || null) !== agentId)
-        throw problem(500, "Invalid Paseo draft source identity");
-      const projectDir = path.resolve(resolved.projectDir);
-      const suffix = path.sep + "projects" + path.sep + work.project;
-      if (projectDir !== main && (!agentId || !projectDir.startsWith(trees + path.sep) || !projectDir.endsWith(suffix)))
-        throw problem(500, "Invalid Paseo draft source");
-      // The manager authenticates Git worktree registration; this boundary independently rejects links and other work roots.
-      if (await confinedAsync(this.data, path.relative(this.data, projectDir)) !== projectDir)
-        throw problem(500, "Invalid Paseo draft source");
-      if (!fs.existsSync(path.join(projectDir, "project.ts"))) throw problem(409, "Paseo draft source is not ready");
-      return { projectDir, source: "paseo", task: null, ...(agentId ? { paseoAgent: agentId } : {}) };
-    }
-    if (kind !== "work") throw problem(400, "Invalid live preview source");
-    if (taskId) {
-      const task = await this.db.one("SELECT * FROM tasks WHERE id=$1", [taskId]);
-      if (!task || task.repo !== work.repo || task.project !== work.project || task.kind !== "agent")
-        throw problem(404, "Task draft does not belong to this work");
-      if (task.cleaned) throw problem(410, "Task draft has expired");
-      if (!["running", "publishing", "publish_failed", "succeeded", "failed", "cancelling", "cancelled"].includes(task.state))
-        throw problem(409, "AI draft has not started yet");
-      const projectDir = confined(path.join(this.data, "runs", task.id), "projects/" + work.project);
-      if (!fs.existsSync(path.join(projectDir, "project.ts"))) throw problem(409, "AI draft source is not ready");
-      return { projectDir, source: "task", task: task.id };
-    }
+  async source(work, taskId = null, kind = "work", agentId = null) {
+    if (taskId || agentId || kind !== "work") throw problem(400, "实时预览只使用当前作品的唯一工作区");
     const { dir } = await this.repos.project(work.repo, work.project);
     return { projectDir: dir, source: "work", task: null };
   }
@@ -74,24 +45,21 @@ export class LivePreviewSessions {
     if (!checkedMode.success) throw problem(400, "Invalid preview media mode");
     if (this.closed) throw problem(503, "Live preview service stopped");
     if (work.deleted) throw problem(410, "Work is in the recycle bin");
-    if (!["work", "paseo"].includes(source) || source === "paseo" && task ||
-        paseoAgent !== undefined && (source !== "paseo" || typeof paseoAgent !== "string" || !paseoAgent.length || paseoAgent.length > 256))
-      throw problem(400, "Invalid live preview source");
-    // Resolve even when renewing: a native agent may have moved to another owned checkout.
-    const resolved = source === "paseo" ? await this.source(work, task, source, paseoAgent || null) : null;
-    const key = work.id + ":" + (task || source) + (resolved ? ":" + (paseoAgent || "main") + ":" + hash(resolved.projectDir) : "");
+    if (source !== "work" || task || paseoAgent !== undefined)
+      throw problem(400, "实时预览只使用当前作品的唯一工作区");
+    const key = work.id;
     const existing = this.sessions.get(this.keys.get(key));
     if (existing && !existing.closed) {
       existing.expires = Date.now() + this.leaseMs; existing.lastUsed = Date.now();
       return this.link(existing, ai, mediaMode);
     }
     if (this.pending.has(key)) return this.link(await this.pending.get(key), ai, mediaMode);
-    const creation = this.create(work, task, key, source, resolved);
+    const creation = this.create(work, key);
     this.pending.set(key, creation);
     try { return this.link(await creation, ai, mediaMode); } finally { this.pending.delete(key); }
   }
-  async create(work, task, key, sourceKind = "work", resolved = null) {
-    const source = resolved || await this.source(work, task, sourceKind);
+  async create(work, key) {
+    const source = await this.source(work);
     await this.sweep();
     if (this.sessions.size >= this.maxSessions) {
       const idle = [...this.sessions.values()].filter(s => s.clients === 0 && s.manifest)
@@ -160,11 +128,16 @@ export class LivePreviewSessions {
     }
     for (const [relative, record] of session.runtimeSources)
       if (!session.runtimeFiles.has(relative + ":" + record.resource.revision)) session.runtimeSources.delete(relative);
-    if (!session.sourceSnapshots.has(bundle.sourceRevision))
-      await fsp.rm(path.join(session.outDir, "source-snapshots", bundle.sourceRevision), { recursive: true, force: true });
+    const snapshotKey = this.bundleVersion(bundle);
+    if (!session.sourceSnapshots.has(snapshotKey))
+      await fsp.rm(path.join(session.outDir, "source-snapshots", snapshotKey), { recursive: true, force: true });
+  }
+  bundleVersion(bundle) {
+    return liveReviewRevision({ sourceRevision: bundle.sourceRevision, compiledRevision: bundle.compiledRevision || hash(JSON.stringify(bundle.fingerprints)) });
   }
   async publish(session, bundle) {
-    if (session.closed || session.manifest?.sourceRevision === bundle.sourceRevision) return;
+    const compiledRevision = bundle.compiledRevision || hash(JSON.stringify(bundle.fingerprints));
+    if (session.closed || session.manifest?.sourceRevision === bundle.sourceRevision && session.manifest?.compiledRevision === compiledRevision) return;
     const entries = Object.entries(bundle.assets).map(([src, asset]) => ({ ...asset, src }));
     // Preserve all owned runtime media before publishing a revision. This is local bounded copying,
     // never full-film audio generation; already captured identities are reused.
@@ -175,7 +148,8 @@ export class LivePreviewSessions {
       if (failed) throw failed.reason;
     }
     if (session.closed) return;
-    const codeDir = path.join(session.outDir, "source-snapshots", bundle.sourceRevision);
+    const snapshotKey = this.bundleVersion(bundle);
+    const codeDir = path.join(session.outDir, "source-snapshots", snapshotKey);
     const newSizes = new Map(session.fileBytes);
     for (const file of bundle.files) {
       const output = confined(session.outDir, file), stat = await fsp.stat(output);
@@ -221,10 +195,10 @@ export class LivePreviewSessions {
     ];
     if (resources.length > 20000) throw problem(413, "Live preview contains too many runtime resources");
     const manifest = {
-      workId: session.work, projectId: session.project, ...(session.paseoAgent ? { paseoAgent: session.paseoAgent } : {}),
+      workId: session.work, projectId: session.project,
       mediaModes: ["original", "compressed", "cached"], defaultMediaMode: "compressed", resources,
       schemaVersion: 1, sessionId: session.id, revision: session.revision + 1, source: session.source,
-      sourceRevision: bundle.sourceRevision, projectUrl: bundle.projectUrl, fingerprints: bundle.fingerprints,
+      sourceRevision: bundle.sourceRevision, compiledRevision, projectUrl: bundle.projectUrl, fingerprints: bundle.fingerprints,
       changes: {
         visual: !previous || previous.fingerprints.visual !== bundle.fingerprints.visual,
         audio: !previous || previous.fingerprints.audio !== bundle.fingerprints.audio,
@@ -241,7 +215,7 @@ export class LivePreviewSessions {
     session.fileBytes = newSizes; for (const file of bundle.files) session.files.add(file);
     session.shell = { playerUrl: bundle.playerUrl, styles: bundle.styles };
     session.manifest = manifest; session.revision = manifest.revision; session.state = "ready"; session.error = null;
-    session.sourceSnapshots.set(bundle.sourceRevision, { codeDir, entries, manifest });
+    session.sourceSnapshots.set(snapshotKey, { codeDir, entries, manifest });
     while (session.sourceSnapshots.size > 16) {
       const oldest = session.sourceSnapshots.keys().next().value, old = session.sourceSnapshots.get(oldest);
       session.sourceSnapshots.delete(oldest); await fsp.rm(old.codeDir, { recursive: true, force: true });
@@ -253,8 +227,8 @@ export class LivePreviewSessions {
     if (ai) query.set("ai", "1");
     if (mediaMode !== "compressed") query.set("mediaMode", mediaMode);
     return { mediaMode, url: "/preview-live/" + session.secret + "/index.html" + (query.size ? "?" + query : ""),
-      sessionId: session.id, sourceRevision: session.manifest?.sourceRevision || null, source: session.source,
-      ...(session.paseoAgent ? { paseoAgent: session.paseoAgent } : {}),
+      sessionId: session.id, sourceRevision: session.manifest?.sourceRevision || null, compiledRevision: session.manifest?.compiledRevision || null, source: session.source,
+
       expires: new Date(session.expires).toISOString(), state: session.manifest ? "ready" : session.state,
       revision: session.revision, ...(session.error ? { error: session.error.message } : {}) };
   }
@@ -293,7 +267,7 @@ export class LivePreviewSessions {
   }
   snapshot(session) {
     return session.manifest || { schemaVersion: 1, sessionId: session.id, revision: 0, source: session.source, state: session.state,
-      ...(session.paseoAgent ? { paseoAgent: session.paseoAgent } : {}),
+
       ...(session.error ? { error: session.error.message } : {}) };
   }
   attach(session, close) {
@@ -302,22 +276,30 @@ export class LivePreviewSessions {
     let detached = false;
     return () => { if (detached) return; detached = true; session.clients--; session.lastUsed = Date.now(); session.releases.delete(close); };
   }
-  async freezeReference({ sessionId, sourceRevision, repo, project }) {
+  async freezeReference({ sessionId, sourceRevision, compiledRevision, repo, project }) {
     const session = this.sessions.get(sessionId);
     if (!session || session.closed || session.repo !== repo || session.project !== project)
       throw problem(404, "Live review session does not belong to this work");
-    const snapshot = session.sourceSnapshots.get(sourceRevision);
+    let snapshot;
+    if (compiledRevision) snapshot = session.sourceSnapshots.get(liveReviewRevision({ sourceRevision, compiledRevision }));
+    else {
+      const matches = [...session.sourceSnapshots.values()].filter(value => value.manifest?.sourceRevision === sourceRevision);
+      if (matches.length > 1) throw problem(409, "此源码有多个已显示编译版本，请重新选择当前画面");
+      snapshot = matches[0] || session.sourceSnapshots.get(sourceRevision);
+    }
     if (!snapshot) throw problem(410, "This live source revision has expired; refresh the review reference");
-    const root = path.join(this.data, "live-preview-references", session.id, sourceRevision),
+    const actualCompiledRevision = snapshot.manifest.compiledRevision;
+    const versionKey = liveReviewRevision({ sourceRevision, compiledRevision: actualCompiledRevision });
+    const root = path.join(this.data, "live-preview-references", session.id, versionKey),
       dir = path.join(root, "projects", project);
     if (snapshot.frozen) {
       if (await treeHash(dir, { includeIgnored: true }) !== snapshot.frozen.fingerprint) throw problem(409, "Frozen live review source was modified");
       return snapshot.frozen;
     }
-    const pendingKey = "freeze:" + session.id + ":" + sourceRevision;
+    const pendingKey = "freeze:" + session.id + ":" + versionKey;
     if (this.pending.has(pendingKey)) return this.pending.get(pendingKey);
     const freezing = (async () => {
-      const temporary = path.join(path.dirname(root), "." + sourceRevision + "-" + randomUUID()),
+      const temporary = path.join(path.dirname(root), "." + versionKey + "-" + randomUUID()),
         temporaryDir = path.join(temporary, "projects", project);
       try {
         if (fs.existsSync(root)) throw problem(409, "Unexpected existing live review snapshot");
@@ -332,9 +314,8 @@ export class LivePreviewSessions {
         }
         const fingerprint = await treeHash(temporaryDir, { includeIgnored: true });
         await fsp.rename(temporary, root);
-        snapshot.frozen = { root, dir, fingerprint, sourceRevision, revision: snapshot.manifest.revision,
-          sessionId: session.id, source: session.source, task: session.task,
-          ...(session.paseoAgent ? { paseoAgent: session.paseoAgent } : {}) };
+        snapshot.frozen = { root, dir, fingerprint, sourceRevision, ...(actualCompiledRevision ? { compiledRevision: actualCompiledRevision } : {}), revision: snapshot.manifest.revision,
+          sessionId: session.id, source: session.source, task: null };
         return snapshot.frozen;
       } finally { await fsp.rm(temporary, { recursive: true, force: true }); }
     })();

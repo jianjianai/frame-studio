@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { fixture } from "./paseo-test-fixture.mjs";
-import { command } from "../../server/process.mjs";
 import { PaseoManager } from "../../server/paseo-manager.mjs";
 import { paseoSessionEnvironment } from "../../server/paseo-credentials.mjs";
 
@@ -24,7 +23,7 @@ async function setup(t, overrides = {}) {
     connections: { resolve: async id => { assert.equal(id, connectionId); return config; } },
     db: f.db, secrets: {}, localMode: true };
   const request = { version: 1, agentId: "agent-a", workspaceId: "main-workspace",
-    provider: "frame-" + connectionId, cwd: prepared.draft.draftRoot, reason: "create", purpose: "interactive" };
+    provider: "frame-" + connectionId, cwd: prepared.workspace.workspaceRoot, reason: "create", purpose: "interactive" };
   return { ...f, prepared, options, request, setConfig: next => { config = { ...config, ...next }; }, setAgent: next => { agent = next; } };
 }
 
@@ -50,13 +49,13 @@ test("Native profile credentials stay session-only and endpoint/auth changes fai
 
 test("Credential admission rejects foreign cwd/profile/agent and linked workspace escape", async t => {
   const f = await setup(t);
-  await assert.rejects(paseoSessionEnvironment({ ...f.options, request: { ...f.request, cwd: f.prepared.draft.draftRoot + "-foreign" } }), error => error.statusCode === 403);
+  await assert.rejects(paseoSessionEnvironment({ ...f.options, request: { ...f.request, cwd: f.prepared.workspace.workspaceRoot + "-foreign" } }), error => error.statusCode === 403);
   f.setAgent({ id: "agent-a", provider: "other-provider", cwd: f.request.cwd });
   await assert.rejects(paseoSessionEnvironment({ ...f.options, request: { ...f.request, reason: "resume" } }), error => error.statusCode === 404);
   await assert.rejects(paseoSessionEnvironment({ ...f.options, request: { ...f.request, workspaceId: "foreign-workspace" } }), error => error.statusCode === 409);
   const outside = path.join(f.directory, "foreign-workspace");
   await fs.mkdir(outside);
-  const linked = path.join(f.prepared.draft.draftRoot, "linked-foreign-workspace");
+  const linked = path.join(f.prepared.workspace.workspaceRoot, "linked-foreign-workspace");
   await fs.symlink(outside, linked);
   await assert.rejects(paseoSessionEnvironment({ ...f.options, request: { ...f.request, cwd: linked } }), error => error.statusCode === 400 && /Links and special files/.test(error.message));
 });
@@ -82,48 +81,19 @@ test("Official profile copies only private regular credential files into its iso
 });
 
 
-test("Registered native worktrees map local and Linux paths without escaping this work", async t => {
-  const f = await setup(t);
-  const root = f.prepared.draft.draftRoot;
-  const home = path.join(f.prepared.draft.base, "home/.paseo/worktrees/project-hash");
-  const checkout = path.join(home, "native-tree");
-  await command("git", ["init", "-b", "frame-draft"], { cwd: root });
-  await command("git", ["config", "user.name", "Owned test"], { cwd: root });
-  await command("git", ["config", "user.email", "fixture@invalid"], { cwd: root });
-  await command("git", ["add", "--", "projects"], { cwd: root });
-  await command("git", ["commit", "-m", "Owned fixture baseline"], { cwd: root });
-  await command("git", ["worktree", "add", "-b", "native-tree", checkout], { cwd: root });
-  const nested = path.join(checkout, "projects/fixture");
-  const manager = f.options.manager;
+test("All native agents map to the authoritative checkout and historical worktrees are rejected", async t => {
+  const f = await setup(t), manager = f.options.manager, root = f.prepared.workspace.workspaceRoot;
+  const nested = path.join(root, "projects/fixture");
   const local = await manager.resolveAgentWorkspace(f.work.id, nested);
-  assert.equal(local.checkoutRoot, checkout);
-  assert.equal(local.hostCwd, nested);
-  assert.equal(local.nativeCheckout, checkout);
-  const custom = await paseoSessionEnvironment({ ...f.options,
-    request: { ...f.request, provider: "official-custom-profile", cwd: nested, workspaceId: "native-worktree-workspace" } });
-  assert.equal(custom.env.CODEX_HOME, undefined);
-  assert.ok(custom.env.FRAME_AGENT_TOKEN);
-  const localContext = await manager.agentCredential(f.work.id, "native-agent");
+  assert.equal(local.checkoutRoot, root); assert.equal(local.hostCwd, nested);
+  const credential = await manager.agentCredential(f.work.id, "native-agent");
   f.setAgent({ id: "native-agent", status: "running", cwd: nested });
-  assert.equal((await manager.agentContext(localContext)).runRoot, checkout);
-  if (process.platform === "win32") return; // Container native paths are POSIX; local worktree assertions above still run.
-  const nativeCheckout = "/paseo-home/.paseo/worktrees/project-hash/native-tree";
-  await fs.writeFile(path.join(checkout, ".git"), "gitdir: /workspace/.git/worktrees/native-tree\n");
-  await fs.writeFile(path.join(root, ".git/worktrees/native-tree/gitdir"), nativeCheckout + "/.git\n");
+  assert.equal((await manager.agentContext(credential)).runRoot, root);
+  await assert.rejects(manager.resolveAgentWorkspace(f.work.id, path.join(f.prepared.workspace.base, "home/.paseo/worktrees/project-hash/native-tree")), error => error.statusCode === 403);
   manager.localMode = false;
-  const main = await manager.resolveAgentWorkspace(f.work.id, "/workspace");
-  assert.equal(main.checkoutRoot, root);
-  const linux = await manager.resolveAgentWorkspace(f.work.id, nativeCheckout + "/projects/fixture");
-  assert.equal(linux.hostCwd, nested);
-  assert.equal(linux.checkoutRoot, checkout);
-  assert.equal(linux.nativeCheckout, nativeCheckout);
-  await assert.rejects(manager.resolveAgentWorkspace(f.work.id, "/paseo-home/profiles/foreign"), error => error.statusCode === 403);
-  await fs.writeFile(path.join(checkout, ".git"), "gitdir: /foreign-workspace/.git/worktrees/native-tree\n");
-  await assert.rejects(manager.resolveAgentWorkspace(f.work.id, nativeCheckout), error => error.statusCode === 403);
-  const linked = path.join(home, "foreign-tree");
-  await fs.symlink(f.canonical, linked);
-  await assert.rejects(manager.resolveAgentWorkspace(f.work.id, "/paseo-home/.paseo/worktrees/project-hash/foreign-tree"),
-    error => error.statusCode === 400 && /Links and special files/.test(error.message));
+  const linux = await manager.resolveAgentWorkspace(f.work.id, "/workspace/projects/fixture");
+  assert.equal(linux.hostCwd, nested); assert.equal(linux.checkoutRoot, root);
+  await assert.rejects(manager.resolveAgentWorkspace(f.work.id, "/paseo-home/.paseo/worktrees/project-hash/native-tree"), error => error.statusCode === 403);
 });
 
 test("Selected desktop official CLI environment is session-only, provider-specific and identity-frozen", async t => {

@@ -1,6 +1,6 @@
 // Status-only projections must not transfer frozen build inputs to the API.
 const columns =
-  "id,repo,project,kind,state,error,created,started,finished,expires,cleaned,source_commit,progress";
+  "id,repo,project,kind,state,error,created,started,finished,expires,cleaned,source_commit,fingerprint,frozen,workspace_cleaned,cleanup_error,progress";
 export const TASK_SUMMARY_COLUMNS = columns + ",result - 'input' AS result";
 export const taskSummaryColumns = (db) =>
   db.kind === "sqlite"

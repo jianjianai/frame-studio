@@ -371,6 +371,8 @@ function LivePreview() {
           embedded
           liveUpdate={{
             revision: candidate.manifest.revision,
+            sourceRevision: candidate.manifest.sourceRevision,
+            compiledRevision: candidate.manifest.compiledRevision,
             changes: candidate.manifest.changes,
             signal: candidate.signal,
           }}

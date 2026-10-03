@@ -28,7 +28,7 @@ export class ProjectRevisions {
       const before = await this.read(repo, project);
       if (!before) return null;
       const { dir } = await this.repos.project(repo, project);
-      const revision = await treeHash(dir);
+      const revision = await treeHash(dir, { includeExecutableMode: true });
       const saved = await this.db.one(
         "UPDATE works SET source_revision=$4,source_indexed_at=now() WHERE repo=$1 AND project=$2 AND source_generation=$3 RETURNING source_revision,source_generation,source_indexed_at",
         [repo, project, before.source_generation, revision],

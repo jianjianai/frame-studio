@@ -104,7 +104,7 @@ test("Official FRAME plugin uses create/session_open lifecycle hooks and never p
   });
   const config = {
     provider: "frame-selected",
-    cwd: "/workspace",
+    cwd: process.cwd(),
     systemPrompt: "User native instruction",
   };
   const created = await f.before.get("agent.create")(
@@ -117,15 +117,19 @@ test("Official FRAME plugin uses create/session_open lifecycle hooks and never p
   );
   assert.match(
     created.config.systemPrompt,
-    /Managed Git worktrees remain isolated/,
+    /sole editable work workspace/,
   );
   assert.match(
     created.config.systemPrompt,
-    /merge a worktree into the main workspace/,
+    /Do not create or switch worktrees/,
   );
   assert.equal(created.env, undefined);
   assert.doesNotMatch(JSON.stringify(created), /OPENAI_API_KEY|current-/);
   assert.equal(config.systemPrompt, "User native instruction");
+  assert.throws(() => f.before.get("workspace.create")({ request: { source: { kind: "worktree", cwd: process.cwd() } } }, f.context), /共享工作区/);
+  assert.throws(() => f.before.get("workspace.create")({ request: { source: { kind: "directory", path: "/another-work" } } }, f.context), /共享工作区/);
+  assert.deepEqual(f.before.get("workspace.create")({ request: { source: { kind: "directory", path: process.cwd() } } }, f.context), { source: { kind: "directory", path: process.cwd() } });
+  await assert.rejects(f.before.get("agent.create")({ request: { config: { ...config, cwd: "/another-work" } } }, f.context), /共享工作区/);
   await f.before.get("agent.create")({ request: { config } }, f.context);
   assert.equal(calls.filter((call) => call.url.endsWith("/context")).length, 1);
   const opening = {

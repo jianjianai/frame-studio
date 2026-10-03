@@ -1,9 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
-  createPreviewSessionController,
-  activePreviewTask,
-} from "../../studio/live-preview-session.mjs";
+import { createPreviewSessionController } from "../../studio/live-preview-session.mjs";
 
 const settle = async () => {
   for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -116,14 +113,11 @@ test("late source and retry responses cannot overwrite a newer work, including a
   h.owner.dispose();
 });
 
-test("draft source waits for readiness and export blocking defers attachment without refetching unchanged sessions", async () => {
+test("background tasks and native agents never select another preview source; local export blocking preserves the work session", async () => {
   const calls = [];
-  let ready = false;
   const h = harness(async (args) => {
     calls.push(args);
-    return args.task
-      ? { ...link("draft", ready ? "ready" : "starting"), source: "task" }
-      : link("work");
+    return link("work");
   });
   h.owner.update(input);
   await settle();
@@ -133,24 +127,24 @@ test("draft source waits for readiness and export blocking defers attachment wit
   assert.equal(
     calls.length,
     1,
-    "ending an export with unchanged source does not renew or remount",
+    "ending an export does not renew or remount an unchanged work session",
   );
-  h.owner.update({ ...input, blocked: true, taskId: "task-a" });
-  await settle();
-  assert.equal(calls.length, 1);
-  h.owner.update({ ...input, blocked: false, taskId: "task-a" });
+  h.owner.update({
+    ...input,
+    taskId: "task-a",
+    source: "paseo",
+    paseoAgent: "agent-a",
+  });
   await settle();
   assert.equal(
-    h.owner.getState().preview.id,
-    "work",
-    "last good source remains while a draft starts",
+    calls.length,
+    1,
+    "retired source selectors cannot create another attachment",
   );
-  assert.equal(h.owner.getState().status, "updating");
-  ready = true;
-  h.fire();
+  h.owner.retry();
   await settle();
-  assert.equal(h.owner.getState().preview.id, "draft");
-  assert.deepEqual(calls.at(-1), { id: "work-a", task: "task-a" });
+  assert.deepEqual(calls, [{ id: "work-a" }, { id: "work-a" }]);
+  assert.equal(h.owner.getState().preview.id, "work");
   h.owner.dispose();
 });
 
@@ -196,7 +190,7 @@ test("disconnection retains a working player; first failure falls back explicitl
   h.owner.dispose();
 });
 
-test("immutable review renews the same build and draft selection cannot cross work boundaries", async () => {
+test("immutable review renews the same historical build", async () => {
   const stableCalls = [];
   const h = harness(
     async () => {
@@ -226,17 +220,6 @@ test("immutable review renews the same build and draft selection cannot cross wo
   await settle();
   assert.deepEqual(stableCalls, ["build-a", "build-a"]);
   h.owner.dispose();
-  assert.equal(
-    activePreviewTask(
-      [
-        { id: "foreign", kind: "agent", state: "running", work_id: "work-b" },
-        { id: "queued", kind: "agent", state: "queued", work_id: "work-a" },
-        { id: "ours", kind: "agent", state: "running", work_id: "work-a" },
-      ],
-      "work-a",
-    ),
-    "ours",
-  );
 });
 
 test("manual reconnect generations discard a late reply for the same source and do not refetch the published fallback", async () => {
