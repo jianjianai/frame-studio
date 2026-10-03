@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import {
   FrameBootstrapSchema,
   FrameConnectSchema,
@@ -107,7 +108,7 @@ export function paseoBridge({
           if (!agentId(value?.agentId)) throw new Error("当前对话无效");
           const context = FrameReviewContextSchema.parse(getContext());
           const item = {
-            id: crypto.randomUUID(),
+            id: randomUUID(),
             identifier: "frame-preview",
             title:
               context.start !== undefined

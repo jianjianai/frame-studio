@@ -110,6 +110,13 @@ test(
       app.get("/cache.js", (_, res) =>
         res.type("text/javascript").send(delayedCacheSource),
       );
+      for (const file of [
+        "src/browser/hash.mjs",
+        "src/engine/preview-cache-storage.mjs",
+      ])
+        app.get("/" + file, (_, res) =>
+          res.type("text/javascript").send(fs.readFileSync(path.join(repo, file))),
+        );
       app.get("/film/*", async (req, res) => {
         const file = req.params["*"],
           target = path.join(built.output, file);

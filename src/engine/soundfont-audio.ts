@@ -1,4 +1,5 @@
 import { assetUrl, type GeneratedAudioModule } from "./types";
+import { browserSha256 } from "../browser/hash.mjs";
 import {
   ScoreStream,
   createStreamVoice,
@@ -16,11 +17,6 @@ export function createSampledScoreAudio(
   options: SampledScoreOptions,
 ): GeneratedAudioModule {
   let bank: Promise<ArrayBuffer> | undefined;
-  const digest = async (bytes: ArrayBuffer) =>
-    Array.from(
-      new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
-      (n) => n.toString(16).padStart(2, "0"),
-    ).join("");
   const selectedBank = async (): Promise<ArrayBuffer | undefined> => {
     // Bank-select and system-exclusive messages can change preset resolution;
     // those scores keep the original complete bank and its checksum contract.
@@ -71,7 +67,7 @@ export function createSampledScoreAudio(
         const r = await fetch(assetUrl(options.bank + ".parts/" + part.file));
         if (!r.ok) throw new Error("乐器采样分包载入失败");
         const bytes = await r.arrayBuffer();
-        if ((await digest(bytes)) !== part.sha256)
+        if ((await browserSha256(bytes)) !== part.sha256)
           throw new Error("乐器采样分包校验失败");
         return bytes;
       }),
@@ -90,7 +86,7 @@ export function createSampledScoreAudio(
       const response = await fetch(assetUrl(options.bank));
       if (!response.ok) throw new Error(`乐器采样载入失败：${response.status}`);
       const bytes = await response.arrayBuffer();
-      if ((await digest(bytes)) !== options.sha256)
+      if ((await browserSha256(bytes)) !== options.sha256)
         throw new Error("乐器采样校验失败，请恢复项目指定的采样库");
       return bytes;
     })().catch((error) => {

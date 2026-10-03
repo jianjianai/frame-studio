@@ -102,6 +102,13 @@ test(
             fs.readFileSync(path.join(repo, "studio/preview-cache.js"), "utf8"),
           ),
       );
+      for (const file of [
+        "src/browser/hash.mjs",
+        "src/engine/preview-cache-storage.mjs",
+      ])
+        app.get("/" + file, (_, res) =>
+          res.type("text/javascript").send(fs.readFileSync(path.join(repo, file))),
+        );
       app.get("/film/*", async (req, res) => {
         const file = req.params["*"];
         if (file.endsWith(".mp3")) {

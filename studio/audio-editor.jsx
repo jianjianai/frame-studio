@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
@@ -26,7 +27,7 @@ import {
   flushNumericPending,
 } from "./editor-inputs";
 import { stretchPreset, stretchMode } from "./editor-drafts.mjs";
-const uid = (p) => p + "_" + crypto.randomUUID().slice(0, 8);
+const uid = (p) => p + "_" + randomUUID().slice(0, 8);
 const labels = {
   gain: "增益",
   pan: "声像",
@@ -136,7 +137,7 @@ export function AudioEditor({
           "public/" +
           sourceFile.slice(7).replace(/\.[^.]+$/, "") +
           "-" +
-          crypto.randomUUID().slice(0, 6) +
+          randomUUID().slice(0, 6) +
           "." +
           conversion;
       const r = await api("works_audio_transcode", { id: work.id, src, out });

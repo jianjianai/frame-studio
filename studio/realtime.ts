@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { operationContract, parseOperationResult, wireResponseSchema, taskGetResponseSchema } from "../src/contracts/platform.mjs";
 import type { OperationName, OperationInput, OperationResult } from "../src/contracts/platform";
 import { clientOperationError, uncertainOperation } from "../src/contracts/errors.mjs";
@@ -78,7 +79,7 @@ export async function socketCall(name: string, args: Args = {}): Promise<unknown
     ws.addEventListener("close", close, { once: true });
   });
   return new Promise((resolve, reject) => {
-    const id = crypto.randomUUID();
+    const id = randomUUID();
     const timer = setTimeout(() => { calls.delete(id); reject(uncertainOperation("等待响应超时，请查看操作状态")); }, 300000);
     calls.set(id, { name, resolve, reject, timer });
     try { ws.send(JSON.stringify({ type: "call", id, name, args: input })); }
@@ -87,7 +88,7 @@ export async function socketCall(name: string, args: Args = {}): Promise<unknown
 }
 export function subscribe(name: string, args: Args, receive: (value: SubscriptionUpdate) => void): () => void {
   const input = operationContract(name)?.request.parse(args) ?? args;
-  const id = crypto.randomUUID();
+  const id = randomUUID();
   subscriptions.set(id, { id, name, args: input, receive });
   const ws = connect();
   if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: "subscribe", id, name, args: input }));

@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { useEffect, useRef, useState } from "react";
 import {
   Layers,
@@ -169,7 +170,7 @@ export function CompositionEditor({
         op: "split",
         id: clip.id,
         at: Math.round((position?.time ?? 0) * state.fps) / state.fps,
-        newId: "clip_" + crypto.randomUUID().slice(0, 8),
+        newId: "clip_" + randomUUID().slice(0, 8),
       },
     ]);
   const begin = (event, c, mode) => {
@@ -242,7 +243,7 @@ export function CompositionEditor({
     else onSeek?.(d.clip.start);
   };
   const add = async () => {
-    const id = "clip_" + crypto.randomUUID().slice(0, 8),
+    const id = "clip_" + randomUUID().slice(0, 8),
       start = Math.min(position?.time ?? 0, state.duration - 1 / state.fps);
     const source =
       kind === "color"

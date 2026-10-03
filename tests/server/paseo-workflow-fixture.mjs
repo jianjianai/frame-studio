@@ -17,7 +17,11 @@ import { holdSharedSpeechPreparation } from "./paseo-speech-model-fixture.mjs";
 
 export async function nativeWorkflowFixture(
   t,
-  { port = Number(process.env.FRAME_TEST_PORT || 59488), databasePrefix = "frame_test_native_workflow_" } = {},
+  {
+    port = Number(process.env.FRAME_TEST_PORT || 59488),
+    databasePrefix = "frame_test_native_workflow_",
+    publicHostname = "127.0.0.1",
+  } = {},
 ) {
   const originalUrl = new URL(process.env.FRAME_TEST_DATABASE_URL);
   assert.match(originalUrl.pathname, /^\/frame_test/);
@@ -64,7 +68,8 @@ export async function nativeWorkflowFixture(
     path.join(os.tmpdir(), "frame-native-workflow-"),
   );
   const data = path.join(directory, "data"),
-    origin = "http://127.0.0.1:" + port;
+    origin = "http://" + publicHostname + ":" + port,
+    internalOrigin = "http://127.0.0.1:" + port;
   let app,
     db,
     services,
@@ -133,7 +138,9 @@ export async function nativeWorkflowFixture(
   process.env.DATABASE_URL = "owned-unused-database-sentinel";
   delete process.env.FRAME_LOCAL_MODE;
   process.env.FRAME_PUBLIC_URL = origin;
-  process.env.FRAME_AGENT_URL = origin;
+  // Node's local tools use loopback; Chromium resolves the public test hostname
+  // itself so the real browser origin remains an ordinary insecure HTTP host.
+  process.env.FRAME_AGENT_URL = internalOrigin;
   process.env.FRAME_PASEO_ROOT = selectedRuntime;
   process.env.FRAME_PASEO_UI = selectedUI;
   db = await database(ownUrl.href, "owned-native-workflow-password");

@@ -2,23 +2,43 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { launchBrowser } from "../../scripts/browser.mjs";
+import { createHash } from "node:crypto";
+import { chromium } from "@playwright/test";
+import { browserOptions } from "../../scripts/browser.mjs";
 import { treeHash } from "../../server/project-files.mjs";
+import { paseoIntentHash } from "../../server/paseo-work.mjs";
 import { nativeWorkflowFixture } from "./paseo-workflow-fixture.mjs";
 import { until } from "./paseo-test-fixture.mjs";
 
 test(
-  "Full official Paseo WebUI and standalone tab share the canonical workspace, scope FRAME tools and validate the current revision",
+  "Full official Paseo WebUI on ordinary HTTP shares the canonical workspace, fingerprints real native messages and validates the current revision",
   { skip: !process.env.FRAME_TEST_DATABASE_URL, timeout: 240000 },
   async (t) => {
-    const f = await nativeWorkflowFixture(t);
-    const browser = await launchBrowser();
+    const f = await nativeWorkflowFixture(t, { publicHostname: "frame.insecure.test" });
+    const options = browserOptions();
+    const browser = await chromium.launch({
+      ...options,
+      args: [
+        ...options.args,
+        "--host-resolver-rules=MAP frame.insecure.test 127.0.0.1",
+        "--no-proxy-server",
+      ],
+    });
     f.registerBrowser(browser);
     const page = await browser.newPage({
       viewport: { width: 1500, height: 1000 },
     });
     const errors = [];
+    const sentNativeMessages = [];
     page.on("pageerror", (error) => errors.push(error.message));
+    page.on("websocket", (socket) => socket.on("framesent", ({ payload }) => {
+      if (typeof payload !== "string") return;
+      try {
+        const envelope = JSON.parse(payload);
+        if (envelope.message?.type === "send_agent_message_request")
+          sentNativeMessages.push(envelope.message);
+      } catch { /* Non-JSON transport frames are outside this assertion. */ }
+    }));
     try {
       t.diagnostic("API authentication and parent player");
       await page.goto(f.origin);
@@ -81,6 +101,17 @@ test(
       const nativeFrame = await (
         await frameElement.elementHandle()
       ).contentFrame();
+      assert.deepEqual(await nativeFrame.evaluate(() => ({
+        secure: isSecureContext,
+        hostname: location.hostname,
+        subtle: typeof crypto.subtle,
+        randomUUID: typeof crypto.randomUUID,
+      })), {
+        secure: false,
+        hostname: "frame.insecure.test",
+        subtle: "undefined",
+        randomUUID: "function",
+      });
       assert.ok(
         new URL(nativeFrame.url()).pathname.startsWith(
           `/paseo/${f.work.id}/h/${f.ready.serverId}/workspace/`,
@@ -91,6 +122,18 @@ test(
         await native.getByText("Add a project", { exact: true }).count(),
         0,
       );
+      t.diagnostic("Real image attachment on the HTTP native composer");
+      await native.getByTestId("message-input-attach-button").first().click();
+      const [imageChooser] = await Promise.all([
+        page.waitForEvent("filechooser"),
+        native.getByTestId("message-input-attachment-menu-item-image").click(),
+      ]);
+      await imageChooser.setFiles({
+        name: "owned-frame.png",
+        mimeType: "image/png",
+        buffer: await playerElement.screenshot(),
+      });
+      await native.getByRole("button", { name: "Remove image attachment", exact: true }).waitFor();
       await composer.fill(
         "FRAME WORKFLOW FIXTURE: modify only this project's scene and inspect the exact FRAME reference.",
       );
@@ -145,6 +188,29 @@ test(
         [f.work.id],
       );
       assert.equal(frozen.length, 1);
+      const sent = sentNativeMessages.find((message) => message.messageId === frozen[0].message_id);
+      assert.ok(sent, "Observe the actual official outbound native message");
+      assert.equal(sent.images.length, 1);
+      assert.equal(sent.images[0].mimeType, "image/png");
+      assert.ok(Buffer.from(sent.images[0].data, "base64").byteLength > 300);
+      const attachmentsFingerprint = createHash("sha256").update(JSON.stringify({
+        images: sent.images,
+        attachments: sent.attachments.filter((attachment) => attachment.externalResource?.provider !== "frame"),
+      })).digest("hex");
+      assert.equal(
+        frozen[0].intent_hash,
+        paseoIntentHash({
+          agentId: sent.agentId,
+          messageId: sent.messageId,
+          prompt: sent.text,
+          profileId: f.profileId,
+          model: "owned-model",
+          context: frozen[0].envelope.context,
+          activeTurnBehavior: sent.activeTurnBehavior,
+          attachmentsFingerprint,
+        }),
+        "The actual HTTP image bytes and attachments retain the exact native SHA-256 identity",
+      );
       assert.equal(frozen[0].agent_id, f.agent.id);
       assert.equal(
         frozen[0].envelope.context.time,
@@ -356,6 +422,11 @@ test(
         .getByRole("textbox", { name: "Message agent..." })
         .first();
       await standaloneComposer.waitFor({ timeout: 45000 });
+      assert.deepEqual(await standalone.evaluate(() => ({
+        secure: isSecureContext,
+        hostname: location.hostname,
+        subtle: typeof crypto.subtle,
+      })), { secure: false, hostname: "frame.insecure.test", subtle: "undefined" });
       assert.equal(
         new URL(standalone.url()).searchParams.get("frameStandalone"),
         "1",

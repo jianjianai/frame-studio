@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { usePreviewSession, decodePlayerMessage } from "./preview-session";
 import { useBrowserExport } from "./browser-export-session";
 import { PaseoChat } from "./paseo-chat";
@@ -847,7 +848,7 @@ export function Creation({ id, notify }) {
                   }
                   addAsset(asset);
                   setSuggestion({
-                    id: crypto.randomUUID(),
+                    id: randomUUID(),
                     text:
                       "请将配音资源“" +
                       asset.name +

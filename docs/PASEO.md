@@ -61,6 +61,8 @@ FRAME 连接在原生选择器显示为可用 profile。公开配置只有名称
 
 嵌入和独立页面使用当前请求的实际协议、主机和端口，支持本机 HTTP、反向代理 HTTPS 及访问别名，不增加域名或 TLS 配置。平台登录、作品 nonce 与对应 iframe 的桥接校验继续生效。
 
+普通 HTTP 的消息 UUID 使用 Paseo 原有的安全随机兼容实现。FRAME 消息及图片附件指纹优先使用浏览器 WebCrypto；该接口不可用时复用官方锁定的 `fast-sha256`，保持完全相同的 SHA-256 与 UTF-8 内容身份，大附件分块计算并让出页面主线程。
+
 Paseo 用独立 `paseo_schema_migrations` 管理 bindings、冻结消息和 revision 验证报告。作品、素材、提供商凭据、原生 Paseo 会话及 Git 历史保留。旧 FRAME 聊天、旧 AI 任务、专用令牌、问答、通知与旧执行目录全部移除，不再提供旧历史入口。
 
 升级会先比较历史 Paseo 草稿和工作树与当前源码。不同内容明确标记需处理并保留，不自动覆盖或删除；相同旧副本不作为创作来源。一次性旧 AI 清理使用 `node scripts/clear-legacy-ai.mjs`，只删除迁移 journal 中核对身份的旧目录和已停止容器，不删除卷或其他作品。此迁移删除旧 schema 后不能启动旧版应用作为回滚。

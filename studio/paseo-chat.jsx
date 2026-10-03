@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   RefreshCw,
@@ -180,7 +181,7 @@ export function PaseoChat({
     try {
       const review = context();
       attach({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         identifier: "frame-preview",
         title: "作品 " + paseoReferenceLabel(review),
         subtitle: `${selectedAssets.length} 个素材`,
@@ -202,7 +203,7 @@ export function PaseoChat({
     latestSuggestion.current = suggestion.id;
     try {
       attach({
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         identifier: "frame-suggestion",
         title: "作品创作建议",
         url: suggestion.review ? paseoReferenceUrl(work.id, suggestion.review, location.href) : location.href,

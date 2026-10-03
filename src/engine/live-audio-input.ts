@@ -1,3 +1,4 @@
+import { randomUUID } from "../browser/uuid.mjs";
 /** Live microphone input stays in the trusted workbench; opaque previews receive bounded PCM only. */
 export interface LiveAudioInputDevice {
   kind: "audioinput";
@@ -158,7 +159,7 @@ async function prepareInputProcessor(context: BaseAudioContext) {
   await job;
 }
 function requestId() {
-  return crypto.randomUUID();
+  return randomUUID();
 }
 function nativeDevice(stream: MediaStream): LiveAudioInputDevice {
   const track = stream.getAudioTracks()[0],

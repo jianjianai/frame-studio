@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { useEffect, useRef, useState } from "react";
 import { validPreviewMode } from "../src/engine/live-preview-cache";
 
@@ -16,7 +17,7 @@ export function usePreviewMediaSession({
   useEffect(() => {
     setSnapshot(null);
     if (!live || !playerElement) return;
-    let channel = crypto.randomUUID();
+    let channel = randomUUID();
     let request = null,
       remoteState = null,
       timer,
@@ -28,7 +29,7 @@ export function usePreviewMediaSession({
     };
     const subscribe = () => send({ type: "frame-preview-media-subscribe" });
     const loaded = () => {
-      channel = crypto.randomUUID();
+      channel = randomUUID();
       clearTimeout(timer);
       request = null;
       remoteState = null;
@@ -73,7 +74,7 @@ export function usePreviewMediaSession({
     };
     const command = (action, mode) => {
       if (!current() || request) return;
-      request = { id: crypto.randomUUID(), action };
+      request = { id: randomUUID(), action };
       setSnapshot(
         (previous) =>
           previous && { ...previous, pendingAction: action, controlError: "" },

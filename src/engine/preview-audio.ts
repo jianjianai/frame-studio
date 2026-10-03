@@ -5,6 +5,7 @@ import {
   type GeneratedAudioModule,
 } from "./types";
 import type { PreparedAudio } from "./audio-graph";
+import { browserSha256 } from "../browser/hash.mjs";
 import {
   PreviewBuffering,
   MediaRequestQueue,
@@ -183,11 +184,7 @@ export async function preparePreviewAudio(
             );
             if (data.byteLength !== c.bytes)
               throw new Error("预览音频不完整，请重试");
-            const digest = [
-              ...new Uint8Array(await crypto.subtle.digest("SHA-256", data)),
-            ]
-              .map((b) => b.toString(16).padStart(2, "0"))
-              .join("");
+            const digest = await browserSha256(data, combined);
             if (digest !== c.sha256)
               throw new Error("预览音频校验失败，请刷新预览");
             const buffer = await context.decodeAudioData(data);

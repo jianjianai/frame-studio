@@ -157,6 +157,7 @@ test(
       "0006-frame-host-startup.patch",
       "0007-frame-clickable-reference.patch",
       "0008-frame-worktree-workflow.patch",
+      "0009-frame-http-fingerprint.patch",
     ]);
   },
 );

@@ -1,4 +1,4 @@
-# Frame Studio 8.3.0 · AI 工作台与单一工作区
+# Frame Studio 8.3.1 · AI 工作台与单一工作区
 
 本次依据 `docs/AI-WORKBENCH.md` 完成平台维护，开发位于 main，目标为本机 `/opt/stacks/frame` Docker 生产栈。本文随实际验收和切换结果更新；尚未填写的结果不代表通过。
 
@@ -52,7 +52,21 @@
 
 不执行发布前备份，不重启 PostgreSQL、语音或代理等无关服务，不删除数据卷或已有备份/旧镜像。一次性迁移和验证容器在 Compose 栈外使用 `docker run --rm`。
 
-实际生产版本、镜像、旧数据清理、健康和功能验收：待记录。
+首轮 8.3.0 已于本次任务上线，代码提交 `c56761229797ba517abb973089cc5fc284a3095d`；镜像 `sha256:e13d67b3e0e4706d9a0e3ea9fb4b0c051c635735fef3e22f8ed718df3e15e763`，运行时 `aec430ccdd5b93eca586add4055e79a950e4a0a5df263f9bb033497578d65dea` 与通过完整门禁的候选一致。公网健康正常，只有 studio/controller 切换，PostgreSQL 和语音未重启。
+
+旧数据迁移在栈外一次性 `--rm --init` 容器完成：18 个精确清理身份出队、8 个旧会话目录移除；旧 FRAME 聊天、旧 AI 任务及附属表已清理，journal 为零。迁移后再次确认 25 个作品字节/执行位、8 份待核对草稿、Git HEAD 与 index entries、100 个素材元数据全部一致。旧 8.2.5 与退役后的 schema 不兼容，后续采用向前修复，不能直接启动旧程序。
+
+8.3.0 生产验收时，官方 Paseo 独立页和原位五项验证通过，但普通 HTTP 播放器暴露既有 `crypto.randomUUID()` 安全上下文限制。HTTPS 正常不能代替用户允许的普通 HTTP 使用方式。因此继续修复到 8.3.1：共享安全 UUID v4 helper，以及复用既有增量 SHA-256 的音频/素材校验 helper；HTTPS 优先调用浏览器原生实现，HTTP 保持同样的完整校验，按 64 KiB 零复制视图计算并约每 8 ms 让出主线程、支持取消。没有增加强制 TLS 或域名配置。
+
+8.3.1 的 FRAME 本轮 `verify:core` 已通过：179 项单元测试、MCP 130 通过 / 1 个可选用户音色库跳过、平台及两套类型检查、播放器与工作台构建。实际普通 HTTP UUID/播放器/表单/Paseo 引用回归和四组相关回归 12/12 通过；普通 HTTP SHA/音频与缓存边界 10/10 通过，32 MiB 校验保持 251 个心跳并可取消；原有音频/弱网/音色库/缓存回归 7/7 通过。普通 HTTP 自然缺少 `crypto.subtle` / 原生 `randomUUID`，测试没有模拟覆盖这些能力。
+
+继续审查发现官方 Paseo 已为 HTTP 补齐 UUID，但 FRAME 消息指纹仍调用 `crypto.subtle`；生产只读探针确认发送前会失败，尚未发出付费消息。新增最小官方补丁 0009 将消息指纹改为原生优先，HTTP 复用 Paseo 锁文件中已有 `fast-sha256@1.3.0`；不复制算法或削弱冻结/投递去重校验。完整原生工作流改为真实普通 HTTP 主机名，最终结果以新官方 bundle 与完整服务端发布门禁为准。
+
+新官方 bundle 的来源证明通过：Paseo 固定 commit 不变，包含 0001–0009；bundle fingerprint `396db87a49059d2f4e389bcef1d856753e7e8a6b00fd8765d853257900355589`，2019 个文件，73,407,847 字节。0009 官方指纹测试 6 项、app 类型检查及来源/构建验证 5 项通过。
+
+完整真实 HTTP 原生工作流通过，40.7 秒、0 失败/跳过：官方 iframe 与独立标签页自然处于非安全上下文、`crypto.subtle` 不存在；真实图片上传/消息发送成功，观察到的原生图片 wire bytes 对应 Node SHA-256，冻结 intent_hash 精确一致。canonical 编辑、原位五项验证、消息引用定位、独立页继续/重载不重放、拒绝另建 worktree、共享 Git 恢复均通过。使用隔离 CLI 协议服务，未发送私人账户付费请求；临时 PG、浏览器、进程和独立测试 runtime 已回收，已有 runtime 保留。
+
+8.3.1 最终服务端门禁、镜像、生产功能验收与本次临时资源清理：待记录。
 
 ## 后续优化候选
 
@@ -61,3 +75,5 @@
 旧聊天组件移除后，根包的 `react-markdown`、`rehype-highlight`、`remark-gfm` 已没有调用，可以独立清理包和锁文件；官方 Paseo 使用自己的 Markdown 依赖。本次未擅自进行这一依赖瘦身。`openai` 仍用于语音合成，不能按旧 AI 名称一并删除。
 
 此外，旧 core 0001 迁移按 trigger 名称而非 schema/table 判断是否存在，在同一数据库第二个非 public schema 上可能漏建 trigger，导致后续迁移失败。当前生产使用 public schema，不受影响；本次新增 PostgreSQL 测试使用独立数据库或隔离的真实表结构，未擅自扩展生产迁移范围。
+
+另有 `studio/paseo-chat.css` 中 `.paseo-history` 的窄屏规则已没有对应元素，可与后续样式瘦身一并处理；本次记录供用户决定。

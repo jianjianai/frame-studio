@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { ttsProviders, ttsCapabilities } from "../scripts/tts-capabilities.mjs";
 import "./speech.css";
 import { useState, useEffect, useRef, useId } from "react";
@@ -113,7 +114,7 @@ export function useSpeechJob() {
     status,
     cancelling,
     start: () => {
-      const id = crypto.randomUUID();
+      const id = randomUUID();
       active.current = id;
       setRequestId(id);
       setStatus({ phase: "preparing" });
@@ -807,7 +808,7 @@ function ExternalEditor({ engine, model, onSaved }) {
 }
 function LocalEditor({ draft, models, refresh, onSaved }) {
   const [id] = useState(
-      () => draft?.id || "voice-" + crypto.randomUUID().slice(0, 8),
+      () => draft?.id || "voice-" + randomUUID().slice(0, 8),
     ),
     [created, setCreated] = useState(!!draft),
     [name, setName] = useState(draft?.id || ""),

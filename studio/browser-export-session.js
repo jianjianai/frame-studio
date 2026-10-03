@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { useEffect, useRef, useState } from "react";
 import { decodeExportMessage } from "../src/contracts/player-bridge.mjs";
 
@@ -119,7 +120,7 @@ export function useBrowserExport(iframe, notify, onUnresponsive) {
       if (!iframe.current?.contentWindow) throw Error("请先等待播放器就绪");
       releaseFile();
       const next = {
-        id: crypto.randomUUID(),
+        id: randomUUID(),
         state: "queued",
         ...(reference.sourceRevision
           ? { sourceRevision: reference.sourceRevision }

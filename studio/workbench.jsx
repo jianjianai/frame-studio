@@ -1,3 +1,4 @@
+import { randomUUID } from "../src/browser/uuid.mjs";
 import { Component, lazy, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { clearRetiredChatStorage } from "./paseo-session.mjs";
@@ -204,7 +205,7 @@ function App() {
   useEffect(() => {
     if (!me?.localMode) return;
     sessionStorage.setItem("frame.local-mode", "1");
-    const session = crypto.randomUUID();
+    const session = randomUUID();
     // Use the same protection as browser navigation, including editors, forms and exports.
     const report = () => {
       const event = new Event("beforeunload", { cancelable: true });

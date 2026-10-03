@@ -1,3 +1,4 @@
+import { randomUUID } from "../browser/uuid.mjs";
 import {
   cachedBlobResponse,
   loadPreviewResource,
@@ -385,7 +386,7 @@ export function createLivePreviewCache(
       Object.defineProperty(prototype, "href", descriptor),
     );
   }
-  const workerControl = "frame-preview-cache-" + crypto.randomUUID();
+  const workerControl = "frame-preview-cache-" + randomUUID();
   const activeWorkers = new Set<Worker>();
   const workerMappings = () =>
     Object.fromEntries([...byUrl].map(([key, entry]) => [key, entry.url]));

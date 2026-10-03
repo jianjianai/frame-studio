@@ -1,3 +1,5 @@
+import { browserSha256 } from "../src/browser/hash.mjs";
+
 const NAME = "frame-preview-audio-v1";
 let maintenance;
 async function trim(cache) {
@@ -67,14 +69,8 @@ export function previewCacheBridge(iframe, url) {
   }
   const pending = new Map();
   const lifetime = new AbortController();
-  const valid = async (data, sha) => {
-    const actual = [
-      ...new Uint8Array(await crypto.subtle.digest("SHA-256", data)),
-    ]
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
-    return actual === sha;
-  };
+  const valid = async (data, sha, signal) =>
+    (await browserSha256(data, signal)) === sha;
   const receive = async (event) => {
     if (
       event.source !== iframe.current?.contentWindow ||
@@ -111,6 +107,10 @@ export function previewCacheBridge(iframe, url) {
         entry = { ports: new Set(), controller: new AbortController() };
         pending.set(sha256, entry);
         entry.promise = (async () => {
+          const signal = AbortSignal.any([
+            lifetime.signal,
+            entry.controller.signal,
+          ]);
           let cache;
           const key = new URL(
             `/__frame_audio_cache__/${sha256}`,
@@ -121,7 +121,7 @@ export function previewCacheBridge(iframe, url) {
             const hit = await cache.match(key);
             if (hit) {
               const data = await hit.arrayBuffer();
-              if (data.byteLength === bytes && (await valid(data, sha256)))
+              if (data.byteLength === bytes && (await valid(data, sha256, signal)))
                 return data;
               await cache.delete(key);
             }
@@ -129,11 +129,11 @@ export function previewCacheBridge(iframe, url) {
             /* Storage may be disabled or full; playback still works. */
           }
           const response = await fetch(new URL(file, base), {
-            signal: AbortSignal.any([lifetime.signal, entry.controller.signal]),
+            signal,
           });
           if (!response.ok) throw Error("Preview audio unavailable");
           const data = await response.arrayBuffer();
-          if (data.byteLength !== bytes || !(await valid(data, sha256)))
+          if (data.byteLength !== bytes || !(await valid(data, sha256, signal)))
             throw Error("Preview audio checksum mismatch");
           if (cache) {
             try {
