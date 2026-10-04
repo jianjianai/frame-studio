@@ -62,6 +62,7 @@ export async function createServices({
   aiWork.authorizeThread = (work, threadId, options) => aiManager.thread(work.id, threadId, { ...options, allowDraft: true });
   const aiValidation = new AiValidation({ db, data, repos, works: actions.works, tasks, manager: aiManager, store: aiStore });
   const aiWorkspace = new AiWorkspace({ db, data, works: actions.works, repos, store: aiStore, manager: aiManager,
+    concurrency: tasks.limits.concurrency,
     validate: (report, options) => aiValidation.validate(report, options),
     onChange: async workId => {
       const work = await actions.works.get(workId, { active: true });

@@ -34,15 +34,17 @@ export class AiValidation {
     const binding = await this.store.getWork(report.workId);
     if (binding?.state !== "ready" || binding.runtimeFingerprint !== report.runtimeFingerprint)
       throw Error("作品创作运行环境已更新，请重新验证当前版本");
-    const abort = () => void this.manager.cancelValidation(report.workId, report.id).catch(() => {});
+    let cancellation;
+    const cancel = () => cancellation ||= this.manager.cancelValidation(report.workId, report.id).catch(() => {});
+    const abort = () => void cancel();
     signal?.addEventListener("abort", abort, { once: true });
     try {
       const output = await this.runCommand("docker", ["exec", "--workdir", workspaceRoot, this.manager.container,
         "node", "/opt/frame/server/ai-validate.mjs", JSON.stringify(input)], { timeout: 310000, max: 256 * 1024, signal });
       return JSON.parse(output);
     } catch (error) {
-      await this.manager.cancelValidation(report.workId, report.id).catch(() => {});
+      await cancel();
       throw error;
-    } finally { signal?.removeEventListener("abort", abort); }
+    } finally { signal?.removeEventListener("abort", abort); await cancellation; }
   }
 }

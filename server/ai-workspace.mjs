@@ -26,9 +26,11 @@ const busy = native => native?.incomplete || native?.activeThreads?.length || na
 /** Observe the sole checkout and validate in its existing runtime. Reports never apply or replace source. */
 export class AiWorkspace {
   constructor({ data, works, repos, store, manager, validate, debounceMs = 500, reconcileMs = 15000,
-    onChange = () => {}, onError = () => {} }) {
-    Object.assign(this, { data, works, repos, store, manager, validate, debounceMs, reconcileMs, onChange, onError });
+    concurrency = manager?.tasks?.limits?.concurrency ?? 2, onChange = () => {}, onError = () => {} }) {
+    if (!Number.isInteger(concurrency) || concurrency < 1) throw RangeError("Validation concurrency must be a positive integer");
+    Object.assign(this, { data, works, repos, store, manager, validate, debounceMs, reconcileMs, concurrency, onChange, onError });
     this.entries = new Map(); this.starting = new Map(); this.closed = false;
+    this.queue = new Map(); this.activeWorkers = 0;
   }
   async start(workId) {
     if (this.closed) throw Error("Ai workspace watcher is closed");
@@ -88,55 +90,69 @@ export class AiWorkspace {
   }
   kick(workId) {
     const entry = this.entries.get(workId);
-    if (!entry || entry.controller.signal.aborted) return;
+    if (this.closed || !entry || entry.controller.signal.aborted) return;
     if (entry.worker) { entry.pending = true; return; }
-    entry.pending = false;
-    entry.worker = this.drain(workId).catch(error => this.onError(workId, error)).finally(() => {
-      entry.worker = null;
-      if (entry.pending && this.entries.get(workId) === entry) this.kick(workId);
-    });
+    // Replacing an existing key coalesces requests without moving its FIFO position.
+    this.queue.set(workId, { entry });
+    this.pump();
+  }
+  pump() {
+    for (const [workId, { entry }] of this.queue) {
+      if (this.closed || this.activeWorkers >= this.concurrency) break;
+      if (this.entries.get(workId) !== entry || entry.controller.signal.aborted) { this.queue.delete(workId); continue; }
+      if (entry.cancellation) continue;
+      this.queue.delete(workId);
+      entry.pending = false; this.activeWorkers++;
+      entry.worker = this.drain(workId).catch(error => this.onError(workId, error)).finally(async () => {
+        // A retried receipt reuses its id: finish cancellation before admitting that id again.
+        await entry.cancellation;
+        entry.worker = null; this.activeWorkers--;
+        if (entry.pending && this.entries.get(workId) === entry) this.kick(workId);
+        this.pump();
+      });
+    }
   }
   async drain(workId) {
     const entry = this.entries.get(workId);
-    for (;;) {
-      if (!entry || entry.controller.signal.aborted || busy(await this.manager.observe(workId))) return;
-      const binding = await this.store.getWork(workId);
-      const reports = await this.store.listValidations(workId, { states: ["queued"] });
-      for (const report of reports)
-        if (report.revision !== binding.revision || report.runtimeFingerprint !== entry.ready.runtimeFingerprint)
-          await this.store.updateValidation(report.id, { from: ["queued"], state: "stale" });
-      const report = reports.find(row => row.revision === binding.revision && row.runtimeFingerprint === entry.ready.runtimeFingerprint);
-      if (!report) return;
-      if (!await this.store.updateValidation(report.id, { from: ["queued"], state: "running", error: null })) continue;
-      const controller = new AbortController();
-      entry.validation = { reportId: report.id, controller };
-      const signal = AbortSignal.any([entry.controller.signal, controller.signal]);
-      try {
-        const result = await this.validate(report, { signal });
-        signal.throwIfAborted();
-        const current = await treeHash(entry.ready.projectRoot, { includeExecutableMode: true });
-        const state = current !== report.revision || result.stale ? "stale" : result.status === "passed" ? "passed" : "failed";
-        if (state === "passed" && result.modeFingerprint !== report.revision)
-          throw Error("Validation receipt does not match the workspace revision");
-        const saved = await this.store.updateValidation(report.id, { from: ["running"], state, result,
-          error: state === "failed" ? String(result.error || "作品验证失败").slice(0, 2000) : null });
-        if (!saved) continue;
-        await this.onChange(workId, { revision: current, validation: report.id, state });
-        if (state === "stale") await this.reconcile(workId, { force: true });
-      } catch (error) {
-        if (signal.aborted) {
-          await this.store.updateValidation(report.id, { from: ["running"], state: "cancelled", error: null });
-          if (entry.controller.signal.aborted) return;
-          continue;
-        }
+    if (!entry || entry.controller.signal.aborted || busy(await this.manager.observe(workId))) return;
+    const binding = await this.store.getWork(workId);
+    const reports = await this.store.listValidations(workId, { states: ["queued"] });
+    for (const report of reports)
+      if (report.revision !== binding.revision || report.runtimeFingerprint !== entry.ready.runtimeFingerprint)
+        await this.store.updateValidation(report.id, { from: ["queued"], state: "stale" });
+    const report = reports.find(row => row.revision === binding.revision && row.runtimeFingerprint === entry.ready.runtimeFingerprint);
+    if (!report) return;
+    const controller = new AbortController();
+    entry.validation = { reportId: report.id, controller };
+    const signal = AbortSignal.any([entry.controller.signal, controller.signal]);
+    try {
+      // Register cancellation ownership before the claim can yield to a queued cancellation.
+      if (!await this.store.updateValidation(report.id, { from: ["queued"], state: "running", error: null })) return;
+      signal.throwIfAborted();
+      const result = await this.validate(report, { signal });
+      signal.throwIfAborted();
+      const current = await treeHash(entry.ready.projectRoot, { includeExecutableMode: true });
+      const state = current !== report.revision || result.stale ? "stale" : result.status === "passed" ? "passed" : "failed";
+      if (state === "passed" && result.modeFingerprint !== report.revision)
+        throw Error("Validation receipt does not match the workspace revision");
+      const saved = await this.store.updateValidation(report.id, { from: ["running"], state, result,
+        error: state === "failed" ? String(result.error || "作品验证失败").slice(0, 2000) : null });
+      if (!saved) return;
+      await this.onChange(workId, { revision: current, validation: report.id, state });
+      if (state === "stale") await this.reconcile(workId, { force: true });
+    } catch (error) {
+      if (signal.aborted) {
+        await this.store.updateValidation(report.id, { from: ["running"], state: "cancelled", error: null });
+        if (entry.controller.signal.aborted) return;
+      } else {
         const current = await treeHash(entry.ready.projectRoot, { includeExecutableMode: true }).catch(() => null);
         await this.store.updateValidation(report.id, { from: ["running"], state: current === report.revision ? "failed" : "stale",
           error: String(error.message).slice(0, 2000) });
         this.onError(workId, error);
         if (current !== report.revision) await this.reconcile(workId, { force: true });
-      } finally {
-        if (entry.validation?.controller === controller) entry.validation = null;
       }
+    } finally {
+      if (entry.validation?.controller === controller) entry.validation = null;
     }
   }
   async request(workId, { wait = false, signal, reportId } = {}) {
@@ -160,11 +176,26 @@ export class AiWorkspace {
       this.kick(workId);
     }
     if (!wait || !["queued", "running"].includes(report.state)) return report;
-    const cancel = async () => {
-      const running = this.entries.get(workId)?.validation;
-      if (running?.reportId === report.id) running.controller.abort(signal.reason || Error("Validation cancelled"));
-      await this.manager.cancelValidation?.(workId, report.id);
-      await this.store.updateValidation(report.id, { from: ["queued", "running"], state: "cancelled", error: null });
+    const cancel = () => {
+      const entry = this.entries.get(workId);
+      const operation = (async () => {
+        const cancelledQueued = await this.store.updateValidation(report.id, { from: ["queued"], state: "cancelled", error: null });
+        const cancelledRunning = !cancelledQueued && await this.store.updateValidation(report.id,
+          { from: ["running"], state: "cancelled", error: null });
+        const running = this.entries.get(workId)?.validation;
+        if (running?.reportId === report.id) running.controller.abort(signal.reason || Error("Validation cancelled"));
+        if (cancelledRunning) await this.manager.cancelValidation?.(workId, report.id);
+        const queued = this.queue.get(workId);
+        if (queued && !queued.entry.worker && !(await this.store.listValidations(workId, { states: ["queued"] })).length &&
+            this.queue.get(workId) === queued) this.queue.delete(workId);
+        this.pump();
+      })();
+      if (entry) {
+        const settled = Promise.allSettled([entry.cancellation, operation].filter(Boolean));
+        entry.cancellation = settled;
+        void settled.then(() => { if (entry.cancellation === settled) { entry.cancellation = null; this.pump(); } });
+      }
+      return operation;
     };
     try {
       while (["queued", "running"].includes(report.state)) {
@@ -197,10 +228,10 @@ export class AiWorkspace {
   async stop(workId) {
     const entry = this.entries.get(workId);
     if (!entry) return;
-    this.entries.delete(workId); clearTimeout(entry.timer); clearInterval(entry.interval); entry.watcher?.close();
+    this.queue.delete(workId); this.entries.delete(workId); clearTimeout(entry.timer); clearInterval(entry.interval); entry.watcher?.close();
     entry.controller.abort(Error("Ai workspace watcher stopped"));
     await Promise.allSettled([entry.chain, entry.worker].filter(Boolean));
   }
-  async close() { this.closed = true; await Promise.allSettled([...this.starting.values()]);
+  async close() { this.closed = true; this.queue.clear(); await Promise.allSettled([...this.starting.values()]);
     await Promise.all([...this.entries.keys()].map(id => this.stop(id))); }
 }
