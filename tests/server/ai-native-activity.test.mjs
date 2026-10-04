@@ -16,29 +16,53 @@ const terminal = (threadId, cwd, running = false) => ({ threadId, terminalId: "t
 test("The shared native connection waits for terminal metadata and applies subprocess updates without polling", async () => {
   const directory = await fs.mkdtemp(path.join(os.tmpdir(), "frame-terminal-stream-")), tokenFile = path.join(directory, "token");
   await fs.writeFile(tokenFile, "owned-test-token");
-  let snapshots = 0, peer;
+  let snapshots = 0, peer, sequence = 0, connections = 0, completeShell, completeTerminals;
   const server = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (req.url === "/api/orchestration/shell") { snapshots++; res.end(JSON.stringify({ projects: [], threads: [{ id: "a", projectId: "pa" }], snapshotSequence: 0 })); }
     else res.end(JSON.stringify({ ticket: "owned-fixture-ticket" }));
   });
   const ws = new WebSocketServer({ server });
-  ws.on("connection", socket => { peer = socket; socket.on("message", bytes => {
+  ws.on("connection", socket => { peer = socket; connections++; socket.on("message", bytes => {
     const value = JSON.parse(bytes);
-    if (value.tag === "subscribeTerminalMetadata") socket.send(JSON.stringify({ _tag: "Chunk", requestId: value.id,
-      values: [{ type: "snapshot", terminals: [terminal("a", "/a", true)] }] }));
+    if (value.tag === "orchestration.subscribeShell") {
+      const send = () => socket.send(JSON.stringify({ _tag: "Chunk", requestId: value.id,
+      values: [{ kind: "thread-upserted", sequence: ++sequence, thread: { id: "a", projectId: "pa", session: { status: "running" } } },
+        { kind: "synchronized" }] }));
+      if (connections === 1) completeShell = send; else send();
+    }
+    if (value.tag === "subscribeTerminalMetadata") {
+      const send = () => socket.send(JSON.stringify({ _tag: "Chunk", requestId: value.id,
+        values: [{ type: "snapshot", terminals: [terminal("a", "/a", true)] }] }));
+      if (connections === 1) send(); else completeTerminals = send;
+    }
   }); });
   await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
   const client = new AiClient({ data: directory, tokenFile, url: "http://127.0.0.1:" + server.address().port });
   try {
-    const shell = await client.shell();
+    let returned = false;
+    const pending = client.shell().then(value => { returned = true; return value; });
+    await until(() => client.terminalsReady);
+    assert.equal(returned, false, "Terminal-first delivery does not finish shell replay synchronization");
+    assert.equal(nativeWorkSummary({ projectId: "pa", cwd: "/a" }, client.snapshot()).incomplete, true);
+    completeShell();
+    const shell = await pending;
+    assert.equal(shell.shellReady, true); assert.deepEqual(nativeWorkSummary({ projectId: "pa", cwd: "/a" }, shell).activeThreads, ["a"]);
     assert.equal(shell.terminalsReady, true); assert.equal(shell.terminals[0].hasRunningSubprocess, true);
     peer.send(JSON.stringify({ _tag: "Chunk", requestId: "frame-terminals", values: [{ type: "upsert", terminal: terminal("a", "/a", false) }] }));
     await until(() => [...client.terminals.values()][0]?.hasRunningSubprocess === false);
     assert.equal((await client.shell()).terminals[0].hasRunningSubprocess, false);
     assert.equal(snapshots, 1, "Activity updates use the existing native subscription");
     peer.terminate(); await until(() => client.terminalsReady === false);
+    assert.equal(client.shellReady, false);
     assert.equal(nativeWorkSummary({ projectId: "pa", cwd: "/a" }, { ...shell, terminalsReady: false }).incomplete, true);
+    returned = false;
+    const replay = client.shell().then(value => { returned = true; return value; });
+    await until(() => client.shellReady && completeTerminals);
+    assert.equal(returned, false); assert.equal(client.terminalsReady, false, "Marker-first delivery waits for terminal metadata on reconnect");
+    assert.equal(nativeWorkSummary({ projectId: "pa", cwd: "/a" }, client.snapshot()).incomplete, true);
+    completeTerminals();
+    assert.equal((await replay).shellReady, true); assert.equal(sequence, 2);
   } finally {
     client.close(); for (const socket of ws.clients) socket.terminate();
     await new Promise(resolve => ws.close(resolve)); await new Promise(resolve => server.close(resolve));
@@ -49,7 +73,7 @@ test("The shared native connection waits for terminal metadata and applies subpr
 test("Terminal subprocesses block only their canonical work; stop closes its terminals and preserves another work", async () => {
   const binding = { state: "ready", projectId: "pa", cwd: "/a" }, snapshot = {
     threads: [{ id: "a", projectId: "pa" }, { id: "b", projectId: "pb" }],
-    terminals: [terminal("a", "/a"), terminal("b", "/b", true)], terminalsReady: true,
+    terminals: [terminal("a", "/a"), terminal("b", "/b", true)], terminalsReady: true, shellReady: true,
   };
   assert.equal(nativeWorkSummary(binding, snapshot).activeTerminals, 0, "An idle shell does not block source operations");
   snapshot.terminals[0].hasRunningSubprocess = true;
@@ -65,6 +89,41 @@ test("Terminal subprocesses block only their canonical work; stop closes its ter
   assert.deepEqual(scopedAiPayload({ type: "snapshot", terminals: snapshot.terminals }, "pa", owns).terminals, [snapshot.terminals[0]]);
   assert.equal(scopedAiPayload({ type: "upsert", terminal: snapshot.terminals[1] }, "pa", owns), null);
   assert.equal(scopedAiPayload({ type: "remove", threadId: "b", terminalId: "term-1" }, "pa", owns), null);
+});
+
+for (const mode of ["stream Exit", "missing marker timeout"]) test("An incomplete native shell remains blocked after " + mode, { timeout: 25000 }, async t => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), "frame-native-readiness-")), tokenFile = path.join(directory, "token");
+  await fs.writeFile(tokenFile, "owned-readiness-token");
+  let peer;
+  const server = http.createServer((req, res) => {
+    res.setHeader("content-type", "application/json");
+    res.end(JSON.stringify(req.url === "/api/orchestration/shell" ?
+      { projects: [], threads: [{ id: "a", projectId: "pa" }], snapshotSequence: 1 } : { ticket: "owned-ticket" }));
+  });
+  const sockets = new WebSocketServer({ server });
+  sockets.on("connection", socket => {
+    peer = socket; socket.on("message", bytes => {
+      const message = JSON.parse(bytes);
+      if (message.tag === "subscribeTerminalMetadata") socket.send(JSON.stringify({ _tag: "Chunk", requestId: message.id,
+        values: [{ type: "snapshot", terminals: [] }] }));
+    });
+  });
+  await new Promise(resolve => server.listen(0, "127.0.0.1", resolve));
+  const client = new AiClient({ data: directory, tokenFile, url: "http://127.0.0.1:" + server.address().port });
+  t.after(async () => {
+    client.close(); for (const socket of sockets.clients) socket.terminate();
+    await new Promise(resolve => sockets.close(resolve)); await new Promise(resolve => server.close(resolve));
+    await fs.rm(directory, { recursive: true, force: true });
+  });
+  const pending = client.shell();
+  await until(() => client.terminalsReady);
+  assert.equal(nativeWorkSummary({ projectId: "pa", cwd: "/a" }, client.snapshot()).incomplete, true,
+    "A terminal-only snapshot can never authorize a complete idle source state");
+  if (mode === "stream Exit") peer.send(JSON.stringify({ _tag: "Exit", requestId: "frame-shell", exit: { _tag: "Failure" } }));
+  await assert.rejects(pending, error => error.statusCode === 503);
+  await until(() => !client.shellReady && !client.terminalsReady);
+  assert.equal(client.threads.has("a"), true, "Reconnect retains its bounded shell cache while completeness stays false");
+  assert.equal(nativeWorkSummary({ projectId: "pa", cwd: "/a" }, client.snapshot()).incomplete, true);
 });
 
 test("Native semantic activity invalidates only requested works and ignores token/usage/terminal-label chunks", async t => {
@@ -88,6 +147,7 @@ test("Native semantic activity invalidates only requested works and ignores toke
     client.terminalsReady = true; client.emit("terminal", value);
   };
   client.apply({ kind: "snapshot", snapshot: { projects: [], threads: [thread], snapshotSequence: sequence } });
+  client.apply({ kind: "synchronized" });
   terminals({ type: "snapshot", terminals: [terminal("a", "/a", true)] });
   await manager.flushActivity();
   assert.equal(queries, 1, "Shell and terminal snapshots share one requested-work query");
@@ -112,11 +172,11 @@ test("Native semantic activity invalidates only requested works and ignores toke
   terminals({ type: "remove", threadId: "a", terminalId: "term-1" }); await manager.flushActivity();
   assert.deepEqual(changes.map(change => change.work), ["work-a", "work-b"], "A moved terminal removal resolves its native owner and releases its physical directory");
   changes.length = 0;
-  client.terminalsReady = false; client.emit("disconnect"); client.emit("disconnect"); await manager.flushActivity();
+  client.terminalsReady = false; client.setShellReady(false); client.emit("disconnect"); client.emit("disconnect"); await manager.flushActivity();
   assert.deepEqual(changes.map(change => change.work), ["work-a", "work-b"]);
   assert.equal((await manager.observe("work-b")).incomplete, true);
   changes.length = 0;
-  terminals({ type: "snapshot", terminals: [] }); await manager.flushActivity();
+  terminals({ type: "snapshot", terminals: [] }); client.apply({ kind: "synchronized" }); await manager.flushActivity();
   assert.deepEqual(changes.map(change => change.work), ["work-a", "work-b"]);
   assert.equal((await manager.observe("work-b")).incomplete, false);
   changes.length = 0;

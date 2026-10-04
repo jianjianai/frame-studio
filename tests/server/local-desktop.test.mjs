@@ -128,7 +128,7 @@ test("desktop startup reports its managed native service and closes only the ser
   const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-desktop-native-"));
   let local, release, stopped = 0, launched;
   const pending = new Promise(resolve => { release = resolve; });
-  const client = t.mock.method(AiClient.prototype, "shell", async () => ({ projects: [], threads: [], terminals: [], terminalsReady: true }));
+  const client = t.mock.method(AiClient.prototype, "shell", async () => ({ projects: [], threads: [], terminals: [], terminalsReady: true, shellReady: true }));
   try {
     process.env.FRAME_TEST_LOCAL = "1"; delete process.env.FRAME_T3_URL;
     local = await startLocalApp({ data, port: await freeLocalPort(), speechFactory: async () => ({ close: async () => {} }),

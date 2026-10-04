@@ -10,7 +10,7 @@ export class AiClient extends EventEmitter {
     fetch: fetcher = globalThis.fetch, WebSocket: Socket = WebSocket } = {}) {
     super(); this.url = new URL(url); this.tokenFile = tokenFile || path.join(data, "ai/t3/frame-service-token");
     this.fetcher = fetcher; this.Socket = Socket; this.projects = new Map(); this.threads = new Map();
-    this.requests = new Map(); this.terminals = new Map(); this.terminalsReady = false;
+    this.requests = new Map(); this.terminals = new Map(); this.terminalsReady = false; this.shellReady = false;
     this.sequence = 0; this.ready = false; this.closed = false; this.pending = null; this.socket = null;
   }
   async token() {
@@ -26,6 +26,7 @@ export class AiClient extends EventEmitter {
     return response.json();
   }
   apply(item) {
+    if (item.kind === "synchronized") { this.setShellReady(true); return; }
     if (item.kind === "snapshot") {
       const snapshot = item.snapshot;
       this.projects = new Map(snapshot.projects.map(project => [project.id, project]));
@@ -38,16 +39,21 @@ export class AiClient extends EventEmitter {
       else if (item.kind === "thread-removed") this.threads.delete(item.threadId);
       this.sequence = item.sequence;
     }
-    if (item.kind !== "synchronized") this.emit("change", item);
+    this.emit("change", item);
+  }
+  setShellReady(value) {
+    if (this.shellReady === value) return;
+    this.shellReady = value; this.emit("ready", value);
   }
   async connect() {
     if (this.closed) throw problem(503, "T3 客户端已关闭");
-    if (this.ready && this.terminalsReady && this.socket?.readyState === 1) return;
+    if (this.ready && this.shellReady && this.terminalsReady && this.socket?.readyState === 1) return;
     if (this.pending) return this.pending;
     const operation = this.open(); this.pending = operation;
     try { await operation; } finally { if (this.pending === operation) this.pending = null; }
   }
   async open() {
+    this.terminalsReady = false; this.setShellReady(false);
     // A single lightweight snapshot primes the shared cache. Reconnects replay from its sequence.
     if (!this.ready) this.apply({ kind: "snapshot", snapshot: await this.request("/api/orchestration/shell") });
     const { ticket } = await this.request("/api/auth/websocket-ticket", { method: "POST" });
@@ -64,19 +70,21 @@ export class AiClient extends EventEmitter {
     });
     let synchronized, synchronizationFailed;
     const synchronization = new Promise((resolve, reject) => { synchronized = resolve; synchronizationFailed = reject; });
-    const synchronizationTimeout = setTimeout(() => synchronizationFailed(problem(503, "T3 原生终端状态同步超时")), 15000);
+    const synchronizedStreams = () => { if (this.shellReady && this.terminalsReady) synchronized(); };
+    const synchronizationTimeout = setTimeout(() => synchronizationFailed(problem(503, "T3 原生状态同步超时")), 15000);
     socket.on("message", data => {
       try {
         const decoded = JSON.parse(data.toString());
         for (const item of Array.isArray(decoded) ? decoded : [decoded]) {
           if (item._tag === "Chunk" && item.requestId === "frame-shell") {
             for (const value of item.values) this.apply(value);
+            synchronizedStreams();
             socket.send(JSON.stringify({ _tag: "Ack", requestId: item.requestId }));
           } else if (item._tag === "Chunk" && item.requestId === "frame-terminals") {
             for (const value of item.values) {
               if (value.type === "snapshot") {
                 this.terminals = new Map(value.terminals.map(terminal => [JSON.stringify([terminal.threadId, terminal.terminalId]), terminal]));
-                this.terminalsReady = true; synchronized();
+                this.terminalsReady = true; synchronizedStreams();
               } else if (value.type === "upsert") this.terminals.set(JSON.stringify([value.terminal.threadId, value.terminal.terminalId]), value.terminal);
               else if (value.type === "remove") this.terminals.delete(JSON.stringify([value.threadId, value.terminalId]));
               this.emit("terminal", value);
@@ -85,7 +93,7 @@ export class AiClient extends EventEmitter {
           } else if (item._tag === "Ping") socket.send(JSON.stringify({ _tag: "Pong" }));
           else if (item._tag === "Exit") {
             if (item.requestId === "frame-shell" || item.requestId === "frame-terminals") {
-              this.terminalsReady = false; synchronizationFailed(problem(503, "T3 原生状态订阅已结束")); socket.close();
+              this.terminalsReady = false; this.setShellReady(false); synchronizationFailed(problem(503, "T3 原生状态订阅已结束")); socket.close();
             }
             else { const request = this.requests.get(String(item.requestId));
               if (request) { this.requests.delete(String(item.requestId)); clearTimeout(request.timer);
@@ -97,7 +105,7 @@ export class AiClient extends EventEmitter {
       } catch { socket.close(1002, "Invalid native protocol"); }
     });
     socket.on("error", () => {});
-    socket.once("close", () => { this.terminalsReady = false; synchronizationFailed(problem(503, "T3 连接已断开"));
+    socket.once("close", () => { this.terminalsReady = false; this.setShellReady(false); synchronizationFailed(problem(503, "T3 连接已断开"));
       if (this.socket === socket) this.socket = null; for (const request of this.requests.values()) { clearTimeout(request.timer); request.reject(problem(503, "T3 连接已断开")); }
       this.requests.clear(); this.emit("disconnect"); });
     clearInterval(this.ping); this.ping = setInterval(() => { if (socket.readyState === 1) socket.send(JSON.stringify({ _tag: "Ping" })); }, 20000); this.ping.unref();
@@ -116,7 +124,7 @@ export class AiClient extends EventEmitter {
   }
   async config() { return this.rpc("server.getConfig"); }
   snapshot() { return { projects: [...this.projects.values()], threads: [...this.threads.values()],
-    terminals: [...this.terminals.values()], terminalsReady: this.terminalsReady, snapshotSequence: this.sequence }; }
+    terminals: [...this.terminals.values()], terminalsReady: this.terminalsReady, shellReady: this.shellReady, snapshotSequence: this.sequence }; }
   async shell() { await this.connect(); return this.snapshot(); }
   async dispatch(command) { const result = await this.request("/api/orchestration/dispatch", { method: "POST", body: command }); return result; }
   async detail(threadId, { turnLimit = 1, beforeCursor, signal } = {}) {

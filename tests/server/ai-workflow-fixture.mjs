@@ -13,6 +13,12 @@ import { command } from "../../server/process.mjs";
 import { fixture as filmFixture, repo as core } from "../mcp/helpers.mjs";
 import { until } from "./ai-test-fixture.mjs";
 
+/** A reader may observe an append in progress; only newline-terminated rows are complete. */
+export function parseNativeCapture(text) {
+  const end = text.lastIndexOf("\n");
+  return end < 0 ? [] : text.slice(0, end).split("\n").filter(Boolean).map(JSON.parse);
+}
+
 /** Real FRAME HTTP, native T3 bundle and CLI process; only the paid provider is replaced. */
 export async function nativeWorkflowFixture(t) {
   const originalUrl = new URL(process.env.FRAME_TEST_DATABASE_URL);
@@ -86,7 +92,7 @@ export async function nativeWorkflowFixture(t) {
   assert.notEqual(works[0].ready.projectId, works[1].ready.projectId); assert.notEqual(works[0].ready.cwd, works[1].ready.cwd);
   const material = path.join(data, "uploads/own-material.txt"); await fs.writeFile(material, "Owned native fixture material");
   const ownAsset = await services.assets.register(material, { name: "Own fixture material.txt", license: "Self-owned test", repo: works[0].repo });
-  const captured = async () => fs.readFile(capture, "utf8").then(text => text.trim().split("\n").filter(Boolean).map(JSON.parse), error => { if (error.code === "ENOENT") return []; throw error; });
+  const captured = async () => fs.readFile(capture, "utf8").then(parseNativeCapture, error => { if (error.code === "ENOENT") return []; throw error; });
   return { directory, data, origin, app, db, services, call, works, ownAsset, capture, captured,
     client: services.ai.manager.client, nativeLog: () => nativeLog, registerBrowser: value => { browser = value; } };
 }

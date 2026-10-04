@@ -46,7 +46,7 @@ export function nativeWorkSummary(binding, snapshot, index = nativeActivityIndex
   return { state: "ready", activeThreads: threads.filter(active).map(thread => thread.id),
     activeTerminals: terminals.filter(terminalBusy).length,
     pendingPermissions: threads.filter(thread => thread.hasPendingApprovals || thread.hasPendingUserInput).length,
-    incomplete: snapshot.terminalsReady !== true || uncertain };
+    incomplete: snapshot.shellReady !== true || snapshot.terminalsReady !== true || uncertain };
 }
 
 /** A shared T3 environment owns native execution; this manager owns only FRAME work bindings. */
@@ -57,13 +57,18 @@ export class AiManager extends EventEmitter {
     this.client = client || new AiClient({ data }); this.container = process.env.FRAME_T3_CONTAINER || "frame-t3";
     this.ensuring = new Map(); this.runtimePrepared = new Map(); this.threadActivity = new Map(); this.terminalActivity = new Map(); this.closed = false; this.ticking = null;
     this.workActivity = new Map(); this.activityProjects = new Set(); this.activityCwds = new Set(); this.activityAll = false;
-    this.nativeReady = this.client.terminalsReady === true;
+    this.nativeReady = this.client.shellReady === true && this.client.terminalsReady === true;
     this.client.on?.("change", event => this.nativeChange(event));
     this.client.on?.("terminal", event => this.nativeTerminal(event));
+    this.client.on?.("ready", () => this.nativeReadiness());
     this.client.on?.("disconnect", () => {
       if (!this.nativeReady) return;
       this.nativeReady = false; this.queueActivity({ all: true });
     });
+  }
+  nativeReadiness() {
+    const ready = this.client.shellReady === true && this.client.terminalsReady === true;
+    if (ready !== this.nativeReady) { this.nativeReady = ready; this.queueActivity({ all: true }); }
   }
   nativeThread(thread, id = thread?.id) {
     const previous = this.threadActivity.get(id);
@@ -91,8 +96,7 @@ export class AiManager extends EventEmitter {
     }
   }
   nativeTerminal(event) {
-    const ready = this.client.terminalsReady === true;
-    if (ready !== this.nativeReady) { this.nativeReady = ready; this.queueActivity({ all: true }); }
+    this.nativeReadiness();
     const terminals = event.type === "snapshot" ? event.terminals : event.type === "upsert" ? [event.terminal] : [];
     const current = new Map(terminals.map(terminal => [JSON.stringify([terminal.threadId, terminal.terminalId]), terminal]));
     const keys = event.type === "snapshot" ? new Set([...this.terminalActivity.keys(), ...current.keys()]) :
@@ -153,7 +157,7 @@ export class AiManager extends EventEmitter {
   }
   async activitySnapshot() {
     if (this.client.ready && this.client.snapshot) {
-      if (!this.client.terminalsReady) void this.client.connect().catch(() => {});
+      if (!this.client.shellReady || !this.client.terminalsReady) void this.client.connect().catch(() => {});
       return this.client.snapshot();
     }
     return this.client.shell();

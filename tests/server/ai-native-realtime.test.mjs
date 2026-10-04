@@ -60,6 +60,7 @@ test("Native memory activity reaches real scoped PostgreSQL WebSocket subscriber
   };
   client.apply({ kind: "snapshot", snapshot: { projects: works.map(work => ({ id: work.id, workspaceRoot: work.cwd })),
     threads: [first, second], snapshotSequence: sequence } });
+  client.apply({ kind: "synchronized" });
   terminal({ type: "snapshot", terminals: [] }); await ai.manager.flushActivity();
   const queries = [], query = Object.getPrototypeOf(db.pool).query, ownQuery = Object.getOwnPropertyDescriptor(db.pool, "query");
   db.pool.query = function (...args) { queries.push(typeof args[0] === "string" ? args[0] : args[0].text); return query.apply(this, args); };
@@ -97,8 +98,8 @@ test("Native memory activity reaches real scoped PostgreSQL WebSocket subscriber
   await until(() => latest(b.id)?.native.activeTerminals === 1);
   terminal({ type: "remove", threadId: first.id, terminalId: busy.terminalId }); await ai.manager.flushActivity();
   await until(() => latest(b.id)?.native.activeTerminals === 0);
-  client.terminalsReady = false; client.emit("disconnect"); await ai.manager.flushActivity();
+  client.terminalsReady = false; client.setShellReady(false); client.emit("disconnect"); await ai.manager.flushActivity();
   await until(() => latest(a.id)?.native.incomplete === true && latest(b.id)?.native.incomplete === true);
-  terminal({ type: "snapshot", terminals: [] }); await ai.manager.flushActivity();
+  terminal({ type: "snapshot", terminals: [] }); client.apply({ kind: "synchronized" }); await ai.manager.flushActivity();
   await until(() => latest(a.id)?.native.incomplete === false && latest(b.id)?.native.incomplete === false);
 });

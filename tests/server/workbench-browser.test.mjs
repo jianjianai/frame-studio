@@ -277,7 +277,7 @@ test(
           worktreePath: null, status: "running", hasRunningSubprocess: true })), snapshotSequence: 0,
       };
       const client = ai.manager.client, original = Object.fromEntries(
-        ["connect", "dispatch", "rpc", "projects", "threads", "terminals", "terminalsReady", "ready", "sequence"].map(name => [name, client[name]]),
+        ["connect", "dispatch", "rpc", "projects", "threads", "terminals", "terminalsReady", "shellReady", "ready", "sequence"].map(name => [name, client[name]]),
       );
       const originalBindings = new Map(await Promise.all(owned.map(async value => [value.work.id, await ai.store.getWork(value.work.id)])));
       const interrupted = [], closedTerminals = [];
@@ -293,6 +293,7 @@ test(
         client.terminals = new Map(snapshot.terminals.map(value => [JSON.stringify([value.threadId, value.terminalId]), value]));
         client.terminalsReady = true;
         client.emit("terminal", { type: "snapshot", terminals: snapshot.terminals });
+        client.apply({ kind: "synchronized" });
         client.dispatch = async command => {
           assert.equal(command.type, "thread.turn.interrupt");
           const thread = client.threads.get(command.threadId);
@@ -331,10 +332,14 @@ test(
         assert.deepEqual(closedTerminals, [{ threadId: owned[0].threadId, terminalId: "owned-terminal" }]);
         assert.deepEqual((await ai.manager.observe(otherWork.id)).activeThreads, [owned[1].threadId]);
         assert.equal((await ai.manager.observe(otherWork.id)).activeTerminals, 1);
-        client.terminalsReady = false; client.emit("disconnect");
+        client.terminalsReady = false; client.setShellReady(false); client.emit("disconnect");
         await other.getByText("T3 Code · 连接状态待核对", { exact: true }).waitFor();
         client.terminalsReady = true;
         client.emit("terminal", { type: "snapshot", terminals: [...client.terminals.values()] });
+        await ai.manager.flushActivity();
+        assert.equal((await ai.manager.observe(otherWork.id)).incomplete, true, "Terminal metadata alone cannot complete shell replay");
+        assert.equal(await other.getByText("T3 Code · 连接状态待核对", { exact: true }).isVisible(), true);
+        client.apply({ kind: "synchronized" });
         await other.getByText("T3 Code · 连接状态待核对", { exact: true }).waitFor({ state: "hidden" });
         await other.getByRole("button", { name: "停止", exact: true }).click();
         await reopened.getByText("当前没有在后台运行的项目。").waitFor();
