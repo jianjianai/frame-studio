@@ -9,6 +9,8 @@ import { Tasks } from "../../server/tasks.mjs";
 import { treeHash } from "../../server/project-files.mjs";
 import { cleanOrphanTaskWorkspaces } from "../../server/task-workspace.mjs";
 import { runtimeIdentity } from "../../scripts/runtime-identity.mjs";
+import { Repositories } from "../../server/repositories.mjs";
+import { command } from "../../server/process.mjs";
 
 async function fixture(t) {
   const data = await fs.mkdtemp(path.join(os.tmpdir(), "frame-export-workspace-"));
@@ -79,6 +81,51 @@ test("source changes during admission reject the mixed export and remove only it
   assert.deepEqual(await fs.readdir(path.join(f.data, "runs")), []);
   assert.equal((await f.db.all("SELECT id FROM tasks")).length, 0);
   assert.equal(await fs.readFile(path.join(f.source, "project.ts"), "utf8"), "concurrent saved change");
+});
+
+test("real Git render admission of a legacy work without gitignore cannot commit concurrently written validation caches", async t => {
+  const f = await fixture(t), root = path.dirname(path.dirname(f.source));
+  const real = new Repositories(f.db, f.data, null);
+  real.project = async () => ({ repo: { id: f.repo, root }, dir: f.source });
+  const git = args => real.git(root, args);
+  await command("git", ["init", "--initial-branch=main"], { cwd: root });
+  await git(["add", "--", "projects/" + f.project]);
+  await git(["-c", "user.name=FRAME test", "-c", "user.email=frame-test@localhost", "commit", "-m", "Legacy imported source"]);
+  const head = (await git(["rev-parse", "HEAD"])).trim();
+  const index = await git(["ls-files", "--stage", "-z"]);
+  const revision = await treeHash(f.source, { includeExecutableMode: true });
+  await assert.rejects(fs.stat(path.join(root, ".gitignore")), { code: "ENOENT" });
+  await assert.rejects(fs.stat(path.join(f.source, ".gitignore")), { code: "ENOENT" });
+  f.repos.checkpoint = real.checkpoint.bind(real);
+  const cache = path.join(f.source, ".cache", "validation"), deps = path.join(cache, "vite-owned", "deps");
+  await fs.mkdir(deps, { recursive: true });
+  let stop = false, writes = 0;
+  const write = async () => {
+    await Promise.all([
+      fs.writeFile(path.join(cache, "running.json"), JSON.stringify({ reportId: "owned", pid: process.pid, generation: ++writes })),
+      fs.writeFile(path.join(deps, "package.json"), JSON.stringify({ type: "module", generation: writes })),
+      fs.writeFile(path.join(deps, "_metadata.json"), JSON.stringify({ hash: String(writes) })),
+    ]);
+  };
+  await write();
+  assert.equal(await git(["check-ignore", "--", `projects/${f.project}/.cache/validation/running.json`]).then(() => true, () => false), false,
+    "The fixture has no ignore rule hiding generated paths");
+  const writer = (async () => { while (!stop) { await write(); await new Promise(resolve => setTimeout(resolve, 1)); } })();
+  try {
+    const before = writes;
+    const task = await f.tasks.create({ repo: f.repo, project: f.project, kind: "render", input: { width: 320, fps: 12, start: 0, end: .25 } });
+    assert.ok(writes > before, "Validation cache writes overlap actual render admission");
+    assert.equal(task.frozen.sourceRevision, revision);
+    assert.equal(task.frozen.sourceCommit, head);
+    assert.equal((await git(["rev-parse", "HEAD"])).trim(), head, "Cache-only admission creates no commit");
+    assert.equal(await git(["ls-files", "--stage", "-z"]), index, "Logical user index is unchanged");
+    assert.equal(await git(["diff", "--cached", "--name-only"]), "");
+    assert.ok(!(await git(["ls-files", "-z"])).split("\0").some(file => file.split("/").includes(".cache")));
+    assert.equal(await treeHash(f.source, { includeExecutableMode: true }), revision);
+    await assert.rejects(fs.stat(path.join(f.data, "runs", task.id, "projects", f.project, ".cache")), { code: "ENOENT" });
+    await f.tasks.cancel(task.id);
+    assert.ok((await f.tasks.get(task.id)).workspace_cleaned);
+  } finally { stop = true; await writer; }
 });
 
 test("successful export preserves downloadable artifacts and exact revision, immediately removes source and encoder caches", async t => {

@@ -53,6 +53,7 @@ function fixture(t, { unborn = false } = {}) {
     commands = [],
     repo = { root: cwd, url: "", branch: work.branch };
   const repos = {
+    commitScope: (...args) => Repositories.prototype.commitScope.call(repos, ...args),
     project: async () => ({ repo, dir: path.join(cwd, prefix) }),
     writable: async () => {
       if (busy) throw Object.assign(Error("busy"), { statusCode: 409 });
@@ -585,4 +586,165 @@ test("automatic checkpoints preserve a distinct staged version until the user re
   assert.equal((await f.status()).head, head);
   assert.equal(f.git("show", ":" + f.prefix + "scene.ts"), "staged version");
   assert.equal(fs.readFileSync(path.join(f.cwd, f.prefix, "scene.ts"), "utf8"), "later working version\n");
+});
+
+const checkpoint = (f, options = {}) => Repositories.prototype.checkpoint.call(
+  f.scm.repos, f.work.repo, f.work.project, "Scoped automatic save", options,
+);
+
+test("automatic checkpoints exclude generated directories at every depth without .gitignore and preserve authored files", async (t) => {
+  const f = fixture(t);
+  for (const name of [".git", "node_modules", ".cache", ".history", "exports"])
+    for (const parent of ["", "public/nested/"])
+      f.write(parent + name + "/generated.json", "generated\n");
+  const before = f.git("rev-parse", "HEAD");
+  assert.equal(await checkpoint(f), before, "Cache-only saves must not advance HEAD");
+  assert.equal(f.git("diff", "--cached", "--name-only"), "");
+  for (const file of [
+    "scene.ts", "public/material.bin", "public/build/source.ts", "public/dist/source.ts",
+    "records/notes.md", "tests/test-results/source.ts", "exports.ts", "[中文] clip\nsource.ts",
+  ]) f.write(file, "Authored content for " + file + "\n");
+  const saved = await checkpoint(f);
+  assert.notEqual(saved, before);
+  const committed = f.git("diff-tree", "--no-commit-id", "--name-only", "-r", "-z", saved).split("\0");
+  assert.ok(committed.includes(f.prefix + "public/material.bin"));
+  assert.ok(committed.includes(f.prefix + "public/build/source.ts"));
+  assert.ok(committed.includes(f.prefix + "public/dist/source.ts"));
+  assert.ok(committed.includes(f.prefix + "records/notes.md"));
+  assert.ok(committed.includes(f.prefix + "[中文] clip\nsource.ts"));
+  assert.ok(committed.every(file => !file.split("/").some(part =>
+    [".git", "node_modules", ".cache", ".history", "exports"].includes(part),
+  )));
+  assert.equal(fs.existsSync(path.join(f.cwd, ".gitignore")), false);
+});
+
+test("automatic checkpoints preserve foreign staged content and tracked generated HEAD, index and working versions", async (t) => {
+  const f = fixture(t);
+  f.write(".cache/user-file.txt", "old tracked value\n");
+  f.write("exports/user-file.txt", "old exported value\n");
+  f.git("add", "--", f.prefix + ".cache/user-file.txt", f.prefix + "exports/user-file.txt");
+  f.git("commit", "-m", "User intentionally tracked generated files");
+  f.write(".cache/user-file.txt", "user staged value\n");
+  f.git("add", "--", f.prefix + ".cache/user-file.txt");
+  f.write(".cache/user-file.txt", "later working value\n");
+  fs.unlinkSync(path.join(f.cwd, f.prefix, "exports/user-file.txt"));
+  const foreign = "projects/other/private.ts";
+  fs.mkdirSync(path.dirname(path.join(f.cwd, foreign)), { recursive: true });
+  fs.writeFileSync(path.join(f.cwd, foreign), "foreign staged value\n");
+  f.git("add", "--", foreign);
+  fs.writeFileSync(path.join(f.cwd, foreign), "foreign later working value\n");
+  f.write("scene.ts", "Current authored version\n");
+  f.git("add", "--", f.prefix + "scene.ts");
+  await checkpoint(f);
+  assert.equal(f.git("show", "HEAD:" + f.prefix + "scene.ts"), "Current authored version");
+  assert.equal(f.git("show", "HEAD:" + f.prefix + ".cache/user-file.txt"), "old tracked value");
+  assert.equal(f.git("show", ":" + f.prefix + ".cache/user-file.txt"), "user staged value");
+  assert.equal(fs.readFileSync(path.join(f.cwd, f.prefix, ".cache/user-file.txt"), "utf8"), "later working value\n");
+  assert.equal(f.git("show", "HEAD:" + f.prefix + "exports/user-file.txt"), "old exported value");
+  assert.equal(f.git("show", ":" + f.prefix + "exports/user-file.txt"), "old exported value");
+  assert.equal(f.git("show", ":" + foreign), "foreign staged value");
+  assert.equal(fs.readFileSync(path.join(f.cwd, foreign), "utf8"), "foreign later working value\n");
+  assert.throws(() => f.git("show", "HEAD:" + foreign), /does not exist|not in 'HEAD'/);
+});
+
+test("automatic checkpoints save deliberately tracked source that a new user ignore rule hides", async (t) => {
+  const f = fixture(t);
+  fs.writeFileSync(path.join(f.cwd, ".gitignore"), "*.ts\n");
+  f.write("audio.ts", "const trackedTone = 880;\n");
+  f.write("ignored-new.ts", "const ignoredNew = true;\n");
+  await checkpoint(f);
+  assert.equal(f.git("show", "HEAD:" + f.prefix + "audio.ts"), "const trackedTone = 880;");
+  assert.throws(() => f.git("show", "HEAD:" + f.prefix + "ignored-new.ts"), /does not exist|not in 'HEAD'/);
+});
+
+test("named empty checkpoints and unborn saves preserve staged content outside the source scope", async (t) => {
+  for (const unborn of [false, true]) await t.test(unborn ? "unborn" : "named empty", async (t) => {
+    const f = fixture(t, { unborn });
+    const foreign = "materials/private.txt";
+    fs.mkdirSync(path.dirname(path.join(f.cwd, foreign)), { recursive: true });
+    fs.writeFileSync(path.join(f.cwd, foreign), "user staged material\n");
+    f.git("add", "--", foreign);
+    const before = unborn ? null : f.git("rev-parse", "HEAD");
+    const beforeTree = unborn ? null : f.git("rev-parse", "HEAD^{tree}");
+    const saved = await checkpoint(f, { named: !unborn });
+    assert.notEqual(saved, before);
+    if (!unborn) assert.equal(f.git("rev-parse", "HEAD^{tree}"), beforeTree);
+    assert.equal(f.git("show", ":" + foreign), "user staged material");
+    assert.throws(() => f.git("show", "HEAD:" + foreign), /does not exist|not in 'HEAD'/);
+  });
+});
+
+test("automatic checkpoints handle staged and unstaged whole-project deletion without sweeping tracked caches", async (t) => {
+  for (const staged of [false, true]) await t.test(staged ? "staged deletion" : "working deletion", async (t) => {
+    const f = fixture(t);
+    if (!staged) {
+      f.write(".cache/previous.json", "Preserved historical cache\n");
+      f.git("add", "--", f.prefix + ".cache/previous.json");
+      f.git("commit", "-m", "Existing tracked cache");
+    }
+    if (staged) f.git("rm", "-r", "--", f.prefix);
+    else fs.rmSync(path.join(f.cwd, f.prefix), { recursive: true });
+    await checkpoint(f);
+    assert.throws(() => f.git("show", "HEAD:" + f.prefix + "scene.ts"), /does not exist|not in 'HEAD'/);
+    if (!staged)
+      assert.equal(f.git("show", "HEAD:" + f.prefix + ".cache/previous.json"), "Preserved historical cache");
+  });
+});
+
+test("source and repository status prune thousands of untracked cache files while keeping tracked cache changes visible", async (t) => {
+  const f = fixture(t);
+  f.write(".cache/tracked.json", "tracked cache baseline\n");
+  f.git("add", "--", f.prefix + ".cache/tracked.json");
+  f.git("commit", "-m", "Existing user-tracked cache");
+  for (let i = 0; i < 2600; i++) f.write(".cache/validation/" + i + ".json", "cache\n");
+  f.write("public/nested/node_modules/temporary.js", "cache\n");
+  const realStatus = () => Repositories.prototype.status.call({
+    git: f.scm.repos.git,
+    library: async () => f.repo,
+    db: { pool: { query: async () => {} } },
+  }, f.work.repo);
+  assert.equal((await f.status()).files.length, 0);
+  assert.equal((await realStatus()).dirty, 0);
+  f.write(".cache/tracked.json", "staged tracked cache\n");
+  f.git("add", "--", f.prefix + ".cache/tracked.json");
+  f.write(".cache/tracked.json", "working tracked cache\n");
+  f.write("scene.ts", "const newSource = true;\n");
+  const status = await f.status();
+  const cache = status.files.find(file => file.path === f.prefix + ".cache/tracked.json");
+  assert.ok(cache);
+  assert.equal(cache.index, "M");
+  assert.equal(cache.working, "M");
+  assert.ok(cache.unsafe, "An old tracked cache remains visible for manual handling");
+  assert.equal(status.files.length, 2);
+  assert.equal((await realStatus()).dirty, 2);
+});
+
+test("repository work and material synchronization share scoped commits without consuming another scope's stage", async (t) => {
+  for (const workScope of [false, true]) await t.test(workScope ? "work" : "material library", async (t) => {
+    const f = fixture(t);
+    const material = "materials/exports/user-source.txt";
+    fs.mkdirSync(path.dirname(path.join(f.cwd, material)), { recursive: true });
+    fs.writeFileSync(path.join(f.cwd, material), "new material\n");
+    f.write("scene.ts", "new project source\n");
+    const outside = workScope ? material : f.prefix + "scene.ts";
+    f.git("add", "--", outside);
+    f.write(".cache/validation/current.json", "temporary validation\n");
+    const owner = {
+      ...f.scm.repos,
+      library: async () => f.repo,
+      db: { one: async () => f.work, lock: async (_key, action) => action() },
+      status: async () => ({ head: f.git("rev-parse", "HEAD") }),
+    };
+    owner.commitScope = (...args) => Repositories.prototype.commitScope.call(owner, ...args);
+    await Repositories.prototype.sync.call(owner, f.work.repo, "commit", "Sync selected scope", workScope ? f.work.id : null);
+    assert.equal(f.git("show", ":" + outside), workScope ? "new material" : "new project source");
+    if (workScope) {
+      assert.equal(f.git("show", "HEAD:" + f.prefix + "scene.ts"), "new project source");
+      assert.throws(() => f.git("show", "HEAD:" + material), /does not exist|not in 'HEAD'/);
+    } else {
+      assert.equal(f.git("show", "HEAD:" + material), "new material");
+      assert.equal(f.git("show", "HEAD:" + f.prefix + "scene.ts"), "const value = 1;\nconst stable = true;");
+    }
+    assert.throws(() => f.git("show", "HEAD:" + f.prefix + ".cache/validation/current.json"), /does not exist|not in 'HEAD'/);
+  });
 });

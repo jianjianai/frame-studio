@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import { confinedAsync } from "./project-files.mjs";
+import { confinedAsync, sourceGitStatus } from "./project-files.mjs";
 import { problem, relativeParts } from "./security.mjs";
 
 const ROOT_FILES = new Set(["README.md", ".gitattributes", ".gitignore"]);
@@ -153,13 +153,7 @@ export async function sourceSnapshot(repos, work) {
   const { repo } = await repos.project(work.repo, work.project, {
     exists: false,
   });
-  const raw = await gitText(repo.root, [
-    "status",
-    "--porcelain=v2",
-    "-z",
-    "--untracked-files=all",
-    "--renames",
-  ]);
+  const raw = await sourceGitStatus(args => gitText(repo.root, args));
   const all = parseSourceStatus(raw);
   if (all.length > FILE_LIMIT)
     throw problem(413, `变更超过 ${FILE_LIMIT} 个文件，请先使用本地 Git 整理`);

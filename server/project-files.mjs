@@ -57,6 +57,24 @@ export async function fileSha256(file, { cache = true } = {}) {
   } finally { await handle.close(); }
 }
 const ignored = new Set([".git", "node_modules", ".cache", ".history", "exports"]);
+/** Git saves share the source inventory boundary, even when imported works lack .gitignore. */
+export function sourceGitExclusions(root) {
+  return [...ignored].flatMap(name => [
+    `:(exclude,glob)${root}/**/${name}`,
+    `:(exclude,glob)${root}/**/${name}/**`,
+  ]);
+}
+export function sourceGitUntrackedExclusions(root) {
+  return [...ignored].map(name => `--exclude=${root}/**/${name}`);
+}
+/** Ask Git to prune generated untracked directories before enumeration; tracked history stays visible. */
+export async function sourceGitStatus(git) {
+  const [tracked, untracked] = await Promise.all([
+    git(["status", "--porcelain=v2", "-z", "--untracked-files=no", "--renames"]),
+    git(["ls-files", "--others", "--exclude-standard", ...sourceGitUntrackedExclusions("projects"), "-z"]),
+  ]);
+  return tracked + untracked.split("\0").filter(Boolean).map(file => "? " + file + "\0").join("");
+}
 /** Same canonical fingerprint as the legacy synchronous helper. */
 export async function projectInventory(root, { includeExecutableMode = false, includeIgnored = false } = {}) {
   const files = [];

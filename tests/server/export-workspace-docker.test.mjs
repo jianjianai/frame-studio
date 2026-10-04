@@ -293,6 +293,11 @@ async function isolatedDocker(t) {
     report.scenarios.map((item) => item.mutationPhase),
     ["queued", "encoding"],
   );
+  assert.equal(report.validationCacheCheckpoint.passed, true);
+  assert.equal(report.validationCacheCheckpoint.headUnchanged, true);
+  assert.equal(report.validationCacheCheckpoint.indexUnchanged, true);
+  assert.equal(report.validationCacheCheckpoint.validationState, "passed");
+  assert.equal(report.validationCacheCheckpoint.workspaceCleaned, true);
   t.diagnostic(JSON.stringify(report));
 }
 
@@ -309,6 +314,299 @@ export async function createScene({width,height}:SceneOptions):Promise<Scene>{
 }`;
 const swatch = (epoch) =>
   `<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64"><path fill="${epoch === "A" ? "#e02020" : "#2030e0"}" d="M0 0h64v64H0z"/></svg>`;
+
+async function validationCacheExport(t, platform, cli, repo, data, remember) {
+  const [
+    { treeHash },
+    { runtimeIdentity },
+    { validatePaseoWorkspace, probePaseoRuntime, createWorkspaceProbeSession },
+    { probeMedia },
+  ] = await Promise.all([
+    import("../../server/project-files.mjs"),
+    import("../../scripts/runtime-identity.mjs"),
+    import("../../server/paseo-validate.mjs"),
+    import("../../scripts/production-media.mjs"),
+  ]);
+  let proof;
+  await t.test(
+    "legacy imported work without gitignore freezes a real export during actual Vite/audio validation without committing generated caches",
+    async () => {
+      const work = await cli.call("works_create", {
+        repo: repo.id,
+        title: "Legacy cache-only freeze",
+        renderer: "canvas",
+        duration: 2,
+        fps: 12,
+        composition: { width: 320, height: 180 },
+      });
+      const { dir: source, repo: checkout } = await platform.repos.project(
+        repo.id,
+        work.project,
+      );
+      const runtime = await runtimeIdentity(),
+        core = path.resolve(".");
+      // Prepare the same readonly shared runtime used by a canonical native workspace.
+      await platform.paseo.work.prepare(work.id);
+      await platform.paseo.manager.prepareRuntime(checkout.root, work, {
+        ...runtime,
+        image: process.env.FRAME_EXECUTOR_IMAGE,
+      });
+      const git = (args) => platform.repos.git(checkout.root, args);
+      await fs.writeFile(
+        path.join(source, "scene.ts"),
+        scene(work.project, "A"),
+      );
+      await fs.writeFile(
+        path.join(source, "public", "swatch.svg"),
+        swatch("A"),
+      );
+      for (const file of [
+        path.join(checkout.root, ".gitignore"),
+        path.join(source, ".gitignore"),
+      ])
+        await fs.rm(file, { force: true });
+      // Imported repositories can lack both .gitignore and generated-path info/exclude entries.
+      // Keep the independently required readonly runtime exclusions installed above.
+      const excludes = path.resolve(
+        checkout.root,
+        (await git(["rev-parse", "--git-path", "info/exclude"])).trim(),
+      );
+      await fs.writeFile(
+        excludes,
+        (await fs.readFile(excludes, "utf8"))
+          .split(/\r?\n/)
+          .filter(
+            (line) =>
+              !/^projects\/\*\/(?:\.cache|\.history|exports)\/$/.test(line),
+          )
+          .join("\n"),
+      );
+      const head = await platform.repos.checkpoint(
+        repo.id,
+        work.project,
+        "Legacy source baseline",
+      );
+      const index = await git(["ls-files", "--stage", "-z"]);
+      const revision = await treeHash(source, { includeExecutableMode: true });
+      const cache = path.join(source, ".cache", "validation"),
+        marker = path.join(cache, "export-admission.json");
+      await fs.mkdir(cache, { recursive: true });
+      assert.equal(
+        await git([
+          "check-ignore",
+          "--",
+          `projects/${work.project}/.cache/validation/export-admission.json`,
+        ]).then(
+          () => true,
+          () => false,
+        ),
+        false,
+      );
+      const previous = {
+        root: process.env.FRAME_SHARED_RUNTIME_ROOT,
+        fingerprint: process.env.FRAME_SHARED_RUNTIME_FINGERPRINT,
+      };
+      process.env.FRAME_SHARED_RUNTIME_ROOT = core;
+      process.env.FRAME_SHARED_RUNTIME_FINGERPRINT = runtime.fingerprint;
+      let release,
+        held,
+        writes = 0,
+        stop = false,
+        accepted,
+        validation;
+      const released = new Promise((resolve) => {
+          release = resolve;
+        }),
+        holding = new Promise((resolve) => {
+          held = resolve;
+        });
+      const write = () =>
+        fs.writeFile(
+          marker,
+          JSON.stringify({
+            reportId: "owned-export-admission",
+            pid: process.pid,
+            generation: ++writes,
+          }),
+        );
+      await write();
+      const writer = (async () => {
+        while (!stop) {
+          await write();
+          await sleep(1);
+        }
+      })();
+      try {
+        // The real validator runs scope, structure, project tests/types, browser frames and audio.
+        // Hold its real Vite/browser cleanup so admission deterministically overlaps generated deps.
+        validation = validatePaseoWorkspace({
+          core,
+          work: checkout.root,
+          project: work.project,
+          baselineCommit: head,
+          modeFingerprint: revision,
+          runtimeFingerprint: runtime.fingerprint,
+          runtimeProbe: (options) =>
+            probePaseoRuntime({
+              ...options,
+              sessionFactory: async (settings) => {
+                const session = await createWorkspaceProbeSession(settings);
+                return {
+                  ...session,
+                  async close() {
+                    held();
+                    try {
+                      await released;
+                    } finally {
+                      await session.close();
+                    }
+                  },
+                };
+              },
+            }),
+        }).then(
+          (result) => ({ result }),
+          (error) => ({ error }),
+        );
+        const ready = await Promise.race([
+          holding.then(() => ({ held: true })),
+          validation,
+        ]);
+        assert.equal(ready.held, true, JSON.stringify(ready));
+        const vite = path.join(cache, "vite-" + process.pid);
+        const generated = await fs.readdir(vite, { recursive: true });
+        assert.ok(
+          generated.some((file) => /(?:^|\/)package\.json$/.test(file)),
+          "Actual Vite dependency JSON exists during validation",
+        );
+        const before = writes;
+        accepted = await cli.call("works_task", {
+          id: work.id,
+          kind: "render",
+          requestKey: randomUUID(),
+          input: { width: 320, fps: 12, start: 0, end: 0.25, subtitles: false },
+        });
+        await remember(accepted);
+        assert.ok(
+          writes > before,
+          "Generated validation JSON writes overlap HTTP export admission",
+        );
+        assert.equal(accepted.frozen.sourceRevision, revision);
+        assert.equal(
+          accepted.frozen.sourceCommit,
+          head,
+          "No cache-only export checkpoint commit",
+        );
+        assert.equal((await git(["rev-parse", "HEAD"])).trim(), head);
+        assert.equal(
+          await git(["ls-files", "--stage", "-z"]),
+          index,
+          "Export leaves the logical Git index intact",
+        );
+        assert.equal(await git(["diff", "--cached", "--name-only"]), "");
+        const tracked = (await git(["ls-files", "-z"])).split("\0");
+        assert.ok(
+          !tracked.some((file) => file.split("/").includes(".cache")),
+          "No validation marker, dependency metadata or generated JS is tracked",
+        );
+        const snapshot = path.join(
+          data,
+          "runs",
+          accepted.id,
+          "projects",
+          work.project,
+        );
+        await assert.rejects(fs.stat(path.join(snapshot, ".cache")), {
+          code: "ENOENT",
+        });
+        release();
+        const checked = await validation;
+        if (checked.error) throw checked.error;
+        assert.equal(
+          checked.result.status,
+          "passed",
+          JSON.stringify(checked.result),
+        );
+        assert.deepEqual(
+          checked.result.validation.map((check) => check.name),
+          ["scope", "structure", "project-tests", "project-types", "runtime"],
+        );
+        assert.equal(checked.result.modeFingerprint, revision);
+        assert.equal(checked.result.runtimeFingerprint, runtime.fingerprint);
+        assert.equal(checked.result.stale, false);
+        await platform.tasks.start(await platform.tasks.get(accepted.id));
+        const finished = await until(
+          async () => {
+            await platform.tasks.tick();
+            const row = await platform.tasks.get(accepted.id);
+            if (["failed", "cancelled", "publish_failed"].includes(row.state))
+              throw Error(row.error || row.state);
+            return row.state === "succeeded" && row.workspace_cleaned
+              ? row
+              : null;
+          },
+          "Legacy cache-safe frozen MP4 failed or left its workspace",
+          120000,
+        );
+        const artifact = finished.result.artifacts.find((file) =>
+          file.path.endsWith(".mp4"),
+        );
+        assert.ok(artifact?.bytes > 0);
+        const output = path.join(data, "cache-safe.mp4"),
+          download = await cli.download(accepted.id, artifact.path, output);
+        assert.equal(download.checksumVerified, true);
+        const video = (await probeMedia(output)).streams.find(
+          (item) => item.codec_type === "video",
+        );
+        assert.equal(video.width, 320);
+        assert.equal(Number(video.nb_read_frames), 3);
+        assert.equal(finished.result.sourceRevision, revision);
+        assert.equal(
+          await treeHash(source, { includeExecutableMode: true }),
+          revision,
+        );
+        assert.equal((await git(["rev-parse", "HEAD"])).trim(), head);
+        assert.equal(await git(["ls-files", "--stage", "-z"]), index);
+        assert.equal(
+          await inspect("container", "frame-task-" + accepted.id),
+          null,
+        );
+        assert.deepEqual(await fs.readdir(snapshot), ["exports"]);
+        proof = {
+          passed: true,
+          work: work.id,
+          task: accepted.id,
+          sourceRevision: revision,
+          head,
+          headUnchanged: true,
+          indexUnchanged: true,
+          validationState: checked.result.status,
+          actualViteFiles: generated.length,
+          overlappingCacheWrites: writes - before,
+          bytes: download.bytes,
+          checksumVerified: true,
+          frames: Number(video.nb_read_frames),
+          workspaceCleaned: true,
+        };
+        await fs.rm(output);
+      } finally {
+        release();
+        stop = true;
+        await writer;
+        if (validation) await validation;
+        await fs.rm(marker, { force: true });
+        for (const [key, value] of Object.entries({
+          FRAME_SHARED_RUNTIME_ROOT: previous.root,
+          FRAME_SHARED_RUNTIME_FINGERPRINT: previous.fingerprint,
+        }))
+          if (value === undefined) delete process.env[key];
+          else process.env[key] = value;
+      }
+    },
+  );
+  assert.ok(proof);
+  return proof;
+}
 
 async function realExport(t) {
   const [
@@ -637,6 +935,14 @@ async function realExport(t) {
         },
       );
     assert.equal(scenarios.length, 2);
+    const validationCacheCheckpoint = await validationCacheExport(
+      t,
+      platform,
+      cli,
+      repo,
+      data,
+      remember,
+    );
     await fs.writeFile(
       path.join(data, "report.json"),
       JSON.stringify(
@@ -647,6 +953,7 @@ async function realExport(t) {
             "actual isolated PostgreSQL + HTTP CLI admission/edit/download + immutable Docker executor + decoded MP4",
           runtimeImage: process.env.FRAME_EXECUTOR_IMAGE,
           scenarios,
+          validationCacheCheckpoint,
         },
         null,
         2,

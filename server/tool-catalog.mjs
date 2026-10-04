@@ -68,7 +68,7 @@ export function registerToolHelp(add, registry) {
             "frame_works_task (kind: validate)",
           ],
           review: [
-            "frame_works_live_preview (editable work or active task draft)",
+            "frame_works_live_preview (the work's unique canonical workspace)",
             "frame_works_browser (private live AI console)",
             "FRAME_AI.ready() / FRAME_AI.help()",
             "frame_works_task kind:build only for an explicit immutable snapshot",

@@ -3,10 +3,12 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { command } from "./process.mjs";
 import { allowedGitUrl, confined, problem } from "./security.mjs";
-import { copyTree } from "./project-files.mjs";
+import { copyTree, sourceGitExclusions, sourceGitUntrackedExclusions, sourceGitStatus } from "./project-files.mjs";
 import { ProjectRevisions } from "./project-revisions.mjs";
 import { validProjectId, readProject } from "../scripts/project-metadata.mjs";
 import { purgedWorkKey } from "./work-purge.mjs";
+const rootSourceFiles = ["README.md", ".gitattributes", ".gitignore"];
+const literal = file => ":(literal)" + file;
 export class Repositories {
   constructor(db, data, secrets) {
     this.db = db;
@@ -209,33 +211,46 @@ export class Repositories {
   }
   async checkpoint(id, project, message, { named = false } = {}) {
     const { repo } = await this.project(id, project, { exists: false });
+    return this.commitScope(repo, [`projects/${project}`, ...rootSourceFiles], message, {
+      named,
+      generatedRoots: [`projects/${project}`],
+    });
+  }
+  async commitScope(repo, roots, message, { named = false, generatedRoots = [] } = {}) {
+    const exclusions = generatedRoots.flatMap(sourceGitExclusions);
+    const initialScope = [...roots.map(literal), ...exclusions];
+    const [trackedRaw, stagedRaw] = await Promise.all([
+      this.git(repo.root, ["ls-files", "-z", "--", ...initialScope]),
+      this.git(repo.root, ["diff", "--cached", "--name-only", "--no-renames", "-z", "--", ...initialScope]),
+    ]);
+    const tracked = trackedRaw.split("\0").filter(Boolean);
+    const staged = stagedRaw.split("\0").filter(Boolean);
+    const available = file => fs.existsSync(path.join(repo.root, file)) ||
+      tracked.some(name => name === file || name.startsWith(file + "/"));
+    const files = roots.filter(file =>
+      available(file) || staged.some(name => name === file || name.startsWith(file + "/")),
+    );
+    const scope = files.length ? [...files.map(literal), ...exclusions] : [];
     // Automatic saves must not overwrite a user's distinct index version.
-    const staged = (await this.git(repo.root, ["diff", "--cached", "--name-only", "--no-renames", "-z"])).split("\0").filter(Boolean);
     if (staged.length) {
       const working = new Set([
-        ...(await this.git(repo.root, ["diff", "--name-only", "--no-renames", "-z"])).split("\0"),
-        ...(await this.git(repo.root, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0"),
+        ...(await this.git(repo.root, ["diff", "--name-only", "--no-renames", "-z", "--", ...scope])).split("\0"),
+        ...(await this.git(repo.root, ["ls-files", "--others", "--exclude-standard", ...generatedRoots.flatMap(sourceGitUntrackedExclusions), "-z", "--", ...scope])).split("\0"),
       ]);
       if (staged.some((file) => working.has(file)))
         throw problem(409, "暂存区与工作区存在不同版本，请先在源代码管理中提交或取消暂存，再执行自动保存");
     }
-    const tracked = (await this.git(repo.root, ["ls-files", "-z"])).split("\0");
-    const files = [
-      `projects/${project}`,
-      "README.md",
-      ".gitattributes",
-      ".gitignore",
-    ].filter(
-      (file) =>
-        fs.existsSync(path.join(repo.root, file)) ||
-        tracked.some((name) => name === file || name.startsWith(file + "/")),
-    );
-    if (files.length) await this.git(repo.root, ["add", "--", ...files]);
-    const changed = await this.git(repo.root, [
+    // Fully staged deletions no longer exist in the index or filesystem, but
+    // commit --only still matches their HEAD paths. Do not re-add missing roots.
+    const addFiles = files.filter(available);
+    if (addFiles.length) await this.git(repo.root, ["add", "--", ...addFiles.map(literal), ...exclusions]);
+    const changed = scope.length ? await this.git(repo.root, [
       "diff",
       "--cached",
       "--name-only",
-    ]);
+      "--",
+      ...scope,
+    ]) : "";
     if (changed || named)
       await this.git(repo.root, [
         "-c",
@@ -243,9 +258,11 @@ export class Repositories {
         "-c",
         "user.email=frame@localhost",
         "commit",
+        "--only",
         ...(named ? ["--allow-empty"] : []),
         "-m",
         message,
+        ...(scope.length ? ["--", ...scope] : []),
       ]);
     return (await this.git(repo.root, ["rev-parse", "HEAD"])).trim();
   }
@@ -476,12 +493,7 @@ export class Repositories {
         error = "无法刷新远端，请检查网络或重新登录 GitHub；以下为上次已知状态";
       }
     }
-    const changes = await this.git(r.root, [
-      "status",
-      "--porcelain=v2",
-      "-z",
-      "--untracked-files=all",
-    ]);
+    const changes = await sourceGitStatus(args => this.git(r.root, args));
     const paths = [];
     const entries = changes.split("\0");
     for (let i = 0; i < entries.length; i++) {
@@ -588,7 +600,7 @@ export class Repositories {
           : await this.library(id);
         if (action === "fetch") return this.status(id, { fetch: true, work });
         if (action === "pull") {
-          if (await this.git(r.root, ["status", "--porcelain"]))
+          if (await sourceGitStatus(args => this.git(r.root, args)))
             throw problem(
               409,
               "当前分支有本地修改，请先保存并推送，再拉取远端修改",
@@ -603,28 +615,14 @@ export class Repositories {
         } else if (
           action === "commit" ||
           (action === "push" &&
-            (await this.git(r.root, ["status", "--porcelain"])))
+            (await sourceGitStatus(args => this.git(r.root, args))))
         ) {
           if (action === "push")
             message ||= w ? "Save work: " + w.title : "Update material library";
           if (!message?.trim()) throw problem(400, "Commit message required");
-          const files = [
-            "projects",
-            "materials",
-            "README.md",
-            ".gitattributes",
-            ".gitignore",
-          ].filter((f) => fs.existsSync(path.join(r.root, f)));
-          await this.git(r.root, ["add", "--", ...files]);
-          await this.git(r.root, [
-            "-c",
-            "user.name=FRAME",
-            "-c",
-            "user.email=frame@localhost",
-            "commit",
-            "-m",
-            message,
-          ]);
+          await this.commitScope(r, [w ? `projects/${w.project}` : "materials", ...rootSourceFiles], message, {
+            generatedRoots: w ? [`projects/${w.project}`] : [],
+          });
         }
         if (action === "push") {
           if (!r.url) throw problem(400, "No remote configured");
