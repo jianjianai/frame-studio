@@ -46,6 +46,14 @@ async function fixture(t, dialect) {
     [report,work,revision,fingerprint,{validation:[{name:"runtime",status:"passed"}],status:"passed",modeFingerprint:revision},date]);
   return {db,data,secrets,repo,work,report,api,official};
 }
+function nativeConfig(settings) {
+  return { settings: structuredClone(settings), environment: { environmentId: "fixture" },
+    providers: Object.entries(settings.providerInstances).map(([instanceId,item]) => ({
+      instanceId, driver: item.driver, enabled: item.enabled, installed: item.enabled,
+      version: item.enabled ? "fixture" : null, status: item.enabled ? "ready" : "disabled",
+      auth: { status: item.driver === "claudeAgent" ? "authenticated" : "unauthenticated" },
+    })) };
+}
 for (const dialect of ["sqlite","postgres"]) {
   const options = { skip: dialect === "postgres" && !process.env.FRAME_TEST_DATABASE_URL };
   test(`${dialect}: provider import preserves API credential and absent official authentication; reports survive receipt-checked retirement`, options, async t => {
@@ -59,13 +67,48 @@ for (const dialect of ["sqlite","postgres"]) {
     const proof = JSON.parse(await fs.readFile(path.join(f.data,"ai/shared/retirement.json"),"utf8"));
     assert.equal(proof.profiles.find(item=>item.instanceId==="frame_"+f.official).sourceAuth,"absent");
     await assert.rejects(retireAiTables(f), /Verify migrated/);
-    const providers = Object.entries(config.providerInstances).map(([instanceId,item])=>({instanceId,driver:item.driver,enabled:item.enabled,runtimePaths:{homePath:item.config.homePath}}));
-    await assert.rejects(verifyAiRetirement({...f,client:{config:async()=>({providers:[],environment:{environmentId:"fixture"}})}}), /live T3 registry/);
-    await verifyAiRetirement({...f,client:{config:async()=>({providers,environment:{environmentId:"fixture"}})}});
+    const native = nativeConfig(config);
+    await assert.rejects(verifyAiRetirement({...f,client:{config:async()=>({...native,providers:[]})}}), /live T3 registry/);
+    await verifyAiRetirement({...f,client:{config:async()=>native}});
     assert.equal((await retireAiTables(f)).phase,"retired");
     assert.equal((await f.db.all("SELECT * FROM ai_validations")).length,1);
     assert.equal((await f.db.all("SELECT * FROM works")).length,1);
     assert.equal((await retireAiTables(f)).phase,"retired");
+  });
+  test(`${dialect}: verification rejects changed native settings, registration and unavailable enabled binary before table deletion`, options, async t => {
+    const f = await fixture(t,dialect); await prepareAiRetirement(f);
+    const settings = JSON.parse(await fs.readFile(path.join(f.data,"ai/t3/userdata/settings.json"),"utf8"));
+    const instanceId = "frame_" + f.api;
+    const cases = [
+      ["home mismatch", value => { value.settings.providerInstances[instanceId].config.homePath += "-different"; }],
+      ["missing settings", value => { delete value.settings.providerInstances[instanceId]; }],
+      ["settings driver mismatch", value => { value.settings.providerInstances[instanceId].driver = "codex"; }],
+      ["settings enabled mismatch", value => { value.settings.providerInstances[instanceId].enabled = false; }],
+      ["registry driver mismatch", value => { value.providers.find(item => item.instanceId === instanceId).driver = "codex"; }],
+      ["registry enabled mismatch", value => { value.providers.find(item => item.instanceId === instanceId).enabled = false; }],
+      ["enabled binary unavailable", value => { value.providers.find(item => item.instanceId === instanceId).installed = false; }],
+      ["enabled binary unreported", value => { delete value.providers.find(item => item.instanceId === instanceId).installed; }],
+    ];
+    for (const [label, change] of cases) {
+      const config = nativeConfig(settings); change(config);
+      await assert.rejects(verifyAiRetirement({...f,client:{config:async()=>config}}), /live T3 registry/, label);
+      assert.equal((await f.db.all("SELECT * FROM connections")).length,2,label);
+      assert.equal(JSON.parse(await fs.readFile(path.join(f.data,"ai/shared/retirement.json"),"utf8")).phase,"prepared",label);
+    }
+  });
+  test(`${dialect}: disabled official profile without installed binary or login survives verified retirement`, options, async t => {
+    const f = await fixture(t,dialect);
+    await f.db.pool.query("UPDATE connections SET state='deleted' WHERE id=$1", [f.official]);
+    await prepareAiRetirement(f);
+    const settings = JSON.parse(await fs.readFile(path.join(f.data,"ai/t3/userdata/settings.json"),"utf8"));
+    const config = nativeConfig(settings), official = config.providers.find(item => item.instanceId === "frame_" + f.official);
+    assert.equal(official.enabled,false); assert.equal(official.installed,false); assert.equal(official.status,"disabled");
+    assert.equal(official.auth.status,"unauthenticated");
+    await assert.rejects(fs.access(path.join(f.data,"ai/cli/frame_"+f.official,"auth.json")), {code:"ENOENT"});
+    assert.equal((await verifyAiRetirement({...f,client:{config:async()=>config}})).phase,"verified");
+    assert.equal((await retireAiTables(f)).phase,"retired");
+    assert.equal((await f.db.all("SELECT * FROM ai_validations")).length,1);
+    assert.equal(JSON.parse(await fs.readFile(path.join(f.data,"ai/t3/userdata/settings.json"),"utf8")).providerInstances["frame_"+f.official].enabled,false);
   });
   test(`${dialect}: preparation refuses retained history and credential changes block table deletion`, options, async t => {
     const f=await fixture(t,dialect);

@@ -167,9 +167,11 @@ export async function verifyAiRetirement({ db, data, client = new AiClient({ dat
   if (digest(stable(await snapshot(db))) !== proof.sourceDigest) throw Error("Retirement source changed after preparation");
   const config = await client.config();
   for (const profile of proof.profiles) {
-    const native = config.providers.find(value => value.instanceId === profile.instanceId);
-    if (!native || native.driver !== profile.driver || native.enabled !== profile.enabled ||
-        native.runtimePaths?.homePath !== profile.homePath || native.availability === "unavailable")
+    const settings = config.settings?.providerInstances?.[profile.instanceId];
+    const native = config.providers?.find(value => value.instanceId === profile.instanceId);
+    if (!settings || settings.driver !== profile.driver || settings.enabled !== profile.enabled ||
+        settings.config?.homePath !== profile.homePath || !native || native.driver !== profile.driver ||
+        native.enabled !== profile.enabled || (profile.enabled && native.installed !== true))
       throw Error("The live T3 registry has not loaded the migrated native provider");
   }
   proof.phase = "verified"; proof.nativeEnvironmentId = config.environment.environmentId; proof.verifiedAt = new Date().toISOString();
