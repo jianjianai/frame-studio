@@ -16,6 +16,11 @@ FROM base
 # Native dependencies build with upstream pnpm 11; work CLI commands use FRAME's pinned manager.
 RUN npm install -g pnpm@12.4.2
 COPY --from=build /opt/t3/ /opt/t3/
+# Native login-shell PATH hydration may prefer /usr/local/bin. Keep both entry
+# paths on the same managed launcher and retain the stock npm symlinks for fallback.
+RUN mv /usr/local/bin/codex /usr/local/bin/codex-frame-fallback && \
+    mv /usr/local/bin/claude /usr/local/bin/claude-frame-fallback && \
+    ln -s /opt/t3/bin/codex /usr/local/bin/codex && ln -s /opt/t3/bin/claude /usr/local/bin/claude
 COPY scripts/start-t3.mjs /opt/t3/start.mjs
 ENV NODE_ENV=production FRAME_DATA=/data FRAME_T3_ROOT=/opt/t3 FRAME_BROWSER=/usr/bin/chromium T3CODE_HOST=0.0.0.0 T3CODE_PORT=3773
 ARG REVISION=development

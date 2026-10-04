@@ -6,7 +6,8 @@ import { spawn } from "node:child_process";
 const tool = path.basename(process.argv[1]) === "codex" ? "codex" : "claude";
 const data = process.env.FRAME_DATA || "/data";
 const directory = path.join(data, "tools", tool), marker = path.join(directory, "current");
-let binary = "/usr/local/bin/" + tool;
+const fallback = "/usr/local/bin/" + tool + "-frame-fallback";
+let binary = fs.existsSync(fallback) ? fallback : "/usr/local/bin/" + tool;
 if (fs.existsSync(marker)) {
   const version = fs.readFileSync(marker, "utf8").trim();
   if (!/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version)) throw Error("Invalid installed CLI version");
