@@ -25,13 +25,6 @@
 .desktop-runtime-grid > div { display: flex; gap: 9px; font-size: 11px; color: var(--muted); }
 .desktop-runtime-grid strong { display: block; font-size: 13px; color: var(--ink); margin-top: 7px; font-weight: 500; }
 .desktop-secondary-actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 20px; }
-.desktop-ai-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
-.desktop-ai-card { margin: 0 0 20px; }
-.desktop-ai-card p { min-height: 42px; margin-top: 12px; }
-.desktop-cli-detail { display: flex; flex-direction: column; gap: 8px; font-size: 11px; margin: 20px 0; color: var(--muted); }
-.desktop-cli-detail strong { color: var(--ink); font-weight: 500; }
-.desktop-ai-actions { margin: 20px 0 12px; }
-.desktop-ai-card small { color: var(--muted); font-size: 11px; line-height: 1.8; }
 .desktop-welcome { display: flex; align-items: center; gap: 30px; padding: 32px; background: #eaf0e2; border: 1px solid #d8e2cc; border-radius: 12px; margin: 6px 0 28px; }
 .desktop-welcome h2 { margin: 9px 0 10px; font-size: 25px; font-weight: 500; }
 .desktop-welcome p { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.8; }
@@ -42,4 +35,4 @@
 .desktop-welcome-art div { position: absolute; width: 76px; height: 59px; background: #fff; border: 1px solid #9cab8d; border-radius: 5px; box-shadow: 0 5px 13px #263b3210; transform: rotate(-12deg); left: 10px; top: 5px; }
 .desktop-welcome-art div:nth-child(2) { left: 29px; top: 24px; transform: rotate(3deg); }
 .desktop-welcome-art div:nth-child(3) { left: 42px; top: 42px; transform: rotate(12deg); background: #d1e6b1; }
-@media (max-width: 1000px) { .desktop-ai-grid { grid-template-columns: 1fr; } .desktop-welcome { padding: 24px; gap: 18px; } .desktop-welcome-art { display: none; } }
+@media (max-width: 1000px) { .desktop-welcome { padding: 24px; gap: 18px; } .desktop-welcome-art { display: none; } }

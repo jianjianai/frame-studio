@@ -3,7 +3,7 @@
 name: frame
 services:
   studio:
-    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.3}
+    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-8.4.0}
     restart: unless-stopped
     user: "1000:1000"
     read_only: true
@@ -23,12 +23,16 @@ services:
       FRAME_MIN_FREE_BYTES: ${FRAME_MIN_FREE_BYTES:-1073741824}
       # Canonical workspace edits on this Docker volume are observed by the live preview.
       FRAME_LIVE_PREVIEW_POLLING: ${FRAME_LIVE_PREVIEW_POLLING:-1}
-      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.3}
+      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-8.4.0}
+      FRAME_T3_URL: http://frame-t3:3773
+      FRAME_T3_CONTAINER: frame-t3
       FRAME_TASK_TIMEOUT_SECONDS: ${FRAME_TASK_TIMEOUT_SECONDS:-21600}
       FRAME_SPEECH_URL: http://speech:8000
     volumes:
       - ./data:/data
-    networks: [internal, caddy]
+    networks:
+      internal: { aliases: [frame-web] }
+      caddy:
     labels:
       caddy: ${FRAME_DOMAIN:-frame.nerviloom.com}
       caddy.reverse_proxy: "{{upstreams 3000}}"
@@ -49,7 +53,7 @@ services:
       retries: 5
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   controller:
-    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-7.6.3}
+    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-8.4.0}
     restart: unless-stopped
     user: "1000:1000"
     group_add: ["${FRAME_DOCKER_GID:?Set FRAME_DOCKER_GID to the Docker socket group ID}"]
@@ -74,6 +78,45 @@ services:
       start_period: 30s
       retries: 5
     stop_grace_period: 120s
+    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
+  t3:
+    image: ghcr.io/jianjianai/frame-studio/t3-code:${FRAME_T3_VERSION:-0.0.45-frame.1}
+    container_name: frame-t3
+    restart: unless-stopped
+    user: "1000:1000"
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      HOME: /data/ai/t3/home
+      FRAME_DATA: /data
+      FRAME_CALLBACK_URL: http://frame-web:3000
+      FRAME_AI_CONTROL_FILE: /data/ai/shared/control.json
+      FRAME_BROWSER: /usr/bin/chromium
+    volumes:
+      - ./data:/data
+      - type: bind
+        source: ./data/runtime/current
+        target: /opt/frame
+        read_only: true
+        bind: { create_host_path: false }
+    networks: [internal]
+    depends_on:
+      studio: { condition: service_healthy }
+    stop_grace_period: 120s
+    healthcheck:
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "const fs=require('node:fs');fetch('http://127.0.0.1:3773/api/auth/session',{headers:{authorization:'Bearer '+fs.readFileSync('/data/ai/t3/frame-service-token','utf8').trim()}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 20s
+      timeout: 5s
+      start_period: 30s
+      retries: 5
     logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
   postgres:
     image: postgres:18-alpine

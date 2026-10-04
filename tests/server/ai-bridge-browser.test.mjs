@@ -1,0 +1,249 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import path from "node:path";
+import fs from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { createServer } from "vite";
+import { launchBrowser } from "../../scripts/browser.mjs";
+import { readAiReference } from "../../studio/ai-reference.mjs";
+import {
+  aiBoundaryBootstrap,
+  aiBoundaryHtml,
+} from "../ui/ai-boundary-fixture.mjs";
+const workId = "cc8c4ec2-a1aa-41ed-8fdc-8a98684f5c4a";
+const messageId = "fced05e2-9f68-4a0c-b446-61df118d8541";
+test(
+  "The production T3 Code parent bridge isolates windows and cancels replaced pending ports",
+  { timeout: 60000 },
+  async () => {
+    let bootstrap;
+    const cacheDir = path.resolve(".cache/tests/ai-bridge-" + randomUUID());
+    const server = await createServer({
+      configFile: false,
+      root: process.cwd(),
+      cacheDir,
+      logLevel: "error",
+      appType: "custom",
+      server: { host: "127.0.0.1", port: 0, watch: null },
+      plugins: [
+        {
+          name: "ai-parent-boundary",
+          configureServer(vite) {
+            vite.middlewares.use((req, res, next) => {
+              if (req.url === "/__parent") {
+                res.setHeader("Content-Type", "text/html");
+                res.end(`<!doctype html><html><body><iframe id="native"></iframe><script type="module">
+          import {aiBridge} from '/studio/ai-bridge.js';
+          const config=${JSON.stringify(bootstrap)},iframe=document.getElementById('native');
+          window.trace={contextCalls:0,freezeCalls:[],aborted:0,mode:'resolve',releases:[],connections:[],activeThreads:[],previews:[]};
+          const trace=window.trace;
+          window.owner=aiBridge({iframe,bootstrap:config,getContext:()=>{trace.contextCalls++;return {time:5};},
+            freeze:(body,signal)=>{trace.freezeCalls.push(body);return new Promise((resolve,reject)=>{
+              const finish=()=>resolve({version:1,workId:config.workId,threadId:body.threadId,messageId:body.messageId,intentHash:'a'.repeat(64),context:body.reference,reviewReference:{status:'unversioned'}});
+              signal.addEventListener('abort',()=>{trace.aborted++;reject(new DOMException('Cancelled','AbortError'));},{once:true});
+              if(trace.mode==='resolve')finish();else trace.releases.push(finish);
+            });},onConnection:state=>trace.connections.push(state),onActiveThread:id=>trace.activeThreads.push(id),onPreview:reference=>trace.previews.push(reference)});
+          iframe.src=config.embedPath+'?frameNonce='+config.nonce;
+          </script></body></html>`);
+                return;
+              }
+              if (bootstrap && req.url?.startsWith(bootstrap.embedPath)) {
+                res.setHeader("Content-Type", "text/html");
+                res.end(aiBoundaryHtml(bootstrap));
+                return;
+              }
+              next();
+            });
+          },
+        },
+      ],
+    });
+    let browser;
+    try {
+      await server.listen();
+      const origin = "http://127.0.0.1:" + server.httpServer.address().port;
+      bootstrap = aiBoundaryBootstrap({ workId, origin });
+      browser = await launchBrowser();
+      const page = await browser.newPage(),
+        errors = [];
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(origin + "/__parent");
+      let frame = await (
+        await page.locator("#native").elementHandle()
+      ).contentFrame();
+      await frame.waitForFunction(() => window.__FRAME_REVIEW_AI__?.ready);
+      assert.deepEqual(
+        await frame.evaluate(() => window.__FRAME_REVIEW_AI__.context()),
+        { time: 5 },
+      );
+      await page.waitForFunction(() =>
+        window.trace.activeThreads.includes("fixture-draft-composer"),
+      );
+      await assert.rejects(
+        frame.evaluate(
+          (config) =>
+            window.__FRAME_REVIEW_AI__.request("context.subscribe", {
+              threadId: "foreign-thread",
+              nativeProjectId: "another-project",
+              cwd: config.cwd,
+              standaloneUrl: "/ai/another-work/foreign-thread",
+            }),
+          bootstrap,
+        ),
+        /不属于此作品/,
+      );
+      await assert.rejects(
+        frame.evaluate(
+          (config) =>
+            window.__FRAME_REVIEW_AI__.request("context.subscribe", {
+              threadId: "foreign-thread",
+              nativeProjectId: config.projectId,
+              cwd: "/another/work",
+              standaloneUrl: "/ai/another-work/foreign-thread",
+            }),
+          bootstrap,
+        ),
+        /不属于此作品/,
+      );
+      assert.equal(
+        await page.evaluate(() =>
+          window.trace.activeThreads.includes("foreign-thread"),
+        ),
+        false,
+      );
+      const before = await page.evaluate(() => window.trace.contextCalls);
+      // A sibling same-origin iframe has no authority even with the real work ID and nonce.
+      await page.evaluate(
+        (config) =>
+          new Promise((resolve) => {
+            const foreign = document.createElement("iframe");
+            foreign.id = "foreign";
+            foreign.srcdoc =
+              "<script>const pair=new MessageChannel();parent.postMessage(" +
+              JSON.stringify({
+                type: "frame-ai-connect",
+                version: 1,
+                workId: config.workId,
+                nonce: config.nonce,
+              }) +
+              "," +
+              JSON.stringify(location.origin) +
+              ",[pair.port2]);<\/script>";
+            foreign.onload = () => setTimeout(resolve, 80);
+            document.body.append(foreign);
+          }),
+        bootstrap,
+      );
+      await frame.evaluate((config) => {
+        const pair = new MessageChannel();
+        parent.postMessage(
+          {
+            type: "frame-ai-connect",
+            version: 1,
+            workId: config.workId,
+            nonce: "wrong-nonce-123456789012345",
+          },
+          config.parentOrigin,
+          [pair.port2],
+        );
+      }, bootstrap);
+      assert.deepEqual(
+        await frame.evaluate(() => window.__FRAME_REVIEW_AI__.context()),
+        { time: 5 },
+      );
+      assert.equal(
+        await page.evaluate(() => window.trace.contextCalls),
+        before + 1,
+      );
+      await frame.evaluate(() =>
+        window.__FRAME_REVIEW_AI__.request("context.attach", {
+          threadId: "owned-agent",
+        }),
+      );
+      await frame.waitForFunction(
+        () => window.__FRAME_REVIEW_AI__.attachments.length === 1,
+      );
+      const attachedUrl = await frame.evaluate(
+        () => window.__FRAME_REVIEW_AI__.attachments[0].url,
+      );
+      assert.deepEqual(readAiReference(attachedUrl, workId), { time: 5 });
+      await frame.evaluate(
+        (url) => window.__FRAME_REVIEW_AI__.request("preview.open", { url }),
+        attachedUrl,
+      );
+      assert.deepEqual(await page.evaluate(() => window.trace.previews), [
+        { time: 5 },
+      ]);
+      const foreignReference = new URL(attachedUrl);
+      const encoded = JSON.parse(
+        foreignReference.searchParams.get("frameReference"),
+      );
+      encoded.workId = "ff6a75e1-fd80-4305-a6ce-24ad5a53df4b";
+      foreignReference.searchParams.set(
+        "frameReference",
+        JSON.stringify(encoded),
+      );
+      for (const url of [foreignReference.href, new URL("/", origin).href])
+        await assert.rejects(
+          frame.evaluate(
+            (url) =>
+              window.__FRAME_REVIEW_AI__.request("preview.open", { url }),
+            url,
+          ),
+          /不属于此作品/,
+        );
+      assert.equal(await page.evaluate(() => window.trace.previews.length), 1);
+      const input = {
+        threadId: "owned-agent",
+        messageId,
+        text: "Keep this frame",
+        nativeProjectId: bootstrap.projectId,
+        cwd: bootstrap.cwd,
+        selection: { instanceId: "codex", model: "fixture" },
+        reference: { time: 5 },
+      };
+      assert.equal(
+        (
+          await frame.evaluate(
+            (input) =>
+              window.__FRAME_REVIEW_AI__.request("freeze.submit", input),
+            input,
+          )
+        ).messageId,
+        messageId,
+      );
+      await page.evaluate(() => {
+        window.trace.mode = "defer";
+      });
+      await frame.evaluate((input) => {
+        window.__pendingFreeze = window.__FRAME_REVIEW_AI__
+          .request("freeze.submit", input)
+          .catch(() => null);
+      }, input);
+      await page.waitForFunction(() => window.trace.freezeCalls.length === 2);
+      await frame.goto(frame.url());
+      await frame.waitForFunction(() => window.__FRAME_REVIEW_AI__?.ready);
+      await page.waitForFunction(() => window.trace.aborted === 1);
+      const next = frame.evaluate(
+        (input) => window.__FRAME_REVIEW_AI__.request("freeze.submit", input),
+        input,
+      );
+      await page.waitForFunction(() => window.trace.freezeCalls.length === 3);
+      await page.evaluate(() => {
+        window.owner.dispose();
+      });
+      await assert.rejects(next, /Frame closed/);
+      await page.waitForFunction(() => window.trace.aborted === 2);
+      const after = await page.evaluate(() => window.trace.contextCalls);
+      await page.evaluate(() => {
+        window.trace.releases.forEach((release) => release());
+      });
+      assert.equal(await page.evaluate(() => window.trace.contextCalls), after);
+      assert.deepEqual(errors, []);
+    } finally {
+      await browser?.close();
+      await server.close();
+      await fs.rm(cacheDir, { recursive: true, force: true });
+    }
+  },
+);

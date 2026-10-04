@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import { setTimeout as sleep } from "node:timers/promises";
 import { Client } from "pg";
 import { createServer } from "vite";
 import { chromium } from "@playwright/test";
@@ -21,7 +22,7 @@ test("browser UUID helper retains native secure UUID generation", () => {
 });
 
 test(
-  "real insecure HTTP hostname supports secure UUIDs, live preview, WebSocket form writes and Paseo reference IDs",
+  "real insecure HTTP hostname supports secure UUIDs, live preview, WebSocket form writes and T3 Code reference IDs",
   {
     skip: !process.env.FRAME_TEST_DATABASE_URL,
     timeout: 120000,
@@ -59,9 +60,20 @@ test(
         if (db && !db.pool.ending && !db.pool.ended) await db.pool.end();
       });
       if (created)
-        await cleanup(() =>
-          admin.query('DROP DATABASE "' + dbName + '" WITH (FORCE)'),
-        );
+        await cleanup(async () => {
+          const deadline = Date.now() + 5000;
+          for (;;) {
+            try {
+              await admin.query('DROP DATABASE "' + dbName + '"');
+              break;
+            } catch (error) {
+              // Pool shutdown can finish before PostgreSQL observes every socket close.
+              // Wait for our sessions to leave; a persistent leak must still fail this test.
+              if (error.code !== "55006" || Date.now() >= deadline) throw error;
+              await sleep(50);
+            }
+          }
+        });
       await cleanup(() => admin.end());
       await cleanup(() => fs.rm(owned, { recursive: true, force: true }));
       if (failures.length)
@@ -112,8 +124,8 @@ window.nativeRequest=(op,payload={})=>new Promise((resolve,reject)=>{const id=ra
 pair.port1.onmessage=({data})=>{if(data.type==='connected')window.nativeReady=true;
  if(data.type==='event'&&data.event==='context.attach')attachments.push(data.payload.item);
  if(data.type==='response'){const next=pending.get(data.id);pending.delete(data.id);data.ok?next.resolve(data.payload):next.reject(new Error(data.error.message));}};
-pair.port1.start();window.submitReference=()=>window.nativeRequest('freeze.submit',{agentId:'http-agent',messageId:randomUUID(),prompt:'Review this actual HTTP frame',context:{time:.5},profileId:'http-profile',model:'http-model',attachmentsFingerprint:'a'.repeat(64)});
-parent.postMessage({type:'frame-paseo-connect',version:1,...config},location.origin,[pair.port2]);
+pair.port1.start();window.submitReference=()=>window.nativeRequest('freeze.submit',{threadId:'http-agent',messageId:randomUUID(),text:'Review this actual HTTP frame',reference:{time:.5},nativeProjectId:'http-project',cwd:'/fixture/http',selection:{instanceId:'http-profile',model:'http-model'}});
+parent.postMessage({type:'frame-ai-connect',version:1,...config},location.origin,[pair.port2]);
 </script>`;
     vite = await createServer({
       configFile: false,
@@ -140,7 +152,7 @@ parent.postMessage({type:'frame-paseo-connect',version:1,...config},location.ori
                 );
                 return;
               }
-              if (req.url?.startsWith(`/paseo/${work.id}/`)) {
+              if (req.url?.startsWith(`/ai/works/${work.id}/`)) {
                 res.setHeader("Content-Type", "text/html");
                 res.end(native);
                 return;
@@ -152,14 +164,14 @@ parent.postMessage({type:'frame-paseo-connect',version:1,...config},location.ori
               res.setHeader("Content-Type", "text/html");
               res.end(`<!doctype html><form id="rename"><input name="title" value="HTTP edited"><button>Save</button></form><output id="saved"></output>
 <iframe id="player" src=${JSON.stringify(live.url + (live.url.includes("?") ? "&" : "?") + "debug=1")}></iframe><iframe id="native"></iframe><script type="module">
-import {randomUUID} from '/src/browser/uuid.mjs';import {socketCall,subscribe} from '/studio/realtime.ts';import {paseoBridge} from '/studio/paseo-bridge.js';
+import {randomUUID} from '/src/browser/uuid.mjs';import {socketCall,subscribe} from '/studio/realtime.ts';import {aiBridge} from '/studio/ai-bridge.js';
 window.uuidProof=()=>Array.from({length:4096},()=>randomUUID());window.frozen=[];
 document.getElementById('rename').onsubmit=async event=>{event.preventDefault();const title=new FormData(event.target).get('title');
  const result=await socketCall('works_update',{id:${JSON.stringify(work.id)},title});document.getElementById('saved').textContent=result.title;};
-const bootstrap={version:1,workId:${JSON.stringify(work.id)},userScope:'http-test-admin',nonce:'http-uuid-boundary-nonce-123456',basePath:${JSON.stringify(`/paseo/${work.id}/`)},parentOrigin:location.origin,serverId:'http-server',workspaceId:'http-workspace',label:'HTTP boundary'};
-const iframe=document.getElementById('native');window.bridge=paseoBridge({iframe,bootstrap,getContext:()=>({time:.5}),
- freeze:async input=>{window.frozen.push(input);return {version:1,workId:bootstrap.workId,agentId:input.agentId,messageId:input.messageId,intentHash:'a'.repeat(64),context:input.context,reviewReference:{status:'unversioned'}};}});
-iframe.src=bootstrap.basePath+'?frameNonce='+bootstrap.nonce;
+const bootstrap={version:1,workId:${JSON.stringify(work.id)},userScope:'http-test-admin',nonce:'http-uuid-boundary-nonce-123456',basePath:'/ai/',embedPath:${JSON.stringify(`/ai/works/${work.id}/`)},parentOrigin:location.origin,environmentId:'http-server',projectId:'http-project',cwd:'/fixture/http',label:'HTTP boundary'};
+const iframe=document.getElementById('native');window.bridge=aiBridge({iframe,bootstrap,getContext:()=>({time:.5}),
+ freeze:async input=>{window.frozen.push(input);return {version:1,workId:bootstrap.workId,threadId:input.threadId,messageId:input.messageId,intentHash:'a'.repeat(64),context:input.reference,reviewReference:{status:'unversioned'}};}});
+iframe.src=bootstrap.embedPath+'?frameNonce='+bootstrap.nonce;
 window.unwatch=subscribe('works_sync_status',{id:bootstrap.workId},value=>{window.sync=value;});
 </script>`);
             });
@@ -265,7 +277,7 @@ window.unwatch=subscribe('works_sync_status',{id:bootstrap.workId},value=>{windo
     ).contentFrame();
     await frame.waitForFunction(() => window.nativeReady);
     await frame.evaluate(() =>
-      window.nativeRequest("context.attach", { agentId: "http-agent" }),
+      window.nativeRequest("context.attach", { threadId: "http-agent" }),
     );
     await frame.waitForFunction(() => window.attachments.length === 1);
     const attachment = await frame.evaluate(() => window.attachments[0]);

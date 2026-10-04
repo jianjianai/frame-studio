@@ -49,7 +49,7 @@ export async function workToolsChecks(h) {
     "共用非阻断工作面板，草稿、配音结果、素材搜索及审片位置保留",
     async () => {
       await ai();
-      const native = page.locator('iframe[title^="Paseo ·"]');
+      const native = page.locator('iframe[title^="T3 Code ·"]');
       await expect(native).toBeVisible();
       await native.evaluate((el) => {
         el.dataset.retained = "same-native-iframe";
@@ -102,9 +102,9 @@ export async function workToolsChecks(h) {
       );
     },
   );
-  await check("完整Paseo作品面板入口：素材、独立标签页与展开恢复", async () => {
+  await check("完整T3 Code作品面板入口：素材、独立标签页与展开恢复", async () => {
     await ai();
-    const native = page.locator('iframe[title^="Paseo ·"]');
+    const native = page.locator('iframe[title^="T3 Code ·"]');
     await expect(native).toBeVisible();
     await page.getByRole("button", { name: /^选择素材/ }).click();
     await expect(dock).toHaveAttribute("aria-label", "素材");
@@ -116,18 +116,18 @@ export async function workToolsChecks(h) {
     ).toHaveCount(0);
     const popupPromise = page.waitForEvent("popup");
     await page
-      .getByRole("link", { name: "在新标签页打开 Paseo", exact: true })
+      .getByRole("link", { name: "在新标签页打开 T3 Code", exact: true })
       .click();
     const popup = await popupPromise;
     await popup.waitForLoadState();
-    assert.equal(new URL(popup.url()).pathname, `/paseo/${state.work.id}/`);
+    assert.equal(new URL(popup.url()).pathname, "/ai/");
     assert.equal(new URL(popup.url()).searchParams.get("frameStandalone"), "1");
     assert.equal(await popup.evaluate(() => window.opener), null);
     await popup.close();
     await page
       .getByRole("button", { name: "展开 AI 面板", exact: true })
       .click();
-    await expect(dock).toHaveClass(/paseo-expanded/);
+    await expect(dock).toHaveClass(/ai-expanded/);
     await expect(native).toBeVisible();
     const bounds = await dock.boundingBox(),
       box = await native.boundingBox();
@@ -140,11 +140,11 @@ export async function workToolsChecks(h) {
     await page
       .getByRole("button", { name: "还原 AI 面板", exact: true })
       .click();
-    await expect(dock).not.toHaveClass(/paseo-expanded/);
+    await expect(dock).not.toHaveClass(/ai-expanded/);
     await expect(native).toHaveAttribute("data-retained", "same-native-iframe");
     const child = await (await native.elementHandle()).contentFrame();
     await child.evaluate(() =>
-      window.__FRAME_REVIEW_PASEO__.request("results.open", {}),
+      window.__FRAME_REVIEW_AI__.request("results.open", {}),
     );
     const results = page.getByRole("region", {
       name: "作品检查",
@@ -469,10 +469,10 @@ export async function workToolsChecks(h) {
       };
       await state.sendLive(originalFrame, updated);
       await expect(status).toHaveText("实时预览");
-      const native = page.frames().find((f) => f.url().includes("/paseo/"));
-      assert(native, "Paseo protocol boundary is mounted");
+      const native = page.frames().find((f) => f.url().includes("/ai/"));
+      assert(native, "T3 Code protocol boundary is mounted");
       const reference = await native.evaluate(() =>
-        window.__FRAME_REVIEW_PASEO__.context(),
+        window.__FRAME_REVIEW_AI__.context(),
       );
       assert.equal(reference.liveSessionId, state.live.sessionId);
       assert.equal(
@@ -573,7 +573,7 @@ export async function workToolsChecks(h) {
       await expect(dock).toBeHidden();
       await screenshot("11-rail-mobile");
       await tool("打开 AI 对话").click();
-      await expect(page.locator('iframe[title^="Paseo ·"]')).toHaveAttribute(
+      await expect(page.locator('iframe[title^="T3 Code ·"]')).toHaveAttribute(
         "data-retained",
         "same-native-iframe",
       );

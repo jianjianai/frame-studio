@@ -1,7 +1,7 @@
 import { randomUUID } from "../src/browser/uuid.mjs";
 import { usePreviewSession, decodePlayerMessage } from "./preview-session";
 import { useBrowserExport } from "./browser-export-session";
-import { PaseoChat } from "./paseo-chat";
+import { AiChat } from "./ai-chat";
 import { WorkTools } from "./work-tools";
 import { WorkDock } from "./work-dock";
 import { PreviewMediaPanel } from "./preview-media-panel";
@@ -48,7 +48,12 @@ import {
   useMediaQuery,
 } from "./ui";
 import { Materials, Details, Voice, Exports } from "./work-panels";
-import { readPaseoReference, paseoReferenceMatch, paseoReferencePosition, paseoReferenceLabel } from "./paseo-reference.mjs";
+import {
+  readAiReference,
+  aiReferenceMatch,
+  aiReferencePosition,
+  aiReferenceLabel,
+} from "./ai-reference.mjs";
 
 const SourceControl = lazy(() =>
   import("./source-control").then((module) => ({
@@ -65,20 +70,23 @@ export function Creation({ id, notify }) {
     iframe = useRef(null),
     split = useRef(null);
   const [playerElement, setPlayerElement] = useState(null);
-  const [paseoExpanded, setPaseoExpanded] = useState(false);
+  const [aiExpanded, setAiExpanded] = useState(false);
   const [messageReference, setMessageReference] = useState(null),
     [messageReferenceError, setMessageReferenceError] = useState(""),
     [referenceLocated, setReferenceLocated] = useState(false);
   const referenceApplied = useRef(false);
+  const showMessageReference = useCallback((reference) => {
+    referenceApplied.current = false;
+    setReferenceLocated(false);
+    setMessageReference(reference);
+    setMessageReferenceError("");
+  }, []);
   useEffect(() => {
     const read = () => {
-      referenceApplied.current = false;
-      setReferenceLocated(false);
       try {
-        setMessageReference(readPaseoReference(location.href, id));
-        setMessageReferenceError("");
+        showMessageReference(readAiReference(location.href, id));
       } catch (error) {
-        setMessageReference(null);
+        showMessageReference(null);
         setMessageReferenceError(error.message);
       }
     };
@@ -89,7 +97,7 @@ export function Creation({ id, notify }) {
       window.removeEventListener("popstate", read);
       window.removeEventListener("hashchange", read);
     };
-  }, [id]);
+  }, [id, showMessageReference]);
   const [editorDirty, setEditorDirty] = useState({
     audio: false,
     composition: false,
@@ -168,7 +176,7 @@ export function Creation({ id, notify }) {
     [suggestion, setSuggestion] = useState(null),
     [run, busy] = useAction(notify);
   useEffect(() => {
-    setPaseoExpanded(false);
+    setAiExpanded(false);
   }, [id]);
   useEffect(() => {
     try {
@@ -327,20 +335,51 @@ export function Creation({ id, notify }) {
       { type: "frame-player-command", command, ...extra },
       "*",
     );
-  const referenceMatch = messageReference ? paseoReferenceMatch(messageReference, previewReference) : null;
-  const referenceReady = Boolean(playerElement && preview && !browserBusy &&
-    (preview.live ? liveStatus === "ready" : !previewStage));
+  const referenceMatch = messageReference
+    ? aiReferenceMatch(messageReference, previewReference)
+    : null;
+  const referenceReady = Boolean(
+    playerElement &&
+    preview &&
+    !browserBusy &&
+    (preview.live ? liveStatus === "ready" : !previewStage),
+  );
+  useEffect(() => {
+    referenceApplied.current = false;
+    setReferenceLocated(false);
+  }, [
+    playerElement,
+    previewReference.liveSessionId,
+    previewReference.sourceRevision,
+    previewReference.compiledRevision,
+    previewReference.previewTask,
+    previewReference.sourceCommit,
+  ]);
   const locateMessageReference = () => {
     if (!messageReference || !referenceReady) return;
     sendPlayer("pause");
-    sendPlayer("seek", paseoReferencePosition(messageReference));
+    sendPlayer("seek", aiReferencePosition(messageReference));
     referenceApplied.current = true;
     setReferenceLocated(true);
   };
   useEffect(() => {
-    if (referenceReady && referenceMatch === "matched" && !referenceApplied.current)
+    if (
+      referenceReady &&
+      referenceMatch === "matched" &&
+      !referenceApplied.current
+    )
       locateMessageReference();
-  }, [referenceReady, referenceMatch, messageReference]);
+  }, [
+    referenceReady,
+    referenceMatch,
+    messageReference,
+    playerElement,
+    previewReference.liveSessionId,
+    previewReference.sourceRevision,
+    previewReference.compiledRevision,
+    previewReference.previewTask,
+    previewReference.sourceCommit,
+  ]);
   const closeChat = closeTool;
   const retryPreview = () => {
     if (browserBusy) return;
@@ -599,27 +638,58 @@ export function Creation({ id, notify }) {
         >
           <ErrorNote error={messageReferenceError} />
           {messageReference && (
-            <div className="preview-version-note live-preview-note" role="status" aria-label="对话中的画面引用">
-              <strong>对话引用 · {paseoReferenceLabel(messageReference)}</strong>
+            <div
+              className="preview-version-note live-preview-note"
+              role="status"
+              aria-label="对话中的画面引用"
+            >
+              <strong>对话引用 · {aiReferenceLabel(messageReference)}</strong>
               <span>
                 {referenceMatch === "matched"
-                  ? referenceLocated ? "已定位引用对应的预览版本。" : "正在定位引用画面…"
-                  : referenceMatch === "pending" ? "正在核对引用记录的预览版本…"
-                  : referenceMatch === "unversioned" ? "此引用未记录源码版本，尚未定位。"
-                  : referenceLocated ? "已按你的选择定位当前版本；引用仍属于记录的较早版本。"
-                  : "引用记录的版本与当前预览不同，尚未定位。"}
+                  ? referenceLocated
+                    ? "已定位引用对应的预览版本。"
+                    : "正在定位引用画面…"
+                  : referenceMatch === "pending"
+                    ? "正在核对引用记录的预览版本…"
+                    : referenceMatch === "unversioned"
+                      ? "此引用未记录源码版本，尚未定位。"
+                      : referenceLocated
+                        ? "已按你的选择定位当前版本；引用仍属于记录的较早版本。"
+                        : "引用记录的版本与当前预览不同，尚未定位。"}
               </span>
-              {(messageReference.sourceRevision || messageReference.sourceCommit) && (
+              {(messageReference.sourceRevision ||
+                messageReference.sourceCommit) && (
                 <details style={{ maxWidth: "100%", overflowWrap: "anywhere" }}>
                   <summary>查看引用版本</summary>
-                  <p>记录源码：{messageReference.sourceRevision || messageReference.sourceCommit}</p>
-                  {messageReference.compiledRevision && <p>记录画面：{messageReference.compiledRevision}</p>}
-                  <p>当前源码：{previewReference.sourceRevision || previewReference.sourceCommit || "正在获取"}</p>
-                  {messageReference.compiledRevision && <p>当前画面：{previewReference.compiledRevision || "正在获取"}</p>}
+                  <p>
+                    记录源码：
+                    {messageReference.sourceRevision ||
+                      messageReference.sourceCommit}
+                  </p>
+                  {messageReference.compiledRevision && (
+                    <p>记录画面：{messageReference.compiledRevision}</p>
+                  )}
+                  <p>
+                    当前源码：
+                    {previewReference.sourceRevision ||
+                      previewReference.sourceCommit ||
+                      "正在获取"}
+                  </p>
+                  {messageReference.compiledRevision && (
+                    <p>
+                      当前画面：
+                      {previewReference.compiledRevision || "正在获取"}
+                    </p>
+                  )}
                 </details>
               )}
-              <Button disabled={!referenceReady || referenceMatch === "pending"} onClick={locateMessageReference}>
-                {referenceMatch === "matched" ? "重新定位引用" : "在当前版本定位此时间"}
+              <Button
+                disabled={!referenceReady || referenceMatch === "pending"}
+                onClick={locateMessageReference}
+              >
+                {referenceMatch === "matched"
+                  ? "重新定位引用"
+                  : "在当前版本定位此时间"}
               </Button>
             </div>
           )}
@@ -708,9 +778,9 @@ export function Creation({ id, notify }) {
         <WorkDock
           tool={tool}
           compact={compact}
-          expanded={tool === "ai" && paseoExpanded}
+          expanded={tool === "ai" && aiExpanded}
           onClose={() => {
-            setPaseoExpanded(false);
+            setAiExpanded(false);
             closeTool();
           }}
         >
@@ -732,10 +802,9 @@ export function Creation({ id, notify }) {
             data-dock-pane="ai"
             hidden={!chatOpen}
           >
-            <PaseoChat
+            <AiChat
               key={id}
               work={work}
-              tasks={tasks}
               reload={taskQuery.refresh}
               notify={notify}
               position={position}
@@ -746,20 +815,18 @@ export function Creation({ id, notify }) {
               suggestion={suggestion}
               visible={chatOpen}
               onClose={() => {
-                setPaseoExpanded(false);
+                setAiExpanded(false);
                 closeChat();
               }}
               compact={compact}
-              expanded={paseoExpanded}
-              onExpand={() => setPaseoExpanded((value) => !value)}
-              onPreviewWork={() => setPaseoExpanded(false)}
+              expanded={aiExpanded}
+              onExpand={() => setAiExpanded((value) => !value)}
+              onPreviewWork={(reference) => {
+                setAiExpanded(false);
+                if (reference) showMessageReference(reference);
+              }}
               onRemoveAsset={(id) =>
                 setAssets((old) => old.filter((a) => a.id !== id))
-              }
-              onClearAssets={(ids) =>
-                setAssets((current) =>
-                  ids ? current.filter((asset) => !ids.includes(asset.id)) : [],
-                )
               }
             />
           </div>

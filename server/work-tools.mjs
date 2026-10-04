@@ -92,7 +92,7 @@ export function workTools({
 }) {
   app.post("/api/agent/action", async (req) => {
     const task = req.agentTask;
-    if (!task || task.kind !== "paseo") throw problem(403, "Paseo workspace credential required");
+    if (!task || task.kind !== "ai") throw problem(403, "Ai workspace credential required");
     const runRoot = () => task.runRoot || path.join(data, "runs", task.id || "");
     const { name, args = {} } = req.body || {};
     if (!args || typeof args !== "object" || Array.isArray(args))
@@ -101,7 +101,7 @@ export function workTools({
       if (Object.keys(args).length)
         throw problem(
           400,
-          "preview takes no arguments; the workspace is scoped to this Paseo agent",
+          "preview takes no arguments; the workspace is scoped to this Ai agent",
         );
       const work = await db.one(
         "SELECT id FROM works WHERE repo=$1 AND project=$2 AND NOT deleted",

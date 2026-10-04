@@ -28,7 +28,7 @@ try {
   const versioned = (await client.query("SELECT to_regclass('frame_schema_migrations') AS name")).rows[0].name;
   const migrations = versioned ? (await client.query("SELECT id FROM frame_schema_migrations ORDER BY id")).rows : [];
   let credentials = 0;
-  for (const table of ["connections", "github_accounts", "engines"]) {
+  for (const table of ["github_accounts", "engines"]) {
     for (const row of (await client.query(`SELECT config FROM ${table}`)).rows) {
       secrets.decrypt(row.config); credentials++;
     }

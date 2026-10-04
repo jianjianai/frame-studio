@@ -24,9 +24,9 @@ test(
       f = fixture({ browser: true, renderer: "pixi" }),
       db = await database(url, "test-password-at-least-14");
     await db.pool.query(
-      "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
+      "TRUNCATE repos,github_accounts,auth_flows RESTART IDENTITY CASCADE",
     );
-    const { app, actions, tasks, paseo } = await createApp({
+    const { app, actions, tasks, ai } = await createApp({
       db,
       data,
       masterKey: "33".repeat(32),
@@ -260,28 +260,28 @@ test(
       );
       await reopened.getByRole("button", { name: "停止", exact: true }).click();
       await reopened.getByText("当前没有在后台运行的项目。").waitFor();
-      await paseo.store.ensureWork({ workId: work.id, repo: repo.id, project: work.project, revision: "b".repeat(64) });
+      await ai.store.ensureWork({ workId: work.id, repo: repo.id, project: work.project, revision: "b".repeat(64) });
       let nativeRunning = true;
       const nativeActivity = tasks.externalActivity;
-      const nativeCancel = paseo.manager.cancelWork;
+      const nativeCancel = ai.manager.cancelWork;
       tasks.externalActivity = async () => nativeRunning ? [{ workId: work.id, repo: repo.id, project: work.project,
         state: "ready", activeAgents: ["owned-native-agent"], activeTerminals: 1, pendingPermissions: 1, incomplete: false }] : [];
-      paseo.manager.cancelWork = async id => {
+      ai.manager.cancelWork = async id => {
         assert.equal(id, work.id);
         nativeRunning = false;
-        await paseo.store.updateRuntime(id, { state: "stopped" });
+        await ai.store.updateRuntime(id, { state: "stopped" });
         return { stopped: 2 };
       };
-      await paseo.store.updateRuntime(work.id, { state: "ready" });
-      await reopened.getByText("Paseo · 1 个对话正在运行", { exact: true }).waitFor();
+      await ai.store.updateRuntime(work.id, { state: "ready" });
+      await reopened.getByText("Ai · 1 个对话正在运行", { exact: true }).waitFor();
       await reopened.getByText("终端 · 1 项正在运行", { exact: true }).waitFor();
-      await reopened.getByText("Paseo · 等待权限确认", { exact: true }).waitFor();
+      await reopened.getByText("Ai · 等待权限确认", { exact: true }).waitFor();
       assert.equal(await reopened.getByRole("button", { name: "停止", exact: true }).isEnabled(), true);
       assert.equal((await call("works_background"))[0].storage_name, "作品浏览器测试");
       await reopened.getByRole("button", { name: "停止", exact: true }).click();
       await reopened.getByText("当前没有在后台运行的项目。").waitFor();
       tasks.externalActivity = nativeActivity;
-      paseo.manager.cancelWork = nativeCancel;
+      ai.manager.cancelWork = nativeCancel;
       await reopened.goto(origin + "/#/repository/" + repo.id);
       await reopened.getByLabel("MCP 测试操作").click();
       await reopened

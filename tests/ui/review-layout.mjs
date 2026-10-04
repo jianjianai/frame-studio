@@ -18,7 +18,7 @@ export async function layoutChecks(h) {
       state.work.title,
     );
     assert.equal(await page.locator(".navigation").count(), 0);
-    await expect(page.locator('iframe[title^="Paseo ·"]')).toBeVisible();
+    await expect(page.locator('iframe[title^="T3 Code ·"]')).toBeVisible();
     assert(!library.url().includes("#/work/"));
     await player().getByTestId("play-toggle").waitFor();
     await frame().waitForFunction(() => window.__FRAME_STUDIO__?.ready);
@@ -28,7 +28,7 @@ export async function layoutChecks(h) {
   await check(
     "AI显隐保留完整原生界面实例和后台任务，无上下布局切换",
     async () => {
-      const native = page.locator('iframe[title^="Paseo ·"]');
+      const native = page.locator('iframe[title^="T3 Code ·"]');
       await native.evaluate((el) => {
         el.dataset.retained = "same-instance";
       });
@@ -136,10 +136,10 @@ export async function layoutChecks(h) {
       .press("0");
   });
   await check("Frame选段上下文绑定实际预览，旧聊天入口已移除", async () => {
-    const native = page.frames().find((f) => f.url().includes("/paseo/"));
-    await native.waitForFunction(() => window.__FRAME_REVIEW_PASEO__?.ready);
+    const native = page.frames().find((f) => f.url().includes("/ai/"));
+    await native.waitForFunction(() => window.__FRAME_REVIEW_AI__?.ready);
     const reference = await native.evaluate(() =>
-      window.__FRAME_REVIEW_PASEO__.context(),
+      window.__FRAME_REVIEW_AI__.context(),
     );
     assert.equal(reference.start, 0.5);
     assert.equal(reference.end, 1.5);
@@ -150,7 +150,7 @@ export async function layoutChecks(h) {
       page.getByRole("region", { name: "旧版创作记录" }),
     ).toHaveCount(0);
     await expect(
-      page.getByRole("link", { name: "在新标签页打开 Paseo", exact: true }),
+      page.getByRole("link", { name: "在新标签页打开 T3 Code", exact: true }),
     ).toBeVisible();
   });
 }
@@ -180,7 +180,9 @@ export async function responsiveChecks(h) {
         await page
           .getByRole("button", { name: "打开 AI 对话", exact: true })
           .click();
-        const r = await page.locator('iframe[title^="Paseo ·"]').boundingBox();
+        const r = await page
+          .locator('iframe[title^="T3 Code ·"]')
+          .boundingBox();
         assert(r.y + r.height <= 844);
         await screenshot("05-chat-" + width);
         await page.locator("#work-dock").focus();

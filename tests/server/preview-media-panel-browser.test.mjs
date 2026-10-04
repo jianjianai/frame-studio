@@ -8,9 +8,9 @@ import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
 import { launchBrowser } from "../../scripts/browser.mjs";
 import {
-  paseoBoundaryBootstrap,
-  paseoBoundaryHtml,
-} from "../ui/paseo-boundary-fixture.mjs";
+  aiBoundaryBootstrap,
+  aiBoundaryHtml,
+} from "../ui/ai-boundary-fixture.mjs";
 
 const workId = "e68a0b4b-0a63-463e-861b-7f3403220255";
 const component = `
@@ -95,7 +95,9 @@ function installBackend({ workId }) {
       return { remote: false, dirty: 0, ahead: 0, behind: 0 };
     if (name === "works_live_preview")
       return {
-        url: "/__media-player?source=work&generation=" + window.fixturePreviewGeneration,
+        url:
+          "/__media-player?source=work&generation=" +
+          window.fixturePreviewGeneration,
         sessionId: window.fixturePreviewGeneration
           ? "c46d6bcd-bca7-40fb-b454-b25b078e55e7"
           : "b79b5738-b9ab-46ca-953b-168e1bfc9c60",
@@ -162,7 +164,9 @@ function installBackend({ workId }) {
           });
     }
   };
-  window.replacePreviewSession = () => { window.fixturePreviewGeneration++; };
+  window.replacePreviewSession = () => {
+    window.fixturePreviewGeneration++;
+  };
 }
 
 test(
@@ -233,30 +237,32 @@ test(
       });
       await page.addInitScript(installBackend, { workId });
       const origin = "http://127.0.0.1:" + server.httpServer.address().port;
-      const paseo = paseoBoundaryBootstrap({ workId, origin });
-      await page.route("**/api/paseo/**", (route) => {
+      const ai = aiBoundaryBootstrap({ workId, origin });
+      await page.route("**/api/ai/**", (route) => {
         const url = new URL(route.request().url());
         if (url.pathname.endsWith("/session"))
           return route.fulfill({
             json: {
-              bootstrap: paseo,
-              uiUrl: paseo.basePath + "?frameNonce=" + paseo.nonce,
+              bootstrap: ai,
+              standaloneUrl: "/ai/",
+              uiUrl: ai.embedPath + "?frameNonce=" + ai.nonce,
             },
           });
         if (url.pathname.endsWith("/status"))
           return route.fulfill({
             json: {
-              version: 1,
+              version: 2,
+              generation: "0",
               workId,
               native: {
                 state: "ready",
-                activeAgents: [],
+                activeThreads: [],
                 activeTerminals: 0,
                 pendingPermissions: 0,
                 scheduled: 0,
                 incomplete: false,
               },
-              candidate: null,
+              validation: null,
             },
           });
         return route.fulfill({
@@ -264,12 +270,12 @@ test(
           json: { error: "Unexpected fixture request" },
         });
       });
-      await page.route("**/paseo/**", (route) => {
-        if (!new URL(route.request().url()).pathname.startsWith(paseo.basePath))
+      await page.route("**/ai/**", (route) => {
+        if (!new URL(route.request().url()).pathname.startsWith(ai.embedPath))
           return route.fallback();
         return route.fulfill({
           contentType: "text/html",
-          body: paseoBoundaryHtml(paseo),
+          body: aiBoundaryHtml(ai),
         });
       });
       await page.goto(origin + "/__media-workbench");
@@ -540,10 +546,19 @@ test(
       // After reconnecting the canonical preview, late state carrying the prior nonce
       // must be ignored even if posted by the new iframe's WindowProxy.
       await page.evaluate(() => window.replacePreviewSession());
-      await frame.evaluate(() => parent.postMessage({
-        type: "frame-live-preview", state: "error", error: "Fixture connection lost",
-      }, "*"));
-      await page.getByRole("button", { name: "重新连接实时预览", exact: true }).click();
+      await frame.evaluate(() =>
+        parent.postMessage(
+          {
+            type: "frame-live-preview",
+            state: "error",
+            error: "Fixture connection lost",
+          },
+          "*",
+        ),
+      );
+      await page
+        .getByRole("button", { name: "重新连接实时预览", exact: true })
+        .click();
       await expect(iframe).toHaveAttribute("src", /source=work&generation=1/);
       frame = await currentFrame();
       await frame.waitForFunction(() => window.fixtureReady && window.channel);
@@ -595,7 +610,10 @@ test(
       for (const width of [390, 274]) {
         await page.setViewportSize({ width, height: 844 });
         if (await pane.isVisible()) {
-          await expect(page.locator("#work-dock")).toHaveAttribute("role", "dialog");
+          await expect(page.locator("#work-dock")).toHaveAttribute(
+            "role",
+            "dialog",
+          );
           await expect(radio("完整缓存")).toBeFocused();
           await page.keyboard.press("Escape");
         }

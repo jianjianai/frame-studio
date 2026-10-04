@@ -6,11 +6,11 @@ import { expect } from "@playwright/test";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
 import { launchBrowser } from "../../scripts/browser.mjs";
-import { readPaseoReference } from "../../studio/paseo-reference.mjs";
+import { aiReferenceUrl, readAiReference } from "../../studio/ai-reference.mjs";
 import {
-  paseoBoundaryBootstrap,
-  paseoBoundaryHtml,
-} from "../ui/paseo-boundary-fixture.mjs";
+  aiBoundaryBootstrap,
+  aiBoundaryHtml,
+} from "../ui/ai-boundary-fixture.mjs";
 
 const workId = "e68a0b4b-0a63-463e-861b-7f3403220255";
 const taskId = "485dc032-fdb9-43e2-b8ec-e383d5bcb424";
@@ -45,7 +45,7 @@ window.emitRevision('ready','a'.repeat(64));
 </script></body></html>`;
 
 test(
-  "Creation uses live preview without build, preserves the canonical player while background tasks run and opens the same Paseo conversation in a separate tab",
+  "Creation uses live preview without build, preserves the canonical player while background tasks run and opens the same T3 Code conversation in a separate tab",
   { timeout: 60000 },
   async () => {
     const virtualFile = path.resolve("tests/ui/live-creation-fixture.jsx");
@@ -106,12 +106,13 @@ test(
           const Native = WebSocket;
           window.fixtureCalls = [];
           window.fixtureTasks = [];
-          window.fixturePaseoStatus = {
-            version: 1,
+          window.fixtureAiStatus = {
+            version: 2,
+            generation: "0",
             workId,
             native: {
               state: "ready",
-              activeAgents: [],
+              activeThreads: [],
               activeTerminals: 0,
               pendingPermissions: 0,
             },
@@ -128,7 +129,7 @@ test(
                 title: "Live creation",
               };
             if (name === "works_tasks") return window.fixtureTasks;
-            if (name === "works_paseo_status") return window.fixturePaseoStatus;
+            if (name === "works_ai_status") return window.fixtureAiStatus;
             if (name === "works_preview_status")
               return {
                 runtimeFingerprint: "fixture",
@@ -228,24 +229,26 @@ test(
         { workId, taskId, sessionWork, sessionTask },
       );
       const origin = "http://127.0.0.1:" + server.httpServer.address().port;
-      const paseo = paseoBoundaryBootstrap({ workId, origin });
-      await page.route("**/api/paseo/**", async (route) => {
+      const ai = aiBoundaryBootstrap({ workId, origin });
+      await page.route("**/api/ai/**", async (route) => {
         const url = new URL(route.request().url());
         if (url.pathname.endsWith("/session"))
           return route.fulfill({
             json: {
-              bootstrap: paseo,
-              uiUrl: paseo.basePath + "?frameNonce=" + paseo.nonce,
+              bootstrap: ai,
+              standaloneUrl: "/ai/",
+              uiUrl: ai.embedPath + "?frameNonce=" + ai.nonce,
             },
           });
         if (url.pathname.endsWith("/status"))
           return route.fulfill({
             json: {
-              version: 1,
+              version: 2,
+              generation: "0",
               workId,
               native: {
                 state: "ready",
-                activeAgents: [],
+                activeThreads: [],
                 activeTerminals: 0,
                 pendingPermissions: 0,
                 scheduled: 0,
@@ -259,12 +262,12 @@ test(
           json: { error: "Unexpected fixture request" },
         });
       });
-      await page.context().route("**/paseo/**", (route) => {
-        if (!new URL(route.request().url()).pathname.startsWith(paseo.basePath))
+      await page.context().route("**/ai/**", (route) => {
+        if (!new URL(route.request().url()).pathname.startsWith(ai.basePath))
           return route.fallback();
         return route.fulfill({
           contentType: "text/html",
-          body: paseoBoundaryHtml(paseo),
+          body: aiBoundaryHtml(ai),
         });
       });
       await page.goto(origin + "/__creation");
@@ -328,12 +331,12 @@ test(
       await page
         .getByRole("button", { name: "打开 AI 对话", exact: true })
         .click();
-      const nativeElement = page.locator('iframe[title^="Paseo ·"]');
+      const nativeElement = page.locator('iframe[title^="T3 Code ·"]');
       await expect(nativeElement).toBeVisible();
       const native = await (await nativeElement.elementHandle()).contentFrame();
-      await native.waitForFunction(() => window.__FRAME_REVIEW_PASEO__?.ready);
+      await native.waitForFunction(() => window.__FRAME_REVIEW_AI__?.ready);
       const reference = await native.evaluate(() =>
-        window.__FRAME_REVIEW_PASEO__.context(),
+        window.__FRAME_REVIEW_AI__.context(),
       );
       assert.equal(reference.liveSessionId, sessionWork);
       assert.equal(reference.sourceRevision, "d".repeat(64));
@@ -341,15 +344,15 @@ test(
       assert.equal(reference.sourceCommit, undefined);
       await page.evaluate(() => window.startBackgroundExport());
       await page.evaluate(() => {
-        window.fixturePaseoStatus.native.activeAgents = ["current"];
+        window.fixtureAiStatus.native.activeThreads = ["current"];
         for (const ws of window.fixtureSockets)
           for (const call of ws.subs.values())
-            if (call.name === "works_paseo_status")
+            if (call.name === "works_ai_status")
               ws.onmessage?.({
                 data: JSON.stringify({
                   type: "update",
                   id: call.id,
-                  result: window.fixturePaseoStatus,
+                  result: window.fixtureAiStatus,
                 }),
               });
       });
@@ -395,32 +398,28 @@ test(
       await expect(
         page.getByRole("button", { name: "预览当前对话", exact: true }),
       ).toHaveCount(0);
-      const nativeRoute =
-        paseo.basePath +
-        "h/fixture/workspace/main?open=agent%3Acurrent&frameNonce=" +
-        paseo.nonce;
-      await nativeElement.evaluate((element, url) => {
-        element.src = url;
-      }, nativeRoute);
       const currentNative = await (
         await nativeElement.elementHandle()
       ).contentFrame();
-      await currentNative.waitForFunction(
-        () => window.__FRAME_REVIEW_PASEO__?.ready,
+      await currentNative.evaluate(
+        (config) =>
+          window.__FRAME_REVIEW_AI__.request("context.subscribe", {
+            threadId: "current",
+            nativeProjectId: config.projectId,
+            cwd: config.cwd,
+            standaloneUrl: "/ai/" + config.environmentId + "/current",
+          }),
+        ai,
       );
       const popupPromise = page.waitForEvent("popup");
       await page
-        .getByRole("link", { name: "在新标签页打开 Paseo", exact: true })
+        .getByRole("link", { name: "在新标签页打开 T3 Code", exact: true })
         .click();
       const popup = await popupPromise;
       await popup.waitForLoadState();
       const popupUrl = new URL(popup.url());
-      assert.equal(
-        popupUrl.pathname,
-        paseo.basePath + "h/fixture/workspace/main",
-      );
-      assert.equal(popupUrl.searchParams.get("open"), "agent:current");
-      assert.equal(popupUrl.searchParams.get("frameNonce"), paseo.nonce);
+      assert.equal(popupUrl.pathname, "/ai/" + ai.environmentId + "/current");
+      assert.equal(popupUrl.searchParams.has("frameNonce"), false);
       assert.equal(popupUrl.searchParams.get("frameStandalone"), "1");
       assert.equal(await popup.evaluate(() => window.opener), null);
       await popup.close();
@@ -432,7 +431,10 @@ test(
       await page
         .getByRole("button", { name: "打开 AI 对话", exact: true })
         .click();
-      await expect(nativeElement).toHaveAttribute("src", nativeRoute);
+      await expect(nativeElement).toHaveAttribute(
+        "src",
+        ai.embedPath + "?frameNonce=" + ai.nonce,
+      );
       assert.equal(
         await (await currentFrame()).evaluate(() => window.instance),
         instance,
@@ -485,34 +487,87 @@ test(
       await exportDialog
         .getByRole("button", { name: "关闭弹窗", exact: true })
         .click();
-      await page.getByRole("button", { name: "引用当前画面", exact: true }).click();
-      await currentNative.waitForFunction(() => window.__FRAME_REVIEW_PASEO__.attachments.length > 0);
-      const sentLink = await currentNative.evaluate(() => window.__FRAME_REVIEW_PASEO__.attachments.at(-1).url);
-      const sentReference = readPaseoReference(sentLink, workId);
+      await page
+        .getByRole("button", { name: "引用当前画面", exact: true })
+        .click();
+      await currentNative.waitForFunction(
+        () => window.__FRAME_REVIEW_AI__.attachments.length > 0,
+      );
+      const sentLink = await currentNative.evaluate(
+        () => window.__FRAME_REVIEW_AI__.attachments.at(-1).url,
+      );
+      const sentReference = readAiReference(sentLink, workId);
       assert.equal(sentReference.sourceRevision, "d".repeat(64));
       assert.equal(sentReference.compiledRevision, "c".repeat(64));
-      assert.deepEqual({ start: sentReference.start, end: sentReference.end }, { start: 12, end: 22 });
-      await page.evaluate(url => {
-        history.replaceState(null, "", url);
-        dispatchEvent(new PopStateEvent("popstate"));
-      }, sentLink);
+      assert.deepEqual(
+        { start: sentReference.start, end: sentReference.end },
+        { start: 12, end: 22 },
+      );
+      await currentNative.evaluate(
+        (url) => window.__FRAME_REVIEW_AI__.request("preview.open", { url }),
+        sentLink,
+      );
       await frame.waitForFunction(() => window.seeks?.length === 1);
-      assert.deepEqual(await frame.evaluate(() => window.seeks[0].selection), { start: 12, end: 22 });
-      await expect(page.getByRole("status", { name: "对话中的画面引用" })).toContainText("已定位引用对应的预览版本");
+      assert.deepEqual(await frame.evaluate(() => window.seeks[0].selection), {
+        start: 12,
+        end: 22,
+      });
+      await expect(
+        page.getByRole("status", { name: "对话中的画面引用" }),
+      ).toContainText("已定位引用对应的预览版本");
       await frame.evaluate(() => {
         window.emitState({ time: 26 });
         window.emitRevision("ready", "e".repeat(64));
       });
-      await page.evaluate(() => dispatchEvent(new PopStateEvent("popstate")));
-      const referenceNotice = page.getByRole("status", { name: "对话中的画面引用" });
-      await expect(referenceNotice).toContainText("版本与当前预览不同，尚未定位");
-      assert.equal(await frame.evaluate(() => window.seeks.length), 1, "a saved old link never silently seeks the new version");
+      const referenceNotice = page.getByRole("status", {
+        name: "对话中的画面引用",
+      });
+      await expect(referenceNotice).toContainText(
+        "版本与当前预览不同，尚未定位",
+      );
+      assert.equal(
+        await frame.evaluate(() => window.seeks.length),
+        1,
+        "a saved old link never silently seeks the new version",
+      );
       assert.equal(await frame.evaluate(() => window.state.time), 26);
-      await referenceNotice.getByRole("button", { name: "在当前版本定位此时间", exact: true }).click();
+      await referenceNotice
+        .getByRole("button", { name: "在当前版本定位此时间", exact: true })
+        .click();
       await frame.waitForFunction(() => window.seeks.length === 2);
       assert.equal(await frame.evaluate(() => window.state.time), 12);
       await expect(referenceNotice).toContainText("引用仍属于记录的较早版本");
-      assert.equal(await frame.evaluate(() => window.instance), instance, "reference navigation keeps the one canonical player");
+      assert.equal(
+        await frame.evaluate(() => window.instance),
+        instance,
+        "reference navigation keeps the one canonical player",
+      );
+      const sourceOnlyLink = aiReferenceUrl(
+        workId,
+        { time: 8, liveSessionId: sessionWork, sourceRevision: "e".repeat(64) },
+        origin,
+      );
+      await currentNative.evaluate(
+        (url) => window.__FRAME_REVIEW_AI__.request("preview.open", { url }),
+        sourceOnlyLink,
+      );
+      await frame.waitForFunction(() => window.seeks.length === 3);
+      await expect(referenceNotice).toContainText("已定位引用对应的预览版本");
+      await frame.evaluate(() => {
+        window.emitState({ time: 27 });
+        parent.postMessage(
+          {
+            type: "frame-live-preview",
+            state: "ready",
+            sourceRevision: "e".repeat(64),
+            compiledRevision: "f".repeat(64),
+          },
+          "*",
+        );
+      });
+      await frame.waitForFunction(() => window.seeks.length === 4);
+      assert.equal(await frame.evaluate(() => window.state.time), 8);
+      await expect(referenceNotice).toContainText("已定位引用对应的预览版本");
       const calls = await page.evaluate(() => window.fixtureCalls);
       assert.equal(
         calls.filter(
@@ -526,16 +581,16 @@ test(
           .filter((call) => call.name === "works_live_preview")
           .every(
             (call) =>
-              !call.args.task && !call.args.source && !call.args.paseoAgent,
+              !call.args.task && !call.args.source && !call.args.aiThread,
           ),
         "all live preview requests use the canonical work",
       );
       assert(
         calls.some(
           (call) =>
-            call.type === "subscribe" && call.name === "works_paseo_status",
+            call.type === "subscribe" && call.name === "works_ai_status",
         ),
-        "Paseo status is updated by the platform WebSocket",
+        "T3 Code status is updated by the platform WebSocket",
       );
       assert.deepEqual(errors, []);
     } finally {

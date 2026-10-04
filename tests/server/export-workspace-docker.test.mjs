@@ -1,3 +1,4 @@
+import { linkSharedRuntime } from "../../scripts/shared-runtime.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -319,12 +320,12 @@ async function validationCacheExport(t, platform, cli, repo, data, remember) {
   const [
     { treeHash },
     { runtimeIdentity },
-    { validatePaseoWorkspace, probePaseoRuntime, createWorkspaceProbeSession },
+    { validateAiWorkspace, probeAiRuntime, createWorkspaceProbeSession },
     { probeMedia },
   ] = await Promise.all([
     import("../../server/project-files.mjs"),
     import("../../scripts/runtime-identity.mjs"),
-    import("../../server/paseo-validate.mjs"),
+    import("../../server/ai-validate.mjs"),
     import("../../scripts/production-media.mjs"),
   ]);
   let proof;
@@ -346,11 +347,8 @@ async function validationCacheExport(t, platform, cli, repo, data, remember) {
       const runtime = await runtimeIdentity(),
         core = path.resolve(".");
       // Prepare the same readonly shared runtime used by a canonical native workspace.
-      await platform.paseo.work.prepare(work.id);
-      await platform.paseo.manager.prepareRuntime(checkout.root, work, {
-        ...runtime,
-        image: process.env.FRAME_EXECUTOR_IMAGE,
-      });
+      await platform.ai.work.prepare(work.id);
+      linkSharedRuntime(checkout.root, core);
       const git = (args) => platform.repos.git(checkout.root, args);
       await fs.writeFile(
         path.join(source, "scene.ts"),
@@ -439,7 +437,7 @@ async function validationCacheExport(t, platform, cli, repo, data, remember) {
       try {
         // The real validator runs scope, structure, project tests/types, browser frames and audio.
         // Hold its real Vite/browser cleanup so admission deterministically overlaps generated deps.
-        validation = validatePaseoWorkspace({
+        validation = validateAiWorkspace({
           core,
           work: checkout.root,
           project: work.project,
@@ -447,7 +445,7 @@ async function validationCacheExport(t, platform, cli, repo, data, remember) {
           modeFingerprint: revision,
           runtimeFingerprint: runtime.fingerprint,
           runtimeProbe: (options) =>
-            probePaseoRuntime({
+            probeAiRuntime({
               ...options,
               sessionFactory: async (settings) => {
                 const session = await createWorkspaceProbeSession(settings);

@@ -132,8 +132,8 @@ test("background tasks and native agents never select another preview source; lo
   h.owner.update({
     ...input,
     taskId: "task-a",
-    source: "paseo",
-    paseoAgent: "agent-a",
+    source: "alternate",
+    aiThread: "agent-a",
   });
   await settle();
   assert.equal(

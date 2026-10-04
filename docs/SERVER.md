@@ -2,11 +2,11 @@
 
 ## 部署与更新
 
-`deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio/app:<版本>` 与 `ghcr.io/jianjianai/frame-studio/speech:<版本>`。服务器需要 Linux x86_64、Docker、反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
+`deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio/app:<版本>` 、`ghcr.io/jianjianai/frame-studio/t3-code:<原生版本>` 与 `ghcr.io/jianjianai/frame-studio/speech:<版本>`。服务器需要 Linux x86_64、Docker、反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
 
-从 7.4.1 起，镜像统一使用以上仓库命名空间，由仓库的 GitHub Actions 令牌发布。旧的 `frame-studio` 与 `frame-speech` 包和历史镜像保留；已有部署升级时需同步采用新版 Compose 中的镜像路径。推送 `v<版本>` 标签自动执行服务端门禁、Windows 安装验证、两个镜像发布与 GitHub Release 发布，均固定到同一源码提交。发布不会自动切换正在运行的服务器。
+从 7.4.1 起，镜像统一使用以上仓库命名空间，由仓库的 GitHub Actions 令牌发布。旧的 `frame-studio` 与 `frame-speech` 包和历史镜像保留；已有部署升级时需同步采用新版 Compose 中的镜像路径。推送 `v<版本>` 标签执行 FRAME/语音镜像与 Windows 安装包构建发布，源码固定到同一提交；功能门禁在本机独立运行。T3 镜像独立构建发布。发布不会自动切换正在运行的服务器。
 
-在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`，以及宿主机 `stat -c %g /var/run/docker.sock` 得到的 `FRAME_DOCKER_GID`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_SPEECH_VERSION` 独立控制语音镜像；按需下载功能要求工作台与语音服务同时升级到 7.3.1，旧版语音服务不提供下载接口。主密钥丢失后无法恢复加密凭据，应妥善保管。
+在栈目录 `.env` 配置 `FRAME_VERSION`、随机 `POSTGRES_PASSWORD`、64 位十六进制 `FRAME_MASTER_KEY`、至少 14 字符的 `FRAME_ADMIN_PASSWORD`，以及宿主机 `stat -c %g /var/run/docker.sock` 得到的 `FRAME_DOCKER_GID`。密码每次启动生效，变更后撤销旧登录；网页和 MCP 不提供修改密码入口。`FRAME_T3_VERSION` 独立控制共享 AI 镜像，`FRAME_SPEECH_VERSION` 独立控制语音镜像；按需下载功能要求工作台与语音服务同时升级到 7.3.1，旧版语音服务不提供下载接口。主密钥丢失后无法恢复加密凭据，应妥善保管。
 
 模板使用已有 `caddy_caddy` 网络和域名 `frame.nerviloom.com`，部署到其他主机时修改域名、外部网络和 `FRAME_HOST_DATA`。后者必须是 Docker 宿主机上 `./data` 的绝对路径。数据库与语音服务不发布公网端口。
 
@@ -16,7 +16,7 @@ HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `con
 
 ## 一次性初始化与 Dockge 状态
 
-生产 Compose 只保留 `studio`、`controller`、`postgres`、`speech` 四个常驻服务。初始化任务正常退出也会影响 Dockge 的整栈状态，不应作为服务保留，不能用 `sleep` 或重启循环掩盖状态。
+生产 Compose 只保留 `studio`、`controller`、共享 `t3`、`postgres` 和 `speech` 五个常驻服务。初始化任务正常退出也会影响 Dockge 的整栈状态，不应作为服务保留，不能用 `sleep` 或重启循环掩盖状态。
 
 首次部署或明确需要修复旧数据权限时，在 Docker 宿主机的栈目录执行下面的一次性初始化。已有 `.frame-ownership-v1` 且服务可写的数据目录无需每次更新重跑。旧数据迁移前须停止写入并确认操作范围，初始化不会删除作品或素材。
 
@@ -41,7 +41,7 @@ HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `con
 
 此容器只有 `/data` 挂载，无网络、Docker socket、数据库或主密钥，不带 Compose 项目标签，退出后通过 `--rm` 自动移除。初始化实现仍保留在平台镜像中；不要改成 `docker compose run` 或把初始化服务放回生产模板。
 
-旧栈迁移：先删除 Compose 中的 `data-init` 服务及相应 `depends_on`，运行 `docker compose config --quiet` 验证；确认旧 `frame-data-init-1` 属于本栈、已经退出且挂载仅为数据目录，再使用 `docker rm frame-data-init-1`（不加 `-f` 或 `-v`）。不要执行广泛的容器清理或重启正常服务。完成后 `docker compose ls --all` 的本栈状态应仅有 `running`，`docker compose ps -a` 只列出四个健康常驻服务。
+旧栈迁移：先删除 Compose 中的 `data-init` 服务及相应 `depends_on`，运行 `docker compose config --quiet` 验证；确认旧 `frame-data-init-1` 属于本栈、已经退出且挂载仅为数据目录，再使用 `docker rm frame-data-init-1`（不加 `-f` 或 `-v`）。不要执行广泛的容器清理或重启正常服务。完成后 `docker compose ls --all` 的本栈状态应仅有 `running`，`docker compose ps -a` 只列出五个长期服务。
 
 ## 平台代码与作品仓库
 
@@ -49,7 +49,7 @@ HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `con
 
 一个作品独占 `works/<slug>` 分支，分支内使用 `projects/<slug>/`，无需复制平台代码。共享素材库单独使用 `frame/materials` 分支。仓库列表可以选择 GitHub 账号创建或添加仓库，支持多个账号的设备授权及过期重登，也支持私密访问令牌。作品名称可更改，UUID 和分支保持稳定。
 
-首次使用先创建作品，再选择生成关键帧、分镜、交互预览或 MP4。每个任务复制目标作品到独立工作目录。AI 修改成功后比较源指纹并应用；源冲突时保留结果副本并报告失败，绝不覆盖新的外部修改。
+首次使用先创建作品，再打开 AI 聊天或生成关键帧、分镜和 MP4。AI 使用共享 T3 服务，直接修改作品权威目录，实时播放器观察相同文件；检查绑定具体 revision。后台导出才创建本次任务的临时冻结副本，完成或失败后释放。原生配置、共享工具链与升级流程见 [T3 Code](T3-CODE.md)。
 
 每个作品独立 Git worktree 和锁；同作品修改串行，同仓其他作品不受影响。Git 拉取要求当前分支干净且可 fast-forward；推送先上传 LFS。作品页面显示本分支领先、落后、未保存变化和检查时间。AI 修改与命名版本均记录到作品 Git 历史，恢复产生新提交，历史随普通 push 同步。
 
@@ -138,7 +138,7 @@ FRAME_TASK_CONCURRENCY 默认 2，允许 1–8；每个执行器仍受 4 GiB/2 C
 
 设置 → 运行状态显示 Docker、语音服务、排队与最长等待、待恢复发布、磁盘容量和迁移版本；统计缓存 30 秒。目录统计有时间/条目上限，未完成会显示“至少”，不把逻辑文件大小冒充实际磁盘占用。/healthz 保持轻量存活检查；/readyz 分别检查执行依赖及空间，只返回 ready/degraded，不公开内部详情。
 
-Docker 部署模板默认设置 `FRAME_LIVE_PREVIEW_POLLING=1`，对作品模块每 250ms 轮询。AI 验证通过后会原子替换整个作品目录；原生文件监听可能继续跟随旧目录，轮询使已有实时预览会话接收新目录的源码和素材，随后仍可增量更新。升级已有生产栈时也要补充该环境变量，仅替换镜像不会自动更新宿主机 Compose。只有已验证目录替换、素材更新和后续编辑均能触发监听的环境才可显式设为 `0`。
+Docker 部署模板默认设置 `FRAME_LIVE_PREVIEW_POLLING=1`，对作品模块每 250ms 轮询。作品文件保存、Git恢复和素材更新可能使用原子替换；轮询使已有实时预览会话接收变化，随后仍可增量更新。升级已有生产栈时也要补充该环境变量，仅替换镜像不会自动更新宿主机 Compose。只有已验证目录替换、素材更新和后续编辑均能触发监听的环境才可显式设为 `0`。
 
 数据库在 HTTP 服务启动前执行 server/migrations 中的版本化事务迁移，通过数据库锁串行执行并保存 SHA-256。已应用脚本被修改或数据库版本高于应用时拒绝启动。以后增加迁移文件，不改历史文件；已有旧数据库先以幂等基线纳入版本管理。迁移和回退需验证数据库与文件的一致性，不以语法检查代替实际验收；不兼容回退或不可逆操作另行确认，备份仅在用户明确要求时执行。
 

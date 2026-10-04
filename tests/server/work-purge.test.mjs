@@ -26,7 +26,7 @@ for (const backend of ["sqlite", "postgres"]) {
           : await database(url, "test-password-at-least-14");
       if (backend === "postgres")
         await db.pool.query(
-          "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
+          "TRUNCATE repos,github_accounts,auth_flows RESTART IDENTITY CASCADE",
         );
       const { app, actions, repos } = await createApp({
         db,
@@ -91,10 +91,9 @@ for (const backend of ["sqlite", "postgres"]) {
         await call("works_use_asset", { id: a.id, asset: asset.id });
         await call("works_use_asset", { id: b.id, asset: asset.id });
         const task = randomUUID(),
-          version = randomUUID(),
-          undo = randomUUID();
+          version = randomUUID();
         await db.pool.query(
-          "INSERT INTO tasks(id,repo,project,kind,state,input,finished) VALUES($1,$2,$3,'paseo','succeeded',$4,now())",
+          "INSERT INTO tasks(id,repo,project,kind,state,input,finished) VALUES($1,$2,$3,'frame','succeeded',$4,now())",
           [task, repo.id, a.project, {}],
         );
         await db.event(task, "log", { text: "fixture" });
@@ -102,16 +101,11 @@ for (const backend of ["sqlite", "postgres"]) {
           "INSERT INTO work_versions(id,work,name) VALUES($1,$2,'fixture')",
           [version, a.id],
         );
-        await db.pool.query(
-          "INSERT INTO work_undos(id,work,task,expected_commit,expected_revision,state) VALUES($1,$2,$3,$4,$5,'succeeded')",
-          [undo, a.id, task, "a".repeat(40), "b".repeat(64)],
-        );
         await db.setting("preview-link:fixture", { task });
         for (const folder of [
           path.join(data, "runs", task),
           path.join(data, "sessions", task),
           path.join(data, "versions", version),
-          path.join(data, "restores", "undo-" + undo),
         ]) {
           fs.mkdirSync(folder, { recursive: true });
           fs.writeFileSync(path.join(folder, "fixture.txt"), "fixture");
@@ -235,7 +229,6 @@ for (const backend of ["sqlite", "postgres"]) {
             for (const [table, column, value] of [
               ["tasks", "id", task],
               ["work_versions", "work", a.id],
-              ["work_undos", "work", a.id],
               ["events", "task", task],
             ])
               assert.equal(
@@ -253,10 +246,6 @@ for (const backend of ["sqlite", "postgres"]) {
             assert.equal(fs.existsSync(path.join(data, "runs", task)), false);
             assert.equal(
               fs.existsSync(path.join(data, "versions", version)),
-              false,
-            );
-            assert.equal(
-              fs.existsSync(path.join(data, "restores", "undo-" + undo)),
               false,
             );
             const refs = await git(remote, [

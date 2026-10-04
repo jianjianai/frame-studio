@@ -17,7 +17,7 @@ test(
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-workbench-")),
       db = await database(url, "test-password-at-least-14");
     await db.pool.query(
-      "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
+      "TRUNCATE repos,github_accounts,auth_flows RESTART IDENTITY CASCADE",
     );
     const { app, actions, tasks, repos } = await createApp({
       db,
@@ -193,16 +193,8 @@ test(
           ),
         ),
       );
-      const connection = await call("connections_save", {
-        name: "fixture",
-        tool: "codex",
-        mode: "api",
-        apiKey: "test-secret-should-not-leak",
-        model: "fixture-model",
-      });
-      assert(
-        !JSON.stringify(await call("connections_list")).includes("test-secret"),
-      );
+      await assert.rejects(call("connections_save", {}), /Unknown/);
+      await assert.rejects(call("connections_list", {}), /Unknown/);
       const args = { id: a.id, kind: "frame", requestKey: randomUUID(), input: { time: 1 } };
       const first = await call("works_task", args), retry = await call("works_task", args);
       assert.equal(first.id, retry.id);

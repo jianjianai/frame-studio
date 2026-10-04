@@ -41,7 +41,7 @@ export async function startController(options = {}) {
     finally { reporting = false; }
   };
   tasks.startLoop({ onLeadership: leader => leader ? retention.start() : retention.stop() });
-  services.startPaseoLoop();
+  services.startAiLoop();
   const timer = setInterval(() => void report(), 10000);
   void report();
   return { ...services, async close() {

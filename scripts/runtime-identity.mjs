@@ -6,10 +6,13 @@ import { ENGINE_PROTOCOL_VERSION } from "../src/engine/protocol.mjs";
 
 const rootDirectory = fileURLToPath(new URL("../", import.meta.url));
 const pending = new Map();
-const sourceNames = ["src", "public", "scripts", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json", ".npmrc", "vite.config.ts", "index.html", "server/executor.mjs", "server/tool-installation.mjs", "server/preview-version.mjs", "server/creator-workspace.mjs", "server/public-data.mjs", "server/project-validation.mjs", "server/paseo-validate.mjs", "server/paseo-manager.mjs", "server/paseo-runtime-options.mjs", "integrations/paseo"];
+// Native UI build/update code is versioned by its own service, outside the film runtime.
+const independentSources = new Set(["scripts/build-t3.mjs", "scripts/start-t3.mjs", "scripts/test-t3-embed.mjs"]);
+const sourceNames = ["src", "public", "scripts", "templates", "docs", "AGENTS.md", "package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", "tsconfig.json", ".npmrc", "vite.config.ts", "index.html", "server/executor.mjs", "server/tool-installation.mjs", "server/preview-version.mjs", "server/creator-workspace.mjs", "server/public-data.mjs", "server/project-validation.mjs", "server/ai-validate.mjs"];
 async function identity(root) {
   const files = [];
   const walk = async relative => {
+    if (independentSources.has(relative)) return;
     const file = path.join(root, relative);
     let stat;
     try { stat = await fs.lstat(file); } catch (error) { if (error.code === "ENOENT") return; throw error; }

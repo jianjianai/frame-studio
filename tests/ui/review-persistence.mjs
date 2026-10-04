@@ -3,7 +3,7 @@ import { expect } from "@playwright/test";
 export async function persistenceChecks(h) {
   const { page, player, frame, check } = h;
   await check(
-    "刷新后保留AI面板显隐状态、拖拽比例和预览画质（原生草稿由Paseo管理）",
+    "刷新后保留AI面板显隐状态、拖拽比例和预览画质（原生草稿由T3 Code管理）",
     async () => {
       await player()
         .getByRole("button", { name: "隐藏时间轴", exact: true })
@@ -17,7 +17,7 @@ export async function persistenceChecks(h) {
           window.__FRAME_STUDIO__?.ready &&
           document.querySelector("canvas").width === 1920,
       );
-      await expect(page.locator('iframe[title^="Paseo ·"]')).toBeVisible();
+      await expect(page.locator('iframe[title^="T3 Code ·"]')).toBeVisible();
       await page
         .locator(".creation-actions")
         .getByRole("button", { name: "关闭 AI 对话", exact: true })
@@ -46,7 +46,7 @@ export async function persistenceChecks(h) {
       await page
         .getByRole("button", { name: "打开 AI 对话", exact: true })
         .click();
-      await expect(page.locator('iframe[title^="Paseo ·"]')).toBeVisible();
+      await expect(page.locator('iframe[title^="T3 Code ·"]')).toBeVisible();
       await player()
         .getByRole("button", { name: "显示时间轴", exact: true })
         .click();

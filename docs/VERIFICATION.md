@@ -24,13 +24,14 @@ pnpm verify
 ```sh
 export FRAME_TEST_DATABASE_URL='postgres://frame:<测试库密码>@127.0.0.1:5432/frame_test_release'
 export FRAME_TEST_EXECUTOR=1
+export FRAME_TEST_EXECUTOR_RUNTIME=1
 export FRAME_TEST_HOST_ROOT="$PWD"
 export FRAME_EXECUTOR_IMAGE=frame-studio:verification
 docker build -f deploy/Dockerfile -t "$FRAME_EXECUTOR_IMAGE" .
 pnpm verify:release
 ```
 
-完整执行器用例需要能够访问 Docker、对自己创建的测试目录执行 chown，并从默认 Docker bridge 访问本机 55178/55179 端口。Paseo 工作流门禁使用镜像内的完整官方 daemon/WebUI，验证默认打开、多对话共享目录、保存后画面更新、版本引用、失败保留修改，以及独立标签页原生发送和重连。可在专用测试虚拟机或 root WSL 中执行，不在生产目录执行。它使用隔离模拟模型服务和 CLI 协议，不调用收费账号；不能据此宣称生产外部账号登录或付费模型已经验收。
+完整执行器用例需要能够访问 Docker、对自己创建的测试目录执行 chown，并从默认 Docker bridge 访问本机 55178/55179 端口。T3 工作流门禁使用独立候选原生服务和完整官方 WebUI，验证默认打开、多对话共享目录、保存后画面更新、版本引用、失败保留修改，以及独立标签页原生发送和重连。可在专用测试虚拟机或 root WSL 中执行，不在生产目录执行。它使用隔离模拟模型服务和 CLI 协议，不调用收费账号；不能据此宣称生产外部账号登录或付费模型已经验收。
 
 发布门禁拒绝执行器、数据库或未知用例的跳过。唯一显式可选项是用户提供的 GeneralUser 音色库：设置 `FRAME_TEST_SF2` 后启用；没有该文件会单独列明跳过，其生成音色库测试始终执行。平台自身新增的短片验收不依赖私有作品，覆盖确定性跳转、有声播放、取消和重新导出、完整视频帧数及音频流。
 
@@ -40,6 +41,8 @@ GitHub 工作流只负责构建与发布，不运行 `verify`、`verify:release`
 
 `pnpm verify:content` 仍是独立内容入口，需要先把作品仓库复制到临时 checkout。不要把作品提交进平台仓库。真实长片还需检查多音轨、慢网冷跳转、变速、声画漂移、音效边界、正式导出与预览的一致性，以及音乐和运镜质量；短片功能验收不能替代这些检查。
 
-候选构建可复用经 `scripts/build-paseo.mjs --bundle-only` 生成的官方源码 bundle：Docker 参数 `--build-arg PASEO_MODE=prebuilt --build-context paseo-prepared=<bundle目录>`。安装时仍逐项校验固定 commit、全部 patch、插件、依赖与 bundle 内容；任一不匹配会拒绝构建。默认构建仍从固定官方源码生成。
+FRAME 与原生 T3 分别构建候选镜像。原生 bundle 由 `scripts/build-t3.mjs --bundle-only` 生成，构建和安装校验固定 commit、补丁、依赖锁及内容指纹；原生运行测试在 `tests/t3-code/`，共享工作流的真实浏览器与 CLI 协议测试纳入服务端门禁。
 
-升级前核对活动 FRAME 任务、原生 Paseo Agent/终端/权限请求以及旧 `paseo_candidates`。旧候选非空时迁移拒绝升级并保留其运行身份，需先完成定向核对。退役旧 AI 的迁移删除旧聊天和专用任务数据，随后在栈外使用 `docker run --rm` 执行 `scripts/clear-legacy-ai.mjs` 清理已记录身份的旧文件/容器；不会删除作品、素材、当前原生 Paseo 会话或数据卷。不可用旧版应用直接回滚已移除旧 schema 的数据库。
+升级前核对活动 FRAME 任务、原生回合/终端/权限请求。首次替换先将历史检查报告迁入新 AI 记录、将实际账号配置迁入原生 CLI 配置并核对；退役旧服务、路由、构建和专用数据前确认没有运行中的回合或未迁移会话。以前明确保留的冲突源码不作为活跃 AI 工作区，也不能在清理时误删。历史数据库迁移文件保持 checksum，不再为旧专用表提供运行入口。移除旧 schema 后不能单纯切换旧镜像回退。
+
+不执行默认发布前备份。一次性发布共享工具链、迁移与检查使用栈外 `docker run --rm`，不声明为长期 Compose 服务；不删除数据卷或重启无关服务。

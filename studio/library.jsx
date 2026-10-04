@@ -36,7 +36,7 @@ import {
   kinds,
 } from "./ui";
 import { RepositorySettings } from "./repository-settings";
-import { LoginFlow } from "./accounts";
+import { GitHubLoginFlow } from "./accounts";
 import {
   LibraryMenu,
   LibrarySkeleton,
@@ -118,7 +118,10 @@ export function NewWork({ repo, onClose, notify, localMode = false }) {
     [pickerRevision, setPickerRevision] = useState(0),
     [run, busy] = useAction(notify);
   const repositories = useQuery("repositories_page", { limit: 30, offset: 0 });
-  useEffect(() => { if (localMode && !selected && repositories.data?.items?.length) setSelected(repositories.data.items[0].id); }, [localMode, repositories.data, selected]);
+  useEffect(() => {
+    if (localMode && !selected && repositories.data?.items?.length)
+      setSelected(repositories.data.items[0].id);
+  }, [localMode, repositories.data, selected]);
   return (
     <Modal title="新建作品" onClose={onClose}>
       {created && (
@@ -134,7 +137,13 @@ export function NewWork({ repo, onClose, notify, localMode = false }) {
           </a>
         </p>
       )}
-      <p>{repo ? `保存到 ${repo.name}` : localMode ? "作品保存在这台电脑。也可以选择其他作品仓库。" : "选择一个仓库保存作品"}</p>
+      <p>
+        {repo
+          ? `保存到 ${repo.name}`
+          : localMode
+            ? "作品保存在这台电脑。也可以选择其他作品仓库。"
+            : "选择一个仓库保存作品"}
+      </p>
       {!created && (
         <Form
           busy={busy}
@@ -142,7 +151,9 @@ export function NewWork({ repo, onClose, notify, localMode = false }) {
           submit="创建并开始创作"
           onSubmit={(a) =>
             run(async () => {
-              const tab = localMode ? null : window.open("about:blank", "_blank");
+              const tab = localMode
+                ? null
+                : window.open("about:blank", "_blank");
               if (tab) {
                 tab.opener = null;
                 tab.document.title = "正在创建作品…";
@@ -157,7 +168,11 @@ export function NewWork({ repo, onClose, notify, localMode = false }) {
                 tab?.close();
                 throw error;
               }
-              if (localMode) { onClose(); location.hash = "/work/" + work.id; return; }
+              if (localMode) {
+                onClose();
+                location.hash = "/work/" + work.id;
+                return;
+              }
               if (tab && !tab.closed)
                 tab.location.replace(
                   new URL("#/work/" + work.id, location.href).href,
@@ -205,7 +220,12 @@ export function NewWork({ repo, onClose, notify, localMode = false }) {
     </Modal>
   );
 }
-export function WorkLibrary({ repo, recent = false, notify, localMode = false }) {
+export function WorkLibrary({
+  repo,
+  recent = false,
+  notify,
+  localMode = false,
+}) {
   const [scope, setScope] = useState(recent ? "recent" : "all");
   const [status, setStatus] = useState(""),
     [search, setSearch] = useState("");
@@ -1198,8 +1218,7 @@ function AddRepository({ notify, onClose, onAdded }) {
         </Form>
       )}
       {login && (
-        <LoginFlow
-          kind="github"
+        <GitHubLoginFlow
           notify={notify}
           onSuccess={accounts.refresh}
           onClose={() => {

@@ -99,7 +99,7 @@ test("context identifies the active work and does not expose task credentials or
       path.join(f.root, "task.json"),
       JSON.stringify({
         id: "fixture",
-        kind: "paseo",
+        kind: "ai",
         project: "test-film",
         input: {
           prompt: "private-user-prompt",
@@ -255,7 +255,7 @@ test("task assets honor pagination but cannot override the repository", async ()
   });
   const request = (args) =>
     route({
-      agentTask: { kind: "paseo", repo: "current-repo" },
+      agentTask: { kind: "ai", repo: "current-repo" },
       body: { name: "assets", args },
     });
   await request({ limit: 15, offset: 60, search: "背景", repo: "other-repo" });
@@ -484,7 +484,7 @@ test("creator task instructions participate in the frozen executor fingerprint",
     const after = await runtimeIdentity(f.root, { refresh: true });
     assert.notEqual(before.fingerprint, after.fingerprint);
     let prior = after;
-    for (const name of ["public-data.mjs", "paseo-manager.mjs", "paseo-runtime-options.mjs", "paseo-validate.mjs"]) {
+    for (const name of ["public-data.mjs", "ai-manager.mjs", "ai-client.mjs", "ai-validate.mjs"]) {
       fs.copyFileSync(path.join(repo, "server", name), path.join(f.root, "server", name));
       const current = await runtimeIdentity(f.root, { refresh: true });
       assert.notEqual(prior.fingerprint, current.fingerprint, name + " must be pinned in the runtime identity");

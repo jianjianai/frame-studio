@@ -98,8 +98,8 @@ test("Live preview rejects isolated AI drafts and additional native workspaces",
   const f = await fixture();
   try {
     await assert.rejects(f.manager.start({ work: f.work, task: randomUUID() }), /唯一工作区/);
-    await assert.rejects(f.manager.start({ work: f.work, source: "paseo" }), /唯一工作区/);
-    await assert.rejects(f.manager.start({ work: f.work, paseoAgent: "other-agent" }), /唯一工作区/);
+    await assert.rejects(f.manager.start({ work: f.work, source: "alternate" }), /唯一工作区/);
+    await assert.rejects(f.manager.start({ work: f.work, aiThread: "other-agent" }), /唯一工作区/);
     const selected = await f.manager.start({ work: f.work, ai: true });
     assert.equal(selected.source, "work"); assert.equal(selected.sessionId, f.link.sessionId);
   } finally { await f.close(); }

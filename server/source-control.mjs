@@ -464,10 +464,6 @@ export class SourceControl {
       "SELECT id,kind,state FROM tasks WHERE repo=$1 AND project=$2 AND state IN ('queued','running','cancelling','publishing','publish_failed') LIMIT 1",
       [work.repo, work.project],
     );
-    const undo = await this.db.one(
-      "SELECT id,state FROM work_undos WHERE work=$1 AND state IN ('applying','failed') LIMIT 1",
-      [work.id],
-    );
     return {
       revision: state.revision,
       head: state.head,
@@ -489,9 +485,7 @@ export class SourceControl {
           ? "检出分支与作品分支不一致"
           : state.merging
             ? "合并或变基尚未完成，请先在本地 Git 处理"
-            : undo
-              ? "作品有尚未完成的撤销，请先在创作结果中重试完成撤销"
-              : busy
+            : busy
                 ? "作品任务正在执行或等待恢复，暂时只读"
                 : "",
       busy: busy || null,

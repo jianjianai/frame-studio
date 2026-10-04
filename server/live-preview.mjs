@@ -40,12 +40,12 @@ export class LivePreviewSessions {
     const { dir } = await this.repos.project(work.repo, work.project);
     return { projectDir: dir, source: "work", task: null };
   }
-  async start({ work, task, paseoAgent, ai = false, mediaMode = "compressed", source = "work" }) {
+  async start({ work, task, ai = false, mediaMode = "compressed", source = "work" }) {
     const checkedMode = livePreviewMediaModeSchema.safeParse(mediaMode);
     if (!checkedMode.success) throw problem(400, "Invalid preview media mode");
     if (this.closed) throw problem(503, "Live preview service stopped");
     if (work.deleted) throw problem(410, "Work is in the recycle bin");
-    if (source !== "work" || task || paseoAgent !== undefined)
+    if (source !== "work" || task)
       throw problem(400, "实时预览只使用当前作品的唯一工作区");
     const key = work.id;
     const existing = this.sessions.get(this.keys.get(key));

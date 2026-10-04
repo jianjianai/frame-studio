@@ -24,7 +24,10 @@ if (release && (process.env.FRAME_TEST_EXECUTOR !== "1" || !process.env.FRAME_TE
 if (!light && !fs.existsSync("studio-dist/index.html"))
   throw Error("Build the current workbench first: pnpm build:studio");
 if (light) console.warn("DEVELOPMENT-ONLY: missing integrations may be skipped; this is NOT a release acceptance result.");
-const files = fs.readdirSync("tests/server").filter((name) => name.endsWith(".test.mjs")).sort().map((name) => path.join("tests/server", name));
+const discover = directory => fs.readdirSync(directory).filter(name => name.endsWith(".test.mjs")).sort().map(name => path.join(directory, name));
+const nativeFiles = fs.existsSync("tests/t3-code") ? discover("tests/t3-code") : [];
+if (release && !nativeFiles.length) throw Error("Release verification requires the native T3 Code integration tests");
+const files = [...discover("tests/server"), ...nativeFiles];
 let tail = "";
 const child = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-reporter=tap", ...files], { stdio: ["ignore", "pipe", "inherit"], windowsHide: true });
 child.stdout.on("data", (chunk) => { process.stdout.write(chunk); tail = (tail + chunk).slice(-8 * 1024 * 1024); });

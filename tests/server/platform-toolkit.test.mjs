@@ -30,7 +30,6 @@ function fixture(t) {
     assets: {},
     tasks: {},
     secrets: {},
-    connections: {},
     github: {},
     retention: {},
   });

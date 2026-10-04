@@ -31,7 +31,6 @@ function registryFixture(t) {
     assets: {},
     tasks: {},
     secrets: {},
-    connections: {},
     github: {},
     retention: {},
   });

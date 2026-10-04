@@ -92,7 +92,7 @@ export const workToolHelp = {
     },
   },
   notes: [
-    "Local capabilities/context/reference/check do not need platform credentials. Remote actions require an active Paseo session.",
+    "Local capabilities/context/reference/check do not need platform credentials. Remote actions require an active AI session.",
     "engines lists real model capabilities. Discover configured voice catalogs before auditioning. Chinese pronunciation/pauses are provider-specific; unsupported controls are rejected, never fabricated. Built-ins cannot be replaced.",
     "engine_test creates temporary audition audio; speech creates a material. Neither automatically edits audioTracks or subtitles.",
     "Remote writes are never retried automatically; after a timeout their outcome may be unknown. Inspect assets before repeating speech.",
@@ -186,7 +186,7 @@ export async function callWorkTool(
   if (!env.FRAME_AGENT_URL || !env.FRAME_AGENT_TOKEN)
     throw toolError(
       "TASK_REQUIRED",
-      "This action is available only inside an active Paseo session.",
+      "This action is available only inside an active AI session.",
       "Local context/check and pnpm film remain available without task credentials.",
     );
   let url;

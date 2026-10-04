@@ -6,7 +6,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { startLocalApp, freeLocalPort } from "../../server/local-app.mjs";
 import { sqliteDatabase } from "../../server/sqlite.mjs";
-import { PaseoManager } from "../../server/paseo-manager.mjs";
+import { AiManager } from "../../server/ai-manager.mjs";
 
 test("local browser startup does not wait for speech and exit protects unsaved browser activity", async t => {
   const names = ["FRAME_TEST_LOCAL", "FRAME_LOCAL_MODE", "FRAME_PUBLIC_URL", "FRAME_DATA", "FRAME_SPEECH_URL", "FRAME_LAUNCH_TOKEN"];
@@ -21,14 +21,14 @@ test("local browser startup does not wait for speech and exit protects unsaved b
     assert.equal((await invoke("/api/me")).json().localMode, true);
     // Capture the actual manager without replacing createApp or the local services contract.
     let nativeManager;
-    const originalActive = PaseoManager.prototype.active;
-    const capture = t.mock.method(PaseoManager.prototype, "active", async function (...args) {
+    const originalActive = AiManager.prototype.active;
+    const capture = t.mock.method(AiManager.prototype, "active", async function (...args) {
       nativeManager = this;
       return originalActive.apply(this, args);
     });
     try { assert.equal((await invoke("/api/desktop/status")).json().speech.state, "starting"); }
     finally { capture.mock.restore(); }
-    assert.ok(nativeManager instanceof PaseoManager);
+    assert.ok(nativeManager instanceof AiManager);
     const repos = (await invoke("/api/action", { name: "repositories_page", args: {} })).json();
     assert.equal(repos.items[0].name, "我的作品");
     const work = (await invoke("/api/action", { name: "works_create", args: { repo: repos.items[0].id, title: "Exit admission" } })).json();
@@ -44,9 +44,9 @@ test("local browser startup does not wait for speech and exit protects unsaved b
     const activity = t.mock.method(nativeManager, "active", async () => nativeActivity);
     try {
       const idle = { workId: work.id, repo: repos.items[0].id, project: "exit-admission", state: "ready",
-        activeAgents: [], pendingPermissions: 0, activeTerminals: 0, incomplete: false };
+        activeThreads: [], pendingPermissions: 0, activeTerminals: 0, incomplete: false };
       for (const [name, busy] of [
-        ["native agent", { activeAgents: ["owned-native-agent"] }],
+        ["native agent", { activeThreads: ["owned-native-agent"] }],
         ["native terminal", { activeTerminals: 1 }],
         ["pending permission", { pendingPermissions: 1 }],
         ["unknown native activity", { incomplete: true }],

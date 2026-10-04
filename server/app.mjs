@@ -34,7 +34,7 @@ import { createServices } from "./services.mjs";
 import { rasterCover } from "./covers.mjs";
 import { installRealtime } from "./realtime.mjs";
 import { installOAuth } from "./oauth.mjs";
-import { installPaseoGateway } from "./paseo-gateway.mjs";
+import { installAiGateway } from "./ai-gateway.mjs";
 import { operationError } from "../src/contracts/errors.mjs";
 import { PLATFORM_VERSION } from "../src/contracts/version.mjs";
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -104,8 +104,8 @@ export async function createApp({
     // Host, Origin, TLS, rate limiting and browser access policy belong to the proxy.
     res.header("Cache-Control", "no-store");
     if (req.url.startsWith("/preview/") || req.url.startsWith("/preview-live/")) return;
-    if (req.url.startsWith("/api/paseo/internal/")) return; // The gateway verifies the work-scoped daemon capability.
-    if (req.url.startsWith("/paseo/")) { await requirePlatformSession(req); return; }
+    if (req.url.startsWith("/api/ai/internal/")) return; // The gateway verifies the work-scoped daemon capability.
+    if (req.url.startsWith("/ai/")) { await requirePlatformSession(req); return; }
     if (!req.url.startsWith("/api/") && !req.url.startsWith("/mcp")) return;
     if (req.url === "/api/login") return;
     const bearer = req.headers.authorization?.startsWith("Bearer ")
@@ -113,8 +113,8 @@ export async function createApp({
       : null;
     let authenticated = false;
     if (req.url === "/api/agent/action") {
-      if (bearer) req.agentTask = await services.paseoManager.agentContext(bearer);
-      if (!req.agentTask) throw problem(401, "Work-scoped Paseo credential required");
+      if (bearer) req.agentTask = await services.aiManager.threadContext(bearer);
+      if (!req.agentTask) throw problem(401, "Work-scoped Ai credential required");
       return;
     }
     if (localMode) return;
@@ -149,9 +149,9 @@ export async function createApp({
       .code(state.ready ? 200 : 503)
       .send({ status: state.ready ? "ready" : "degraded" });
   });
-  await installPaseoGateway({ app, manager: services.paseoManager, workService: services.paseoWork,
-    store: services.paseoStore, workspace: services.paseoWorkspace, authenticate: requirePlatformSession,
-    connections: services.connections, db, data, secrets: services.secrets, localMode });
+  await installAiGateway({ app, manager: services.aiManager, workService: services.aiWork,
+    store: services.aiStore, workspace: services.aiWorkspace, authenticate: requirePlatformSession,
+    localMode });
   workTools({ app, db, data, assets, actions, localMode });
   app.post(
     "/api/login",
@@ -468,7 +468,7 @@ export async function createApp({
     app.setNotFoundHandler((req, res) => res.sendFile("index.html"));
   }
   if (scheduler) {
-    services.startPaseoLoop();
+    services.startAiLoop();
     tasks.startLoop({
       onLeadership: (leader) => (leader ? retention.start() : retention.stop()),
     });
@@ -477,7 +477,7 @@ export async function createApp({
     await mcp.close();
     await services.close();
   });
-  return { app, db, repos, assets, tasks, actions, paseo: { manager: services.paseoManager, work: services.paseoWork, store: services.paseoStore, workspace: services.paseoWorkspace } };
+  return { app, db, repos, assets, tasks, actions, ai: { manager: services.aiManager, work: services.aiWork, store: services.aiStore, workspace: services.aiWorkspace } };
 }
 if (
   process.argv[1] &&

@@ -481,7 +481,6 @@ export class Tasks {
         if (this.queueBlocked) return;
         const t = await this.db.one(
           `SELECT t.* FROM tasks t WHERE t.state='queued' AND NOT EXISTS(SELECT 1 FROM tasks r WHERE (r.repo=t.repo AND r.project=t.project AND r.frozen IS NULL AND t.frozen IS NULL AND r.state IN ('running','cancelling','publishing','publish_failed')))
-          AND NOT EXISTS(SELECT 1 FROM work_undos u JOIN works w ON w.id=u.work WHERE w.repo=t.repo AND w.project=t.project AND u.state IN ('applying','failed'))
           ORDER BY t.created LIMIT 1`,
         );
         if (t) {

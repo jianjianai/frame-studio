@@ -85,7 +85,7 @@ async function fixture(origin = "http://frame.test") {
   process.env.FRAME_SPEECH_URL = `http://127.0.0.1:${mock.address().port}`;
   const db = await database(url, password);
   await db.pool.query(
-    "TRUNCATE engines,assets,repos,connections,github_accounts,auth_flows,tokens,sessions RESTART IDENTITY CASCADE",
+    "TRUNCATE engines,assets,repos,github_accounts,auth_flows,tokens,sessions RESTART IDENTITY CASCADE",
   );
   const legacy = randomUUID();
   await db.pool.query(
@@ -100,7 +100,7 @@ async function fixture(origin = "http://frame.test") {
       }),
     ],
   );
-  const { app, actions, paseo } = await createApp({
+  const { app, actions, ai } = await createApp({
     db,
     data,
     masterKey: key,
@@ -110,7 +110,7 @@ async function fixture(origin = "http://frame.test") {
   return {
     app,
     actions,
-    paseo,
+    ai,
     db,
     data,
     requests,
@@ -245,11 +245,11 @@ test(
         engines.find((e) => e.id === custom.id).config.configured,
         true,
       );
-      const nativeRoot = (await f.paseo.work.prepare(work.id)).workspace.workspaceRoot;
+      const nativeRoot = (await f.ai.work.prepare(work.id)).workspace.workspaceRoot;
       const token = "speech-native-credential";
-      f.paseo.manager.agentContext = async credential => credential === token ? {
-        kind: "paseo", repo: work.repo, project: work.project,
-        paseoWork: work.id, paseoAgent: "native-speech-agent", runRoot: nativeRoot,
+      f.ai.manager.threadContext = async credential => credential === token ? {
+        kind: "ai", repo: work.repo, project: work.project,
+        aiWork: work.id, aiThread: "native-speech-agent", runRoot: nativeRoot,
       } : null;
       const agent = (name, args) =>
         app.inject({

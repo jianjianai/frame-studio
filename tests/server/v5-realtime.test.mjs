@@ -104,7 +104,7 @@ test(
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-v5-stream-"));
     const db = await database(url, "v5-stream-fixture-password");
     await db.pool.query(
-      "TRUNCATE repos,tasks,events,works,connections,assets,engines,auth_flows CASCADE",
+      "TRUNCATE repos,tasks,events,works,assets,engines,auth_flows CASCADE",
     );
     const origin = "http://v5-stream.test";
     const { app, actions } = await createApp({
@@ -227,7 +227,7 @@ test(
       send({
         type: "call",
         id: "invalid",
-        name: "works_undo",
+        name: "works_restore",
         args: { id: "invalid" },
       });
       await until(() => messages.some((m) => m.id === "invalid"));
@@ -236,7 +236,7 @@ test(
         method: "POST",
         url: "/api/action",
         headers: { origin, cookie },
-        payload: { name: "works_undo", args: { id: "invalid" } },
+        payload: { name: "works_restore", args: { id: "invalid" } },
       });
       assert.equal(wireError.code, "INVALID_REQUEST");
       assert.equal(httpError.json().code, wireError.code);

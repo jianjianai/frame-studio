@@ -79,7 +79,7 @@ export async function flowChecks(h) {
       }),
     ).toBeVisible();
   });
-  await check("先试听再采用原音频，编排要求只带入Paseo输入框", async () => {
+  await check("先试听再采用原音频，编排要求只带入T3 Code输入框", async () => {
     await more("配音");
     const dialog = page.getByRole("complementary", {
       name: "配音",
@@ -130,9 +130,9 @@ export async function flowChecks(h) {
     await dialog
       .getByRole("button", { name: "带入 AI 对话，填写编排要求", exact: true })
       .click();
-    const native = page.frames().find((f) => f.url().includes("/paseo/"));
+    const native = page.frames().find((f) => f.url().includes("/ai/"));
     await native.waitForFunction(() =>
-      window.__FRAME_REVIEW_PASEO__?.attachments.some((item) =>
+      window.__FRAME_REVIEW_AI__?.attachments.some((item) =>
         item.text.includes("配音资源"),
       ),
     );

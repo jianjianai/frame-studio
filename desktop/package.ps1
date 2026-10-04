@@ -78,13 +78,13 @@ if ($PublishRuntimes) {
     }
   }
 }
-$paseoBundle = Join-Path $repo '.cache\paseo-generated'
-if (Test-Path -LiteralPath (Join-Path $paseoBundle 'source-proof.json')) {
-  & node (Join-Path $repo 'scripts/build-paseo.mjs') ("--prebuilt=" + $paseoBundle) --bundle-only
+$t3Bundle = Join-Path $repo '.cache\t3-generated'
+if (Test-Path -LiteralPath (Join-Path $t3Bundle 'source-proof.json')) {
+  & node (Join-Path $repo 'scripts/build-t3.mjs') ("--prebuilt=" + $t3Bundle) --bundle-only
 } else {
-  & node (Join-Path $repo 'scripts/build-paseo.mjs') --bundle-only
+  & node (Join-Path $repo 'scripts/build-t3.mjs') --bundle-only
 }
-if ($LASTEXITCODE -ne 0) { throw 'Paseo pinned WebUI build or integrity check failed.' }
+if ($LASTEXITCODE -ne 0) { throw 'T3 Code pinned WebUI build or integrity check failed.' }
 & pnpm build:studio
 if ($LASTEXITCODE -ne 0) { throw 'Studio build failed.' }
 & (Join-Path $PSScriptRoot 'build.ps1')
@@ -96,7 +96,7 @@ foreach ($name in (@($pack.files.path) + @('pnpm-lock.yaml','pnpm-workspace.yaml
   New-Item -ItemType Directory -Path (Split-Path -Parent $target) -Force | Out-Null
   Copy-Item -LiteralPath (Join-Path $repo $name) -Destination $target
 }
-Copy-Item -LiteralPath (Join-Path $repo '.cache/paseo-generated') -Destination (Join-Path $bundle 'integrations/paseo/generated') -Recurse
+Copy-Item -LiteralPath (Join-Path $repo '.cache/t3-generated') -Destination (Join-Path $bundle 'integrations/t3-code/generated') -Recurse
 Copy-Item -LiteralPath (Join-Path $repo 'studio-dist') -Destination (Join-Path $bundle 'studio-dist') -Recurse
 foreach ($name in @('FrameStudio.exe','FrameSetup.exe','FrameStudio.exe.config','FrameSetup.exe.config')) { Copy-Item -LiteralPath (Join-Path $repo ".cache\desktop\$name") -Destination (Join-Path $bundle $name) }
 Copy-Item (Join-Path $repo '.cache\desktop\FrameStudio.ico') (Join-Path $bundle 'desktop\FrameStudio.ico')

@@ -1,7 +1,7 @@
 import { randomUUID } from "../src/browser/uuid.mjs";
 import { Component, lazy, Suspense, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { clearRetiredChatStorage } from "./paseo-session.mjs";
+import { clearRetiredChatStorage } from "./ai-session.mjs";
 import {
   Film,
   FolderGit2,
@@ -92,19 +92,19 @@ function Background({ notify, localMode }) {
             <p>{w.storage_name}</p>
             <div className="row">
               {w.nativeActivity?.state === "starting" && (
-                <span className="badge queued">Paseo · 正在连接</span>
+                <span className="badge queued">T3 Code · 正在连接</span>
               )}
-              {!!w.nativeActivity?.activeAgents?.length && (
-                <span className="badge running">Paseo · {w.nativeActivity.activeAgents.length} 个对话正在运行</span>
+              {!!w.nativeActivity?.activeThreads?.length && (
+                <span className="badge running">T3 Code · {w.nativeActivity.activeThreads.length} 个对话正在运行</span>
               )}
               {!!w.nativeActivity?.activeTerminals && (
                 <span className="badge running">终端 · {w.nativeActivity.activeTerminals} 项正在运行</span>
               )}
               {!!w.nativeActivity?.pendingPermissions && (
-                <span className="badge queued">Paseo · 等待权限确认</span>
+                <span className="badge queued">T3 Code · 等待权限确认</span>
               )}
               {w.nativeActivity?.incomplete && w.nativeActivity.state !== "starting" && (
-                <span className="badge failed">Paseo · 连接状态待核对</span>
+                <span className="badge failed">T3 Code · 连接状态待核对</span>
               )}
               {w.tasks.map((t) => (
                 <span className={"badge " + t.state} key={t.id}>

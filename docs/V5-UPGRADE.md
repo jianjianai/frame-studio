@@ -50,8 +50,8 @@ V5 保留 AI 直接执行。没有讨论模式、只读聊天模式或额外逐�
 
 新增操作：
 
-- `works_result({id, task})`：读取本轮确切版本、文件变化、工具证据及当前撤销条件。
-- `works_undo({id, task, requestKey, expectedCommit, expectedRevision})`：在乐观版本条件下逆向撤销；重试必须使用原标识和原条件。
+- AI 回合的文件差异和检查点在 T3 原生工作台查看；FRAME 作品检查绑定准确 revision。
+- 作品版本恢复使用 `works_restore`，原生回合恢复使用 T3 的检查点；两者均操作唯一作品工作区。
 - `works_queue_status({id})`：读取当前排队原因及控制器就绪状态。
 
 审片上下文可附带 `previewTask`、`sourceCommit`、`shotId`。原来的 `time/start/end/assets` 保持兼容。结构化操作错误提供 `error/status/code/recovery/retryable/requestId`，例如 `UNDO_BASE_CHANGED`、`UNDO_RECOVERY_REQUIRED`、`EXECUTION_SELECTION_CHANGED`。连接中断或响应超时的客户端错误使用 `OPERATION_UNCERTAIN`，不会自动重试写操作。

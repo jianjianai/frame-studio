@@ -45,7 +45,7 @@ jobs:
           ref: ${{ needs.source.outputs.revision }}
       - uses: actions/setup-node@v4
         with:
-          node-version: "26.8.2"
+          node-version: "24.21.0"
       - name: Install pnpm
         shell: pwsh
         run: |
@@ -55,8 +55,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .cache/pnpm-store
-          key: windows-pnpm-12.4.2-node-26-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc') }}
-          restore-keys: windows-pnpm-12.4.2-node-26-
+          key: windows-pnpm-12.4.2-node-24-${{ hashFiles('pnpm-lock.yaml', 'pnpm-workspace.yaml', '.npmrc') }}
+          restore-keys: windows-pnpm-12.4.2-node-24-
       - name: Restore installer compiler
         uses: actions/cache@v4
         with:
@@ -91,11 +91,11 @@ jobs:
         run: |
           pnpm install --frozen-lockfile --prefer-offline --store-dir .cache/pnpm-store
           if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed' }
-      - name: Restore pinned Paseo compiled bundle
+      - name: Restore pinned T3 Code compiled bundle
         uses: actions/cache@v4
         with:
-          path: .cache/paseo-generated
-          key: windows-paseo-node-26-${{ hashFiles('integrations/paseo/source.json', 'integrations/paseo/patches/**', 'integrations/paseo/frame-plugin/**', 'integrations/paseo/runtime/**', 'integrations/paseo/PASEO-LICENSE', 'scripts/build-paseo.mjs', 'server/local-tools.mjs') }}
+          path: .cache/t3-generated
+          key: windows-t3-node-24-${{ hashFiles('integrations/t3-code/**', 'scripts/build-t3.mjs', 'server/local-tools.mjs') }}
       - name: Build installer and immutable runtime components
         shell: pwsh
         env:

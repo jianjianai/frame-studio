@@ -5,7 +5,7 @@ import { workTools } from "../../server/work-tools.mjs";
 import { workOperations } from "../../server/work-operations.mjs";
 import { z } from "zod";
 
-function paseoFixture(work = { id: randomUUID() }) {
+function aiFixture(work = { id: randomUUID() }) {
   let handler;
   const reads = [],
     calls = [];
@@ -32,14 +32,14 @@ function paseoFixture(work = { id: randomUUID() }) {
   return { request: (body) => handler(body), reads, calls, work };
 }
 
-test("Paseo preview resolves its unique work workspace from the credential without source arguments", async () => {
-  const f = paseoFixture(),
+test("Ai preview resolves its unique work workspace from the credential without source arguments", async () => {
+  const f = aiFixture(),
     task = {
       id: randomUUID(),
       repo: randomUUID(),
       project: "film",
       state: "running",
-      kind: "paseo",
+      kind: "ai",
     };
   const result = await f.request({
     agentTask: task,
@@ -60,9 +60,9 @@ test("Paseo preview resolves its unique work workspace from the credential witho
   ]);
 });
 
-test("Paseo preview rejects arbitrary work, task, capability and nested arguments before database lookup", async () => {
-  const f = paseoFixture(),
-    task = { kind: "paseo", id: randomUUID(), repo: randomUUID(), project: "film" };
+test("Ai preview rejects arbitrary work, task, capability and nested arguments before database lookup", async () => {
+  const f = aiFixture(),
+    task = { kind: "ai", id: randomUUID(), repo: randomUUID(), project: "film" };
   for (const args of [
     { id: randomUUID() },
     { work: randomUUID() },
@@ -83,17 +83,17 @@ test("Paseo preview rejects arbitrary work, task, capability and nested argument
   assert.equal(f.calls.length, 0);
 });
 
-test("Paseo preview requires native credentials and refuses missing or deleted bound works", async () => {
-  const noTask = paseoFixture();
+test("Ai preview requires native credentials and refuses missing or deleted bound works", async () => {
+  const noTask = aiFixture();
   await assert.rejects(() => noTask.request({ body: { name: "preview" } }), {
     statusCode: 403,
   });
   assert.equal(noTask.reads.length, 0);
-  const missing = paseoFixture(null);
+  const missing = aiFixture(null);
   await assert.rejects(
     () =>
       missing.request({
-        agentTask: { kind: "paseo", id: randomUUID(), repo: randomUUID(), project: "film" },
+        agentTask: { kind: "ai", id: randomUUID(), repo: randomUUID(), project: "film" },
         body: { name: "preview", args: {} },
       }),
     { statusCode: 404 },
@@ -115,7 +115,7 @@ test("AI browser opens only the unique live workspace and rejects retired draft 
   });
   const id = randomUUID();
   const invoke = async value => operation.fn(operation.schema.parse(value));
-  for (const value of [{ id, task: randomUUID() }, { id, source: "paseo" }, { id, paseoAgent: "other" }])
+  for (const value of [{ id, task: randomUUID() }, { id, source: "alternate" }, { id, aiThread: "other" }])
     await assert.rejects(invoke(value), /Unrecognized key/);
   await assert.rejects(invoke({ id }), error => error.statusCode === 503);
   registry.works_live_preview = {

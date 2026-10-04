@@ -17,7 +17,7 @@ function materialFixture(
   t.after(() => fs.rmSync(data, { recursive: true, force: true }));
   const bytes = Buffer.from("material import fixture"),
     sha = createHash("sha256").update(bytes).digest("hex"),
-    task = { kind: "paseo", id: randomUUID(), repo: randomUUID(), project: "authority-film" },
+    task = { kind: "ai", id: randomUUID(), repo: randomUUID(), project: "authority-film" },
     asset = {
       id: randomUUID(),
       name: filename,

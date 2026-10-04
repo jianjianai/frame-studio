@@ -1,0 +1,13 @@
+{
+  "repository": "https://github.com/pingdotgg/t3code.git",
+  "version": "0.0.45",
+  "tag": "v0.0.45",
+  "commit": "6c8fed35dded9ff71c5b46807125457acbb76be6",
+  "upstreamManifestVersion": "0.0.44",
+  "nodeMajor": 24,
+  "packageManager": "pnpm@11.10.0",
+  "upstreamLockSha256": "7fba9d28f5b01b2bbce483f30a4c8ef1d1e26a72afd324c2789408690e650eb7",
+  "patches": [
+    "0001-frame-host-adapter.patch"
+  ]
+}

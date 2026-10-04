@@ -19,7 +19,7 @@ test(
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-lifecycle-")),
       db = await database(url, "test-password-at-least-14");
     await db.pool.query(
-      "TRUNCATE repos,connections,github_accounts,auth_flows,assets RESTART IDENTITY CASCADE",
+      "TRUNCATE repos,github_accounts,auth_flows,assets RESTART IDENTITY CASCADE",
     );
     const key = "55".repeat(32),
       platform = await createApp({
@@ -195,15 +195,7 @@ test(
         one.id,
       );
       assert(!JSON.stringify(await github.list()).includes("fixture-account"));
-      const connection = await call("connections_save", {
-        name: "Model test",
-        tool: "codex",
-        mode: "api",
-        model: "fixture",
-        apiKey: "fixture-model-key",
-        baseUrl: "https://model.fixture/v1",
-      });
-      assert((await call("connections_test", { id: connection.id })).ok);
+      await assert.rejects(call("connections_save", {}), /Unknown/);
       await db.pool.query("UPDATE repos SET url=$2,account=$3 WHERE id=$1", [
         repo.id,
         "https://github.com/account-a/works.git",

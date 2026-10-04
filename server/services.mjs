@@ -6,17 +6,17 @@ import { Repositories } from "./repositories.mjs";
 import { Assets } from "./assets.mjs";
 import { Tasks } from "./tasks.mjs";
 import { operations } from "./operations.mjs";
-import { Connections } from "./connections.mjs";
+import { GitHubAuthorization } from "./github-authorization.mjs";
 import { GitHub } from "./github.mjs";
 import { Retention } from "./retention.mjs";
 import { seedSpeech } from "./speech.mjs";
 import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
 import { LivePreviewSessions } from "./live-preview.mjs";
-import { PaseoStore } from "./paseo-store.mjs";
-import { PaseoWork } from "./paseo-work.mjs";
-import { PaseoManager } from "./paseo-manager.mjs";
-import { PaseoWorkspace } from "./paseo-workspace.mjs";
-import { PaseoValidation } from "./paseo-validation.mjs";
+import { AiStore } from "./ai-store.mjs";
+import { AiWork } from "./ai-work.mjs";
+import { AiManager } from "./ai-manager.mjs";
+import { AiWorkspace } from "./ai-workspace.mjs";
+import { AiValidation } from "./ai-validation.mjs";
 
 /** Shared domain assembly, without HTTP listeners or a privileged scheduler. */
 export async function createServices({
@@ -39,12 +39,10 @@ export async function createServices({
     repos = new Repositories(db, data, secrets),
     assets = new Assets(db, data, repos),
     tasks = new Tasks(db, data, repos, secrets);
-  const connections = new Connections(db, data, secrets),
-    github = new GitHub(db, secrets, repos, data),
+  const github = new GitHub(db, secrets, repos, data),
     retention = new Retention(db, data);
   const livePreview = new LivePreviewSessions({ db, data, repos });
-  connections.github = github;
-  tasks.connections = connections;
+  const githubAuth = new GitHubAuthorization({ db, data, github });
   const actions = operations({
     db,
     data,
@@ -52,52 +50,50 @@ export async function createServices({
     assets,
     tasks,
     secrets,
-    connections,
+    githubAuth,
     github,
     retention,
     livePreview,
   });
-  const paseoStore = await new PaseoStore({ db }).initialize();
-  const paseoWork = new PaseoWork({ db, data, repos, works: actions.works, connections, secrets, livePreview, store: paseoStore });
-  const paseoManager = new PaseoManager({ db, data, tasks, connections, store: paseoStore, workService: paseoWork });
-  paseoWork.manager = paseoManager;
-  paseoWork.authorizeAgent = (work, agentId) => paseoManager.agent(work.id, agentId);
-  const paseoValidation = new PaseoValidation({ db, data, repos, works: actions.works, tasks, manager: paseoManager, store: paseoStore });
-  const paseoWorkspace = new PaseoWorkspace({ db, data, works: actions.works, repos, store: paseoStore, manager: paseoManager,
-    validate: (report, options) => paseoValidation.validate(report, options),
+  const aiStore = await new AiStore({ db }).initialize();
+  const aiWork = new AiWork({ db, data, repos, works: actions.works, livePreview, store: aiStore });
+  const aiManager = new AiManager({ db, data, tasks, store: aiStore, workService: aiWork });
+  aiWork.manager = aiManager;
+  aiWork.authorizeThread = (work, threadId, options) => aiManager.thread(work.id, threadId, { ...options, allowDraft: true });
+  const aiValidation = new AiValidation({ db, data, repos, works: actions.works, tasks, manager: aiManager, store: aiStore });
+  const aiWorkspace = new AiWorkspace({ db, data, works: actions.works, repos, store: aiStore, manager: aiManager,
+    validate: (report, options) => aiValidation.validate(report, options),
     onChange: async workId => {
       const work = await actions.works.get(workId, { active: true });
       await repos.revisions?.refresh(work.repo, work.project);
       assets.invalidateReferences(work.repo, work.project);
     },
-    onError: (_workId, error) => console.error("Paseo workspace:", error.message),
+    onError: (_workId, error) => console.error("Ai workspace:", error.message),
   });
-  tasks.externalActivity = options => paseoManager.active(options);
-  repos.nativeActivity = async (repo, project) => (await paseoManager.active({ repo, project })).length > 0;
-  connections.nativeActivity = async (connection, options = {}) => (await paseoManager.active({ profileId: "frame-" + connection, ...options })).length > 0;
-  actions.works.paseo = { manager: paseoManager, workspace: paseoWorkspace, store: paseoStore, work: paseoWork };
+  tasks.externalActivity = options => aiManager.active(options);
+  repos.nativeActivity = async (repo, project) => (await aiManager.active({ repo, project })).length > 0;
+  actions.works.ai = { manager: aiManager, workspace: aiWorkspace, store: aiStore, work: aiWork };
   tasks.validateWorkspace = async (task, options = {}) => {
     const work = await db.one("SELECT id FROM works WHERE repo=$1 AND project=$2 AND NOT deleted", [task.repo, task.project]);
     if (!work) throw Object.assign(Error("作品已不存在，请刷新作品列表"), { statusCode: 404 });
-    const report = await paseoWorkspace.request(work.id, { ...options, wait: false });
+    const report = await aiWorkspace.request(work.id, { ...options, wait: false });
     await options.onReport?.(report);
-    return options.wait === false ? report : paseoWorkspace.request(work.id, { ...options, reportId: report.id, wait: true });
+    return options.wait === false ? report : aiWorkspace.request(work.id, { ...options, reportId: report.id, wait: true });
   };
-  paseoManager.onReconcile = async workId => {
-    if (!paseoWorkspace.entries.has(workId)) await paseoWorkspace.start(workId);
-    else await paseoWorkspace.reconcile(workId);
+  aiManager.onReconcile = async workId => {
+    if (!aiWorkspace.entries.has(workId)) await aiWorkspace.start(workId);
   };
-  paseoManager.onStopped = workId => paseoWorkspace.stop(workId);
-  paseoManager.onNativeEvent = (workId, event) => {
-    if (event.type === "agent.turn_ended") void paseoWorkspace.reconcile(workId, { force: true }).catch(() => {});
+  aiManager.onStopped = workId => aiWorkspace.stop(workId);
+  aiManager.onNativeEvent = (workId, event) => {
+    if (event.type === "thread.ended") void aiWorkspace.reconcile(workId, { force: true }).catch(() => {});
   };
-  let paseoTimer;
-  const startPaseoLoop = () => {
-    if (paseoTimer) return;
-    paseoTimer = setInterval(() => {
-      if (tasks.lease?.held || process.env.FRAME_LOCAL_MODE === "1") void paseoManager.tick().catch(error => console.error("Paseo controller:", error.message));
+  let aiTimer;
+  const startAiLoop = () => {
+    if (aiTimer) return;
+    aiTimer = setInterval(() => {
+      if (tasks.lease?.held || process.env.FRAME_LOCAL_MODE === "1") void aiManager.tick().catch(error => console.error("Ai controller:", error.message));
     }, 5000);
-    paseoTimer.unref();
+    aiTimer.unref();
   };
   repos.onChange = async (id, project = null) => {
     if (!project) await assets.indexRepository(id);
@@ -105,7 +101,7 @@ export async function createServices({
     assets.invalidateReferences(id, project);
   };
   if (initialize) {
-    await connections.migrate();
+    await aiManager.control();
     await github.migrate();
     await assets.migrate();
     await actions.works.discover();
@@ -123,21 +119,21 @@ export async function createServices({
     repos,
     assets,
     tasks,
-    connections,
+    githubAuth,
     github,
     retention,
     actions,
     livePreview,
-    paseoStore, paseoWork, paseoManager, paseoWorkspace, paseoValidation, startPaseoLoop,
+    aiStore, aiWork, aiManager, aiWorkspace, aiValidation, startAiLoop,
     async close() {
-      clearInterval(paseoTimer);
-      await paseoWorkspace.close();
-      await paseoManager.close();
+      clearInterval(aiTimer);
+      await aiWorkspace.close();
+      await aiManager.close();
       await livePreview.close();
       await tasks.close();
       await retention.close();
       await assets.close();
-      connections.close();
+      githubAuth.close();
       await db.pool.end();
     },
   };

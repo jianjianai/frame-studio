@@ -232,16 +232,19 @@ test(
         beforeEmptyVoice,
         "missing default voice must fail before provider request",
       );
-      const agentToken = "fixture-native-paseo-only";
-      const workspaceRoot = (await f.paseo.work.prepare(work.id)).workspace.workspaceRoot;
-      f.paseo.manager.agentContext = async (credential) =>
+      const agentToken = "fixture-native-ai-only";
+      const workspaceRoot = (await f.ai.work.prepare(work.id)).workspace.workspaceRoot;
+      f.ai.manager.threadContext = async (credential) =>
         credential === agentToken
           ? {
-              kind: "paseo",
+              id: work.id,
+              kind: "ai",
+              state: "running",
+              input: {},,
               repo: repo.id,
               project: work.project,
-              paseoWork: work.id,
-              paseoAgent: "fixture-native-tts",
+              aiWork: work.id,
+              aiThread: "fixture-native-tts",
               runRoot: workspaceRoot,
             }
           : null;

@@ -97,7 +97,7 @@ export class Retention {
         const references = await this.db.all(
           "SELECT review_reference FROM tasks WHERE cleaned IS NULL AND review_reference->>'mode'='live' AND (state IN ('queued','running','cancelling','publishing','publish_failed') OR expires>now())",
         );
-        const nativeReferences = await this.db.all("SELECT review_reference FROM paseo_message_contexts WHERE review_reference->>'mode'='live'").catch(error => {
+        const nativeReferences = await this.db.all("SELECT review_reference FROM ai_message_contexts WHERE review_reference->>'mode'='live'").catch(error => {
           if (error.code === "42P01" || /no such table/.test(error.message)) return [];
           throw error;
         });

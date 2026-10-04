@@ -17,7 +17,6 @@ import { livePreviewOperations } from "./live-preview-routes.mjs";
 import { workbenchOperations } from "./workbench.mjs";
 import { toolManagementOperations } from "./tool-management.mjs";
 import { createOperationRegistry } from "./operation-registry.mjs";
-import { workResultOperations } from "./work-results.mjs";
 import { taskGetRequestSchema } from "../src/contracts/platform.mjs";
 import { workIdRequestSchema } from "../src/contracts/platform.mjs";
 import { hash, token, confined, problem } from "./security.mjs";
@@ -34,7 +33,7 @@ export function operations({
   assets,
   tasks,
   secrets,
-  connections,
+  githubAuth,
   github,
   retention,
   livePreview,
@@ -578,8 +577,7 @@ export function operations({
     livePreview,
   });
   if (livePreview) livePreviewOperations({ add, works, livePreview });
-  workResultOperations({ add, db, data, works, repos, tasks });
-  if (connections)
+  if (github)
     workbenchOperations({
       add,
       db,
@@ -588,7 +586,7 @@ export function operations({
       repos,
       assets,
       tasks,
-      connections,
+      githubAuth,
       github,
       retention,
     });

@@ -22,7 +22,7 @@ import { problem } from "./security.mjs";
 
 // This allowlist is shared by discovery and MCP registration, never by authorization.
 export const isMcpOperation = (name) =>
-  /^(help$|capabilities$|works_|upload_|repositories_(page|get|check|sync|refresh)$|connections_list$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local|discover)$|speech_(test|providers|status|cancel)$|models_list$|workspace_context$|tool_describe$|authoring_reference$)/.test(
+  /^(help$|capabilities$|works_|upload_|repositories_(page|get|check|sync|refresh)$|assets_(list|update|trash|purge)$|task_(get|status|cancel|retry_publish)$|artifact_read$|engines_(list|save|delete|local|discover)$|speech_(test|providers|status|cancel)$|models_list$|workspace_context$|tool_describe$|authoring_reference$)/.test(
     name,
   );
 const readOnly = new Set([
@@ -48,11 +48,10 @@ const readOnly = new Set([
   "works_tasks_page",
   "works_versions",
   "works_exports",
-  "works_paseo_status",
+  "works_ai_status",
   "task_get",
   "task_status",
   "artifact_read",
-  "connections_list",
   "engines_list",
   "models_list",
   "assets_list",

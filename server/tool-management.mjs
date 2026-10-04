@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import { toolBinary } from "./connections.mjs";
+import { toolBinary } from "./tool-binary.mjs";
 import { command } from "./process.mjs";
 import { problem } from "./security.mjs";
 import {

@@ -184,8 +184,7 @@
 .repo-picker .field {
   margin: 12px 0;
 }
-.repository-grid,
-.connection-grid {
+.repository-grid {
   grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
 }
 

@@ -1,8 +1,5 @@
 import { randomUUID, createHash } from "node:crypto";
-import {
-  paseoBoundaryBootstrap,
-  paseoBoundaryHtml,
-} from "./paseo-boundary-fixture.mjs";
+import { aiBoundaryBootstrap, aiBoundaryHtml } from "./ai-boundary-fixture.mjs";
 import {
   validateAudioDocument,
   audioEngines,
@@ -36,16 +33,6 @@ export async function mockApi(context, playerUrl, uiUrl) {
     opened: now,
     updated: now,
     branch: "works/test-film",
-  };
-  const connection = {
-    id: randomUUID(),
-    name: "验收模型（模拟连接）",
-    configured: true,
-    tool: "codex",
-    mode: "api",
-    model: "fixture-model",
-    models: [{ id: "fixture-model", name: "验收模型", enabled: true }],
-    state: "ready",
   };
   const build = {
     id: randomUUID(),
@@ -258,22 +245,21 @@ export async function mockApi(context, playerUrl, uiUrl) {
               blocker: null,
             })),
         };
-      case "connections_list":
-        return [connection];
-      case "works_paseo_status":
+      case "works_ai_status":
         return {
-          version: 1,
+          version: 2,
+          generation: "0",
           workId: work.id,
           sourceRevision: state.live.sourceRevision,
           native: {
             state: "ready",
-            activeAgents: [],
+            activeThreads: [],
             activeTerminals: 0,
             pendingPermissions: 0,
           },
           validation: state.validation,
         };
-      case "works_paseo_validate":
+      case "works_ai_validate":
         state.validation = {
           state: "passed",
           revision: state.live.sourceRevision,
@@ -509,35 +495,38 @@ export async function mockApi(context, playerUrl, uiUrl) {
     }
   };
   // This fixture verifies Frame's host boundary/layout. The complete official child UI and
-  // native send/model/history behavior are covered by the dedicated Paseo browser gates.
-  const paseoBootstrap = paseoBoundaryBootstrap({
+  // native send/model/history behavior are covered by the dedicated T3 Code browser gates.
+  const aiBootstrap = aiBoundaryBootstrap({
     workId: work.id,
     origin: new URL(uiUrl).origin,
     label: work.title,
   });
-  await context.route("**/paseo/**", async (route) => {
+  await context.route("**/ai/**", async (route) => {
     const url = new URL(route.request().url());
-    if (!url.pathname.startsWith(paseoBootstrap.basePath))
-      return route.fallback();
+    if (!url.pathname.startsWith(aiBootstrap.embedPath))
+      return route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><title>T3 Code standalone navigation fixture</title><p>The installed native UI has its own browser gate.</p>",
+      });
     if (
-      !url.pathname.startsWith(paseoBootstrap.basePath) ||
-      url.searchParams.get("frameNonce") !== paseoBootstrap.nonce
+      !url.pathname.startsWith(aiBootstrap.embedPath) ||
+      url.searchParams.get("frameNonce") !== aiBootstrap.nonce
     )
       return route.fulfill({ status: 403, body: "Invalid fixture scope" });
     return route.fulfill({
       contentType: "text/html",
-      body: paseoBoundaryHtml(paseoBootstrap),
+      body: aiBoundaryHtml(aiBootstrap),
     });
   });
   await context.route("**/api/**", async (route) => {
     const url = new URL(route.request().url());
-    const paseoPrefix = `/api/paseo/works/${work.id}`;
-    if (url.pathname === paseoPrefix + "/session")
+    const aiPrefix = `/api/ai/works/${work.id}`;
+    if (url.pathname === aiPrefix + "/session")
       return route.fulfill({
         json: {
-          bootstrap: paseoBootstrap,
-          uiUrl:
-            paseoBootstrap.basePath + "?frameNonce=" + paseoBootstrap.nonce,
+          bootstrap: aiBootstrap,
+          standaloneUrl: "/ai/",
+          uiUrl: aiBootstrap.embedPath + "?frameNonce=" + aiBootstrap.nonce,
         },
       });
     if (url.pathname === "/api/me")

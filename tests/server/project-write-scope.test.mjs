@@ -17,7 +17,7 @@ test("file writes only check the current work for active tasks", async () => {
   };
   const actions = operations({
     db: { lock: async (_key, fn) => fn() }, data, repos,
-    assets: {}, tasks: {}, secrets: {}, connections: {}, github: {}, retention: {},
+    assets: {}, tasks: {}, secrets: {}, github: {}, retention: {},
   });
   const write = actions.registry.project_write.fn;
   try {

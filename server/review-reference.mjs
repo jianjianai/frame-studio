@@ -104,12 +104,12 @@ async function savedLiveReviewReference({ db, data, repo, project, context }) {
   if (!row?.review_reference) {
     try {
       row = await db.one(
-        "SELECT m.review_reference FROM paseo_message_contexts m JOIN paseo_work_bindings b ON b.work_id=m.work_id JOIN works w ON w.id=b.work_id WHERE w.repo=$1 AND w.project=$2 AND NOT w.deleted AND m.review_reference->>'status'='versioned' AND m.review_reference->>'mode'='live' AND m.review_reference->>'liveSessionId'=$3 AND m.review_reference->>'sourceRevision'=$4 AND ($5::text IS NULL OR m.review_reference->>'compiledRevision'=$5) ORDER BY m.created DESC LIMIT 1",
+        "SELECT m.review_reference FROM ai_message_contexts m JOIN ai_work_bindings b ON b.work_id=m.work_id JOIN works w ON w.id=b.work_id WHERE w.repo=$1 AND w.project=$2 AND NOT w.deleted AND m.review_reference->>'status'='versioned' AND m.review_reference->>'mode'='live' AND m.review_reference->>'liveSessionId'=$3 AND m.review_reference->>'sourceRevision'=$4 AND ($5::text IS NULL OR m.review_reference->>'compiledRevision'=$5) ORDER BY m.created DESC LIMIT 1",
         [repo, project, context.liveSessionId, context.sourceRevision, context.compiledRevision || null],
       );
     } catch (error) {
       // The integration is optional in a local database created by an earlier FRAME version.
-      if (error.code !== "42P01" && !/no such table: paseo_(message_contexts|work_bindings)/.test(error.message)) throw error;
+      if (error.code !== "42P01" && !/no such table: ai_(message_contexts|work_bindings)/.test(error.message)) throw error;
     }
   }
   const reference = row?.review_reference;

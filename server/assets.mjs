@@ -618,8 +618,8 @@ export class Assets {
         [id],
       );
       return this.db.lock("blob:" + asset.sha, async () => {
-        const retained = () => problem(409, "素材仍被已发送的 Paseo 消息引用，无法永久删除；删除所属作品后才会释放原件");
-        if (await this.db.one("SELECT asset FROM paseo_message_assets WHERE asset=$1 LIMIT 1", [id]))
+        const retained = () => problem(409, "素材仍被已发送的 Ai 消息引用，无法永久删除；删除所属作品后才会释放原件");
+        if (await this.db.one("SELECT asset FROM ai_message_assets WHERE asset=$1 LIMIT 1", [id]))
           throw retained();
         let deleted;
         try {
@@ -629,7 +629,7 @@ export class Assets {
           );
         } catch (error) {
           // The FK closes the cross-process gap between the indexed check and deletion.
-          if ((["23503", "23001"].includes(error.code) && error.constraint === "paseo_message_assets_asset_fkey") ||
+          if ((["23503", "23001"].includes(error.code) && error.constraint === "ai_message_assets_asset_fkey") ||
               (this.db.kind === "sqlite" && /FOREIGN KEY constraint failed/.test(error.message)))
             throw retained();
           throw error;

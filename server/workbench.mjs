@@ -1,13 +1,9 @@
 import { z } from "zod";
 import { operationContracts, workIdRequestSchema, workSyncStatusRequestSchema } from "../src/contracts/platform.mjs";
-import {
-  modelIdSchema,
-  providerModelsSchema,
-} from "../src/contracts/ai-models.mjs";
 import { problem } from "./security.mjs";
 import { RuntimeStatus } from "./runtime-status.mjs";
 import { workQueueStatus } from "./task-diagnostics.mjs";
-import { paseoPublicValidation } from "./paseo-work.mjs";
+import { aiPublicValidation } from "./ai-work.mjs";
 
 export function workbenchOperations({
   add,
@@ -16,7 +12,7 @@ export function workbenchOperations({
   repos,
   tasks,
   assets,
-  connections,
+  githubAuth,
   github,
   retention,
   data,
@@ -29,11 +25,11 @@ export function workbenchOperations({
   });
   add("works_queue_status", "Explain queued work from current blockers, controller heartbeat and capacity without re-running a task", workIdRequestSchema,
     ({ id }) => workQueueStatus({ db, works, tasks, id }));
-  add("works_paseo_status", "Read the single work workspace and its revision-bound validation report", workIdRequestSchema,
-    ({ id }) => works.paseo.work.status(id));
-  add("works_paseo_validate", "Retry verification of the current work revision in its existing runtime", workIdRequestSchema,
+  add("works_ai_status", "Read the single work workspace and its revision-bound validation report", workIdRequestSchema,
+    ({ id }) => works.ai.work.status(id));
+  add("works_ai_validate", "Retry verification of the current work revision in its existing runtime", workIdRequestSchema,
     async ({ id }) => {
-      return paseoPublicValidation(await works.paseo.workspace.request(id, { wait: false }));
+      return aiPublicValidation(await works.ai.workspace.request(id, { wait: false }));
     });
   add(
     "system_status",
@@ -146,7 +142,7 @@ export function workbenchOperations({
         [w.repo, w.project],
       );
       for (const row of rows) await tasks.cancel(row.id);
-      const native = await works.paseo?.manager.cancelWork(a.id);
+      const native = await works.ai?.manager.cancelWork(a.id);
       return { stopped: rows.length + (native?.stopped || 0) };
     },
   );
@@ -211,12 +207,6 @@ export function workbenchOperations({
     github.list(),
   );
   add(
-    "connections_test",
-    "Test selected model API or official CLI login status",
-    { id: uuid, model: modelIdSchema.optional() },
-    (a) => connections.test(a.id, a.model),
-  );
-  add(
     "github_token",
     "Connect a GitHub account with a personal access token",
     { token: z.string().min(10).max(8000) },
@@ -248,78 +238,14 @@ export function workbenchOperations({
       return repo;
     },
   );
-  add("connections_list", "List model providers without credentials", operationContracts.connections_list.request, () =>
-    connections.list(),
-  );
-  add(
-    "connections_discover",
-    "Discover provider models without modifying the saved catalog",
-    { id: uuid },
-    (a) => connections.discover(a.id),
-  );
-  add(
-    "connections_sync_models",
-    "Refresh and save Codex official-account models and capabilities, preserving manual choices",
-    { id: uuid },
-    (a) => connections.syncModels(a.id),
-  );
-  add(
-    "connections_enabled",
-    "Enable or disable a provider while preserving conversation history",
-    { id: uuid, enabled: z.boolean() },
-    (a) => connections.setEnabled(a.id, a.enabled),
-  );
-  add(
-    "connections_usage",
-    "Inspect provider deletion impact without credentials",
-    { id: uuid },
-    (a) => connections.usage(a.id),
-  );
-  add(
-    "connections_delete",
-    "Delete provider credentials while preserving history; active use blocks deletion",
-    {
-      id: uuid,
-      expectedRevision: z.string().regex(/^[a-f0-9]{64}$/),
-      confirmName: z.string().min(1).max(100),
-    },
-    (a) => connections.delete(a),
-  );
-  add(
-    "connections_save",
-    "Save a named Codex or Claude model connection",
-    {
-      id: uuid.optional(),
-      name: z.string().trim().min(1).max(100),
-      tool: z.enum(["codex", "claude"]),
-      mode: z.enum(["api", "official"]),
-      baseUrl: z.string().max(1000).default(""),
-      model: modelIdSchema.default(""),
-      models: providerModelsSchema.optional(),
-      enabled: z.boolean().optional(),
-      publicCatalog: z.boolean().optional(),
-      expectedRevision: z
-        .string()
-        .regex(/^[a-f0-9]{64}$/)
-        .optional(),
-      apiKey: z.string().max(10000).optional(),
-    },
-    (a) => connections.save(a),
-  );
   add(
     "auth_begin",
-    "Start official GitHub, Codex or Claude browser login",
-    { kind: z.enum(["github", "codex", "claude"]), target: uuid.optional() },
-    (a) => connections.begin(a.kind, a.target),
+    "Start GitHub browser login",
+    { kind: z.literal("github"), target: uuid.optional() },
+    (a) => githubAuth.begin(a.kind, a.target),
   );
   add("auth_state", "Read a browser authorization flow", { id: uuid }, (a) =>
-    connections.flow(a.id),
-  );
-  add(
-    "auth_submit",
-    "Submit the official Claude authorization code",
-    { id: uuid, code: z.string().max(4000) },
-    (a) => connections.submit(a.id, a.code),
+    githubAuth.flow(a.id),
   );
   add(
     "works_exports",
@@ -328,7 +254,7 @@ export function workbenchOperations({
     async (a) => {
       const w = await works.get(a.id);
       return db.all(
-        "SELECT id,state,error,result,input,progress,created,expires,cleaned,source_commit,fingerprint,frozen,workspace_cleaned,cleanup_error FROM tasks WHERE repo=$1 AND project=$2 AND (kind='render' OR (kind='paseo' AND EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(result->'artifacts','[]'::jsonb)) artifact WHERE lower(right(artifact->>'path',4))='.mp4' OR lower(right(artifact->>'path',5))='.webm'))) ORDER BY created DESC LIMIT 50",
+        "SELECT id,state,error,result,input,progress,created,expires,cleaned,source_commit,fingerprint,frozen,workspace_cleaned,cleanup_error FROM tasks WHERE repo=$1 AND project=$2 AND kind='render' ORDER BY created DESC LIMIT 50",
         [w.repo, w.project],
       );
     },

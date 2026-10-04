@@ -38,7 +38,7 @@ test("stored speech auditions are readable without becoming executable jobs", as
   const { taskKindSchema, executableTaskKindSchema } =
     await import("../../src/contracts/platform.mjs");
   assert.equal(taskKindSchema.safeParse("speech-test").success, true);
-  assert.equal(taskKindSchema.safeParse("paseo").success, true);
+  assert.equal(taskKindSchema.safeParse("paseo").success, false);
   assert.equal(taskKindSchema.safeParse("agent").success, false);
   assert.equal(executableTaskKindSchema.safeParse("paseo").success, false);
   assert.equal(

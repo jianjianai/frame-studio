@@ -1,40 +1,18 @@
-# OVH 开发环境
+# 本机开发与生产
 
-主开发目录：`/home/agentdock/AgentDock/frame-studio`，在 ovh-docker 插件中指定此目录作为 workdir。直接在 `main` 开发，不再依赖 Windows 工作目录。
+当前执行环境就是 OVH Docker 宿主机。当前 checkout 为 `/home/ubuntu/Documents/AgentDock/frame-studio`；直接在 main 开发，不经 ovh-docker 插件或 SSH 中转。先检查 Git 状态、HEAD 和相关 diff，保留已有未提交内容。
 
-## 代码与持久化
+## 开发与测试
 
-代码及 `.git` 位于 AgentDock 的持久 workspace volume，重建 AgentDock 容器不丢失。开发容器 `frame-development` 将同一目录挂载到 `/workspace`；两处编辑的是同一份文件。`origin` 保持 `https://github.com/jianjianai/frame-studio.git`，Git 操作在 AgentDock 中执行，推送地址单独配置为 `git@github.com:jianjianai/frame-studio.git`，使用其现有 jianjianai SSH 身份（推送 dry-run 已验证）。不要在开发容器里复制账号凭据。
+工具镜像包含 Node 24、pnpm 12.4.2、Chromium、Git LFS 和 FFmpeg。已有 `frame-development` 挂载另一份 AgentDock checkout，不能把它当作当前代码。需要容器工具时，以当前目录为明确 bind source，使用自己创建的 `docker run --rm`，选择独立测试目录、端口和数据库；结束后清理本次临时资源。
 
-仅迁入 main 和可达提交历史；本地作品、配置、凭据及导出不在迁移范围。`projects/` 可以为空，平台验证使用自己的临时作品夹具。不要从生产数据目录复制作品来补测试。
+工具检查仅输出镜像、状态及挂载等需要的字段，不输出含口令的完整 inspect 或生产 `.env`。当前用户通过 `sudo -n docker` 使用 Docker。测试库名必须含 `frame_test`，不连接生产库；测试不会导入生产作品。
 
-## 日常命令
+依赖通过 `pnpm install --frozen-lockfile` 显式安装。`verifyDepsBeforeRun: false` 避免运行制作命令时重写只读共享依赖。公共维护运行 `pnpm verify`，正式切换运行 `pnpm verify:release`；真实执行器用固定候选镜像、隔离数据库和目录。完整测试后只清理本次容器及输出，不执行全局 prune。
 
-在 ovh-docker 的项目目录执行：
+## 生产路径
 
-```sh
-git status --short --branch
-ssh host 'sudo -n docker exec frame-development pnpm install --frozen-lockfile'
-ssh host 'sudo -n docker exec -u 0 frame-development pnpm verify'
-ssh host 'sudo -n docker exec -u 0 frame-development chown -R 10001:10001 /workspace/.cache /workspace/dist /workspace/studio-dist'
-ssh host 'sudo -n docker exec frame-development pnpm test:workspace'
-ssh host 'sudo -n docker exec frame-development pnpm build:studio'
-```
-
-工具容器固定使用现有 FRAME 工具镜像 `sha256:43b5807e9a4db3f1265512f3f95df171091b774641acc1df495dc4cd42148470`，包含 Node 24.21.0、pnpm 12.4.2、Chromium、Git LFS 和 FFmpeg。实际代码和依赖来自 `/workspace`，不会调用镜像中的旧平台实现。常规开发容器用户 UID/GID 10001，与 AgentDock 一致。完整服务端测试的语音用例会将临时执行器文件 chown 为 UID 1000，因此完整 verify 或 test:server 需在这个无 Docker socket 的专用容器中使用 `docker exec -u 0`；执行后按上面的命令恢复生成文件的所有者。普通构建、工作台浏览器测试和编辑仍使用 UID 10001。
-
-
-依赖安装使用显式的 `pnpm install --frozen-lockfile`。`pnpm-workspace.yaml` 设置 `verifyDepsBeforeRun: false`，避免 pnpm 在运行 film、构建或测试前自动重写共享的只读 node_modules；依赖变更后必须重新安装，`film doctor --json` 可检查实际可用性。生产镜像在构建时安装并锁定依赖，任务工作区复用同一份依赖。
-
-`FRAME_TEST_DATABASE_URL` 已在开发容器环境配置，仅连接独立的 `frame-development-postgres` / `frame_test_development`。测试会清空这个测试库；它不保存业务数据，使用 tmpfs，容器重启后重新初始化。独立网络为 `frame-development`，没有公布数据库端口。容器环境文件位于忽略的 `.cache/ovh-dev/`，权限 600。
-
-开发与测试容器均设置 `restart=unless-stopped`。开发容器只保活，按需通过 docker exec 运行命令，没有挂载 Docker socket，不启动生产调度器。`pnpm verify:release` 的真实执行器仍需要单独搭建隔离候选镜像及容器控制环境，普通 verify 通过不代表发布验收。
-
-## 预览与服务
-
-运行 `ssh host 'sudo -n docker exec frame-development pnpm dev --host 0.0.0.0'` 可启动工作台 Vite 开发服务。其 API 需要另外启动独立开发平台，并使用独立业务库和数据目录；测试数据库不能作为业务库。本次迁移未启动业务平台或公开服务。
-
-若需从 AgentDock 浏览器访问开发容器，可以通过 `ssh host 'sudo -n docker inspect frame-development --format "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}"'` 查询开发容器 IP，然后用只绑定 AgentDock 回环地址的 SSH 本地转发访问该 IP 的开发端口。不要把开发服务直接接入生产 Caddy。
+Dockge 栈为 `/opt/stacks/frame`，持久数据为 `data/`、`postgres/` 和 `models/`。当前 public URL 为 `https://frame.nerviloom.com`。发布只更新本次需要的软件服务，保留 PostgreSQL、语音及其他项目服务。共享 T3 的部署与独立升级见 [T3 Code](T3-CODE.md)。
 
 ## 授权生产更新
 
@@ -43,9 +21,3 @@ ssh host 'sudo -n docker exec frame-development pnpm build:studio'
 回退前必须核对目标镜像的迁移清单覆盖当前数据库的迁移记录。即使迁移只新增表或列，旧程序仍可能因“数据库比应用更新”而拒绝启动；不能仅凭迁移可加性判断回退兼容，也不能删除迁移记录绕过检查。兼容回退基线与上线中发现的问题记录在当次 `records/` 报告中。
 
 上线验收须核对全部未删除作品的当前源码与运行时预览，包含大文件媒体；健康接口通过不能替代作品验收。若已有任务占用作品，等待并核对当前预览，避免重复构建。
-
-## 重建与维护
-
-容器启动参数可通过 `ssh host 'sudo -n docker inspect frame-development'` 检查，但环境字段含测试库口令，不应完整输出到聊天或日志。安全查看挂载、镜像和状态时应使用相应 `--format`。重新创建容器时挂载源为 `/var/lib/docker/volumes/agent-dock_agentdock_workspace/_data/frame-studio`，目标 `/workspace`；加载该目录 `.cache/ovh-dev/dev.env`，保持工作目录和用户不变。
-
-主代码、Git 历史和文档应持续提交；依赖和构建输出可重建。不得改动 `frame-studio-1`、`frame-speech-1`、`frame-postgres-1` 等现有生产容器。迁移记录见 `records/ovh-development-migration-20260929.md`。

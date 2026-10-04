@@ -139,6 +139,12 @@ export async function sqliteDatabase(file) {
           throw Error(`${item.id}: ${error.message}\n${statement.slice(0, 200)}`);
         }
       }
+      if (item.id === "0012-native-provider-settings" &&
+          raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='connections'").get() &&
+          !raw.prepare("SELECT id FROM connections LIMIT 1").get()) raw.exec("DROP TABLE connections");
+      if (item.id === "0012-native-provider-settings" &&
+          raw.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='work_undos'").get() &&
+          !raw.prepare("SELECT id FROM work_undos LIMIT 1").get()) raw.exec("DROP TABLE work_undos");
       raw.prepare("INSERT INTO frame_schema_migrations(id,checksum) VALUES(?,?)").run(item.id, item.checksum);
       raw.exec("COMMIT");
     } catch (error) { raw.exec("ROLLBACK"); raw.close(); throw error; }

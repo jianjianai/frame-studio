@@ -1,0 +1,65 @@
+name: Release T3 Code
+run-name: Release T3 Code ${{ inputs.version }}
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Native image tag (upstream version plus FRAME adapter revision)
+        required: true
+        default: 0.0.45-frame.1
+        type: string
+permissions:
+  contents: read
+  packages: write
+concurrency:
+  group: release-t3-${{ inputs.version }}
+  cancel-in-progress: false
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.21.0"
+      - name: Validate native image version
+        env:
+          T3_IMAGE_VERSION: ${{ inputs.version }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const source = JSON.parse(fs.readFileSync('integrations/t3-code/source.json', 'utf8'));
+          const tag = process.env.T3_IMAGE_VERSION;
+          if (!/^\d+\.\d+\.\d+-frame\.\d+$/.test(tag) || !tag.startsWith(source.version + '-frame.'))
+            throw Error('Image tag must match the pinned native source version and adapter revision');
+          JS
+      - name: Restore pinned native bundle
+        uses: actions/cache@v4
+        with:
+          path: .cache/t3-generated
+          key: t3-node-24-${{ hashFiles('integrations/t3-code/**', 'scripts/build-t3.mjs', 'server/local-tools.mjs') }}
+      - name: Build or verify the pinned native source
+        run: |
+          npm install --global pnpm@11.10.0
+          if test -f .cache/t3-generated/source-proof.json; then
+            node scripts/build-t3.mjs --prebuilt=.cache/t3-generated --bundle-only
+          else
+            node scripts/build-t3.mjs --bundle-only
+          fi
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.t3
+          build-contexts: t3_bundle=.cache/t3-generated
+          push: true
+          tags: ghcr.io/${{ github.repository }}/t3-code:${{ inputs.version }}
+          build-args: REVISION=${{ github.sha }}
+          cache-from: type=registry,ref=ghcr.io/${{ github.repository }}/t3-code:buildcache
+          cache-to: type=registry,ref=ghcr.io/${{ github.repository }}/t3-code:buildcache,mode=max

@@ -42,7 +42,7 @@ export function WorkDock({
     <aside
       id="work-dock"
       ref={dock}
-      className={"work-dock" + (expanded ? " paseo-expanded" : "")}
+      className={"work-dock" + (expanded ? " ai-expanded" : "")}
       hidden={!tool}
       role={compact || expanded ? "dialog" : "complementary"}
       aria-modal={(compact || expanded) && tool ? true : undefined}

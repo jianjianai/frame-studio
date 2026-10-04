@@ -36,7 +36,7 @@ const works = Array.from({ length: 27 }, (_, index) => ({
   deleted: false,
   duration: 62 + index * 3,
   composition: { width: 1920, height: 1080 },
-  activity: index === 0 ? { kind: "paseo", state: "running" } : null,
+  activity: index === 0 ? { kind: "ai", state: "running" } : null,
   cover: index === 1 ? "/api/broken-cover" : null,
 }));
 works.push({

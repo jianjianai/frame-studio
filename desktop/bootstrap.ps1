@@ -107,14 +107,13 @@ try {
   if ($LASTEXITCODE -ne 0) { throw 'Node 依赖安装失败，请查看 pnpm 日志；重新启动可继续安装。' }
   $selected.dependencies = Join-Path $cache $manifest.dependencies.id
   Write-FrameProgress 'dependencies' 'done' '工作台依赖已就绪'
-  Write-FrameProgress 'paseo' 'installing' '正在准备完整 Paseo 创作环境'
-  $paseoRoot = Join-Path $cache ('paseo-' + (Get-FileHash -LiteralPath (Join-Path $app 'integrations/paseo/generated/source-proof.json') -Algorithm SHA256).Hash.ToLowerInvariant().Substring(0,20))
-  & (Join-Path $selected.tools 'node.exe') (Join-Path $app 'scripts/build-paseo.mjs') ("--prebuilt=" + (Join-Path $app 'integrations/paseo/generated')) ("--runtime=" + $paseoRoot) --package-manager=pnpm ("--pnpm=" + (Join-Path $selected.tools 'tools/pnpm/pnpm.exe')) $(if ($CheckOnly) { '--check' })
-  if ($LASTEXITCODE -ne 0) { throw 'Paseo 环境准备失败，请查看日志；重新启动可复用已下载的依赖并继续。' }
-  $selected.paseo = $paseoRoot
-  $env:FRAME_PASEO_ROOT = $paseoRoot
-  $env:FRAME_PASEO_UI = Join-Path $paseoRoot 'web'
-  Write-FrameProgress 'paseo' 'done' 'Paseo 创作环境已就绪'
+  Write-FrameProgress 't3' 'installing' '正在准备完整 T3 Code 创作环境'
+  $t3Root = Join-Path $cache ('t3-' + (Get-FileHash -LiteralPath (Join-Path $app 'integrations/t3-code/generated/source-proof.json') -Algorithm SHA256).Hash.ToLowerInvariant().Substring(0,20))
+  & (Join-Path $selected.tools 'node.exe') (Join-Path $app 'scripts/build-t3.mjs') ("--prebuilt=" + (Join-Path $app 'integrations/t3-code/generated')) ("--runtime=" + $t3Root) --package-manager=pnpm ("--pnpm=" + (Join-Path $selected.tools 'tools/pnpm/pnpm.exe')) $(if ($CheckOnly) { '--check' })
+  if ($LASTEXITCODE -ne 0) { throw 'T3 Code 环境准备失败，请查看日志；重新启动可复用已下载的依赖并继续。' }
+  $selected.t3 = $t3Root
+  $env:FRAME_T3_ROOT = $t3Root
+  Write-FrameProgress 't3' 'done' 'T3 Code 创作环境已就绪'
   if ($PrepareOnly) {
     $selected | ConvertTo-Json | Set-Content -LiteralPath $Selection -Encoding utf8
     Write-Output '依赖缓存已就绪'

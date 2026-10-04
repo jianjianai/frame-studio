@@ -104,8 +104,9 @@ test("Windows local mode creates a work and renders a frame without Docker or a 
     const status = await call("system_status", {});
     assert.equal(status.docker.mode, "windows-native");
     assert.equal(status.queue.queued, 0);
-    const providers = await call("connections_list", {});
-    assert.deepEqual(providers.map((p) => p.tool), ["codex", "claude"]);
+    const aiSession = await app.inject({ url: "/api/ai/session", headers });
+    assert.equal(aiSession.statusCode, 200);
+    assert.equal(aiSession.json().nativeSettingsUrl, "/ai/settings/providers");
     assert.equal((await call("repositories_page", {})).total, 1);
     assert.deepEqual(await call("assets_list", {}), []);
     await db.pool.query("INSERT INTO assets(id,name,sha,bytes,mime,license) VALUES($1,$2,$3,$4,$5,$6)",
@@ -114,8 +115,6 @@ test("Windows local mode creates a work and renders a frame without Docker or a 
     assert.equal((await call("engines_list", {})).length, 3);
     await call("works_versions", { id: work.id });
     await call("works_context", { id: work.id });
-    if (!providers[0].configured)
-      assert.ok(["unavailable", "unconfigured"].includes(providers[0].state));
     // FRAME no longer admits old chat writes, even when native CLI credentials are configured.
     const retired = await app.inject({ method: "POST", url: "/api/action", headers,
       payload: { name: "works_chat_create", args: { id: work.id, connection: providers[0].id, title: "Retired API" } } });

@@ -5,7 +5,7 @@ Windows 本地包提供完整 FRAME 工作台：作品仓库、素材、预览�
 ## 安装与使用
 
 1. 从平台仓库的 [GitHub Releases](https://github.com/jianjianai/frame-studio/releases) 下载与版本号匹配的 `FrameStudio-v<版本>-win-x64-Setup.exe`（另提供 `.sha256` 校验文件），双击按向导安装。需要 Windows 10/11 x64；默认安装到当前用户目录，无需管理员权限。
-2. 安装程序自动检查、下载和校验工具、Python 语音运行环境，并使用 pnpm 安装 Node 依赖和固定版本的完整 Paseo 运行环境。安装窗口显示进度，详细日志在 `%LOCALAPPDATA%\FRAME Studio\installer.log`。完成后创建开始菜单快捷方式与 Windows 卸载入口，可以直接启动工作台。
+2. 安装程序自动检查、下载和校验工具、Python 语音运行环境，并使用 pnpm 安装 Node 依赖和固定版本的完整 T3 Code 运行环境。安装窗口显示进度，详细日志在 `%LOCALAPPDATA%\FRAME Studio\installer.log`。完成后创建开始菜单快捷方式与 Windows 卸载入口，可以直接启动工作台。
 3. 启动后在默认浏览器打开完整工作台并驻留托盘。左键点击托盘打开浏览器，右键打开 Windows 控制中心，管理运行环境、更新和重启；也可以退出。关闭控制中心不会停止后台服务。数据保存在 `%LOCALAPPDATA%\FRAME Studio`，独立于程序目录。
 4. 自动更新默认开启，在后台下载并校验新版 Setup，退出时安装；控制中心可手动检查、继续下载或重启更新。后台任务与未保存编辑会延后重启。依赖准备失败时保留旧版程序，运行环境和 pnpm 缓存继续复用。控制中心可以检查与修复环境。通过 Windows“已安装的应用”或开始菜单卸载会移除程序，保留作品、数据库、模型及依赖缓存。
 
@@ -13,9 +13,9 @@ Windows 本地包提供完整 FRAME 工作台：作品仓库、素材、预览�
 
 ## 本机 AI CLI
 
-在 Windows 终端安装 Codex CLI 或 Claude CLI；工作台直接读取它们的登录状态，不单独保存一份 AI 密码。“设置 → AI 模型”显示安装与登录状态，未安装时不可用，已安装时可以打开登录终端。新安装 CLI 后从控制中心重启工作台，登录后点击“重新检测”。
+在 Windows 终端安装并登录 Codex CLI 或 Claude Code。提供商、模型、账号与 API 配置使用 T3 原生设置及官方 CLI；FRAME 的“AI 助手”提供原生设置和完整工作台入口。新安装 CLI 后从控制中心重启工作台。
 
-本地模式只创建 Codex 和 Claude 两个固定连接，默认使用 CLI 的默认模型；可以为已登录的 CLI 手动添加模型 ID。CLI 的安装与更新在 Windows 终端完成。原生 Paseo 会话使用所选 CLI 的现有账号和本机网络环境；作品各自保留草稿、Git 工作树及原生历史，当前 session 的 FRAME 凭据与目录按 agent 核对。
+所有作品共用一个原生 T3 进程，各作品按实际目录绑定项目和对话。作品保存直接进入权威工作区，实时预览观察相同文件。原生数据保存在独立的数据目录，更新程序不覆盖作品或账号。
 
 ## 数据与功能
 

@@ -501,15 +501,6 @@ label.field,
 .settings-body {
   max-width: 1050px;
 }
-.connection-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 18px;
-  margin: 20px 0 35px;
-}
-.connection-grid p {
-  overflow-wrap: anywhere;
-}
 .device-code {
   display: flex;
   justify-content: space-between;

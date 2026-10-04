@@ -44,11 +44,9 @@ export async function purgeWork(works, id, confirm) {
     )
       throw problem(409, "作品预览或导出正在读取，请关闭后重试");
 
-    if (works.paseo) {
-      await works.paseo.workspace.stop(id);
-      // A deleted work cannot admit a new native session; its daemon is stopped by the controller.
-      const native = await works.paseo.store.getWork(id);
-      if (native?.container) throw problem(409, "Paseo 正在关闭此作品环境，请稍后重试永久删除。");
+    if (works.ai) {
+      await works.ai.workspace.stop(id);
+      if ((await works.ai.manager.active({ repo: work.repo, project: work.project })).length) throw problem(409, "请先停止作品的原生创作后重试永久删除。");
     }
     const repository = await repos.get(work.repo);
     if (work.branch === repository.branch)
@@ -62,15 +60,13 @@ export async function purgeWork(works, id, confirm) {
       "SELECT id FROM work_versions WHERE work=$1",
       [id],
     );
-    const undos = await db.all("SELECT id FROM work_undos WHERE work=$1", [id]);
     const folders = [
       ...tasks.flatMap(({ id }) => [
         ownedPath(data, "runs", id),
         ownedPath(data, "sessions", id),
       ]),
-      ...(works.paseo ? [ownedPath(data, "paseo", id)] : []),
+      ...(works.ai ? [ownedPath(data, "ai", id)] : []),
       ...versions.map(({ id }) => ownedPath(data, "versions", id)),
-      ...undos.map(({ id }) => path.join(data, "restores", "undo-" + id)),
     ];
     const legacy = confined(repository.root, "projects/" + work.project);
     const ref = "refs/heads/" + work.branch;
@@ -158,7 +154,6 @@ export async function purgeWork(works, id, confirm) {
       let broken = false;
       try {
         await client.query("BEGIN");
-        await client.query("DELETE FROM work_undos WHERE work=$1", [id]);
         await client.query("DELETE FROM work_versions WHERE work=$1", [id]);
         for (const task of tasks) {
           await client.query("DELETE FROM events WHERE task=$1", [task.id]);

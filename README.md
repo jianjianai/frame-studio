@@ -23,11 +23,11 @@ Windows 客户端见 [Windows 本地模式](docs/WINDOWS-LOCAL.md)；服务器�
 
 Windows 提供 Setup.exe 安装向导，安装时自动检查并下载工具与 Python 运行环境，Node 依赖由 pnpm 按锁文件安装并缓存，更新时复用。Windows 安装程序和服务器语音镜像均不携带语音权重；在设置中按需下载推荐模型或上传自定义 Kokoro 模型。
 
-首页显示最近打开。通过仓库进入作品列表，新建只填名称。每个作品使用同仓库内独立的 `works/<id>` 分支，素材库独立使用 `frame/materials`；作品历史和拉取/推送互不干扰。具体产品契约见 [AI 工作台](docs/AI-WORKBENCH.md)。 创作聊天使用 [完整官方 Paseo](docs/PASEO.md)，音频支持完整 Tone / Signalsmith API 和三种预览资源模式。
+首页显示最近打开。通过仓库进入作品列表，新建只填名称。每个作品使用同仓库内独立的 `works/<id>` 分支，素材库独立使用 `frame/materials`；作品历史和拉取/推送互不干扰。具体产品契约见 [AI 工作台](docs/AI-WORKBENCH.md)。 创作聊天使用 [T3 Code 原生聊天](docs/T3-CODE.md)，音频支持完整 Tone / Signalsmith API 和三种预览资源模式。
 
-作品在新标签页打开，无全局侧栏。AI 对话与时间轴均可显隐，播放器始终保留进度条；左右分栏及视频/时间轴高度可拖动，细分割线仅在交互时显示。素材、版本比较、统一导出和资料在弹窗操作。服务器设置支持多个模型提供商、官方账号登录、多 GitHub 账号、CLI 独立升级及语音模型。服务器管理员密码仅通过 `FRAME_ADMIN_PASSWORD` 配置。本地模式直接使用电脑上已安装并登录的 Codex 和 Claude CLI，使用 SQLite，无工作台登录密码。
+作品在新标签页打开，无全局侧栏。AI 对话与时间轴均可显隐，播放器始终保留进度条；左右分栏及视频/时间轴高度可拖动，细分割线仅在交互时显示。素材、版本比较、统一导出和资料在弹窗操作。AI 提供商、模型及登录使用 T3 原生页面与 CLI；FRAME 设置保留多 GitHub 账号、CLI 独立升级及语音模型。服务器管理员密码仅通过 `FRAME_ADMIN_PASSWORD` 配置。本地模式直接使用电脑上已安装并登录的 Codex 和 Claude CLI，使用 SQLite，无工作台登录密码。
 
-AI 消息提交后在隔离工作目录执行，关闭浏览器不停止任务。服务器使用独立容器，Windows 本地模式使用原生子进程。通过结构、范围、项目测试和类型验证后才应用修改，自动产生 Git 版本并同步实时播放器。显式不可变预览与正式导出仍运行对应构建。导出文件有保留期限，与素材库分离；可发布到对应作品仓库 Releases。
+所有作品共用一个 T3 服务；作品侧栏只显示当前作品的聊天，独立页面保留完整工作台。AI、CLI、MCP 和可视编辑操作同一个作品工作区，保存后实时播放器更新；检查报告绑定确切源码版本，失败保留修改。关闭浏览器不停止原生回合。T3 与 FRAME 可独立升级。显式不可变预览与正式导出仍运行对应构建。导出文件有保留期限，与素材库分离；可发布到对应作品仓库 Releases。
 
 外部 AI 使用带 Bearer 令牌的 `/mcp`，从 `frame_help` 发现操作；CLI 使用 `FRAME_URL`、`FRAME_TOKEN` 和 `pnpm platform help`。作品操作统一使用作品 UUID，支持参数发现、局部补丁、批量事务、任务等待、上传续传和产物下载，详见 [平台 MCP / CLI 工作流](docs/PLATFORM-TOOLS.md)。隔离任务内使用 `pnpm film` 和 `node scripts/work-tool.mjs`。
 

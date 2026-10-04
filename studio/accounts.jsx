@@ -1,17 +1,14 @@
 import { subscribe } from "./realtime";
-import { WindowsCenterLink, LocalAiSettings } from "./desktop-settings";
+import { WindowsCenterLink } from "./desktop-settings";
 import { useEffect, useState } from "react";
 import {
   Plus,
   Check,
   Copy,
   CheckCircle2,
-  LoaderCircle,
   ExternalLink,
   RefreshCw,
   FolderGit2,
-  Link,
-  Settings2,
   Search,
   Cpu,
   Terminal,
@@ -32,17 +29,17 @@ import {
   Loading,
   Empty,
 } from "./ui";
-import { ProviderSettings, ToolSettings } from "./model-settings";
+import { ToolSettings } from "./tool-settings";
+import { AiSettings } from "./ai-settings";
 import "./settings.css";
 import { SpeechSettings } from "./speech";
 import { SystemStatus } from "./system-status";
 import { AccessSettings } from "./access-settings";
 
-export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
+export function GitHubLoginFlow({ target, onClose, onSuccess, notify }) {
   const [flow, setFlow] = useState(null),
     [error, setError] = useState(""),
     [code, setCode] = useState(""),
-    [opened, setOpened] = useState(false),
     [attempt, setAttempt] = useState(0),
     [copied, setCopied] = useState(false);
   const [run, busy] = useAction(notify);
@@ -53,9 +50,8 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
     setFlow(null);
     setError("");
     setCode("");
-    setOpened(false);
     setCopied(false);
-    api("auth_begin", { kind, ...(target ? { target } : {}) })
+    api("auth_begin", { kind: "github", ...(target ? { target } : {}) })
       .then((row) => {
         if (done) return;
         setFlow(row);
@@ -76,63 +72,24 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
           },
         );
       })
-      .catch((err) => {
-        if (!done) setError(err.message);
+      .catch((error) => {
+        if (!done) setError(error.message);
       });
     return () => {
       done = true;
       stop?.();
     };
-  }, [kind, target, attempt]);
-  const codex = kind === "codex",
+  }, [target, attempt]);
+  const pending = flow?.state === "pending",
     succeeded = flow?.state === "succeeded";
-  const pending = flow?.state === "pending";
-  const syncing = pending && flow.info.stage === "models";
-  const catalogFailed = succeeded && flow.info.catalogSynced === false;
-  const step = succeeded
-    ? catalogFailed
-      ? 2
-      : 3
-    : syncing
-      ? 2
-      : opened
-        ? 1
-        : 0;
-  const retry = () => setAttempt((old) => old + 1);
   return (
-    <Modal
-      title={`连接 ${kind === "github" ? "GitHub" : codex ? "ChatGPT / Codex" : "Claude 官方账号"}`}
-      onClose={onClose}
-    >
-      {codex && (
-        <ol className="account-login-steps" aria-label="账号连接进度">
-          {["打开授权页", "确认账号", "同步模型"].map((label, index) => (
-            <li
-              key={label}
-              className={
-                index < step
-                  ? "complete"
-                  : index === 2 && catalogFailed
-                    ? "attention"
-                    : index === step
-                      ? "current"
-                      : ""
-              }
-              aria-current={index === step ? "step" : undefined}
-            >
-              <span>{index < step ? <Check size={12} /> : index + 1}</span>
-              {label}
-            </li>
-          ))}
-        </ol>
-      )}
+    <Modal title="连接 GitHub" onClose={onClose}>
       <ErrorNote error={error} />
       {!flow && !error && <Loading />}
       {pending && (
         <>
           <div className="account-login-message" role="status">
-            {syncing && <LoaderCircle size={18} className="catalog-spin" />}
-            <p>{flow.info.message || "正在准备官方授权链接…"}</p>
+            <p>{flow.info.message || "正在准备 GitHub 授权链接…"}</p>
           </div>
           {flow.info.code && (
             <div className="account-device-code">
@@ -160,10 +117,9 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
               className="button primary account-authorize"
               href={flow.info.url}
               target="_blank"
-              rel="noreferrer"
-              onClick={() => setOpened(true)}
+              rel="noopener noreferrer"
             >
-              前往官方页面授权 <ExternalLink size={16} />
+              前往 GitHub 授权 <ExternalLink size={16} />
             </a>
           )}
           {flow.info.needsCode && (
@@ -173,7 +129,7 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
                 run(() => api("auth_submit", { id: flow.id, code }));
               }}
             >
-              <Field label="官方页面返回的验证码">
+              <Field label="GitHub 返回的验证码">
                 <input
                   value={code}
                   onChange={(event) => setCode(event.target.value)}
@@ -187,30 +143,19 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
             </form>
           )}
           <p className="settings-help account-login-hint">
-            {syncing
-              ? "登录已经完成，正在准备模型目录。此时关闭窗口也会继续同步。"
-              : "授权完成后会自动更新，无需重复点击或刷新。关闭窗口后仍会继续等待授权。"}
+            授权完成后会自动更新。关闭窗口后仍会继续等待授权。
           </p>
-          {codex && !syncing && (
-            <details className="account-login-help">
-              <summary>设备码登录提示</summary>
-              <p>
-                若官方页面提示未启用设备码登录，请先在 ChatGPT
-                安全设置中启用，再继续授权。授权等待最长 15 分钟。
-              </p>
-            </details>
-          )}
         </>
       )}
       {succeeded && (
         <>
           <div className="account-login-result" role="status">
             <CheckCircle2 size={30} />
-            <h3>{catalogFailed ? "登录成功，模型待同步" : "账号已连接"}</h3>
-            <p>{flow.info.message || "可以开始创作。"}</p>
+            <h3>GitHub 已连接</h3>
+            <p>{flow.info.message || "可以选择作品仓库。"}</p>
           </div>
           <Button className="primary account-authorize" onClick={onClose}>
-            {codex ? "查看模型" : "完成"}
+            完成
           </Button>
         </>
       )}
@@ -222,7 +167,11 @@ export function LoginFlow({ kind, target, onClose, onSuccess, notify }) {
             </p>
           )}
           <div className="row">
-            <Button className="primary" icon={RefreshCw} onClick={retry}>
+            <Button
+              className="primary"
+              icon={RefreshCw}
+              onClick={() => setAttempt((value) => value + 1)}
+            >
               重新获取授权
             </Button>
             <Button onClick={onClose}>关闭</Button>
@@ -288,8 +237,7 @@ export function GitHubAccounts({ notify }) {
         </Modal>
       )}
       {login && (
-        <LoginFlow
-          kind="github"
+        <GitHubLoginFlow
           target={login.target}
           notify={notify}
           onSuccess={accounts.refresh}
@@ -303,10 +251,6 @@ export function GitHubAccounts({ notify }) {
   );
 }
 
-export function ModelConnections(props) {
-  return <ProviderSettings {...props} LoginDialog={LoginFlow} />;
-}
-
 const settingsSections = [
   {
     id: "desktop",
@@ -316,8 +260,8 @@ const settingsSections = [
   },
   {
     id: "ai",
-    label: "AI 模型",
-    detail: "提供商、模型目录与连接测试",
+    label: "AI 助手",
+    detail: "T3 Code 提供商、模型与 CLI 登录",
     icon: Cpu,
   },
   {
@@ -432,11 +376,7 @@ export function Settings({ notify, localMode = false }) {
           ) : activeTab === "desktop" ? (
             <WindowsCenterLink />
           ) : activeTab === "ai" ? (
-            localMode ? (
-              <LocalAiSettings notify={notify} />
-            ) : (
-              <ModelConnections notify={notify} />
-            )
+            <AiSettings />
           ) : activeTab === "github" ? (
             <GitHubAccounts notify={notify} />
           ) : activeTab === "speech" ? (

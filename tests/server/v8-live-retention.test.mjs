@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { Retention, pruneLiveReviewReferences } from "../../server/retention.mjs";
 import { liveReviewSnapshotKey, isLiveReviewRevision } from "../../server/live-review-snapshot.mjs";
 import { randomUUID } from "node:crypto";
-import { fixture as paseoFixture } from "./paseo-test-fixture.mjs";
+import { fixture as aiFixture } from "./ai-test-fixture.mjs";
 
 test("live review retention bounds storage and pins queued references without following symlinks", async (t) => {
   const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-live-retention-"));
@@ -70,7 +70,7 @@ test("compiled snapshot retention counts bytes, protects the exact compiled vari
 });
 
 test("real SQL retention preserves active, retained and native-message references in both snapshot layouts", async t => {
-  const f = await paseoFixture(t); await f.workService.prepare(f.work.id);
+  const f = await aiFixture(t); await f.workService.prepare(f.work.id);
   const now = Date.now(), session = randomUUID(), sourceRevision = "a".repeat(64);
   const snapshot = (compiledRevision, age = 9 * 86400000) => {
     const reference = { status: "versioned", mode: "live", source: "work", liveSessionId: session, sourceRevision,
@@ -85,7 +85,7 @@ test("real SQL retention preserves active, retained and native-message reference
   for (const [entry, state, expires] of [[legacy, "queued", now - 86400000], [retained, "succeeded", now + 86400000], [expiredTask, "failed", now - 86400000]])
     await f.db.pool.query("INSERT INTO tasks(id,repo,project,kind,state,input,review_reference,expires) VALUES($1,$2,$3,'frame',$4,'{}',$5,$6)",
       [randomUUID(), f.work.repo, f.work.project, state, entry.reference, new Date(expires).toISOString()]);
-  await f.store.freezeMessage({ workId: f.work.id, agentId: "native-agent", messageId: randomUUID(), intentHash: "b".repeat(64),
+  await f.store.freezeMessage({ workId: f.work.id, threadId: "native-agent", messageId: randomUUID(), intentHash: "b".repeat(64),
     envelope: { context: {} }, reviewReference: native.reference });
   const retention = new Retention(f.db, f.data); t.after(() => retention.close());
   await retention.collect();

@@ -229,7 +229,7 @@ test(
     const f = fixture({ browser: true }),
       db = await database(databaseURL, "v8-browser-password");
     await db.pool.query(
-      "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
+      "TRUNCATE repos,github_accounts,auth_flows RESTART IDENTITY CASCADE",
     );
     const port = Number(process.env.FRAME_TEST_PORT || 55779),
       origin = "http://127.0.0.1:" + port;

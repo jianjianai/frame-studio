@@ -3,10 +3,6 @@ import { rendererIds } from "../engine/adapters.mjs";
 import {
   commitSchema,
   shotIdSchema,
-  workResultRequestSchema,
-  workResultResponseSchema,
-  workUndoRequestSchema,
-  workUndoResponseSchema,
 } from "./workflow.mjs";
 import { livePreviewMediaModeSchema } from "./live-preview.mjs";
 
@@ -33,7 +29,6 @@ export const executableTaskKindSchema = z.enum([
 export const taskKindSchema = z.enum([
   ...executableTaskKindSchema.options,
   "speech-test",
-  "paseo",
 ]);
 export const taskStates = Object.freeze(taskStateSchema.options);
 export const taskKinds = Object.freeze(taskKindSchema.options);
@@ -161,14 +156,6 @@ const previewStatusSchema = z.looseObject({
   stale: z.boolean(),
   latest: taskSummarySchema.nullable(),
 });
-const connectionSummarySchema = z.looseObject({
-  id: uuid,
-  name: z.string(),
-  tool: z.enum(["codex", "claude"]),
-  mode: z.enum(["api", "official"]),
-  model: z.string(),
-  configured: z.boolean(),
-});
 export const operationContracts = Object.freeze({
   works_open: { request: workIdRequestSchema, response: workSummarySchema },
   works_tasks: {
@@ -230,18 +217,6 @@ export const operationContracts = Object.freeze({
   task_retry_publish: {
     request: workIdRequestSchema,
     response: taskSummarySchema,
-  },
-  connections_list: {
-    request: z.strictObject({}),
-    response: z.array(connectionSummarySchema),
-  },
-  works_result: {
-    request: workResultRequestSchema,
-    response: workResultResponseSchema,
-  },
-  works_undo: {
-    request: workUndoRequestSchema,
-    response: workUndoResponseSchema,
   },
   task_get: { request: taskGetRequestSchema, response: taskGetResponseSchema },
 });

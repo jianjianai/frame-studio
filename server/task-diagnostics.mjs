@@ -18,10 +18,6 @@ export async function workQueueStatus({
     FROM tasks t WHERE t.repo=$1 AND t.project=$2 AND t.state='queued' ORDER BY t.created,t.id LIMIT 100`,
     [work.repo, work.project],
   );
-  const pendingUndo = await db.one(
-    "SELECT id FROM work_undos WHERE work=$1 AND state IN ('applying','failed') LIMIT 1",
-    [work.id],
-  );
   const runtime = await db.setting("controller-runtime");
   const controllerReady = db.kind === "sqlite" || (
     !!runtime?.leader &&
@@ -46,10 +42,7 @@ export async function workQueueStatus({
     concurrency,
     items: rows.map((row) => {
       let code, reason;
-      if (pendingUndo) {
-        code = "undo-recovery";
-        reason = "作品有尚未完成的撤销，请先重试保存撤销结果";
-      } else if (row.blocker) {
+      if (row.blocker) {
         code = "work-busy";
         reason =
           row.blocker.state === "publish_failed"

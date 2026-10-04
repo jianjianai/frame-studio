@@ -22,7 +22,7 @@ test(
     const f = fixture({ browser: true, renderer: "composition" }),
       db = await database(url, "composition-fixture-password");
     await db.pool.query(
-      "TRUNCATE repos,connections,github_accounts,auth_flows RESTART IDENTITY CASCADE",
+      "TRUNCATE repos,github_accounts,auth_flows RESTART IDENTITY CASCADE",
     );
     const port = Number(process.env.FRAME_TEST_PORT || 55739),
       origin = "http://127.0.0.1:" + port;

@@ -61,7 +61,7 @@ test(
         );
       }
       await client.query(
-        "INSERT INTO tasks VALUES($1,$2,'film-0','paseo','succeeded','{}','2026-09-05','2026-09-05')",
+        "INSERT INTO tasks VALUES($1,$2,'film-0','frame','succeeded','{}','2026-09-05','2026-09-05')",
         [randomUUID(), repo],
       );
       const works = new Works(

@@ -8,20 +8,18 @@ import {
 import { notifyTaskStatus } from "./task-status-wait.mjs";
 
 const watched = {
-  connections_list: ["connections"],
-  connections_usage: ["connections", "tasks", "auth_flows", "paseo_work_bindings"],
   engines_list: ["engines"],
   works_tasks: ["tasks"],
-  works_queue_status: ["tasks", "settings", "work_undos"],
+  works_queue_status: ["tasks", "settings"],
   works_preview_status: ["works", "previews"],
-  works_paseo_status: ["paseo_work_bindings", "paseo_validations", "works"],
-  works_background: ["tasks", "paseo_work_bindings"],
+  works_ai_status: ["ai_work_bindings", "ai_validations", "works"],
+  works_background: ["tasks", "ai_work_bindings"],
   works_exports: ["tasks"],
   auth_state: ["auth_flows"],
   task_get: ["events", "tasks"],
   tools_info: ["settings", "tasks"],
   works_sync_status: ["work_sync"],
-  works_scm_status: ["works", "work_sync", "tasks", "work_undos"],
+  works_scm_status: ["works", "work_sync", "tasks"],
 };
 export async function installRealtime(
   app,

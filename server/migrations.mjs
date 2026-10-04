@@ -13,7 +13,7 @@ export function migrationPlan(root = directory) {
 
 /** Only known integration ledgers may be selected; identifiers never come from SQL input. */
 export function migrationLedger(ledger = "frame_schema_migrations") {
-  if (!["frame_schema_migrations", "paseo_schema_migrations"].includes(ledger))
+  if (!["frame_schema_migrations", "ai_schema_migrations"].includes(ledger))
     throw Error("Unsupported migration ledger");
   return ledger;
 }

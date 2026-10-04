@@ -31,7 +31,7 @@ test(
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-toolchain-"));
     const db = await database(url, "toolchain-test-password-2026");
     await db.pool.query(
-      "TRUNCATE repos,tokens,connections,engines RESTART IDENTITY CASCADE",
+      "TRUNCATE repos,tokens,engines RESTART IDENTITY CASCADE",
     );
     const { app, actions, repos } = await createApp({
       db,

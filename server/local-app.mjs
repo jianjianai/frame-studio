@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { sqliteDatabase } from "./sqlite.mjs";
 import { createApp } from "./app.mjs";
 import { startLocalSpeech } from "./local-speech.mjs";
+import { startT3 } from "../scripts/start-t3.mjs";
 
 export function localDataPath(env = process.env) {
   if (env.FRAME_LOCAL_DATA) return path.resolve(env.FRAME_LOCAL_DATA);
@@ -21,7 +22,8 @@ export async function freeLocalPort() {
   return port;
 }
 
-export async function startLocalApp({ data = localDataPath(), port = Number(process.env.FRAME_LOCAL_PORT || 43173), speechFactory = startLocalSpeech } = {}) {
+export async function startLocalApp({ data = localDataPath(), port = Number(process.env.FRAME_LOCAL_PORT || 43173),
+  speechFactory = startLocalSpeech, nativeFactory = startT3 } = {}) {
   if (process.platform !== "win32" && process.env.FRAME_TEST_LOCAL !== "1")
     throw Error("Local desktop mode currently supports Windows only");
   if (!Number.isInteger(port) || port < 1024 || port > 65535)
@@ -37,7 +39,8 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
   process.env.FRAME_DATA = data;
   const speechPort = await freeLocalPort();
   process.env.FRAME_SPEECH_URL = `http://127.0.0.1:${speechPort}`;
-  let app, speech, preparation, controller;
+  let app, speech, preparation, controller, native, nativePreparation, nativeClosing = false;
+  const aiState = { state: "starting", message: "原生创作服务正在启动。" };
   const speechState = { state: "starting", message: "语音环境正在准备，其他功能可以正常使用。" };
   const prepareSpeech = () => {
     if (preparation || speech) return;
@@ -56,8 +59,8 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
     if (!(await db.one("SELECT id FROM repos LIMIT 1"))) await services.repos.add({ name: "我的作品" });
     const editors = new Map();
     const unsaved = () => { for (const [id, entry] of editors) if (Date.now() - entry.at > 300000) editors.delete(id); return editors.size; };
-    const active = async () => Number((await db.one("SELECT count(*) AS n FROM tasks WHERE state IN ('queued','running','cancelling','publishing')")).n) + (await services.paseo.manager.active()).length;
-    app.get("/api/desktop/status", async () => ({ active: await active(), pending: Number((await db.one("SELECT count(*) AS n FROM tasks WHERE state='publish_failed'")).n), unsaved: unsaved(), speech: speechState, data, version: (await import("../src/contracts/version.mjs")).PLATFORM_VERSION }));
+    const active = async () => Number((await db.one("SELECT count(*) AS n FROM tasks WHERE state IN ('queued','running','cancelling','publishing')")).n) + (await services.ai.manager.active()).length;
+    app.get("/api/desktop/status", async () => ({ active: await active(), pending: Number((await db.one("SELECT count(*) AS n FROM tasks WHERE state='publish_failed'")).n), unsaved: unsaved(), speech: speechState, ai: aiState, data, version: (await import("../src/contracts/version.mjs")).PLATFORM_VERSION }));
     app.post("/api/desktop/activity", async (request, reply) => {
       const { session, dirty } = request.body || {};
       if (!/^[a-f0-9-]{36}$/.test(session || "") || typeof dirty !== "boolean") return reply.code(400).send({ message: "Invalid activity" });
@@ -70,7 +73,7 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
       console.log("FRAME_DESKTOP_ACTION " + JSON.stringify({ action, tab, token: process.env.FRAME_LAUNCH_TOKEN || "" }));
       return { ok: true };
     });
-    app.get("/api/desktop/ai", async request => services.tasks.connections.localStatus(request.query.refresh === "1"));
+    app.get("/api/desktop/ai", async request => ({ nativeSettingsUrl: "/ai/settings/providers", standaloneUrl: "/ai/" }));
     app.post("/api/desktop/speech-retry", async () => { prepareSpeech(); return speechState; });
     app.post("/api/desktop/prepare-exit", async (request, reply) => {
       if (!process.env.FRAME_LAUNCH_TOKEN || request.headers["x-frame-desktop"] !== process.env.FRAME_LAUNCH_TOKEN) return reply.code(403).send({ message: "Desktop credential required" });
@@ -84,10 +87,32 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
       services.tasks.desktopClosing = false;
       return { ok: true };
     });
-    app.addHook("onClose", async () => { controller?.abort(); await preparation; await speech?.close(); });
+    app.addHook("onClose", async () => { nativeClosing = true; controller?.abort();
+      await Promise.allSettled([preparation, nativePreparation].filter(Boolean));
+      await Promise.all([speech?.close(), native?.stop()]); });
     await app.listen({ host: "127.0.0.1", port });
+    if (process.env.FRAME_T3_URL) { aiState.state = "external"; aiState.message = "已连接共享原生服务。"; }
+    else if (process.env.FRAME_TEST_LOCAL === "1" && nativeFactory === startT3) { aiState.state = "disabled"; aiState.message = "测试未启动原生服务。"; }
+    else {
+      const nativePort = await freeLocalPort();
+      services.ai.manager.client.url = new URL("http://127.0.0.1:" + nativePort);
+      nativePreparation = nativeFactory({ dataRoot: data, host: "127.0.0.1", port: nativePort,
+        env: { FRAME_CALLBACK_URL: origin } }).then(async service => {
+        native = service;
+        if (nativeClosing) { await service.stop(); return; }
+        const deadline = Date.now() + 30000;
+        for (;;) {
+          if (nativeClosing) { await service.stop(); return; }
+          try { await services.ai.manager.client.shell(); break; }
+          catch (error) { if (Date.now() >= deadline) throw error; await new Promise(resolve => setTimeout(resolve, 200)); }
+        }
+        aiState.state = "ready"; aiState.message = "原生创作服务已启动。";
+        void service.exited?.then(() => { if (!nativeClosing) { aiState.state = "failed"; aiState.message = "原生服务已退出，请重新启动工作台。"; } }).catch(() => {});
+      }).catch(error => { aiState.state = "failed"; aiState.message = "原生创作服务未启动，请检查原生运行环境。"; console.error(error.message); });
+    }
     prepareSpeech();
-  } catch (error) { controller?.abort(); await app?.close(); await speech?.close(); throw error; }
+  } catch (error) { nativeClosing = true; controller?.abort(); await app?.close(); await nativePreparation;
+    await Promise.all([speech?.close(), native?.stop()]); throw error; }
   return { app, origin, data };
 }
 
