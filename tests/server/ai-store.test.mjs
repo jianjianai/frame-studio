@@ -201,5 +201,3 @@ test("Native contexts and validation reports follow only their work owner", asyn
   assert.equal((await db.all("SELECT * FROM ai_validations")).length, 0);
   assert.equal((await db.all("SELECT * FROM repos")).length, 1);
 });
-
-
