@@ -172,7 +172,9 @@ export async function executeProject(root, id, action, options = {}) {
     );
     if (!fs.existsSync(path.join(folder, "tests/unit")))
       return { status: "not_run", reason: "No project unit tests" };
-    return node("vitest/vitest.mjs", ["run", "--config", config]);
+    // This generated config is plain ESM. Load it directly so Vite never writes
+    // a bundled config into the canonical checkout's read-only shared dependencies.
+    return node("vitest/vitest.mjs", ["run", "--config", config, "--configLoader", "native"]);
   };
   try {
     if (action === "dev") {
