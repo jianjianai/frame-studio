@@ -84,7 +84,27 @@
 
 8.3.2 针对源码管理、source-index、素材引用缓存的生产同版本工具链回归 52/52 通过、0 跳过，6.05 秒；导出接受/取消/恢复全组 14/14 通过、0 跳过，1.1 秒。覆盖空检查点、首次提交、完整目录删除、同步范围与已暂存内容保护。
 
-8.3.2 完整门禁、真实校验并行 Docker 导出、生产功能验收及本次临时资源清理：待记录。
+8.3.2 固定代码提交 `84d2afc1ecc2f79d0aca77cd48c20a393b78f313`；候选镜像 `sha256:805cd7e3e843dd7730e809aa66dda3b753f65824300755bdbdab7f338fc064bc`，运行时 fingerprint `8ec7af7268b7274d53e50ea029ce4fb6fbd0113d78192044aeb4f7b9e08c992c`，Node 24.21.0。相同 bundle 来源证明及固定官方 0001–0009 保持不变。
+
+8.3.2 候选完整 `verify:core` 再次通过：179 单元、MCP 130 通过/1 个许可内容可选跳过、平台及类型检查、播放器/工作台构建。完整服务端门禁同时启用两个真实执行器开关，使用独立空 PostgreSQL 测试库。
+
+固定 8.3.2 镜像的真实 Docker 导出组合回归已通过，33.3 秒：独立 PostgreSQL + HTTP CLI + 实际 validator/Vite/短音频检查，缺少 `.gitignore` 的作品产生 54 个实际 Vite 文件、3061 次并行缓存写入时接受导出，Git HEAD/index/sourceRevision 均保持原值；五项校验通过，3 帧 MP4 下载 SHA 正确。原排队及编码中的 A→B 两种回归也通过，逐帧解码及原 SVG 素材仍为 A，canonical 保持 B。精确 owner 下容器/网络/目录均不存在，`resourcesRemoved=true`、`cleanupErrors=[]`。
+
+8.3.2 `pnpm verify:release` 完整通过，退出 0：服务端 556 项、554 通过、0 失败、0 取消、2 项允许跳过，889.3 秒。仅跳过 Linux 无法运行的 Windows 本机测试和可选 GeneralUser 音色库。
+
+2026-10-04 UTC 仅切换 studio/controller，正式 8.3.2 tag 使用通过门禁的同一候选镜像，没有重新构建。切换前再次确认任务 0、8 个 native binding 停止/不请求启动，25 个源码/保留草稿/Git 状态及 100 个素材均匹配修复后的基线。先停止 studio、再次读取活动状态，再停止 controller；仅原子修改 `FRAME_VERSION`，保留其余环境值、权限、所有者；PostgreSQL、语音及其他服务未重启，没有备份或卷操作。
+
+生产真实普通 HTTP 功能验收通过：独立 Paseo 页冷启动、重复会话复用现有 server/workspace 身份、当前源码原位五项验证、实际播放器和 320×180/12 fps/3 帧 H.264 MP4 下载通过。输出 8603 字节，SHA/ffprobe 正确；`gitUnchanged=true`，验证/导出前后 HEAD 与全部 index entries 完全一致。精确代次 21→22 停止本次 idle daemon，移除本次成片/任务目录/编码缓存/容器/临时浏览器文件并退出本次登录；未发送私人账户付费消息。
+
+8.3.2 实际公网 HTTPS 作品页/官方 Paseo iframe 验收通过，0 页面异常，保留同一 source/compiled revision，截图 210048 字节；本次 daemon 精确 23→24 停止且容器移除。
+
+全部 8 个在用作品的真实公网原始媒体预览、播放/暂停和截图通过，每个页面实际显示的 sourceRevision 与本机 canonical 文件字节/执行位哈希精确一致，均有 compiledRevision 且 0 页面异常；《折叠》显示选定的较新当前作品 `eb1f5b7f…`，保留的旧草稿 `7c6a4a83…` 未被用作来源。首次私有验收脚本把布尔 deleted 字段误按 NULL 筛选，立即得到 0，未计通过；改为 deleted=false 后从头验证上述 8 个实际页面成功。
+
+最终全量核对通过：25 个作品字节/执行位、8 份保留草稿、100 个素材元数据、全部作品的 HEAD/stages/status 均与切换前修复后基线一致。活动任务 0，8 个 native binding 全部停止/不请求启动/无容器；旧聊天及 agent_* 运行表不存在、旧 agent 任务 0、清理 journal 0。没有发送私人账号付费消息或执行真实外部 GitHub 写操作。
+
+临时资源已清理：专用测试 PostgreSQL `--rm` 容器及其匿名测试卷自动移除；3 个仅供本次测试的候选镜像删除，8.3.1/8.3.2 临时 tag 移除，正式镜像与原有 8.2.5/8.3.0/8.3.1 保留。精确删除 106 个本次拥有的临时根，包括私有生产环境文件、验收脚本/截图/日志、来源克隆、预构建 bundle、7 份测试报告、3 个本轮 8.3.0 MCP 夹具和本轮旧 bridge 缓存；没有全局 Docker prune，也未删除既有 runtime、历史缓存、他人退出容器或生产卷。
+
+最终生产再次核对：studio/controller 均 healthy，镜像精确为 `805cd7e3…`、代码提交 `84d2afc…`；公网 `/healthz` 返回 8.3.2 和正确提交。本次测试/native/导出临时容器为零。需求文档已更新为上线完成；最终文档提交独立于已验收的产品提交，不再改变生产镜像字节。
 
 ## 后续优化候选
 
