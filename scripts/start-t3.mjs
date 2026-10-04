@@ -12,34 +12,46 @@ async function privateWrite(file, value) {
     await fs.rename(temporary, file);
   } finally { await fs.rm(temporary, { force: true }); }
 }
-function cli(entry, args, env) {
+/** Bound authentication CLI work and wait for the owned child to leave before rejecting. */
+export function runT3Cli(entry, args, env, { signal, timeoutMs = 30000, killAfterMs = 5000 } = {}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(signal.reason); return; }
     const child = spawn(process.execPath, [entry, ...args], { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
-    let output = "", error = "";
+    let output = "", error = "", failure = null, killTimer;
+    const fail = cause => {
+      if (failure) return;
+      failure = cause;
+      child.kill("SIGTERM");
+      killTimer = setTimeout(() => child.kill("SIGKILL"), killAfterMs); killTimer.unref();
+    };
+    const abort = () => fail(signal.reason instanceof Error ? signal.reason : new DOMException("T3 startup was cancelled", "AbortError"));
+    const timeout = setTimeout(() => fail(new Error("T3 native authentication CLI timed out after " + timeoutMs + " ms")), timeoutMs);
+    timeout.unref(); signal?.addEventListener("abort", abort, { once: true });
+    const cleanup = () => { clearTimeout(timeout); clearTimeout(killTimer); signal?.removeEventListener("abort", abort); };
     child.stdout.setEncoding("utf8"); child.stderr.setEncoding("utf8");
     child.stdout.on("data", chunk => { output += chunk; });
     child.stderr.on("data", chunk => { error = (error + chunk).slice(-8192); });
-    child.once("error", reject);
-    child.once("exit", code => code === 0 ? resolve(output.trim()) : reject(new Error("T3 native CLI exited " + code + ": " + error)));
+    child.once("error", cause => { cleanup(); reject(cause); });
+    child.once("exit", code => { cleanup(); if (failure) reject(failure); else if (code === 0) resolve(output.trim()); else reject(new Error("T3 native CLI exited " + code + ": " + error)); });
   });
 }
-export async function ensureGatewayCredential({ entry, baseDir, env }) {
+export async function ensureGatewayCredential({ entry, baseDir, env, signal }) {
   await fs.mkdir(baseDir, { recursive: true });
   const tokenFile = path.join(baseDir, "frame-service-token");
   const receiptFile = path.join(baseDir, "frame-service-session.json");
   const receipt = await fs.readFile(receiptFile, "utf8").then(JSON.parse).catch(error => { if (error.code !== "ENOENT") throw error; return null; });
   const location = ["--base-dir", baseDir];
   if (receipt && Date.parse(receipt.expiresAt) > Date.now() + 86400_000) {
-    const sessions = JSON.parse(await cli(entry, ["auth", "session", "list", ...location, "--json"], env));
+    const sessions = JSON.parse(await runT3Cli(entry, ["auth", "session", "list", ...location, "--json"], env, { signal }));
     if (sessions.some(item => item.sessionId === receipt.sessionId && item.subject === "frame-gateway") &&
         await fs.readFile(tokenFile, "utf8").then(value => !!value.trim(), () => false)) return tokenFile;
   }
-  const issued = JSON.parse(await cli(entry, ["auth", "session", "issue", ...location,
-    "--subject", "frame-gateway", "--ttl", "3650d", "--json"], env));
+  const issued = JSON.parse(await runT3Cli(entry, ["auth", "session", "issue", ...location,
+    "--subject", "frame-gateway", "--ttl", "3650d", "--json"], env, { signal }));
   if (typeof issued.token !== "string" || !issued.token || typeof issued.sessionId !== "string" || !Number.isFinite(Date.parse(issued.expiresAt))) throw new Error("T3 did not issue a gateway session");
   await privateWrite(tokenFile, issued.token + "\n");
   await privateWrite(receiptFile, JSON.stringify({ sessionId: issued.sessionId, expiresAt: issued.expiresAt }) + "\n");
-  if (receipt?.sessionId && receipt.sessionId !== issued.sessionId) await cli(entry, ["auth", "session", "revoke", receipt.sessionId, ...location], env);
+  if (receipt?.sessionId && receipt.sessionId !== issued.sessionId) await runT3Cli(entry, ["auth", "session", "revoke", receipt.sessionId, ...location], env, { signal });
   return tokenFile;
 }
 
@@ -56,7 +68,7 @@ export function t3Environment({ runtimeRoot, dataRoot, env = {}, inherited = pro
 
 /** Desktop and Docker share one native launcher and lifecycle. Provider sessions remain owned by T3. */
 export async function startT3({ runtimeRoot = process.env.FRAME_T3_ROOT, entry = process.env.FRAME_T3_ENTRY,
-  dataRoot = process.env.FRAME_DATA, host = "127.0.0.1", port = 3773, env = {}, stdio = "inherit" } = {}) {
+  dataRoot = process.env.FRAME_DATA, host = "127.0.0.1", port = 3773, env = {}, stdio = "inherit", signal } = {}) {
   if (!dataRoot || !path.isAbsolute(dataRoot)) throw new Error("T3 needs an absolute FRAME data directory");
   runtimeRoot = path.resolve(runtimeRoot || (entry ? path.join(path.dirname(entry), "..") : ".cache/t3-runtime"));
   entry = path.resolve(entry || path.join(runtimeRoot, "dist/bin.mjs"));
@@ -65,7 +77,8 @@ export async function startT3({ runtimeRoot = process.env.FRAME_T3_ROOT, entry =
   const nativeEnv = t3Environment({ runtimeRoot, dataRoot, env });
   // Desktop CLIs keep the user's existing login homes; Docker uses its persistent shared home.
   if (nativeEnv.FRAME_LOCAL_MODE !== "1") await fs.mkdir(home, { recursive: true });
-  const tokenFile = await ensureGatewayCredential({ entry, baseDir, env: nativeEnv });
+  const tokenFile = await ensureGatewayCredential({ entry, baseDir, env: nativeEnv, signal });
+  signal?.throwIfAborted();
   const child = spawn(process.execPath, [entry, "serve", "--base-dir", baseDir, "--host", host, "--port", String(port)],
     { env: nativeEnv, cwd: baseDir, stdio, windowsHide: true });
   const exited = new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", (code, signal) => resolve({ code, signal })); });
@@ -77,6 +90,9 @@ export async function startT3({ runtimeRoot = process.env.FRAME_T3_ROOT, entry =
     const timer = setTimeout(() => child.kill("SIGKILL"), 10000); timer.unref();
     try { await exited; } finally { clearTimeout(timer); }
   }
+  const abortService = () => { void stop(); };
+  signal?.addEventListener("abort", abortService, { once: true });
+  child.once("exit", () => signal?.removeEventListener("abort", abortService));
   return { child, exited, stop, baseDir, entry, tokenFile };
 }
 

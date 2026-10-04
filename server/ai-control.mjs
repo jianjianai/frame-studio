@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, randomBytes } from "node:crypto";
 import { z } from "zod";
-const schema = z.strictObject({ version: z.literal(1), secret: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/), environmentId: z.uuid() });
+const schema = z.strictObject({ version: z.literal(1), secret: z.string().regex(/^[A-Za-z0-9_-]{32,128}$/) });
 const pending = new Map();
 /** Atomically publish shared identity. Concurrent FRAME processes never replace an existing secret. */
 export async function aiControl(data) {
@@ -13,7 +13,7 @@ export async function aiControl(data) {
     try { return schema.parse(JSON.parse(await fs.readFile(file, "utf8"))); }
     catch (error) { if (error.code !== "ENOENT") throw error; }
     const temporary = file + "." + randomUUID() + ".tmp";
-    const value = { version: 1, secret: randomBytes(32).toString("base64url"), environmentId: randomUUID() };
+    const value = { version: 1, secret: randomBytes(32).toString("base64url") };
     try {
       await fs.writeFile(temporary, JSON.stringify(value), { flag: "wx", mode: 0o600 });
       try { await fs.link(temporary, file); } catch (error) { if (error.code !== "EEXIST") throw error; }

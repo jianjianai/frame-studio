@@ -270,7 +270,7 @@ index 4362dd3d7..a5663e451 100644
      context: {},
      // Route components are split chunks (autoCodeSplitting in vite.config);
 diff --git a/apps/web/src/routes/__root.tsx b/apps/web/src/routes/__root.tsx
-index d90bdb6f0..08fad1866 100644
+index d90bdb6f0..6ef78397f 100644
 --- a/apps/web/src/routes/__root.tsx
 +++ b/apps/web/src/routes/__root.tsx
 @@ -1,3 +1,4 @@
@@ -278,7 +278,27 @@ index d90bdb6f0..08fad1866 100644
  import { type ServerLifecycleWelcomePayload } from "@t3tools/contracts";
  import { scopedProjectKey, scopeProjectRef } from "@t3tools/client-runtime/environment";
  import { squashAtomCommandFailure } from "@t3tools/client-runtime/state/runtime";
-@@ -222,7 +223,7 @@ function RootRouteView() {
+@@ -5,6 +6,7 @@ import {
+   Outlet,
+   Link,
+   redirect,
++  retainSearchParams,
+   createRootRoute,
+   type ErrorComponentProps,
+   useLocation,
+@@ -83,6 +85,11 @@ import { installDesktopPasteAsText } from "../lib/desktopPasteAsText";
+ import { shouldResumeSnapShotSetupOnStartup } from "../lib/snapShotSetupResume";
+ 
+ export const Route = createRootRoute({
++  search: {
++    middlewares: isFrameEmbedded()
++      ? [retainSearchParams<{ frameNonce?: string }>(["frameNonce"])]
++      : [],
++  },
+   beforeLoad: async ({ location }) => {
+     if (location.pathname === "/pair" && hasHostedPairingRequest(new URL(window.location.href))) {
+       return {
+@@ -222,7 +229,7 @@ function RootRouteView() {
          <ProviderAuthCallbackCoordinator />
          <ChatGptWelcomeCoordinator />
          <FirstRunGate
@@ -287,7 +307,7 @@ index d90bdb6f0..08fad1866 100644
            hostedStatic={authGateState.status === "hosted-static"}
          >
            {primaryEnvironmentAuthenticated ? <AuthenticatedTracingBootstrap /> : null}
-@@ -240,7 +241,7 @@ function RootRouteView() {
+@@ -240,7 +247,7 @@ function RootRouteView() {
            <ProjectCloneToastCoordinator />
            <HostedStaticEnvironmentBootstrap />
            {primaryEnvironmentAuthenticated ? (
@@ -327,6 +347,41 @@ index 1d710f273..e43ecd129 100644
      assetsInclude: ["**/*.wasm"],
      plugins: [
        devCompressionPlugin(),
+diff --git a/packages/client-runtime/src/authorization/remote.test.ts b/packages/client-runtime/src/authorization/remote.test.ts
+index ec2861de9..072a5bd8d 100644
+--- a/packages/client-runtime/src/authorization/remote.test.ts
++++ b/packages/client-runtime/src/authorization/remote.test.ts
+@@ -18,7 +18,7 @@ import {
+   resolveRemoteWebSocketConnectionUrl,
+ } from "./remote.ts";
+ import { fetchRemoteEnvironmentDescriptor } from "../environment/descriptor.ts";
+-import { remoteHttpClientLayer } from "../rpc/http.ts";
++import { makeEnvironmentHttpApiClient, remoteHttpClientLayer } from "../rpc/http.ts";
+ 
+ const isEnvironmentAuthInvalidError = Schema.is(EnvironmentAuthInvalidError);
+ 
+@@ -89,6 +89,21 @@ const expectFetchCall = (
+ };
+ 
+ describe("remote environment authorization", () => {
++  it.effect("keeps FRAME gateway base paths for full and grouped typed HTTP clients", () =>
++    Effect.gen(function* () {
++      for (const httpBaseUrl of ["http://frame.example/ai/", "http://frame.example/ai/works/current-work/"]) {
++        const state = { authenticated: true, auth: { policy: "remote-reachable", bootstrapMethods: [],
++          sessionMethods: ["bearer-access-token"], sessionCookieName: "t3_session" } };
++        const fetch = recordedFetch(Response.json(state), Response.json(state));
++        const client = yield* makeEnvironmentHttpApiClient(httpBaseUrl).pipe(provideRemoteHttp(fetch.fetchFn));
++        expect((yield* client.auth.session({ headers: {} }).pipe(provideRemoteHttp(fetch.fetchFn))).authenticated).toBe(true);
++        expect((yield* fetchRemoteSessionState({ httpBaseUrl, bearerToken: "owned-fixture" }).pipe(provideRemoteHttp(fetch.fetchFn))).authenticated).toBe(true);
++        expectFetchCall(fetch.calls, 1, { url: httpBaseUrl + "api/auth/session", method: "GET" });
++        expectFetchCall(fetch.calls, 2, { url: httpBaseUrl + "api/auth/session", method: "GET" });
++      }
++    }),
++  );
++
+   it.effect("bootstraps bearer auth against a remote backend", () =>
+     Effect.gen(function* () {
+       const fetch = recordedFetch(
 diff --git a/packages/client-runtime/src/authorization/remote.ts b/packages/client-runtime/src/authorization/remote.ts
 index 425d95d3a..167dbd0d6 100644
 --- a/packages/client-runtime/src/authorization/remote.ts
@@ -426,6 +481,19 @@ index a08adba22..00eeb0fc6 100644
  });
  
  export const interruptThreadTurn: (input: InterruptThreadTurnInput) => CommandEffect = Effect.fn(
+diff --git a/packages/client-runtime/src/rpc/http.ts b/packages/client-runtime/src/rpc/http.ts
+index d1c470d17..16f3390bf 100644
+--- a/packages/client-runtime/src/rpc/http.ts
++++ b/packages/client-runtime/src/rpc/http.ts
+@@ -88,7 +88,7 @@ export const remoteHttpClientLayer = (
+ 
+ const remoteApiBaseUrl = (httpBaseUrl: string): string => {
+   const url = new URL(httpBaseUrl);
+-  url.pathname = "/";
++  url.pathname = url.pathname.replace(/\/+$/, "") + "/";
+   url.search = "";
+   url.hash = "";
+   return url.toString();
 diff --git a/packages/shared/src/advertisedEndpoint.ts b/packages/shared/src/advertisedEndpoint.ts
 index 314d8272c..b3ffaa2a5 100644
 --- a/packages/shared/src/advertisedEndpoint.ts

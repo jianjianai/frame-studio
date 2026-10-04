@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { startLocalApp, freeLocalPort } from "../../server/local-app.mjs";
 import { sqliteDatabase } from "../../server/sqlite.mjs";
 import { AiManager } from "../../server/ai-manager.mjs";
+import { AiClient } from "../../server/ai-client.mjs";
 
 test("local browser startup does not wait for speech and exit protects unsaved browser activity", async t => {
   const names = ["FRAME_TEST_LOCAL", "FRAME_LOCAL_MODE", "FRAME_PUBLIC_URL", "FRAME_DATA", "FRAME_SPEECH_URL", "FRAME_LAUNCH_TOKEN"];
@@ -118,5 +119,47 @@ test("failed publication allows Windows restart and preserves its recovery recor
   } finally {
     await local?.app.close(); await db?.pool.end(); fs.rmSync(data, { recursive: true, force: true });
     for (const name of names) if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name];
+  }
+});
+
+test("desktop startup reports its managed native service and closes only the service it created", async t => {
+  const names = ["FRAME_TEST_LOCAL", "FRAME_LOCAL_MODE", "FRAME_PUBLIC_URL", "FRAME_DATA", "FRAME_SPEECH_URL", "FRAME_T3_URL"];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-desktop-native-"));
+  let local, release, stopped = 0, launched;
+  const pending = new Promise(resolve => { release = resolve; });
+  const client = t.mock.method(AiClient.prototype, "shell", async () => ({ projects: [], threads: [], terminals: [], terminalsReady: true }));
+  try {
+    process.env.FRAME_TEST_LOCAL = "1"; delete process.env.FRAME_T3_URL;
+    local = await startLocalApp({ data, port: await freeLocalPort(), speechFactory: async () => ({ close: async () => {} }),
+      nativeFactory: async options => { launched = options; return pending; } });
+    const status = () => local.app.inject({ url: "/api/desktop/status", headers: { host: new URL(local.origin).host, origin: local.origin } });
+    assert.equal((await status()).json().ai.state, "starting");
+    assert.equal(launched.dataRoot, data); assert.equal(launched.host, "127.0.0.1"); assert.equal(launched.env.FRAME_CALLBACK_URL, local.origin);
+    assert.notEqual(launched.port, Number(new URL(local.origin).port));
+    release({ stop: async () => { stopped++; } });
+    for (let retry = 0; retry < 50 && (await status()).json().ai.state !== "ready"; retry++) await new Promise(resolve => setTimeout(resolve, 10));
+    assert.equal((await status()).json().ai.state, "ready");
+    await local.app.close(); assert.equal(stopped, 1);
+  } finally {
+    release({ stop: async () => { stopped++; } }); await local?.app.close(); client.mock.restore();
+    fs.rmSync(data, { recursive: true, force: true });
+    for (const name of names) previous[name] === undefined ? delete process.env[name] : process.env[name] = previous[name];
+  }
+});
+
+test("closing a desktop during native credential preparation aborts the owned startup without waiting forever", async () => {
+  const names = ["FRAME_TEST_LOCAL", "FRAME_LOCAL_MODE", "FRAME_PUBLIC_URL", "FRAME_DATA", "FRAME_SPEECH_URL", "FRAME_T3_URL"];
+  const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-desktop-native-cancel-"));
+  let local, cancelled = false;
+  try {
+    process.env.FRAME_TEST_LOCAL = "1"; delete process.env.FRAME_T3_URL;
+    local = await startLocalApp({ data, port: await freeLocalPort(), speechFactory: async () => ({ close: async () => {} }),
+      nativeFactory: ({ signal }) => new Promise((resolve, reject) => signal.addEventListener("abort", () => { cancelled = true; reject(signal.reason); }, { once: true })) });
+    await local.app.close(); assert.equal(cancelled, true);
+  } finally {
+    await local?.app.close(); fs.rmSync(data, { recursive: true, force: true });
+    for (const name of names) previous[name] === undefined ? delete process.env[name] : process.env[name] = previous[name];
   }
 });

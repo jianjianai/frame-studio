@@ -39,7 +39,7 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
   process.env.FRAME_DATA = data;
   const speechPort = await freeLocalPort();
   process.env.FRAME_SPEECH_URL = `http://127.0.0.1:${speechPort}`;
-  let app, speech, preparation, controller, native, nativePreparation, nativeClosing = false;
+  let app, speech, preparation, controller, native, nativePreparation, nativeController, nativeClosing = false;
   const aiState = { state: "starting", message: "原生创作服务正在启动。" };
   const speechState = { state: "starting", message: "语音环境正在准备，其他功能可以正常使用。" };
   const prepareSpeech = () => {
@@ -87,7 +87,7 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
       services.tasks.desktopClosing = false;
       return { ok: true };
     });
-    app.addHook("onClose", async () => { nativeClosing = true; controller?.abort();
+    app.addHook("onClose", async () => { nativeClosing = true; controller?.abort(); nativeController?.abort(Error("Desktop native startup cancelled"));
       await Promise.allSettled([preparation, nativePreparation].filter(Boolean));
       await Promise.all([speech?.close(), native?.stop()]); });
     await app.listen({ host: "127.0.0.1", port });
@@ -96,8 +96,9 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
     else {
       const nativePort = await freeLocalPort();
       services.ai.manager.client.url = new URL("http://127.0.0.1:" + nativePort);
+      nativeController = new AbortController();
       nativePreparation = nativeFactory({ dataRoot: data, host: "127.0.0.1", port: nativePort,
-        env: { FRAME_CALLBACK_URL: origin } }).then(async service => {
+        env: { FRAME_CALLBACK_URL: origin }, signal: nativeController.signal }).then(async service => {
         native = service;
         if (nativeClosing) { await service.stop(); return; }
         const deadline = Date.now() + 30000;
@@ -108,10 +109,11 @@ export async function startLocalApp({ data = localDataPath(), port = Number(proc
         }
         aiState.state = "ready"; aiState.message = "原生创作服务已启动。";
         void service.exited?.then(() => { if (!nativeClosing) { aiState.state = "failed"; aiState.message = "原生服务已退出，请重新启动工作台。"; } }).catch(() => {});
-      }).catch(error => { aiState.state = "failed"; aiState.message = "原生创作服务未启动，请检查原生运行环境。"; console.error(error.message); });
+      }).catch(error => { if (nativeClosing) return;
+        aiState.state = "failed"; aiState.message = "原生创作服务未启动，请检查原生运行环境。"; console.error(error.message); });
     }
     prepareSpeech();
-  } catch (error) { nativeClosing = true; controller?.abort(); await app?.close(); await nativePreparation;
+  } catch (error) { nativeClosing = true; controller?.abort(); nativeController?.abort(error); await app?.close(); await nativePreparation;
     await Promise.all([speech?.close(), native?.stop()]); throw error; }
   return { app, origin, data };
 }

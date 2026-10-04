@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.14
 FROM node:24-bookworm-slim AS base
-RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs ffmpeg chromium fonts-noto-cjk ca-certificates tini && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends git git-lfs gh ffmpeg chromium fonts-noto-cjk ca-certificates tini && rm -rf /var/lib/apt/lists/*
 # T3's upstream lock is independent of FRAME's package manager and application image.
 RUN npm install -g pnpm@11.10.0 @openai/codex@0.158.0 @anthropic-ai/claude-code@2.1.283
 FROM base AS build

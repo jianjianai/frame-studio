@@ -182,11 +182,20 @@ export async function installAiGateway({ app, manager, workService, store, works
           if (!workId) return client.send(data);
           try {
             const decoded = JSON.parse(data.toString()), messages = Array.isArray(decoded) ? decoded : [decoded];
-            for (const message of messages) if (message._tag === "Chunk") {
-              message.values = message.values.map(value => scopedAiPayload(value, projectBinding.projectId, ownsThread)).filter(Boolean);
-              if (!message.values.length) message.values = [{ kind: "synchronized" }];
-            } else if (message._tag === "Exit" && message.exit?._tag === "Success") message.exit.value = scopedAiPayload(message.exit.value, projectBinding.projectId, ownsThread);
-            if (client.readyState === 1) client.send(JSON.stringify(Array.isArray(decoded) ? messages : messages[0]));
+            const outgoing = [];
+            for (const message of messages) {
+              if (message._tag === "Chunk") {
+                message.values = message.values.map(value => scopedAiPayload(value, projectBinding.projectId, ownsThread)).filter(Boolean);
+                if (!message.values.length) {
+                  // A filtered stream item has no value of its declared native
+                  // type. Acknowledge it here instead of inventing a payload.
+                  if (upstream.readyState === 1) upstream.send(JSON.stringify({ _tag: "Ack", requestId: message.requestId }));
+                  continue;
+                }
+              } else if (message._tag === "Exit" && message.exit?._tag === "Success") message.exit.value = scopedAiPayload(message.exit.value, projectBinding.projectId, ownsThread);
+              outgoing.push(message);
+            }
+            if (client.readyState === 1 && outgoing.length) client.send(JSON.stringify(Array.isArray(decoded) ? outgoing : outgoing[0]));
           } catch { client.close(1011, "Native proxy unavailable"); }
         });
         client.once("close", () => upstream.close()); client.on("error", () => upstream.close());

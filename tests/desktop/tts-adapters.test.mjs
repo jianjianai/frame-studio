@@ -240,7 +240,7 @@ test(
               id: work.id,
               kind: "ai",
               state: "running",
-              input: {},,
+              input: {},
               repo: repo.id,
               project: work.project,
               aiWork: work.id,

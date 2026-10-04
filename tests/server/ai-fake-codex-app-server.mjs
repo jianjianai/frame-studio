@@ -45,7 +45,17 @@ async function turn(params, turnId) {
     turn: { id: turnId, status: "inProgress", items: [] },
   });
   try {
-    if (!project) throw Error("A native turn needs its FRAME project context");
+    if (!project) {
+      // T3's native title/summary probe uses the same configured fake binary,
+      // without any project tool authority or source mutation.
+      const item = { id: itemId, type: "agentMessage", text: "Owned native chat" };
+      notify("item/agentMessage/delta", { threadId, turnId, itemId, delta: item.text });
+      notify("item/completed", { threadId, turnId, item });
+      notify("turn/completed", { threadId, turn: { id: turnId, status: "completed", error: null, items: [item] } });
+      return;
+    }
+    const progress = "FRAME_NATIVE_WORKFLOW_RUNNING";
+    notify("item/agentMessage/delta", { threadId, turnId, itemId, delta: progress });
     const projectDir = fs.realpathSync(path.join(cwd, "projects", project));
     const scene = path.join(projectDir, "scene.ts");
     const context = await execute(
@@ -99,12 +109,12 @@ async function turn(params, turnId) {
       scenePath: scene,
       marker: marker.trim(),
     });
-    const text = "FRAME_NATIVE_WORKFLOW_COMPLETE";
+    const completion = "\nFRAME_NATIVE_WORKFLOW_COMPLETE", text = progress + completion;
     notify("item/agentMessage/delta", {
       threadId,
       turnId,
       itemId,
-      delta: text,
+      delta: completion,
     });
     const item = { id: itemId, type: "agentMessage", text };
     notify("item/completed", { threadId, turnId, item });
