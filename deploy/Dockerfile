@@ -8,7 +8,8 @@ WORKDIR /opt/frame
 COPY pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 RUN pnpm fetch
 COPY package.json ./
-RUN pnpm install --offline --frozen-lockfile
+# pnpm creates this private metadata as root; the runtime publisher runs as node.
+RUN pnpm install --offline --frozen-lockfile && chown node:node node_modules/.pnpm-workspace-state-v1.json
 # Worktrees copied from private AgentDock volumes may have 0700/0600 modes.
 # Normalize source permissions during COPY; do not rewrite cached node_modules.
 COPY --chmod=u=rwX,go=rX . .
