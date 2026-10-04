@@ -69,6 +69,7 @@ try {
     for (const name of [".env", "compose.yaml"]) regular(path.join(stack, name));
     const compose = (...argv) => run("docker", ["compose", "--project-directory", stack, "-f", path.join(stack, "compose.yaml"), ...argv], { cwd: stack });
     const config = JSON.parse(await compose("config", "--format", "json"));
+    const writers = ["studio", "controller", "t3", "data-init", "speech"];
     const stored = parseEnv(fs.readFileSync(path.join(stack, ".env"), "utf8"));
     if (!stored.FRAME_MASTER_KEY || config.services?.studio?.environment?.FRAME_MASTER_KEY !== stored.FRAME_MASTER_KEY)
       throw Error("Effective master key differs from the saved .env; persist the correct key before backing up");
@@ -78,7 +79,7 @@ try {
     }
     const stopped = async () => {
       const running = (await compose("ps", "--status", "running", "--services")).split(/\s+/);
-      if (["studio", "controller", "data-init", "speech"].some(service => running.includes(service)) || !running.includes("postgres")) throw Error("Stop studio, controller, data-init and speech, finish/stop all task containers, and keep postgres running before backup");
+      if (writers.some(service => running.includes(service)) || !running.includes("postgres")) throw Error("Stop " + writers.join(", ") + ", finish/stop all task containers, and keep postgres running before backup");
       if (await run("docker", ["ps", "-q", "--filter", "label=frame.task"])) throw Error("FRAME task containers are still running; backup refused");
     };
     await stopped();
@@ -88,7 +89,7 @@ try {
     await stopped();
     const files = {};
     for (const name of ["database.dump", "files.tar.gz"]) files[name] = await fingerprint(path.join(out, name));
-    fs.writeFileSync(path.join(out, "manifest.json"), JSON.stringify({ version: 1, created: new Date().toISOString(), images: Object.fromEntries(["studio", "controller", "data-init", "speech", "postgres"].filter(name => config.services[name]).map((name) => [name, config.services[name].image])), files }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+    fs.writeFileSync(path.join(out, "manifest.json"), JSON.stringify({ version: 1, created: new Date().toISOString(), images: Object.fromEntries([...writers, "postgres"].filter(name => config.services[name]).map((name) => [name, config.services[name].image])), files }, null, 2) + "\n", { flag: "wx", mode: 0o600 });
     await verify(out);
     console.log(JSON.stringify({ created: true, backup: out, verified: true, warning: "Contains credentials and master key. Keep private; source services remain stopped." }));
   } else throw Error("Usage: backup.mjs create --stack <stack> --out <new directory> | verify --backup <directory>");

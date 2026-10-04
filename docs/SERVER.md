@@ -2,7 +2,7 @@
 
 ## 部署与更新
 
-`deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio/app:<版本>` 、`ghcr.io/jianjianai/frame-studio/t3-code:<原生版本>` 与 `ghcr.io/jianjianai/frame-studio/speech:<版本>`。服务器需要 Linux x86_64、Docker、反向代理；默认中文语音使用 CPU。执行器镜像与平台镜像相同，任务启动独立容器。
+`deploy/compose.yaml` 是 Dockge Compose 模板。默认使用 `ghcr.io/jianjianai/frame-studio/app:<版本>` 、`ghcr.io/jianjianai/frame-studio/t3-code:<原生版本>` 与 `ghcr.io/jianjianai/frame-studio/speech:<版本>`。服务器需要 Linux x86_64、Docker、反向代理；默认中文语音使用 CPU。FRAME 后台任务使用与平台匹配的执行器镜像，启动独立容器；AI 创作由共享 T3 服务执行。
 
 从 7.4.1 起，镜像统一使用以上仓库命名空间，由仓库的 GitHub Actions 令牌发布。旧的 `frame-studio` 与 `frame-speech` 包和历史镜像保留；已有部署升级时需同步采用新版 Compose 中的镜像路径。推送 `v<版本>` 标签执行 FRAME/语音镜像与 Windows 安装包构建发布，源码固定到同一提交；功能门禁在本机独立运行。T3 镜像独立构建发布。发布不会自动切换正在运行的服务器。
 
@@ -12,7 +12,7 @@
 
 更新流程：等待当前任务完成，先完成候选构建与测试，修改 `.env` 中的明确版本，拉取并仅切换本次需要更新的服务，检查 `docker compose ps -a`、`/healthz`、`/readyz` 和一次作品预览。按用户要求，发布默认不执行备份，也不重复完整校验历史备份或为备份停机；备份仅在用户另行明确要求时执行。保留旧镜像；不兼容数据迁移或回退先说明影响并确认，不能只换镜像。不得使用 `down -v` 更新。
 
-HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `controller` 通过数据库领导者锁接管调度、监控和发布，仅此服务挂载 socket 并加入其宿主机组；它属于可信控制层，不接入公开代理网络。共享数据目录在首次部署时通过栈外一次性容器准备权限（见下节），不将 `data-init` 声明在 Dockge 栈内；两项长期服务均使用只读根文件系统和临时 `/tmp`。升级后须确认 controller 健康且 `/readyz` 就绪，只有 HTTP 存活不代表可以执行任务。执行器不会挂载 socket、数据库或主密钥，只能读写自己的工作副本和会话目录。为选择的 AI 提供的 API Key 仍属于该 AI 的运行凭据；仅在可信的个人作品中执行代码。
+HTTP 服务 `studio` 以 UID 1000 运行，不挂载 Docker socket。独立 `controller` 通过数据库领导者锁接管调度、监控和发布，仅此服务挂载 socket 并加入其宿主机组；它属于可信控制层，不接入公开代理网络。共享数据目录在首次部署时通过栈外一次性容器准备权限（见下节），不将 `data-init` 声明在 Dockge 栈内；两项长期服务均使用只读根文件系统和临时 `/tmp`。升级后须确认 controller 健康且 `/readyz` 就绪，只有 HTTP 存活不代表可以执行任务。FRAME 执行器不会挂载 socket、数据库或主密钥，读写本次任务目录并使用制作工具。T3 使用独立持久化的 CLI 配置与作品权威工作目录；接入边界见 [T3 Code](T3-CODE.md)。
 
 ## 一次性初始化与 Dockge 状态
 
@@ -71,17 +71,17 @@ Kokoro 来自 [hexgrad/Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)，
 
 `speech_test` 只接受引擎、文字、声线和语速，始终生成 24 小时临时文件，不进入素材库，不修改作品；传入仓库参数会被拒绝。`works_speech` 才将正式配音保存到作品和对应仓库素材库。外部服务可返回 WAV 或 MP3，文件类型经内容验证。原 `speech_test` 附带 repo/project 的旧调用应改用 `works_speech`（平台内部为 `speech_generate`）。
 
-远程 MCP 提供 `frame_engines_list/save/delete/local`、`frame_models_list` 和 `frame_speech_test`；短试听直接返回 MCP 音频，超过 8 MiB 返回临时下载信息。API 令牌和 CLI 使用相同操作。引擎列表隐藏密钥。容器 AI 使用 `node scripts/work-tool.mjs engines|engine_add|engine_test|speech`；`engine_add` 只添加新自定义配置，不能覆盖已有配置；`engine_test` 将试听放在当前任务作品的 `.cache/speech/`，`speech` 才生成素材。后台 AI 不获得管理员 API 或其他任务文件权限。
+远程 MCP 提供 `frame_engines_list/save/delete/local`、`frame_models_list` 和 `frame_speech_test`；短试听直接返回 MCP 音频，超过 8 MiB 返回临时下载信息。API 令牌和 CLI 使用相同操作。引擎列表隐藏密钥。T3 中的 AI 使用 `node scripts/work-tool.mjs engines|engine_add|engine_test|speech`；`engine_add` 只添加新自定义配置，不能覆盖已有配置；`engine_test` 将试听放在当前作品的 `.cache/speech/`，`speech` 才生成素材。FRAME 工具凭据绑定当前作品及活动的原生 thread，并核对 project/cwd，不向 AI 提供管理员 API 凭据。
 
 ## AI 创作与工具升级
 
-每个 Codex/Claude 工具可配置多个命名提供商：API 模式保存密钥、基础地址和模型，官方模式使用工具的官方授权流程。Codex 设备码登录需账号先启用该选项，Claude 支持网页返回验证码。对话绑定一个连接，不会自动换账号。提供商页面可发起模型请求测试或检查官方登录状态。
+所有作品共用一个 T3 Code 服务。每个作品按权威 cwd 绑定原生 project，同作品的 thread 使用相同目录，侧栏默认只显示当前作品聊天；完整工作台保留原生文件、Git、终端与设置。AI 直接修改该目录，实时预览与 FRAME 作品检查读取同一份源码。
 
-消息先持久化再调度，幂等键避免重试重复创建；结构化事件按游标读取，旧对话分页加载。关闭页面或重启平台进程不会终止执行容器。默认任务上限 6 小时，`FRAME_TASK_TIMEOUT_SECONDS` 可设 600–604800 秒；到期保留隔离产物并明确失败，不自动重放副作用。
+设置 → AI 助手链接到 T3 原生设置与完整工作台。提供商、模型和账号使用原生页面及 Codex/Claude Code CLI 配置，FRAME 不提供第二份 API 地址、密钥或登录表单。配置与登录说明见 [提供商与模型](PROVIDER-MODELS.md)。
 
-会话目录持久保存。服务端重启后重新查询原任务容器，仍在运行的任务继续被跟踪。服务器重启导致执行容器退出时，任务不会被误判为完成。后续消息使用已保存的上游会话 ID。
+对话历史与原生执行状态由 T3 管理，FRAME 保存作品绑定、审片引用和按 revision 验证的结果。关闭浏览器或重启 FRAME 不会主动停止共享 T3 中的回合。连接中断时保留待核对状态，原生对话与终端状态都同步完成后再确认运行情况；不能把连接失败当成执行结束。回合不进入 FRAME 的导出任务队列。
 
-设置页可以指定 Codex/Claude CLI 的明确版本，独立安装到持久 tools 目录，并切换后续任务使用版本。当前正在运行的 CLI 进程继续使用原版本；回退时指定以前的版本。平台、语音镜像和 AI 工具升级相互独立。
+“创作工具”可以指定 Codex/Claude CLI 的明确版本，独立安装到持久 tools 目录，并切换后续执行使用的版本。已启动的 CLI 进程继续使用原版本；回退时指定以前的版本。FRAME、T3、语音服务与 CLI 分别升级；共享运行时和 T3 独立发布流程见 [T3 Code](T3-CODE.md)。
 
 ## MCP 与 CLI
 
@@ -136,14 +136,16 @@ Dockge 的持久目录均在项目内：`./data` 为作品与运行目录，`./p
 
 FRAME_TASK_CONCURRENCY 默认 2，允许 1–8；每个执行器仍受 4 GiB/2 CPU 限制，应根据主机容量配置。当前模板运行一个独立 controller；数据库领导者锁避免多个控制器同时调度。增加 studio 副本不等于增加执行容量。FRAME_MIN_FREE_BYTES 默认 1 GiB，低于阈值时暂停新任务出队；不会清理作品、终止已有任务或将排队任务记为失败。设为 0 可关闭剩余空间阈值，但读取容量失败仍保守暂停。
 
+FRAME 的关键帧、分镜、预览构建、后台导出与工具安装任务由 controller 调度，任务和事件持久保存，关闭页面不停止执行器。`FRAME_TASK_TIMEOUT_SECONDS` 默认 21600 秒，可设 600–604800 秒，适用于这些 FRAME 后台任务。controller 重启后核对实际执行进程和已保存结果；执行失败不自动重放有副作用的任务。T3 原生回合不使用这个任务超时或执行器恢复流程。
+
 设置 → 运行状态显示 Docker、语音服务、排队与最长等待、待恢复发布、磁盘容量和迁移版本；统计缓存 30 秒。目录统计有时间/条目上限，未完成会显示“至少”，不把逻辑文件大小冒充实际磁盘占用。/healthz 保持轻量存活检查；/readyz 分别检查执行依赖及空间，只返回 ready/degraded，不公开内部详情。
 
 Docker 部署模板默认设置 `FRAME_LIVE_PREVIEW_POLLING=1`，对作品模块每 250ms 轮询。作品文件保存、Git恢复和素材更新可能使用原子替换；轮询使已有实时预览会话接收变化，随后仍可增量更新。升级已有生产栈时也要补充该环境变量，仅替换镜像不会自动更新宿主机 Compose。只有已验证目录替换、素材更新和后续编辑均能触发监听的环境才可显式设为 `0`。
 
 数据库在 HTTP 服务启动前执行 server/migrations 中的版本化事务迁移，通过数据库锁串行执行并保存 SHA-256。已应用脚本被修改或数据库版本高于应用时拒绝启动。以后增加迁移文件，不改历史文件；已有旧数据库先以幂等基线纳入版本管理。迁移和回退需验证数据库与文件的一致性，不以语法检查代替实际验收；不兼容回退或不可逆操作另行确认，备份仅在用户明确要求时执行。
 
-V5 使用追加迁移 0007、0008，保留作品引擎协议 1，预览格式更新后按源码重新构建。旧程序会拒绝 V5 schema，不能把单纯切换旧镜像当成完整回退。V5 不改语音协议，既有 4.2.0 语音服务可继续使用。完整流程及限制见 [V5 升级说明](V5-UPGRADE.md)。
+V5 的历史迁移 0007、0008 保留作品引擎协议 1；预览格式更新后按当前运行时重新构建。旧程序会拒绝未知 schema，不能把单纯切换旧镜像当成完整回退。内容协议与软件版本的兼容边界见 [V5 兼容说明](V5-UPGRADE.md)，当前服务版本以部署模板为准。
 
-执行完成与结果发布分开：publishing 表示正在保存，连续发布失败进入 publish_failed。正式工作区与恢复副本不会自动清理，同作品继续修改会被阻止。处理错误后在后台任务中点“重试保存结果”，或调用 task_retry_publish；该操作复用原结果，不重新请求 AI。
+FRAME 后台任务的执行与结果保存分开：publishing 表示正在保存，连续保存失败进入 publish_failed。新建作品任务需要应用源码时保留恢复副本；只读构建和导出仅保存本次产物。处理错误后在后台任务中点“重试保存结果”，或调用 task_retry_publish；该操作复用已完成的结果，不重新执行任务。T3 原生回合直接操作唯一作品目录，不经过这套结果应用流程。
 
 备份创建、完整性校验和只读恢复检查见 [备份与恢复](BACKUP-RESTORE.md)。统一测试入口与发布门禁见 [验证说明](VERIFICATION.md)。

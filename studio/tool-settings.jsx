@@ -241,7 +241,7 @@ export function ToolSettings({ notify }) {
         <div>
           <span className="tool-eyebrow">执行环境</span>
           <h2>创作工具</h2>
-          <p>保持 AI 创作工具就绪，模型与登录账号在「AI 模型」中管理。</p>
+          <p>保持 AI 创作工具就绪，模型与账号使用 T3 Code 原生设置和 CLI 配置。</p>
         </div>
         <Button
           icon={checking ? LoaderCircle : RefreshCw}

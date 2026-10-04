@@ -819,8 +819,8 @@ export function WorkLibrary({
             {purge.all
               ? `将永久删除${repo ? `仓库“${repo.name}”` : "全部仓库"}回收站中的 ${trash.data?.total || 0} 个作品，包含所有分页和筛选之外的作品。`
               : `将永久删除作品“${purge.title}”。`}
-            作品文件、历史版本、聊天和导出记录将被清除，对应远端作品分支也会删除。
-            素材库中的共享素材保留。此操作无法恢复。
+            作品文件、历史版本和导出记录将被清除，对应远端作品分支也会删除。
+            素材库中的共享素材保留，原生聊天历史在 T3 Code 中管理。此操作无法恢复。
           </p>
           {!!purgeFailures.length && (
             <div role="alert">
