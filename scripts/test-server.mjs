@@ -29,7 +29,11 @@ const nativeFiles = fs.existsSync("tests/t3-code") ? discover("tests/t3-code") :
 if (release && !nativeFiles.length) throw Error("Release verification requires the native T3 Code integration tests");
 const files = [...discover("tests/server"), ...nativeFiles];
 let tail = "";
-const child = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-reporter=tap", ...files], { stdio: ["ignore", "pipe", "inherit"], windowsHide: true });
+// Fixtures choose their own API/controller role. A production image's default
+// role must not make isolated unit fixtures require a live controller lease.
+const testEnvironment = { ...process.env };
+delete testEnvironment.FRAME_ROLE;
+const child = spawn(process.execPath, ["--test", "--test-concurrency=1", "--test-reporter=tap", ...files], { env: testEnvironment, stdio: ["ignore", "pipe", "inherit"], windowsHide: true });
 child.stdout.on("data", (chunk) => { process.stdout.write(chunk); tail = (tail + chunk).slice(-8 * 1024 * 1024); });
 child.on("error", (error) => { console.error(error.message); process.exitCode = 1; });
 child.on("close", (code) => {

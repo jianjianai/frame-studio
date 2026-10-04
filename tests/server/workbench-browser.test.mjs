@@ -260,28 +260,96 @@ test(
       );
       await reopened.getByRole("button", { name: "停止", exact: true }).click();
       await reopened.getByText("当前没有在后台运行的项目。").waitFor();
-      await ai.store.ensureWork({ workId: work.id, repo: repo.id, project: work.project, revision: "b".repeat(64) });
-      let nativeRunning = true;
-      const nativeActivity = tasks.externalActivity;
-      const nativeCancel = ai.manager.cancelWork;
-      tasks.externalActivity = async () => nativeRunning ? [{ workId: work.id, repo: repo.id, project: work.project,
-        state: "ready", activeAgents: ["owned-native-agent"], activeTerminals: 1, pendingPermissions: 1, incomplete: false }] : [];
-      ai.manager.cancelWork = async id => {
-        assert.equal(id, work.id);
-        nativeRunning = false;
-        await ai.store.updateRuntime(id, { state: "stopped" });
-        return { stopped: 2 };
+      const otherRepo = await call("repositories_add", { name: "其他原生作品仓库" });
+      const otherProject = path.join(data, "repos", otherRepo.id, "projects/test-film");
+      fs.cpSync(f.file(""), otherProject, { recursive: true });
+      fs.mkdirSync(path.join(otherProject, "production"), { recursive: true });
+      fs.writeFileSync(path.join(otherProject, "production/work.json"), JSON.stringify({ title: "其他原生作品" }));
+      await actions.works.discover(otherRepo.id);
+      const otherWork = (await call("works_page", { repo: otherRepo.id })).items[0];
+      const owned = [work, otherWork].map((value, index) => ({ work: value, projectId: value.id,
+        cwd: path.join(data, "works", value.id), threadId: "owned-native-thread-" + index }));
+      const snapshot = {
+        projects: owned.map(value => ({ id: value.projectId, workspaceRoot: value.cwd })),
+        threads: owned.map((value, index) => ({ id: value.threadId, projectId: value.projectId, worktreePath: null,
+          session: { status: "running", activeTurnId: "owned-turn-" + index }, hasPendingApprovals: index === 0 })),
+        terminals: owned.map(value => ({ threadId: value.threadId, terminalId: "owned-terminal", cwd: value.cwd,
+          worktreePath: null, status: "running", hasRunningSubprocess: true })), snapshotSequence: 0,
       };
-      await ai.store.updateRuntime(work.id, { state: "ready" });
-      await reopened.getByText("Ai · 1 个对话正在运行", { exact: true }).waitFor();
-      await reopened.getByText("终端 · 1 项正在运行", { exact: true }).waitFor();
-      await reopened.getByText("Ai · 等待权限确认", { exact: true }).waitFor();
-      assert.equal(await reopened.getByRole("button", { name: "停止", exact: true }).isEnabled(), true);
-      assert.equal((await call("works_background"))[0].storage_name, "作品浏览器测试");
-      await reopened.getByRole("button", { name: "停止", exact: true }).click();
-      await reopened.getByText("当前没有在后台运行的项目。").waitFor();
-      tasks.externalActivity = nativeActivity;
-      ai.manager.cancelWork = nativeCancel;
+      const client = ai.manager.client, original = Object.fromEntries(
+        ["connect", "dispatch", "rpc", "projects", "threads", "terminals", "terminalsReady", "ready", "sequence"].map(name => [name, client[name]]),
+      );
+      const originalBindings = new Map(await Promise.all(owned.map(async value => [value.work.id, await ai.store.getWork(value.work.id)])));
+      const interrupted = [], closedTerminals = [];
+      const updateThread = thread => client.apply({ kind: "thread-upserted", sequence: client.sequence + 1, thread });
+      const updateTerminal = terminal => {
+        client.terminals.set(JSON.stringify([terminal.threadId, terminal.terminalId]), terminal);
+        client.emit("terminal", { type: "upsert", terminal });
+      };
+      try {
+        // Keep native cache, activity, notification and cancellation logic real; replace transport only.
+        client.connect = async () => {};
+        client.apply({ kind: "snapshot", snapshot });
+        client.terminals = new Map(snapshot.terminals.map(value => [JSON.stringify([value.threadId, value.terminalId]), value]));
+        client.terminalsReady = true;
+        client.emit("terminal", { type: "snapshot", terminals: snapshot.terminals });
+        client.dispatch = async command => {
+          assert.equal(command.type, "thread.turn.interrupt");
+          const thread = client.threads.get(command.threadId);
+          assert(thread); interrupted.push(thread.id);
+          updateThread({ ...thread, session: { status: "ready", activeTurnId: null }, hasPendingApprovals: false });
+        };
+        client.rpc = async (tag, value) => {
+          assert.equal(tag, "terminal.close");
+          const terminal = client.terminals.get(JSON.stringify([value.threadId, value.terminalId]));
+          assert(terminal); closedTerminals.push(value);
+          updateTerminal({ ...terminal, status: "exited", hasRunningSubprocess: false });
+        };
+        for (const value of owned) {
+          await ai.store.ensureWork({ workId: value.work.id, repo: value.work.repo, project: value.work.project, revision: "b".repeat(64) });
+          await ai.store.updateRuntime(value.work.id, { state: "ready", requested: true, projectId: value.projectId, cwd: value.cwd });
+        }
+        const current = reopened.locator(".background-project").filter({ has: reopened.getByRole("heading", { name: work.title, exact: true }) });
+        const other = reopened.locator(".background-project").filter({ has: reopened.getByRole("heading", { name: otherWork.title, exact: true }) });
+        await current.getByText("T3 Code · 1 个对话正在运行", { exact: true }).waitFor();
+        await current.getByText("终端 · 1 项正在运行", { exact: true }).waitFor();
+        await current.getByText("T3 Code · 等待权限确认", { exact: true }).waitFor();
+        assert.equal(await current.getByRole("button", { name: "停止", exact: true }).isEnabled(), true);
+        const active = (await call("works_background")).find(value => value.id === work.id);
+        assert.equal(active.storage_name, "作品浏览器测试");
+        assert.deepEqual(active.nativeActivity.native.activeThreads, [owned[0].threadId]);
+        updateThread({ ...client.threads.get(owned[0].threadId), hasPendingApprovals: false });
+        await current.getByText("T3 Code · 等待权限确认", { exact: true }).waitFor({ state: "hidden" });
+        await current.getByText("T3 Code · 1 个对话正在运行", { exact: true }).waitFor();
+        updateThread({ ...client.threads.get(owned[0].threadId), hasPendingApprovals: true });
+        await current.getByText("T3 Code · 等待权限确认", { exact: true }).waitFor();
+        await current.getByRole("button", { name: "停止", exact: true }).click();
+        await current.waitFor({ state: "hidden" });
+        await other.getByText("T3 Code · 1 个对话正在运行", { exact: true }).waitFor();
+        await other.getByText("终端 · 1 项正在运行", { exact: true }).waitFor();
+        assert.deepEqual(interrupted, [owned[0].threadId]);
+        assert.deepEqual(closedTerminals, [{ threadId: owned[0].threadId, terminalId: "owned-terminal" }]);
+        assert.deepEqual((await ai.manager.observe(otherWork.id)).activeThreads, [owned[1].threadId]);
+        assert.equal((await ai.manager.observe(otherWork.id)).activeTerminals, 1);
+        client.terminalsReady = false; client.emit("disconnect");
+        await other.getByText("T3 Code · 连接状态待核对", { exact: true }).waitFor();
+        client.terminalsReady = true;
+        client.emit("terminal", { type: "snapshot", terminals: [...client.terminals.values()] });
+        await other.getByText("T3 Code · 连接状态待核对", { exact: true }).waitFor({ state: "hidden" });
+        await other.getByRole("button", { name: "停止", exact: true }).click();
+        await reopened.getByText("当前没有在后台运行的项目。").waitFor();
+        assert.deepEqual(interrupted, owned.map(value => value.threadId));
+        assert.deepEqual(closedTerminals, owned.map(value => ({ threadId: value.threadId, terminalId: "owned-terminal" })));
+      } finally {
+        try {
+          for (const value of owned) {
+            const binding = originalBindings.get(value.work.id);
+            if (await ai.store.getWork(value.work.id))
+              await ai.store.updateRuntime(value.work.id, { state: binding?.state || "cold", requested: binding?.requested || false,
+                projectId: binding?.projectId || null, cwd: binding?.cwd || null });
+          }
+        } finally { Object.assign(client, original); }
+      }
       await reopened.goto(origin + "/#/repository/" + repo.id);
       await reopened.getByLabel("MCP 测试操作").click();
       await reopened

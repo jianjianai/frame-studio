@@ -60,10 +60,16 @@ test(
           ],
         );
       }
-      await client.query(
-        "INSERT INTO tasks VALUES($1,$2,'film-0','frame','succeeded','{}','2026-09-05','2026-09-05')",
-        [randomUUID(), repo],
-      );
+      // Creation publishes source; later frame/render outputs do not modify it.
+      for (const [project, kind, finished] of [
+        ["film-0", "new", "2026-09-05"],
+        ["film-1", "frame", "2026-09-06"],
+        ["film-2", "render", "2026-09-07"],
+      ])
+        await client.query(
+          "INSERT INTO tasks VALUES($1,$2,$3,$4,'succeeded','{}',$5,$5)",
+          [randomUUID(), repo, project, kind, finished],
+        );
       const works = new Works(
         { all: async (sql, params) => (await client.query(sql, params)).rows },
         ".",
@@ -79,6 +85,12 @@ test(
         listed[0].metadataRevision,
         hash(JSON.stringify(works.info(listed[0]))),
       );
+      assert.deepEqual(listed.map((work) => [work.title, work.modified.toISOString()]), [
+        ["Alpha", "2026-09-05T00:00:00.000Z"],
+        ["Bravo", "2026-09-04T00:00:00.000Z"],
+        ["Charlie", "2026-09-02T00:00:00.000Z"],
+      ]);
+      assert.deepEqual(listed.map((work) => work.activity.kind), ["new", "frame", "render"]);
       assert.deepEqual(await titles({ sort: "updated" }), [
         "Alpha",
         "Bravo",
@@ -100,6 +112,9 @@ test(
       ]);
       assert.deepEqual(await titles({ sort: "created", limit: 1, offset: 1 }), [
         "Alpha",
+      ]);
+      assert.deepEqual(await titles({ sort: "updated", limit: 1, offset: 1 }), [
+        "Bravo",
       ]);
       assert.deepEqual(await titles({ sort: "updated", search: "Charlie" }), [
         "Charlie",

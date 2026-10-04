@@ -9,6 +9,7 @@ export class ProjectService extends Workspace {
   constructor(root, options = {}) {
     super(root, options);
     this.checkOptions = options.checkOptions;
+    this.runtime = options.runtime;
   }
   check(id) {
     if (!this.checkOptions) return super.check(id);
@@ -22,7 +23,7 @@ export class ProjectService extends Workspace {
   }
   fingerprint(id) {
     this.project(id);
-    return inputManifest(this.root, id).fingerprint;
+    return inputManifest(this.root, id, { runtime: this.runtime }).fingerprint;
   }
   search(
     id,

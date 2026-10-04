@@ -473,7 +473,7 @@ test("credentials supplied through request JSON are redacted on both success and
   }
 });
 
-test("creator task instructions participate in the frozen executor fingerprint", async () => {
+test("film instructions and validation are pinned while native service control remains independently versioned", async () => {
   const f = fixture({ browser: true });
   try {
     fs.mkdirSync(path.join(f.root, "server"), { recursive: true });
@@ -484,11 +484,16 @@ test("creator task instructions participate in the frozen executor fingerprint",
     const after = await runtimeIdentity(f.root, { refresh: true });
     assert.notEqual(before.fingerprint, after.fingerprint);
     let prior = after;
-    for (const name of ["public-data.mjs", "ai-manager.mjs", "ai-client.mjs", "ai-validate.mjs"]) {
+    for (const name of ["public-data.mjs", "project-validation.mjs", "ai-validate.mjs"]) {
       fs.copyFileSync(path.join(repo, "server", name), path.join(f.root, "server", name));
       const current = await runtimeIdentity(f.root, { refresh: true });
       assert.notEqual(prior.fingerprint, current.fingerprint, name + " must be pinned in the runtime identity");
       prior = current;
+    }
+    for (const name of ["ai-manager.mjs", "ai-client.mjs"]) {
+      fs.copyFileSync(path.join(repo, "server", name), path.join(f.root, "server", name));
+      assert.equal(prior.fingerprint, (await runtimeIdentity(f.root, { refresh: true })).fingerprint,
+        name + " does not change the film toolchain");
     }
   } finally {
     f.close();

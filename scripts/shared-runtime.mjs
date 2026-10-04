@@ -7,8 +7,9 @@ export const sharedRuntimeNames = Object.freeze(["src", "scripts", "templates", 
   "vite.config.ts", "vitest.config.ts", "AGENTS.md"]);
 
 /** Only executor/daemon-controlled top-level links may refer to the pinned runtime. */
-export function sharedRuntime(root) {
-  const runtimeRoot = process.env.FRAME_SHARED_RUNTIME_ROOT, fingerprint = process.env.FRAME_SHARED_RUNTIME_FINGERPRINT;
+export function sharedRuntime(root, descriptor) {
+  const runtimeRoot = descriptor ? descriptor.root : process.env.FRAME_SHARED_RUNTIME_ROOT,
+    fingerprint = descriptor ? descriptor.fingerprint : process.env.FRAME_SHARED_RUNTIME_FINGERPRINT;
   if (!runtimeRoot && !fingerprint) return null;
   if (!path.isAbsolute(runtimeRoot || "") || !/^[a-f0-9]{64}$/.test(fingerprint || ""))
     throw Error("Shared runtime needs an absolute pinned core and verified fingerprint");

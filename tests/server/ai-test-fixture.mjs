@@ -2,10 +2,32 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
+import assert from "node:assert/strict";
+import { fileURLToPath } from "node:url";
 import { command } from "../../server/process.mjs";
 import { sqliteDatabase } from "../../server/sqlite.mjs";
 import { AiStore } from "../../server/ai-store.mjs";
-import { AiWork } from "../../server/ai-work.mjs";
+import { AiWork, prepareAiRuntime } from "../../server/ai-work.mjs";
+import { fileSha256, treeHash } from "../../server/project-files.mjs";
+import { runtimeIdentity } from "../../scripts/runtime-identity.mjs";
+
+/** Prepare the same canonical core links used by native chats without changing Git ownership. */
+export async function prepareCanonicalRuntime({ db, repos, repo, project }) {
+  const { repo: checkout, dir } = await repos.project(repo, project);
+  const git = args => repos.git(checkout.root, args);
+  const index = path.resolve(checkout.root, await git(["rev-parse", "--git-path", "index"]));
+  const head = await git(["rev-parse", "HEAD"]), indexSha = await fileSha256(index), source = await treeHash(dir);
+  const core = process.env.FRAME_SHARED_RUNTIME_ROOT || fileURLToPath(new URL("../../", import.meta.url));
+  const assertGitPreserved = async () => {
+    assert.equal(await git(["rev-parse", "HEAD"]), head);
+    assert.equal(await fileSha256(index), indexSha);
+  };
+  await prepareAiRuntime({ db, workspaceRoot: checkout.root, repo, core });
+  assert.equal((await fs.lstat(path.join(checkout.root, "src"))).isSymbolicLink(), true);
+  assert.equal(await treeHash(dir), source);
+  await assertGitPreserved();
+  return { root: checkout.root, dir, runtime: { root: core, fingerprint: (await runtimeIdentity(core)).fingerprint }, assertGitPreserved };
+}
 
 export async function fixture(t) {
   const directory = await fs.mkdtemp(

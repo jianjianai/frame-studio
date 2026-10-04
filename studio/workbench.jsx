@@ -67,6 +67,27 @@ class PageBoundary extends Component {
   }
 }
 
+function NativeActivityBadges({ activity }) {
+  const native = activity?.native;
+  if (!native) return null;
+  return (
+    <>
+      {!!native.activeThreads?.length && (
+        <span className="badge running">T3 Code · {native.activeThreads.length} 个对话正在运行</span>
+      )}
+      {!!native.activeTerminals && (
+        <span className="badge running">终端 · {native.activeTerminals} 项正在运行</span>
+      )}
+      {!!native.pendingPermissions && (
+        <span className="badge queued">T3 Code · 等待权限确认</span>
+      )}
+      {native.incomplete && (
+        <span className="badge failed">T3 Code · 连接状态待核对</span>
+      )}
+    </>
+  );
+}
+
 function Background({ notify, localMode }) {
   const query = useQuery("works_background", {}, 2000),
     [run, busy] = useAction(notify);
@@ -91,21 +112,7 @@ function Background({ notify, localMode }) {
             </a>
             <p>{w.storage_name}</p>
             <div className="row">
-              {w.nativeActivity?.state === "starting" && (
-                <span className="badge queued">T3 Code · 正在连接</span>
-              )}
-              {!!w.nativeActivity?.activeThreads?.length && (
-                <span className="badge running">T3 Code · {w.nativeActivity.activeThreads.length} 个对话正在运行</span>
-              )}
-              {!!w.nativeActivity?.activeTerminals && (
-                <span className="badge running">终端 · {w.nativeActivity.activeTerminals} 项正在运行</span>
-              )}
-              {!!w.nativeActivity?.pendingPermissions && (
-                <span className="badge queued">T3 Code · 等待权限确认</span>
-              )}
-              {w.nativeActivity?.incomplete && w.nativeActivity.state !== "starting" && (
-                <span className="badge failed">T3 Code · 连接状态待核对</span>
-              )}
+              <NativeActivityBadges activity={w.nativeActivity} />
               {w.tasks.map((t) => (
                 <span className={"badge " + t.state} key={t.id}>
                   {kinds[t.kind]} · {states[t.state]}

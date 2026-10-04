@@ -87,6 +87,11 @@ export async function createServices({
   aiManager.onNativeEvent = (workId, event) => {
     if (event.type === "thread.ended") void aiWorkspace.reconcile(workId, { force: true }).catch(() => {});
   };
+  aiManager.onActivityError = error => console.error("Ai activity:", error.message);
+  if (db.kind !== "sqlite") aiManager.on("activity", change => {
+    void db.pool.query("SELECT pg_notify('frame_changes',$1)", [JSON.stringify(change)])
+      .catch(aiManager.onActivityError);
+  });
   let aiTimer;
   const startAiLoop = () => {
     if (aiTimer) return;

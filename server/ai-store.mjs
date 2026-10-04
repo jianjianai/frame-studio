@@ -67,13 +67,7 @@ const bindingDTO = (row) =>
     environmentId: row.environment_id,
     cwd: row.cwd,
     runtimeFingerprint: row.runtime_fingerprint,
-    image: row.image,
     error: row.error,
-    lastObserved: date(row.last_observed),
-    nativeSummary:
-      typeof row.native_summary === "string"
-        ? JSON.parse(row.native_summary)
-        : row.native_summary,
     created: date(row.created),
     updated: date(row.updated),
     touched: date(row.touched),
@@ -110,12 +104,7 @@ const runtimeInput = z.strictObject({
   environmentId: id.nullable().optional(),
   cwd: z.string().max(4096).nullable().optional(),
   runtimeFingerprint: sha.nullable().optional(),
-  image: z.string().max(4096).nullable().optional(),
   error: z.string().max(2000).nullable().optional(),
-  lastObserved: z
-    .preprocess(date, z.iso.datetime({ offset: true }).nullable())
-    .optional(),
-  nativeSummary: z.json().nullable().optional(),
 });
 const runtimeColumns = {
   state: "state",
@@ -124,10 +113,7 @@ const runtimeColumns = {
   environmentId: "environment_id",
   cwd: "cwd",
   runtimeFingerprint: "runtime_fingerprint",
-  image: "image",
   error: "error",
-  lastObserved: "last_observed",
-  nativeSummary: "native_summary",
 };
 
 /** Dedicated ledger versions the native-session and sole-workspace metadata. */
@@ -258,7 +244,7 @@ export class AiStore {
     const params = [workId],
       assignments = [];
     for (const [key, item] of entries) {
-      params.push(key === "nativeSummary" ? json(item, 128000) : item);
+      params.push(item);
       assignments.push(runtimeColumns[key] + "=$" + params.length);
     }
       const where = ["work_id=$1"];

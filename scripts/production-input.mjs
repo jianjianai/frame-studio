@@ -87,9 +87,9 @@ const excluded = new Set([
   "test-results",
   "playwright-report",
 ]);
-export function inputFiles(root, id) {
+export function inputFiles(root, id, { runtime: descriptor } = {}) {
   projectPath(root, id);
-  const runtime = sharedRuntime(root);
+  const runtime = sharedRuntime(root, descriptor);
   const files = [];
   function walk(relative) {
     const file = path.join(root, relative);
@@ -124,9 +124,9 @@ export function inputFiles(root, id) {
     if (!runtime?.names.has(name)) walk(name);
   return files.sort();
 }
-export function inputManifest(root, id) {
-  const runtime = sharedRuntime(root);
-  const files = inputFiles(root, id).map((file) => ({
+export function inputManifest(root, id, { runtime: descriptor } = {}) {
+  const runtime = sharedRuntime(root, descriptor);
+  const files = inputFiles(root, id, { runtime: descriptor }).map((file) => ({
     path: file,
     sha256: fileSha256(path.join(root, file)),
   }));
@@ -160,8 +160,8 @@ function snapshotClose(root, id, directory, workspace) {
   };
 }
 /** Copy independently owned bytes. Reject changes to avoid a mixed input. */
-export function captureInput(root, id, { workspace = false } = {}) {
-  const before = inputManifest(root, id);
+export function captureInput(root, id, { workspace = false, runtime: descriptor } = {}) {
+  const before = inputManifest(root, id, { runtime: descriptor });
   const ownedBase = workspace ? ".history/workspaces" : ".cache/production";
   const directory = projectPath(root, id, ownedBase + "/" + randomUUID());
   fs.mkdirSync(directory, { recursive: true });
@@ -186,9 +186,9 @@ export function captureInput(root, id, { workspace = false } = {}) {
       if (fileSha256(target, { cache: false }) !== file.sha256)
         throw new Error("Input changed during capture: " + file.path);
     }
-    if (inputManifest(root, id).fingerprint !== before.fingerprint)
+    if (inputManifest(root, id, { runtime: descriptor }).fingerprint !== before.fingerprint)
       throw new Error("Input changed during capture; retry");
-    const runtime = sharedRuntime(root);
+    const runtime = sharedRuntime(root, descriptor);
     // Render sessions replace their tiny entry HTML, never the shared core HTML.
     if (runtime) linkSharedRuntime(directory, runtime.root, { mutableIndex: true, names: runtime.names });
     if (!fs.existsSync(path.join(directory, "node_modules")))

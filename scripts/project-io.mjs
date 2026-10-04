@@ -210,6 +210,7 @@ export function projectOperationAsync(workspace, operation, ...arguments_) {
       readOnly: workspace.readOnly,
       sessionId: workspace.sessionId,
       checkOptions: workspace.checkOptions,
+      runtime: workspace.runtime,
     },
     operation,
     arguments: arguments_,

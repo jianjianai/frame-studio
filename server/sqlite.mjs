@@ -7,7 +7,7 @@ const jsonColumns = new Set([
   "value", "input", "result", "data", "metadata", "sync_state", "progress",
   "monitor", "runtime", "frozen", "request_input", "execution", "review_reference",
   "metrics", "info", "redirects",
-  "blocker", "tasks", "activity", "refs", "envelope", "native_summary",
+  "blocker", "tasks", "activity", "refs", "envelope",
 ]);
 const booleanColumns = new Set(["deleted", "enabled", "revoked", "ready", "ok", "requested"]);
 

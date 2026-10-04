@@ -13,6 +13,7 @@ import { database } from "../../server/db.mjs";
 import { createApp } from "../../server/app.mjs";
 import { launchBrowser } from "../../scripts/browser.mjs";
 import { fixture, repo as root } from "../mcp/helpers.mjs";
+import { prepareCanonicalRuntime } from "./ai-test-fixture.mjs";
 const url = process.env.FRAME_TEST_DATABASE_URL;
 test(
   "composition GUI uses real API revisions: add, edit, drag trim, undo, conflict, responsive layout",
@@ -104,6 +105,7 @@ test(
         ],
       );
       await repos.revisions.refresh(repo.id, work.project);
+      const prepared = await prepareCanonicalRuntime({ db, repos, repo: repo.id, project: work.project });
       await app.listen({ host: "127.0.0.1", port });
       browser = await launchBrowser();
       page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
@@ -273,6 +275,7 @@ test(
         fullPage: true,
       });
       assert.deepEqual(errors, []);
+      await prepared.assertGitPreserved();
     } finally {
       await browser?.close();
       await app.close();

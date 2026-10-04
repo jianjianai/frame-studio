@@ -144,13 +144,25 @@ test("Real T3 WebUI on HTTP isolates same-remote works, freezes references, edit
     assert.equal((await f.services.ai.manager.observe(other.id)).activeTerminals, 0);
     await f.services.ai.manager.cancelWork(work.id);
     await until(async () => (await f.services.ai.manager.observe(work.id)).activeTerminals === 0, "Owned terminal did not close", 10000);
-    t.diagnostic("The independent full native workbench opens the same current conversation");
+    t.diagnostic("The independent full native workbench reloads and sends in the same current conversation");
     const [standalone] = await Promise.all([page.waitForEvent("popup"), page.getByRole("link", { name: "在新标签页打开 T3 Code", exact: true }).click()]);
     await composer(standalone);
     assert.equal(await standalone.evaluate(() => document.documentElement.dataset.frameEmbedded), undefined);
     assert.equal(new URL(standalone.url()).pathname.startsWith("/ai/works/"), false);
     await standalone.reload(); await composer(standalone);
     assert.equal((await f.captured()).filter(row => row.kind === "accepted-turn").length, 3);
+    const fourth = await submitted(standalone, "FRAME FULL WORKBENCH: continue this current chat in its canonical project without a player reference.", 4);
+    assert.equal(fourth.threadId, third.threadId);
+    assert.equal(fourth.cwd, work.ready.cwd); assert.equal(fourth.scenePath, path.join(work.canonical, "scene.ts"));
+    assert.equal(fourth.frameContext.project, work.project);
+    assert.equal(fourth.frameContext.task, null);
+    assert.deepEqual(fourth.frameContext.request, {}); assert.deepEqual(fourth.frameContext.reference, {});
+    assert.equal(fourth.frameContext.focus.time, null);
+    assert.doesNotMatch(fourth.prompt, /Frozen source:|FRAME work reference/);
+    assert.match(await fs.readFile(fourth.scenePath, "utf8"), new RegExp(fourth.turnId));
+    assert.equal((await f.db.one("SELECT count(*) AS n FROM tasks")).n, "0");
+    assert.equal(new Set((await f.captured()).filter(row => row.kind === "launch" && row.frameCredentialInjected)
+      .map(row => row.frameCredentialHash)).size, 3, "Continuing the same native thread reuses its scoped credential");
     assert.deepEqual(errors, []);
   } catch (error) {
     t.diagnostic(JSON.stringify({ failure: error.message, errors, nativeLog: f.nativeLog(),

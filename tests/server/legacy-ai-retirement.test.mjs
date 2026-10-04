@@ -67,7 +67,8 @@ test("legacy retirement deletes FRAME conversations and artifacts but preserves 
     assert.equal((await db.all("SELECT config FROM connections"))[0].config, "encrypted-provider");
     assert.equal((await db.all("SELECT data FROM paseo_native_fixture"))[0].data, "Preserve native messages");
     assert.equal((await db.all("SELECT key FROM settings WHERE key='preview:legacy'")).length, 0);
-    assert.equal((await db.all("SELECT id FROM work_undos")).length, 0);
+    assert.equal((await db.all("SELECT name FROM sqlite_master WHERE type='table' AND name='work_undos'")).length, 0,
+      "Retired empty undo schema is removed while the native metadata above remains intact");
     const calls = [];
     const runCommand = async (bin, args) => {
       assert.equal(bin, "docker"); calls.push(args);
@@ -176,6 +177,7 @@ test("PostgreSQL retires legacy chat schema atomically and keeps general scoped 
     await migrate(pool);
     assert.equal((await pool.query("SELECT to_regclass('chats') AS table")).rows[0].table, null);
     assert.equal((await pool.query("SELECT to_regclass('agent_questions') AS table")).rows[0].table, null);
+    assert.equal((await pool.query("SELECT to_regclass('work_undos') AS table")).rows[0].table, null);
     assert.deepEqual((await pool.query("SELECT id FROM tasks")).rows.map(row => row.id), [render]);
     await pool.query("INSERT INTO events(task,kind,data) VALUES($1,'log','{}')", [render]);
     await pool.query("UPDATE tasks SET state='failed' WHERE id=$1", [render]);

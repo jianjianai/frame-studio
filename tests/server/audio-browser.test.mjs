@@ -13,11 +13,12 @@ import { database } from "../../server/db.mjs";
 import { createApp } from "../../server/app.mjs";
 import { launchBrowser } from "../../scripts/browser.mjs";
 import { fixture, repo as root } from "../mcp/helpers.mjs";
+import { prepareCanonicalRuntime } from "./ai-test-fixture.mjs";
 const url = process.env.FRAME_TEST_DATABASE_URL;
 test(
   "audio GUI uses real API revisions: migration, multitrack edits, drag, undo, processors, conflict, responsive layout",
   { skip: !url, timeout: 150000 },
-  async () => {
+  async (t) => {
     const data = fs.mkdtempSync(path.join(os.tmpdir(), "frame-composition-"));
     const f = fixture({ browser: true }),
       db = await database(url, "composition-fixture-password");
@@ -34,7 +35,16 @@ test(
       scheduler: false,
     });
     let browser, page;
-    const errors = [];
+    const errors = [], operationFailures = [], requests = new Map(), wireFailures = [];
+    const call = actions.call;
+    actions.call = async (name, args) => {
+      try { return await call(name, args); }
+      catch (error) {
+        if (name === "works_audio_edit") operationFailures.push({ name,
+          error: { name: error.name, code: error.code, message: error.message, stack: error.stack, cause: String(error.cause) } });
+        throw error;
+      }
+    };
     try {
       const repo = await actions.call("repositories_add", {
         name: "Composition acceptance",
@@ -87,10 +97,23 @@ test(
         ],
       );
       await repos.revisions.refresh(repo.id, work.project);
+      const prepared = await prepareCanonicalRuntime({ db, repos, repo: repo.id, project: work.project });
       await app.listen({ host: "127.0.0.1", port });
       browser = await launchBrowser();
       page = await browser.newPage({ viewport: { width: 1500, height: 1000 } });
       page.on("pageerror", (e) => errors.push(e.message));
+      page.on("websocket", socket => {
+        socket.on("framesent", ({ payload }) => {
+          if (typeof payload !== "string") return;
+          try { const message = JSON.parse(payload); if (message.name === "works_audio_edit") requests.set(message.id, message); }
+          catch { /* Non-JSON control frames are unrelated to the mutation. */ }
+        });
+        socket.on("framereceived", ({ payload }) => {
+          if (typeof payload !== "string") return;
+          try { const message = JSON.parse(payload); if (requests.has(message.id) && message.error) wireFailures.push({ request: requests.get(message.id), response: message }); }
+          catch { /* Non-JSON control frames are unrelated to the mutation. */ }
+        });
+      });
       page.setDefaultTimeout(15000);
       await page.goto(origin);
       await page
@@ -221,6 +244,10 @@ test(
         fullPage: true,
       });
       assert.deepEqual(errors, []);
+      await prepared.assertGitPreserved();
+    } catch (error) {
+      t.diagnostic(JSON.stringify({ operationFailures, wireFailures }));
+      throw error;
     } finally {
       await browser?.close();
       await app.close();

@@ -12,8 +12,8 @@ const watched = {
   works_tasks: ["tasks"],
   works_queue_status: ["tasks", "settings"],
   works_preview_status: ["works", "previews"],
-  works_ai_status: ["ai_work_bindings", "ai_validations", "works"],
-  works_background: ["tasks", "ai_work_bindings"],
+  works_ai_status: ["ai_work_bindings", "ai_validations", "works", "ai_native_activity"],
+  works_background: ["tasks", "ai_work_bindings", "ai_native_activity"],
   works_exports: ["tasks"],
   auth_state: ["auth_flows"],
   task_get: ["events", "tasks"],
@@ -40,6 +40,9 @@ export async function installRealtime(
     notifyTaskStatus(db, change);
     for (const ws of wss.clients) ws.refresh?.(change);
   };
+  const nativeActivity = actions.works.ai?.manager;
+  const nativeChanged = change => changed(JSON.stringify(change));
+  if (localMode) nativeActivity?.on("activity", nativeChanged);
   const listen = async () => {
     if (closed) return;
     let client,
@@ -256,6 +259,7 @@ export async function installRealtime(
   });
   app.addHook("preClose", async () => {
     closed = true;
+    nativeActivity?.off("activity", nativeChanged);
     clearTimeout(reconnect);
     app.server.off("upgrade", upgrade);
     for (const ws of wss.clients) ws.terminate();

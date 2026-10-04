@@ -9,6 +9,7 @@ import { brotliDecompressSync } from "node:zlib";
 import Fastify from "fastify";
 import { LivePreviewSessions } from "../../server/live-preview.mjs";
 import { installLivePreview, livePreviewOperations } from "../../server/live-preview-routes.mjs";
+import { createOperationRegistry } from "../../server/operation-registry.mjs";
 import { livePreviewManifestSchema } from "../../src/contracts/live-preview.mjs";
 import { liveSourceInventory } from "../../scripts/live-preview-bundle.mjs";
 
@@ -20,10 +21,10 @@ async function fixture(options = {}) {
   await fsp.writeFile(path.join(projectDir, "scene.ts"), "export const color='red'");
   await fsp.writeFile(path.join(projectDir, "public/image.bin"), Buffer.from("old frozen image"));
   const work = { id: randomUUID(), repo: randomUUID(), project: "test-film", deleted: false };
-  const factories = [], tasks = new Map();
+  const factories = [], lookups = [], tasks = new Map();
   const db = { one: async (_sql, args) => tasks.get(args[0]) || { deleted: false } };
   const manager = new LivePreviewSessions({
-    db, data, repos: { project: async () => ({ dir: projectDir }) },
+    db, data, repos: { project: async (repo, project) => { lookups.push({ repo, project }); return { dir: projectDir }; } },
     bundleFactory: async args => { factories.push(args); return { close: async () => {} }; }, ...options,
   });
   const link = await manager.start({ work });
@@ -39,7 +40,7 @@ async function fixture(options = {}) {
       audioGeneratorRevision: "a".repeat(64), buildMs: 2,
     });
   };
-  return { data, projectDir, work, db, tasks, factories, manager, link, session, publish,
+  return { data, projectDir, work, db, tasks, factories, lookups, manager, link, session, publish,
     close: async () => { await manager.close(); await fsp.rm(data, { recursive: true, force: true }); } };
 }
 
@@ -94,14 +95,40 @@ test("capability resource routes never expose source, other projects, dependenci
   } finally { await app.close(); await f.close(); }
 });
 
-test("Live preview rejects isolated AI drafts and additional native workspaces", async () => {
+test("live preview uses each work's canonical directory and one session for AI and all media modes", async () => {
   const f = await fixture();
   try {
     await assert.rejects(f.manager.start({ work: f.work, task: randomUUID() }), /唯一工作区/);
     await assert.rejects(f.manager.start({ work: f.work, source: "alternate" }), /唯一工作区/);
-    await assert.rejects(f.manager.start({ work: f.work, aiThread: "other-agent" }), /唯一工作区/);
-    const selected = await f.manager.start({ work: f.work, ai: true });
-    assert.equal(selected.source, "work"); assert.equal(selected.sessionId, f.link.sessionId);
+    for (const ai of [false, true]) {
+      for (const mediaMode of ["original", "compressed", "cached"]) {
+        const selected = await f.manager.start({ work: f.work, source: "work", ai, mediaMode });
+        assert.equal(selected.source, "work"); assert.equal(selected.sessionId, f.link.sessionId);
+      }
+    }
+    assert.deepEqual(f.lookups, [{ repo: f.work.repo, project: f.work.project }]);
+    assert.equal(f.factories.length, 1, "AI and playback options reuse the work's watcher");
+    assert.equal(f.factories[0].projectDir, f.projectDir);
+    assert.equal(f.manager.sessions.size, 1);
+
+    const otherWork = { id: randomUUID(), repo: randomUUID(), project: "other-film", deleted: false };
+    const otherDir = path.join(f.data, "projects", otherWork.project);
+    await fsp.mkdir(otherDir, { recursive: true });
+    f.manager.repos.project = async (repo, project) => {
+      assert.deepEqual({ repo, project }, { repo: otherWork.repo, project: otherWork.project });
+      f.lookups.push({ repo, project });
+      return { dir: otherDir };
+    };
+    const [plain, ai] = await Promise.all([
+      f.manager.start({ work: otherWork }),
+      f.manager.start({ work: otherWork, ai: true, mediaMode: "cached" }),
+    ]);
+    assert.equal(plain.sessionId, ai.sessionId, "concurrent viewers share the same work session");
+    assert.notEqual(plain.sessionId, f.link.sessionId, "different works keep separate previews");
+    assert.equal(f.manager.sessions.get(plain.sessionId).projectDir, otherDir);
+    assert.equal(f.factories[1].projectDir, otherDir);
+    assert.equal(f.factories.length, 2); assert.equal(f.lookups.length, 2);
+    assert.equal(f.manager.sessions.size, 2);
   } finally { await f.close(); }
 });
 
@@ -281,19 +308,26 @@ test("original and cached viewers share compilation, keep raw media bytes and ne
   } finally { await app.close(); await f.close(); }
 });
 
-test("live preview operation exposes all three media modes to AI callers", async () => {
-  let operation, input;
+test("live preview operation resolves an active work and validates the current preview selectors", async () => {
+  const { registry, add, call } = createOperationRegistry();
+  let input;
+  const lookups = [], work = { id: randomUUID(), repo: randomUUID(), project: "test-film" };
   livePreviewOperations({
-    add: (name, description, schema, handler) => { operation = { name, description, schema, handler }; },
-    works: { get: async id => ({ id }) }, livePreview: { start: async value => { input = value; return value; } },
+    add,
+    works: { get: async (id, options) => { lookups.push({ id, options }); return work; } },
+    livePreview: { start: async value => { input = value; return value; } },
   });
-  assert.equal(operation.name, "works_live_preview");
-  assert.match(operation.description, /original.*compressed.*cached/);
-  const id = randomUUID();
+  assert.match(registry.works_live_preview.description, /original.*compressed.*cached/);
+  await call("works_live_preview", { id: work.id });
+  assert.deepEqual(input, { work, source: "work", ai: false, mediaMode: "compressed" });
   for (const mediaMode of ["original", "compressed", "cached"]) {
-    await operation.handler({ id, ai: true, mediaMode });
-    assert.equal(input.mediaMode, mediaMode); assert.equal(input.work.id, id);
+    await call("works_live_preview", { id: work.id, source: "work", ai: true, mediaMode });
+    assert.deepEqual(input, { work, source: "work", ai: true, mediaMode });
   }
+  assert.deepEqual(lookups, Array.from({ length: 4 }, () => ({ id: work.id, options: { active: true } })));
+  for (const selectors of [{ source: "alternate" }, { mediaMode: "invalid" }, { workdir: "/another/workspace" }])
+    await assert.rejects(call("works_live_preview", { id: work.id, ...selectors }), { name: "ZodError" });
+  assert.equal(lookups.length, 4, "invalid selectors are rejected before resolving or starting a work");
 });
 
 test("closing the input-owning session cancels its reader while a shared converter keeps its input until the other viewer finishes", async () => {

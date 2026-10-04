@@ -12,6 +12,9 @@ import { projectOperationAsync } from "../scripts/project-io.mjs";
 import { ProjectService } from "../scripts/project-service.mjs";
 import { FrameError } from "../scripts/mcp/workspace.mjs";
 import { problem } from "./security.mjs";
+import { runtimeIdentity } from "../scripts/runtime-identity.mjs";
+
+const coreRoot = fileURLToPath(new URL("../", import.meta.url));
 
 const filePath = z.string().min(1).max(512);
 const digest = z.string().regex(/^[a-f0-9]{64}$/);
@@ -27,9 +30,12 @@ export function workSourceTools({ add, works, repos, db, registry }) {
       await works.get(id, { active: true });
       if (write && !dryRun) await repos.writable(work.repo, work.project);
       const { repo } = await repos.project(work.repo, work.project);
+      const core = process.env.FRAME_SHARED_RUNTIME_ROOT || coreRoot;
+      const identity = await runtimeIdentity(core);
       const workspace = new ProjectService(repo.root, {
         projects: [work.project],
         readOnly: !write,
+        runtime: { root: core, fingerprint: identity.fingerprint },
         checkOptions: { sharedEngineRoot: fileURLToPath(new URL("../src/engine", import.meta.url)) },
       });
       try {

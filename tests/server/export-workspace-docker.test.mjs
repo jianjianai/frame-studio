@@ -1,4 +1,4 @@
-import { linkSharedRuntime } from "../../scripts/shared-runtime.mjs";
+import { prepareAiRuntime } from "../../server/ai-work.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -347,8 +347,12 @@ async function validationCacheExport(t, platform, cli, repo, data, remember) {
       const runtime = await runtimeIdentity(),
         core = path.resolve(".");
       // Prepare the same readonly shared runtime used by a canonical native workspace.
-      await platform.ai.work.prepare(work.id);
-      linkSharedRuntime(checkout.root, core);
+      await prepareAiRuntime({
+        db: platform.db,
+        workspaceRoot: checkout.root,
+        repo: repo.id,
+        core,
+      });
       const git = (args) => platform.repos.git(checkout.root, args);
       await fs.writeFile(
         path.join(source, "scene.ts"),

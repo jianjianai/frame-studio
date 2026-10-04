@@ -11,10 +11,7 @@ CREATE TABLE ai_work_bindings (
  environment_id text,
  cwd text UNIQUE,
  runtime_fingerprint text,
- image text,
  error text,
- last_observed timestamptz,
- native_summary jsonb,
  touched timestamptz NOT NULL DEFAULT now(),
  created timestamptz NOT NULL DEFAULT now(),
  updated timestamptz NOT NULL DEFAULT now()

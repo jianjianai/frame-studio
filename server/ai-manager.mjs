@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, createHmac, timingSafeEqual } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { z } from "zod";
 import { AiClient } from "./ai-client.mjs";
 import { aiControl } from "./ai-control.mjs";
@@ -16,7 +17,7 @@ const samePath = (a, b) => typeof a === "string" && typeof b === "string" && pat
 const terminalBusy = terminal => terminal.status === "starting" || terminal.status === "running" && terminal.hasRunningSubprocess;
 
 function nativeActivityIndex(snapshot) {
-  const projects = new Map(), threads = new Map(), orphanCwds = new Set();
+  const projects = new Map(), threads = new Map(), orphanCwds = new Set(), busyCwds = new Map();
   for (const thread of snapshot?.threads || []) {
     threads.set(thread.id, thread);
     const group = projects.get(thread.projectId) || { threads: [], terminals: [] };
@@ -24,17 +25,24 @@ function nativeActivityIndex(snapshot) {
   }
   for (const terminal of snapshot?.terminals || []) {
     const thread = threads.get(terminal.threadId);
+    if (terminalBusy(terminal) && typeof terminal.cwd === "string") {
+      const cwd = path.resolve(terminal.cwd), owners = busyCwds.get(cwd) || new Set();
+      owners.add(thread?.projectId); busyCwds.set(cwd, owners);
+    }
     if (thread) projects.get(thread.projectId).terminals.push(terminal);
     else if (typeof terminal.cwd === "string") orphanCwds.add(path.resolve(terminal.cwd));
   }
-  return { projects, orphanCwds };
+  return { projects, orphanCwds, busyCwds };
 }
 export function nativeWorkSummary(binding, snapshot, index = nativeActivityIndex(snapshot)) {
   if (!binding.projectId) return { state: binding.state, activeThreads: [], activeTerminals: 0, pendingPermissions: 0, incomplete: false };
   if (!snapshot) return { state: "failed", activeThreads: [], activeTerminals: 0, pendingPermissions: 0, incomplete: true };
   const { threads = [], terminals = [] } = index.projects.get(binding.projectId) || {};
-  const uncertain = terminals.some(terminal => !samePath(terminal.cwd, binding.cwd) || terminal.worktreePath && !samePath(terminal.worktreePath, binding.cwd)) ||
-    !!binding.cwd && index.orphanCwds.has(path.resolve(binding.cwd));
+  const physicalOwners = binding.cwd && index.busyCwds.get(path.resolve(binding.cwd));
+  const uncertain = threads.some(thread => thread.worktreePath && !samePath(thread.worktreePath, binding.cwd)) ||
+    terminals.some(terminal => !samePath(terminal.cwd, binding.cwd) || terminal.worktreePath && !samePath(terminal.worktreePath, binding.cwd)) ||
+    !!binding.cwd && index.orphanCwds.has(path.resolve(binding.cwd)) ||
+    !!physicalOwners && (physicalOwners.size > 1 || !physicalOwners.has(binding.projectId));
   return { state: "ready", activeThreads: threads.filter(active).map(thread => thread.id),
     activeTerminals: terminals.filter(terminalBusy).length,
     pendingPermissions: threads.filter(thread => thread.hasPendingApprovals || thread.hasPendingUserInput).length,
@@ -42,30 +50,113 @@ export function nativeWorkSummary(binding, snapshot, index = nativeActivityIndex
 }
 
 /** A shared T3 environment owns native execution; this manager owns only FRAME work bindings. */
-export class AiManager {
+export class AiManager extends EventEmitter {
   constructor({ db, data, store, workService, tasks, client, localMode = process.env.FRAME_LOCAL_MODE === "1", runCommand = command }) {
+    super();
     Object.assign(this, { db, data, store, workService, tasks, localMode, runCommand });
     this.client = client || new AiClient({ data }); this.container = process.env.FRAME_T3_CONTAINER || "frame-t3";
     this.ensuring = new Map(); this.runtimePrepared = new Map(); this.threadActivity = new Map(); this.terminalActivity = new Map(); this.closed = false; this.ticking = null;
-    this.client.on?.("change", event => {
-      if (!event.thread) return;
-      const running = active(event.thread), previous = this.threadActivity.get(event.thread.id);
-      this.threadActivity.set(event.thread.id, running);
-      if (previous === running) return;
-      void this.store.db.one("SELECT work_id FROM ai_work_bindings WHERE native_project_id=$1", [event.thread.projectId])
-        .then(row => { if (row) this.onNativeEvent?.(row.work_id, { type: active(event.thread) ? "thread.running" : "thread.ended" }); }).catch(() => {});
+    this.workActivity = new Map(); this.activityProjects = new Set(); this.activityCwds = new Set(); this.activityAll = false;
+    this.nativeReady = this.client.terminalsReady === true;
+    this.client.on?.("change", event => this.nativeChange(event));
+    this.client.on?.("terminal", event => this.nativeTerminal(event));
+    this.client.on?.("disconnect", () => {
+      if (!this.nativeReady) return;
+      this.nativeReady = false; this.queueActivity({ all: true });
     });
-    this.client.on?.("terminal", event => {
-      const terminals = event.type === "snapshot" ? event.terminals : event.type === "upsert" ? [event.terminal] : [{ ...event, status: "exited", hasRunningSubprocess: false }];
-      for (const terminal of terminals) {
-        const key = JSON.stringify([terminal.threadId, terminal.terminalId]), running = terminalBusy(terminal);
-        const previous = this.terminalActivity.get(key); this.terminalActivity.set(key, running);
-        if (previous === running || previous === undefined && !running) continue;
-        const thread = this.client.threads?.get(terminal.threadId); if (!thread) continue;
-        void this.store.db.one("SELECT work_id FROM ai_work_bindings WHERE native_project_id=$1", [thread.projectId])
-          .then(row => { if (row) this.onNativeEvent?.(row.work_id, { type: running ? "thread.running" : "thread.ended" }); }).catch(() => {});
+  }
+  nativeThread(thread, id = thread?.id) {
+    const previous = this.threadActivity.get(id);
+    const value = thread && { projectId: thread.projectId, signature: JSON.stringify([thread.projectId,
+      thread.worktreePath || null, active(thread), !!(thread.hasPendingApprovals || thread.hasPendingUserInput)]) };
+    if (previous?.signature === value?.signature) return false;
+    if (value) this.threadActivity.set(id, value); else this.threadActivity.delete(id);
+    this.queueActivity({ projects: [previous?.projectId, value?.projectId] });
+    return true;
+  }
+  nativeChange(event) {
+    if (event.kind === "snapshot") {
+      const threads = new Map(event.snapshot.threads.map(thread => [thread.id, thread]));
+      for (const id of new Set([...this.threadActivity.keys(), ...threads.keys()])) this.nativeThread(threads.get(id), id);
+      this.queueActivity({ all: true });
+    } else if (["thread-upserted", "thread-removed"].includes(event.kind)) {
+      const id = event.thread?.id || event.threadId;
+      if (this.nativeThread(event.thread, id)) {
+        // Removing/moving a thread can leave terminals at another work's cwd.
+        // Only semantic transitions inspect this cache; streamed text skips it.
+        const cwds = [];
+        for (const terminal of this.client.terminals?.values() || []) if (terminal.threadId === id) cwds.push(terminal.cwd);
+        this.queueActivity({ cwds });
       }
+    }
+  }
+  nativeTerminal(event) {
+    const ready = this.client.terminalsReady === true;
+    if (ready !== this.nativeReady) { this.nativeReady = ready; this.queueActivity({ all: true }); }
+    const terminals = event.type === "snapshot" ? event.terminals : event.type === "upsert" ? [event.terminal] : [];
+    const current = new Map(terminals.map(terminal => [JSON.stringify([terminal.threadId, terminal.terminalId]), terminal]));
+    const keys = event.type === "snapshot" ? new Set([...this.terminalActivity.keys(), ...current.keys()]) :
+      event.type === "remove" ? [JSON.stringify([event.threadId, event.terminalId])] : current.keys();
+    for (const key of keys) {
+      const terminal = current.get(key), previous = this.terminalActivity.get(key);
+      const projectId = this.client.threads?.get(terminal?.threadId || previous?.threadId)?.projectId;
+      const value = terminal && { threadId: terminal.threadId, projectId, cwd: terminal.cwd,
+        signature: JSON.stringify([projectId, terminal.threadId, terminal.cwd, terminal.worktreePath || null, terminalBusy(terminal)]) };
+      if (previous?.signature === value?.signature) continue;
+      if (value) this.terminalActivity.set(key, value); else this.terminalActivity.delete(key);
+      this.queueActivity({ projects: [previous?.projectId, value?.projectId, projectId], cwds: [previous?.cwd, value?.cwd] });
+    }
+  }
+  queueActivity({ all = false, projects = [], cwds = [] } = {}) {
+    if (this.closed) return;
+    this.activityAll ||= all;
+    for (const project of projects) if (project) this.activityProjects.add(project);
+    for (const cwd of cwds) if (typeof cwd === "string") this.activityCwds.add(path.resolve(cwd));
+    if (this.activityTimer || this.activityFlush) return;
+    this.activityTimer = setImmediate(() => {
+      this.activityTimer = null;
+      void this.flushActivity().catch(error => this.onActivityError?.(error));
     });
+  }
+  async flushActivity() {
+    if (this.activityFlush) return this.activityFlush;
+    if (this.closed || !this.activityAll && !this.activityProjects.size && !this.activityCwds.size) return;
+    clearImmediate(this.activityTimer); this.activityTimer = null;
+    const all = this.activityAll, projects = this.activityProjects, cwds = this.activityCwds;
+    this.activityAll = false; this.activityProjects = new Set(); this.activityCwds = new Set();
+    const operation = (async () => {
+      // Native text/usage chunks never reach this query. Snapshots and state
+      // transitions share one requested-work lookup for the whole event batch.
+      const bindings = await this.store.listWorks({ requested: true, limit: 10000 });
+      if (this.closed) return;
+      const snapshot = this.client.snapshot?.(), index = nativeActivityIndex(snapshot);
+      const retained = new Set(bindings.map(binding => binding.workId));
+      for (const id of this.workActivity.keys()) if (!retained.has(id)) this.workActivity.delete(id);
+      for (const binding of bindings) {
+        if (!all && !projects.has(binding.projectId) && !cwds.has(path.resolve(binding.cwd || "."))) continue;
+        const summary = nativeWorkSummary(binding, snapshot, index);
+        const signature = JSON.stringify([binding.projectId, binding.cwd, summary.state, [...summary.activeThreads].sort(),
+          summary.activeTerminals, summary.pendingPermissions, summary.incomplete]);
+        if (this.workActivity.get(binding.workId) === signature) continue;
+        this.workActivity.set(binding.workId, signature);
+        this.emit("activity", { table: "ai_native_activity", work: binding.workId, repo: binding.repo, project: binding.project });
+        const busy = summary.incomplete || summary.activeThreads.length || summary.pendingPermissions || summary.activeTerminals;
+        void Promise.resolve(this.onNativeEvent?.(binding.workId, { type: busy ? "thread.running" : "thread.ended" }))
+          .catch(error => this.onActivityError?.(error));
+      }
+    })();
+    this.activityFlush = operation;
+    try { await operation; } finally {
+      this.activityFlush = null;
+      if (!this.closed && (this.activityAll || this.activityProjects.size || this.activityCwds.size)) this.queueActivity();
+    }
+  }
+  async activitySnapshot() {
+    if (this.client.ready && this.client.snapshot) {
+      if (!this.client.terminalsReady) void this.client.connect().catch(() => {});
+      return this.client.snapshot();
+    }
+    return this.client.shell();
   }
   control() { return aiControl(this.data); }
   async authorizeInternal(supplied) {
@@ -158,7 +249,7 @@ export class AiManager {
     const binding = await this.store.getWork(workId);
     if (!binding?.projectId) return { state: binding?.state || "cold", activeThreads: [], incomplete: false };
     try {
-      return { ...nativeWorkSummary(binding, await this.client.shell()), checkedAt: new Date().toISOString() };
+      return { ...nativeWorkSummary(binding, await this.activitySnapshot()), checkedAt: new Date().toISOString() };
     } catch { return { state: "failed", activeThreads: [], incomplete: true }; }
   }
   async active({ repo, project } = {}) {
@@ -166,7 +257,7 @@ export class AiManager {
     const scoped = rows.filter(row => (!repo || row.repo === repo) && (!project || row.project === project));
     if (!scoped.length) return [];
     let snapshot;
-    try { snapshot = await this.client.shell(); } catch {}
+    try { snapshot = await this.activitySnapshot(); } catch {}
     const result = [], index = nativeActivityIndex(snapshot);
     for (const binding of scoped) {
       const summary = nativeWorkSummary(binding, snapshot, index);
@@ -218,6 +309,6 @@ export class AiManager {
       fs.rmSync(file,{force:true});})().catch(e=>{console.error(e.message);process.exitCode=1});`;
     await this.runCommand("docker", ["exec", this.container, "node", "-e", script, binding.cwd, binding.project, reportId], { timeout: 15000, max: 65536 });
   }
-  beginClose() { this.closed = true; }
-  async close() { this.beginClose(); this.client.close(); await Promise.allSettled([...this.ensuring.values()]); }
+  beginClose() { this.closed = true; clearImmediate(this.activityTimer); this.activityTimer = null; }
+  async close() { this.beginClose(); this.client.close(); await Promise.allSettled([...this.ensuring.values(), this.activityFlush]); this.removeAllListeners(); }
 }

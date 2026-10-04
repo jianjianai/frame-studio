@@ -115,8 +115,9 @@ export class AiClient extends EventEmitter {
     });
   }
   async config() { return this.rpc("server.getConfig"); }
-  async shell() { await this.connect(); return { projects: [...this.projects.values()], threads: [...this.threads.values()],
+  snapshot() { return { projects: [...this.projects.values()], threads: [...this.threads.values()],
     terminals: [...this.terminals.values()], terminalsReady: this.terminalsReady, snapshotSequence: this.sequence }; }
+  async shell() { await this.connect(); return this.snapshot(); }
   async dispatch(command) { const result = await this.request("/api/orchestration/dispatch", { method: "POST", body: command }); return result; }
   async detail(threadId, { turnLimit = 1, beforeCursor, signal } = {}) {
     if (!Number.isInteger(turnLimit) || turnLimit < 1 || turnLimit > 100) throw Error("Invalid native history page size");

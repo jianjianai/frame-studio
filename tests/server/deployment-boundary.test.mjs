@@ -21,12 +21,24 @@ test("the public studio never mounts the control socket; only the private contro
 });
 
 test("Dockge stack contains only persistent services, never one-shot initialization jobs", () => {
-  assert.deepEqual([...services.keys()].sort(), ["controller", "postgres", "speech", "studio"]);
+  assert.deepEqual([...services.keys()].sort(), ["controller", "postgres", "speech", "studio", "t3"]);
   assert.doesNotMatch(serviceSource, /data-init|initialize-data|service_completed_successfully|\bsleep\b/);
   for (const [name, service] of services) {
     assert.match(service, /restart: unless-stopped/, `${name} must be long-running`);
     assert.match(service, /healthcheck:/, `${name} must report health`);
   }
+});
+
+test("all works share one private T3 service with an independently versioned image and read-only FRAME runtime", () => {
+  const studio = services.get("studio"), t3 = services.get("t3");
+  assert(studio && t3);
+  assert.match(t3, /image: ghcr\.io\/jianjianai\/frame-studio\/t3-code:\$\{FRAME_T3_VERSION(?::-[^}]+)?\}/);
+  assert.doesNotMatch(t3, /\bFRAME_VERSION\b|docker\.sock|^\s+ports:|\bcaddy\b/m);
+  assert.match(t3, /^    container_name: frame-t3$/m);
+  assert.match(studio, /^      FRAME_T3_URL: http:\/\/frame-t3:3773$/m);
+  assert.match(studio, /^      FRAME_T3_CONTAINER: frame-t3$/m);
+  assert.match(t3, /^    networks: \[internal\]$/m);
+  assert.match(t3, /- type: bind\n\s+source: \.\/data\/runtime\/current\n\s+target: \/opt\/frame\n\s+read_only: true/);
 });
 
 test("data initialization stays explicit, isolated and automatically removed outside Compose", () => {
