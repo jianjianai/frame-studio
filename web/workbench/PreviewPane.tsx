@@ -43,6 +43,12 @@ export function PreviewPane() {
   useEffect(() => {
     const listener = (event: MessageEvent) => {
       if (event.source !== frame.current?.contentWindow || event.data?.source !== "frame-stage") return;
+      // Keys pressed while the preview has focus act as if pressed in the studio.
+      if (event.data.type === "key") {
+        const { key, code, ctrlKey, metaKey, shiftKey, altKey } = event.data;
+        document.body.dispatchEvent(new KeyboardEvent("keydown", { key, code, ctrlKey, metaKey, shiftKey, altKey, bubbles: true, cancelable: true }));
+        return;
+      }
       stage.handleMessage(event.data);
     };
     window.addEventListener("message", listener);

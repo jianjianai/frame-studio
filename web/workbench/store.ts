@@ -1,5 +1,6 @@
 import { createContext, useContext, useSyncExternalStore } from "react";
 import type { CheckResult, PlaybackSnapshot, StageStatus, WorkInfo } from "../lib/types";
+import type { TimelineHistory } from "./timelineHistory";
 
 /** Tiny observable value for high-frequency state (playhead) outside React's tree. */
 export class Observable<T> {
@@ -125,7 +126,7 @@ export type ChatAttachment =
   | { type: "problem"; message: string };
 
 export interface Selection {
-  kind: "layer" | "audio" | "subtitle" | "beat";
+  kind: "layer" | "audio" | "subtitle" | "beat" | "track";
   id: string;
   index?: number;
 }
@@ -147,6 +148,8 @@ export interface WorkbenchContextValue {
   showPanel: (tab: string) => void;
   showView: (view: string) => void;
   openSettings: (section?: string) => void;
+  /** Undo history of manual timeline edits, shared by the timeline and the properties view. */
+  history: TimelineHistory;
 }
 export const WorkbenchContext = createContext<WorkbenchContextValue | null>(null);
 export function useWorkbench() {

@@ -804,6 +804,10 @@
   color: var(--fg-muted);
   font-size: 12px;
 }
+.tl-label.selected {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--accent) 18%, var(--bg-elev));
+}
 .tl-ruler .tl-label {
   z-index: 4;
 }
@@ -920,6 +924,42 @@
   background: var(--danger);
   pointer-events: none;
   z-index: 3;
+}
+/* After the end of the film: shaded; the end bar sets the film's length. */
+.tl-outside {
+  position: absolute;
+  top: 22px;
+  bottom: 0;
+  background: repeating-linear-gradient(135deg, rgb(0 0 0 / 0.18) 0 6px, transparent 6px 12px);
+  pointer-events: none;
+  z-index: 2;
+}
+.tl-end {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--accent);
+  pointer-events: none;
+  z-index: 3;
+}
+.tl-end-grip {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 0 4px 4px 0;
+  background: var(--accent);
+  color: var(--accent-fg);
+  font: 600 10px/20px var(--mono);
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: ew-resize;
+}
+.tl-end.dragging .tl-end-grip {
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 40%, transparent);
 }
 /* The head of the playhead can be grabbed and dragged. */
 .tl-playhead-grip {
@@ -1231,6 +1271,102 @@
   max-height: 70vh;
   background: #000;
 }
+/* ---- properties view ---- */
+.props {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.props-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.props-section {
+  padding: 8px 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.props-section h3 {
+  margin: 2px 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-muted);
+}
+.prop {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  font-size: 12px;
+}
+.prop-label {
+  color: var(--fg-muted);
+}
+.prop-control {
+  min-width: 0;
+}
+.prop-control .input,
+.prop-control .select,
+.prop-control .textarea {
+  width: 100%;
+  margin: 0;
+}
+.prop-number {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.prop-number .input {
+  width: 84px;
+  flex: none;
+}
+.prop-number .tl-volume {
+  width: 110px;
+}
+.prop-hint {
+  flex-basis: 100%;
+}
+.prop-static {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+}
+.prop-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.prop-color {
+  width: 48px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+}
+.prop-grid2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 10px;
+}
+.prop-grid2 .prop {
+  grid-template-columns: 28px minmax(0, 1fr);
+}
+.prop-grid2 .prop-number {
+  flex-wrap: nowrap;
+}
+.prop-grid2 .prop-number .input {
+  width: 100%;
+  min-width: 0;
+  flex: 1;
+}
+
 /* ---- diff editor tab (VS Code inline diff) ---- */
 .diff-editor {
   flex: 1;

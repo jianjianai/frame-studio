@@ -26,7 +26,6 @@ import { useAction, useConfirm, useContextMenu, usePrompt, useToast, Dialog, typ
 import type { Asset, AudioDocument, Subtitle, Beat, VisualClip } from "../lib/types";
 import { useObservable, useWorkbench } from "./store";
 import { loadPeaks, drawPeaks } from "./waveform";
-import { useTimelineHistory } from "./timelineHistory";
 import { assetDrag } from "./assetDrag";
 
 const WIDE_LABEL = 168;
@@ -84,7 +83,7 @@ export const formatDb = (gain: number) => (gain <= 0 ? "-∞ dB" : `${gainToDb(g
  * Ctrl/Alt + wheel zooms around the pointer, wheel scrolls, the view follows playback.
  */
 export function Timeline() {
-  const { work, stage, select, selection, addToChat, reload } = useWorkbench();
+  const { work, stage, select, selection, addToChat, history, showView } = useWorkbench();
   const [run] = useAction();
   const toast = useToast();
   const confirm = useConfirm();
@@ -105,7 +104,6 @@ export function Timeline() {
   const fps = meta?.fps ?? 30;
   const base = workPath(work.repo, work.id);
   const assetUrl = (src: string) => `${work.preview.assetBase}${src}`;
-  const history = useTimelineHistory(base, reload);
   const audioDoc = meta?.audioDocument as AudioDocument | undefined;
 
   useLayoutEffect(() => {
@@ -121,7 +119,8 @@ export function Timeline() {
 
   // ---- zoom ---------------------------------------------------------------------
   const fitPps = useCallback(
-    () => Math.max(0.5, ((viewWidth || scroller.current?.clientWidth || 800) - LABEL_WIDTH - 24) / duration),
+    // A little room after the end keeps the film's end bar visible and grabbable.
+    () => Math.max(0.5, ((viewWidth || scroller.current?.clientWidth || 800) - LABEL_WIDTH - 24) / (duration * 1.08)),
     [viewWidth, LABEL_WIDTH, duration],
   );
   const limits = useCallback(() => ({ min: fitPps() / 2, max: fps * 80 }), [fitPps, fps]);
@@ -511,6 +510,34 @@ export function Timeline() {
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
   };
+  // ---- film length: drag the end bar ---------------------------------------------------------
+  const [endDrag, setEndDrag] = useState<{ time: number; limited: boolean } | null>(null);
+  /** The film cannot end before its last layer, clip, subtitle or marker. */
+  const contentEnd = useMemo(() => Math.max(0.1, ...rows.flatMap((row) => row.items.map((item) => item.start + item.duration))), [rows]);
+  const dragEnd = (event: React.PointerEvent) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    // Keep the scale while the length changes (a fitted view would rescale under the pointer).
+    fitted.current = false;
+    let next = duration;
+    const move = (moveEvent: PointerEvent) => {
+      const wanted = snap(Math.max(0, timeAt(moveEvent.clientX)), null, moveEvent.altKey).time;
+      next = Math.min(3600, Math.max(contentEnd, Math.round(wanted * fps) / fps));
+      setEndDrag({ time: next, limited: wanted < contentEnd - 1e-6 });
+    };
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      const value = Math.round(next * 1000) / 1000;
+      if (Math.abs(value - duration) < 1e-6) return setEndDrag(null);
+      void run(() => history.run("project", "调整作品时长", () => api(base, { method: "PATCH", body: { duration: value } }))).finally(() => setEndDrag(null));
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  };
+  const filmEnd = endDrag?.time ?? duration;
+
   const dragPlayhead = (event: React.PointerEvent) => {
     if (event.button !== 0) return;
     event.preventDefault();
@@ -632,7 +659,7 @@ export function Timeline() {
   // ---- menus --------------------------------------------------------------------------
   const itemMenu = (event: React.MouseEvent, item: Item, row: Row) => {
     select({ kind: item.kind, id: item.id, index: item.index });
-    const items: MenuItem[] = [];
+    const items: MenuItem[] = [{ label: "属性", icon: <SlidersHorizontal size={14} />, onClick: () => showView("properties") }];
     if (item.kind === "layer" || item.kind === "audio") items.push({ label: "在播放头处切开", icon: <Scissors size={14} />, onClick: () => splitItem(item) });
     if (item.kind === "layer")
       items.push({
@@ -658,8 +685,7 @@ export function Timeline() {
         onClick: () => setVolume({ target: { kind: "clip", clip: item.clip! }, x: event.clientX, y: event.clientY }),
       });
     }
-    if (item.kind === "subtitle")
-      items.push({ label: "编辑字幕", icon: <Type size={14} />, onClick: () => setEditing({ index: item.index!, subtitle: meta!.subtitles[item.index!] }) });
+    if (item.kind === "subtitle") items.push({ label: "编辑字幕", icon: <Type size={14} />, onClick: () => showView("properties") });
     items.push({
       label: "让 AI 修改这里…",
       icon: <Sparkles size={14} />,
@@ -674,8 +700,10 @@ export function Timeline() {
     items.push("separator", { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => removeItem(item) });
     openMenu(event, items);
   };
-  const trackMenu = (event: React.MouseEvent, track: AudioTrack) =>
+  const trackMenu = (event: React.MouseEvent, track: AudioTrack) => {
+    select({ kind: "track", id: track.id });
     openMenu(event, [
+      { label: "属性", icon: <SlidersHorizontal size={14} />, onClick: () => showView("properties") },
       { label: "重命名", icon: <Pencil size={14} />, onClick: () => renameTrack(track) },
       {
         label: "音量…",
@@ -691,16 +719,19 @@ export function Timeline() {
       "separator",
       { label: "删除音轨", icon: <Trash2 size={14} />, danger: true, onClick: () => removeTrack(track) },
     ]);
+  };
 
   // ---- ruler -------------------------------------------------------------------------
-  const width = Math.max(1, duration * pps);
+  // Lanes run past the end of the film so it can be lengthened by dragging the end bar.
+  const span = Math.max(duration, filmEnd) + Math.max(2, Math.max(duration, filmEnd) * 0.2);
+  const width = Math.max(1, span * pps);
   const { ticks, minor } = useMemo(() => {
     const frame = 1 / fps;
     const steps = [frame, 2 * frame, 5 * frame, 10 * frame, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
     const step = steps.find((value) => value * pps >= 80) ?? 1200;
     const minorStep = [frame, 0.1, 0.25, 0.5, 1, 5, 10, 30, 60].find((value) => value * pps >= 8 && value < step) ?? step;
-    return { ticks: Array.from({ length: Math.floor(duration / step) + 1 }, (_, index) => index * step), minor: minorStep };
-  }, [pps, duration, fps]);
+    return { ticks: Array.from({ length: Math.floor(span / step) + 1 }, (_, index) => index * step), minor: minorStep };
+  }, [pps, span, fps]);
   const tickLabel = (time: number) => {
     if (ticks[1] - ticks[0] < 0.5) {
       // Frame-level zoom: seconds + frame number, like editing software.
@@ -805,7 +836,13 @@ export function Timeline() {
           </div>
           {rows.map((row) => (
             <div key={row.id} className={`tl-row kind-${row.kind}`} data-row={row.id}>
-              <div className="tl-label" title={row.label} onContextMenu={row.track ? (event) => trackMenu(event, row.track!) : undefined}>
+              <div
+                className={`tl-label ${row.track && selection?.kind === "track" && selection.id === row.track.id ? "selected" : ""}`}
+                title={row.track ? `${row.label}（点击查看属性）` : row.label}
+                onClick={row.track ? () => select({ kind: "track", id: row.track!.id }) : undefined}
+                onDoubleClick={row.track ? () => showView("properties") : undefined}
+                onContextMenu={row.track ? (event) => trackMenu(event, row.track!) : undefined}
+              >
                 {row.icon}
                 <span className="ellipsis grow">{row.label}</span>
                 {row.track && (
@@ -851,7 +888,7 @@ export function Timeline() {
                       style={{ left: shown.start * pps, width: Math.max(2, shown.duration * pps) }}
                       title={`${item.label}\n${formatTime(shown.start)} – ${formatTime(shown.start + shown.duration)}`}
                       onPointerDown={(event) => startDrag(event, item, "move")}
-                      onDoubleClick={() => item.kind === "subtitle" && setEditing({ index: item.index!, subtitle: meta.subtitles[item.index!] })}
+                      onDoubleClick={() => showView("properties")}
                       onContextMenu={(event) => itemMenu(event, item, row)}
                     >
                       {item.kind === "audio" && item.src && (
@@ -894,6 +931,16 @@ export function Timeline() {
             </div>
           )}
           {snapAt !== null && <div className="tl-snap" style={{ left: LABEL_WIDTH + snapAt * pps }} />}
+          <div className="tl-outside" style={{ left: LABEL_WIDTH + filmEnd * pps, width: (span - filmEnd) * pps + 24 }} />
+          <div className={`tl-end ${endDrag ? "dragging" : ""}`} style={{ left: LABEL_WIDTH + filmEnd * pps }}>
+            <span
+              className="tl-end-grip"
+              onPointerDown={dragEnd}
+              title={`作品结束 ${formatTime(duration)}：拖动调整作品时长（不能短于最后一个片段 ${formatTime(contentEnd)}）`}
+            >
+              {endDrag ? `${formatTime(endDrag.time)}${endDrag.limited ? " · 受片段限制" : ""}` : "结束"}
+            </span>
+          </div>
           <Playhead pps={pps} offset={LABEL_WIDTH} onPointerDown={dragPlayhead} />
         </div>
       </div>
@@ -932,7 +979,7 @@ function Playhead({ pps, offset, onPointerDown }: { pps: number; offset: number;
 }
 
 /** dB slider: previews while dragging, saves (one undo step) on release. */
-function VolumeSlider({ gain, onPreview, onCommit }: { gain: number; onPreview: (gain: number) => void; onCommit: (gain: number) => void }) {
+export function VolumeSlider({ gain, onPreview, onCommit }: { gain: number; onPreview: (gain: number) => void; onCommit: (gain: number) => void }) {
   const [db, setDb] = useState(gainToDb(gain));
   const dragging = useRef(false);
   useEffect(() => {

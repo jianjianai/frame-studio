@@ -81,6 +81,14 @@ const trackControls: Record<string, { gain: number; muted: boolean }> = {};
 const post = (message: Record<string, unknown>) => {
   if (parent !== window) parent.postMessage({ source: "frame-stage", ...message }, location.origin);
 };
+// A click on the preview gives this frame the keyboard; the studio's shortcuts (space,
+// arrows, undo) still belong to the studio, so key presses are handed up.
+addEventListener("keydown", (event) => {
+  if (parent === window || (event.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]")) return;
+  if ([" ", "ArrowLeft", "ArrowRight", "Home"].includes(event.key)) event.preventDefault();
+  const { key, code, ctrlKey, metaKey, shiftKey, altKey } = event;
+  post({ type: "key", key, code, ctrlKey, metaKey, shiftKey, altKey });
+});
 function summary(p: AnimationProject): StageStatus["project"] {
   const size = p.composition ?? { width: 1920, height: 1080 };
   return {

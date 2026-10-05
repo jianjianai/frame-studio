@@ -13,12 +13,15 @@ import {
   Sparkles,
   Sun,
   Moon,
+  SlidersHorizontal,
 } from "lucide-react";
 import { api, workPath, useServerEvent, sendEvent } from "../lib/api";
 import { Sash, usePersistent, useToast, Dialog } from "../lib/ui";
 import type { CheckResult, WorkInfo, WorkStatus } from "../lib/types";
 import { navigate } from "../App";
 import { StageController, WorkbenchContext, useWorkbench, type ChatAttachment, type Selection, type WorkbenchContextValue } from "./store";
+import { useTimelineHistory } from "./timelineHistory";
+import { PropertiesView } from "../views/PropertiesView";
 import { EditorArea, type EditorHandle } from "./EditorArea";
 import { PrecacheBar } from "./PrecacheBar";
 import { BottomPanel } from "./BottomPanel";
@@ -35,6 +38,7 @@ import "./workbench.css";
 const VIEWS = [
   { id: "explorer", label: "资源管理器", icon: Files, component: ExplorerView },
   { id: "assets", label: "素材", icon: ImageIcon, component: AssetsView },
+  { id: "properties", label: "属性", icon: SlidersHorizontal, component: PropertiesView },
   { id: "audio", label: "音频与配音", icon: AudioLines, component: AudioView },
   { id: "versions", label: "版本与同步", icon: GitBranch, component: VersionsView },
   { id: "export", label: "导出", icon: Clapperboard, component: ExportView },
@@ -75,6 +79,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
       setError((failure as Error).message);
     }
   }, [base, id]);
+  const history = useTimelineHistory(base, reload);
   const reloadStatus = useCallback(() => api<WorkStatus>(base + "/status").then(setStatus, () => {}), [base]);
   useEffect(() => {
     void reload();
@@ -144,6 +149,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
       setSidebar((value) => ({ ...value, visible: true }));
     },
     openSettings: (section) => setSettingsOpen(section || "ai"),
+    history,
   };
 
   // Global shortcuts.

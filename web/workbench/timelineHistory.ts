@@ -31,6 +31,8 @@ const canonical = (value: unknown): string =>
  * and after; undo writes the "before" back. When the document changed in between
  * (the AI or another window edited it), undo refuses instead of overwriting that work.
  */
+export type TimelineHistory = ReturnType<typeof useTimelineHistory>;
+
 export function useTimelineHistory(base: string, reload: () => Promise<void>) {
   const past = useRef<Step[]>([]);
   const future = useRef<Step[]>([]);
@@ -41,7 +43,19 @@ export function useTimelineHistory(base: string, reload: () => Promise<void>) {
     async (doc: TimelineDoc) => {
       if (doc === "project") {
         const info = await api<WorkInfo>(base);
-        return { value: { subtitles: info.meta?.subtitles ?? [], beats: info.meta?.beats ?? [] }, sha: null };
+        const meta = info.meta;
+        // The project.ts fields the timeline and the properties view edit.
+        return {
+          value: {
+            subtitles: meta?.subtitles ?? [],
+            beats: meta?.beats ?? [],
+            duration: meta?.duration,
+            fps: meta?.fps,
+            title: meta?.title,
+            description: meta?.description,
+          },
+          sha: null,
+        };
       }
       const result = await api<{ document: unknown; sha256: string | null }>(`${base}/${doc === "layers" ? "layers" : "audio"}`);
       return { value: doc === "audio" ? (result.document ?? EMPTY_AUDIO) : result.document, sha: result.sha256 };
