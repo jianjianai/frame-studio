@@ -64,7 +64,7 @@ tmp/                                 导出快照、Vite 缓存
 - 新会话的工作目录是作品目录，并注入 FRAME MCP（`/mcp`，带只对该作品有效的内部令牌）。Claude 默认“接受编辑”模式并自动允许 FRAME 工具；Codex 使用“自动审查”模式。
 - 账号登录调用随依赖安装的 `claude` / `codex` 程序（`auth login`、`login --device-auth`），凭据在它们自己的目录（`~/.claude`、`~/.codex`；容器中为 `/data/home`）。
 - 自定义 API：Anthropic 兼容接口通过 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL` 交给 Claude Code；OpenAI 兼容接口通过 `CODEX_CONFIG` 中的自定义 model provider 交给 Codex。
-- 对话记录保存为原始 ACP 更新的 JSONL，界面把它还原为消息、工具卡片、差异和计划。每轮结束如有改动自动提交一个版本。
+- 对话记录保存为原始 ACP 更新的 JSONL，界面把它还原为消息、工具卡片、差异和计划。版本只由用户手动保存（活动栏的版本图标显示未保存的改动数）。
 
 ## 导出
 

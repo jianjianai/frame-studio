@@ -18,6 +18,7 @@ import {
   Paperclip,
   Check,
   LogIn,
+  CornerDownRight,
 } from "lucide-react";
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
@@ -150,29 +151,22 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   }, [blocks, running]);
 
   const createSession = async () => {
-    const prefs = readPrefs(profile?.id);
+    const { customModel, ...choices } = readPrefs(profile?.id);
+    // A custom API profile picks its model by process, not by the agent's model option.
+    if (profile?.kind !== "account") delete choices.model;
     const meta = await api<SessionMeta>("/api/ai/sessions", {
       body: {
         work: work.id,
         repo: work.repo,
         profile: profile?.id,
-        model: profile?.kind !== "account" ? prefs.customModel || profile?.defaultModel || "" : "",
+        model: profile?.kind !== "account" ? customModel || profile?.defaultModel || "" : "",
+        // The server applies (and keeps re-applying) the last model/mode/effort choices.
+        choices,
       },
     });
     setSessions((list) => [meta, ...list.filter((item) => item.id !== meta.id)]);
     setCurrent(meta.id);
     setEntries([]);
-    // Apply the user's last model/mode choices for this profile.
-    for (const option of meta.configOptions ?? []) {
-      const wanted = prefs[option.category || option.id];
-      if (
-        wanted &&
-        wanted !== option.currentValue &&
-        option.options.some((item) => item.value === wanted) &&
-        !(profile?.kind !== "account" && option.category === "model")
-      )
-        await patch(`/api/ai/sessions/${meta.id}`, { configId: option.id, value: wanted }).catch(() => {});
-    }
     return meta.id;
   };
 
@@ -316,7 +310,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               <Sparkles size={22} />
             </div>
             <h3>和 AI 一起做视频</h3>
-            <p className="muted">描述想要的效果。AI 会写代码、查看画面、修正问题；每一轮修改都会自动保存版本，可以一键撤销。</p>
+            <p className="muted">描述想要的效果。AI 会写代码、查看画面、修正问题；满意后在「版本与同步」中保存版本。</p>
             <div className="suggestions">
               {SUGGESTIONS.map((suggestion) => (
                 <button key={suggestion} onClick={() => send(suggestion, attachments)}>
@@ -333,7 +327,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         ) : (
           turns.map((turn, index) => (
             <div className="turn" key={turn.user?.id ?? index}>
-              {turn.user && <UserMessage text={turn.user.text} attachments={turn.user.attachments} />}
+              {turn.user && <UserMessage text={turn.user.text} attachments={turn.user.attachments} steered={turn.user.steered} />}
               {(turn.items.length > 0 || (running && index === turns.length - 1)) && (
                 <TurnBlocks items={turn.items} running={running && index === turns.length - 1} onRespond={respond} />
               )}
@@ -359,7 +353,29 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         )}
         {session?.queue?.map((item) => (
           <div key={item.id} className="queued">
-            <Clock size={12} /> 排队中：{item.text}
+            <Clock size={12} />
+            <span className="ellipsis grow" title={item.text}>
+              排队中：{item.text}
+            </span>
+            <button
+              className="link-btn"
+              title="立即插入 AI 正在进行的这一轮，不等它做完"
+              onClick={() =>
+                api<{ outcome: string }>(`/api/ai/sessions/${session.id}/queue/${item.id}/steer`, { method: "POST" }).then(
+                  () => (stick.current = true),
+                  (error) => toast((error as Error).message, "error"),
+                )
+              }
+            >
+              <CornerDownRight size={12} /> 引导
+            </button>
+            <button
+              className="icon-btn tiny"
+              title="取消这条消息"
+              onClick={() => del(`/api/ai/sessions/${session.id}/queue/${item.id}`).catch((error) => toast((error as Error).message, "error"))}
+            >
+              <X size={12} />
+            </button>
           </div>
         ))}
       </div>
@@ -558,10 +574,15 @@ function CacheOptions({ session }: { session: SessionMeta | null }) {
 }
 
 // ---- small components -----------------------------------------------------------
-function UserMessage({ text, attachments }: { text: string; attachments: Record<string, unknown>[] }) {
+function UserMessage({ text, attachments, steered }: { text: string; attachments: Record<string, unknown>[]; steered?: boolean }) {
   const { stage } = useWorkbench();
   return (
     <div className="user-msg">
+      {steered && (
+        <div className="steered-tag">
+          <CornerDownRight size={11} /> 引导：在 AI 工作中途插入
+        </div>
+      )}
       {attachments.length > 0 && (
         <div className="attachments">
           {attachments.map((attachment, index) =>

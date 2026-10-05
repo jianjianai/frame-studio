@@ -136,7 +136,8 @@ export interface WorkbenchContextValue {
   stage: StageController;
   check: CheckResult | null;
   runCheck: () => Promise<void>;
-  openFile: (path: string, options?: { line?: number }) => void;
+  /** `preview`: a VS Code preview tab, replaced by the next preview until it is kept (double-click or edit). */
+  openFile: (path: string, options?: { line?: number; preview?: boolean }) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
   selection: Selection | null;
@@ -144,8 +145,6 @@ export interface WorkbenchContextValue {
   showPanel: (tab: string) => void;
   showView: (view: string) => void;
   openSettings: (section?: string) => void;
-  /** Commit at the work's HEAD; undo is only safe for the newest version. */
-  headCommit: string | null;
 }
 export const WorkbenchContext = createContext<WorkbenchContextValue | null>(null);
 export function useWorkbench() {

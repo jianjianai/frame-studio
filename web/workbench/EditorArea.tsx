@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
-import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle } from "lucide-react";
-import { api, workPath, useServerEvent } from "../lib/api";
+import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles } from "lucide-react";
+import { api, formatTime, workPath, useServerEvent } from "../lib/api";
 import { Sash, usePersistent, useToast, useConfirm } from "../lib/ui";
 import { useWorkbench } from "./store";
 import { PreviewPane } from "./PreviewPane";
 import { CodeEditor } from "./CodeEditor";
 
 export interface EditorHandle {
-  openFile(path: string, options?: { line?: number }): void;
+  openFile(path: string, options?: { line?: number; preview?: boolean }): void;
 }
 interface Tab {
   path: string;
@@ -17,6 +17,8 @@ interface Tab {
   hash?: string | null;
   external?: boolean;
   line?: number;
+  /** VS Code preview tab: the next preview replaces it until it is kept. */
+  preview?: boolean;
 }
 
 const kindOf = (path: string): Tab["kind"] =>
@@ -65,15 +67,21 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
   );
 
   const openFile = useCallback(
-    async (path: string, options: { line?: number } = {}) => {
+    async (path: string, options: { line?: number; preview?: boolean } = {}) => {
       setActive(path);
       if (tabs.some((tab) => tab.path === path)) {
-        if (options.line) setTabs((list) => list.map((tab) => (tab.path === path ? { ...tab, line: options.line } : tab)));
+        setTabs((list) =>
+          list.map((tab) => (tab.path === path ? { ...tab, line: options.line ?? tab.line, preview: options.preview ? tab.preview : false } : tab)),
+        );
         return;
       }
       const kind = kindOf(path);
-      const tab: Tab = { path, kind, line: options.line };
-      setTabs((list) => [...list, tab]);
+      const tab: Tab = { path, kind, line: options.line, preview: Boolean(options.preview) };
+      setTabs((list) => {
+        // A new preview takes the place of the current (unchanged) preview tab.
+        const reuse = options.preview ? list.findIndex((item) => item.preview && item.content === item.saved) : -1;
+        return reuse >= 0 ? list.map((item, index) => (index === reuse ? tab : item)) : [...list, tab];
+      });
       if (kind === "text") {
         try {
           const loaded = await load(path);
@@ -157,9 +165,10 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
               {tabs.map((tab) => (
                 <div
                   key={tab.path}
-                  className={`editor-tab ${tab.path === active ? "active" : ""}`}
-                  title={tab.path}
+                  className={`editor-tab ${tab.path === active ? "active" : ""} ${tab.preview ? "is-preview" : ""}`}
+                  title={tab.preview ? `${tab.path}（预览，双击保持打开）` : tab.path}
                   onClick={() => setActive(tab.path)}
+                  onDoubleClick={() => setTabs((list) => list.map((item) => (item.path === tab.path ? { ...item, preview: false } : item)))}
                   onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
                 >
                   {fileIcon(tab.path)}
@@ -206,7 +215,7 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
                       path={current.path}
                       value={current.content}
                       line={current.line}
-                      onChange={(content) => setTabs((list) => list.map((item) => (item.path === current.path ? { ...item, content } : item)))}
+                      onChange={(content) => setTabs((list) => list.map((item) => (item.path === current.path ? { ...item, content, preview: false } : item)))}
                       onSave={() => save(current.path)}
                     />
                   )
@@ -223,17 +232,34 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
 }
 
 function MediaViewer({ path, kind }: { path: string; kind: Tab["kind"] }) {
-  const { work } = useWorkbench();
+  const { work, addToChat } = useWorkbench();
   const [version, setVersion] = useState(0);
-  useEffect(() => setVersion(Date.now()), [path]);
+  const [info, setInfo] = useState("");
+  useEffect(() => {
+    setVersion(Date.now());
+    setInfo("");
+  }, [path]);
   const url = `${workPath(work.repo, work.id)}/raw?path=${encodeURIComponent(path)}&v=${version}`;
+  // Assets are referenced from code as films/<slug>/<path under public/>.
+  const reference = path.startsWith("public/") ? `films/${work.slug}/${path.slice(7)}` : null;
+  const media = (element: HTMLVideoElement | HTMLAudioElement) =>
+    setInfo([element instanceof HTMLVideoElement && `${element.videoWidth}×${element.videoHeight}`, formatTime(element.duration)].filter(Boolean).join(" · "));
   return (
     <div className="media-viewer">
-      {kind === "image" && <img src={url} alt={path} />}
-      {kind === "audio" && <audio src={url} controls />}
-      {kind === "video" && <video src={url} controls />}
+      {kind === "image" && <img src={url} alt={path} onLoad={(event) => setInfo(`${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`)} />}
+      {kind === "audio" && <audio src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
+      {kind === "video" && <video src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
       {kind === "file" && <div className="empty">无法在这里预览这种文件</div>}
-      <div className="faint mono">{path}</div>
+      <div className="media-info">
+        <span className="faint mono ellipsis">{path}</span>
+        {info && <span className="faint">{info}</span>}
+        {reference && (
+          <button className="btn small" onClick={() => addToChat({ type: "asset", url: reference, path })}>
+            <Sparkles size={13} /> 引用到 AI 聊天
+          </button>
+        )}
+      </div>
+      {reference && kind !== "file" && <div className="faint small-text">拖动左侧「素材」中的这个文件到时间轴即可使用</div>}
     </div>
   );
 }

@@ -143,7 +143,6 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
       setSidebar((value) => ({ ...value, visible: true }));
     },
     openSettings: (section) => setSettingsOpen(section || "ai"),
-    headCommit: status?.head?.commit ?? null,
   };
 
   // Global shortcuts.
@@ -240,18 +239,23 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
         </header>
         <div className="wb-body">
           <nav className="wb-activity" aria-label="视图">
-            {VIEWS.map((item) => (
-              <button
-                key={item.id}
-                className={view === item.id && sidebar.visible ? "active" : ""}
-                title={item.label}
-                onClick={() =>
-                  view === item.id ? setSidebar({ ...sidebar, visible: !sidebar.visible }) : (setView(item.id), setSidebar({ ...sidebar, visible: true }))
-                }
-              >
-                <item.icon size={22} strokeWidth={1.6} />
-              </button>
-            ))}
+            {VIEWS.map((item) => {
+              // Like VS Code's Source Control: the number of unsaved changes on the versions icon.
+              const changes = item.id === "versions" ? (status?.files.length ?? 0) : 0;
+              return (
+                <button
+                  key={item.id}
+                  className={view === item.id && sidebar.visible ? "active" : ""}
+                  title={changes ? `${item.label}（${changes} 个未保存的修改）` : item.label}
+                  onClick={() =>
+                    view === item.id ? setSidebar({ ...sidebar, visible: !sidebar.visible }) : (setView(item.id), setSidebar({ ...sidebar, visible: true }))
+                  }
+                >
+                  <item.icon size={22} strokeWidth={1.6} />
+                  {changes > 0 && <span className="activity-badge">{changes > 99 ? "99+" : changes}</span>}
+                </button>
+              );
+            })}
             <span className="grow" />
             <button title="AI 聊天" className={chat.visible ? "active-soft" : ""} onClick={() => setChat({ ...chat, visible: !chat.visible })}>
               <Sparkles size={21} strokeWidth={1.6} />

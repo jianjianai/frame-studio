@@ -6,7 +6,7 @@ const defaults = () => ({
   version: 1,
   repos: [],
   recent: [],
-  ai: { profiles: [], defaultProfile: "claude-account", autoCommit: true, permission: "edits" },
+  ai: { profiles: [], defaultProfile: "claude-account", permission: "edits" },
   speech: { defaultProvider: "edge", providers: {} },
   github: { accounts: [] },
   mcp: { tokens: [], clients: [], grants: [] },

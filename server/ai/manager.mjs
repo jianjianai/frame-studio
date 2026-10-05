@@ -80,6 +80,10 @@ class AgentProcess {
   get capabilities() {
     return this.init?.agentCapabilities ?? {};
   }
+  /** ACP `_session/steering`: inject a message into the running turn. */
+  get steering() {
+    return Boolean(this.init?._meta?.steering?.supported);
+  }
   kill() {
     this.child?.kill();
   }
@@ -225,7 +229,11 @@ export class AiManager {
     const token = (session.token ||= this.services.auth.issueInternal({ work: session.meta.work, repo: session.meta.repo, session: session.meta.id }));
     return [{ type: "http", name: "frame", url: `${this.services.baseUrl}/mcp`, headers: [{ name: "Authorization", value: "Bearer " + token }] }];
   }
-  async create({ work: workId, repo, profile: profileId, model = "", title = "" }) {
+  /**
+   * `choices` are the user's remembered picker values ({ <option id or category>: value }),
+   * applied as soon as the agent session exists.
+   */
+  async create({ work: workId, repo, profile: profileId, model = "", title = "", choices = {} }) {
     const work = await this.services.openWork(workId, repo);
     profileId ||= this.services.settings.get("ai").defaultProfile || "claude-account";
     const profile = this.profiles.get(profileId);
@@ -244,9 +252,11 @@ export class AiManager {
         updatedAt: now,
         status: "idle",
         queue: [],
+        choices: {},
       },
       process: null,
       attached: false,
+      initialChoices: choices,
     };
     this.sessions.set(session.meta.id, session);
     try {
@@ -272,14 +282,25 @@ export class AiManager {
       if (!session.meta.acpSessionId) {
         result = await process.connection.newSession({ ...common, ...meta });
         session.meta.acpSessionId = result.sessionId;
-      } else if (process.capabilities.sessionCapabilities?.resume) {
-        result = await process.connection.resumeSession({ sessionId: session.meta.acpSessionId, ...common, ...meta });
       } else {
-        session.replaying = true;
         try {
-          result = await process.connection.loadSession({ sessionId: session.meta.acpSessionId, ...common, ...meta });
-        } finally {
-          session.replaying = false;
+          if (process.capabilities.sessionCapabilities?.resume)
+            result = await process.connection.resumeSession({ sessionId: session.meta.acpSessionId, ...common, ...meta });
+          else {
+            session.replaying = true;
+            try {
+              result = await process.connection.loadSession({ sessionId: session.meta.acpSessionId, ...common, ...meta });
+            } finally {
+              session.replaying = false;
+            }
+          }
+        } catch (error) {
+          // The agent never stored this conversation (no message was sent before a restart) or
+          // deleted it: continue in a new agent context instead of leaving the chat unusable.
+          if (error?.code !== -32002 && !/not found/i.test(error?.message || "")) throw error;
+          result = await process.connection.newSession({ ...common, ...meta });
+          session.meta.acpSessionId = result.sessionId;
+          this.append(session, { kind: "notice", message: "AI 的上下文已无法恢复，已在新的上下文中继续（对话记录仍保留在这里）" });
         }
       }
     } catch (error) {
@@ -291,12 +312,40 @@ export class AiManager {
     if (result?.configOptions) session.meta.configOptions = result.configOptions;
     if (result?.modes) session.meta.modes = result.modes;
     if (result?.models) session.meta.models = result.models;
-    // Apply the user's default permission level once per agent session.
-    const mode = session.meta.configOptions?.find((option) => option.id === "mode" || option.category === "mode");
-    const wanted = PERMISSION_MODES[this.services.settings.get("ai").permission || "edits"]?.[process.agent];
-    if (!session.meta.modeInitialized && wanted && mode?.currentValue !== wanted && mode?.options?.some((option) => option.value === wanted))
-      await this.setConfig(session.meta.id, mode.id, wanted).catch(() => {});
-    session.meta.modeInitialized = true;
+    await this.restoreChoices(session, process);
+  }
+  /**
+   * A resumed or reloaded agent session starts with the agent's defaults (after a
+   * restart or the idle sweep), so the user's model/effort/mode choices are re-applied
+   * every time. A new session takes the remembered picker values, else the default
+   * permission level from settings.
+   */
+  async restoreChoices(session, process) {
+    const options = () => session.meta.configOptions ?? [];
+    const choices = { ...(session.meta.choices ?? {}) };
+    for (const [key, value] of Object.entries(session.initialChoices ?? {})) {
+      const option = options().find((item) => item.id === key || item.category === key);
+      if (option && !(option.id in choices)) choices[option.id] = value;
+    }
+    session.initialChoices = null;
+    const mode = options().find((option) => option.id === "mode" || option.category === "mode");
+    const permission = PERMISSION_MODES[this.services.settings.get("ai").permission || "edits"]?.[process.agent];
+    if (mode && !(mode.id in choices) && permission) choices[mode.id] = permission;
+    // The model first: the other options (effort) may depend on it.
+    const order = Object.keys(choices).sort((a, b) => Number(isModel(options(), b)) - Number(isModel(options(), a)));
+    for (const id of order) {
+      const option = options().find((item) => item.id === id);
+      const value = choices[id];
+      if (!option?.options?.some((item) => item.value === value)) continue;
+      if (option.currentValue !== value)
+        try {
+          const result = await process.connection.setSessionConfigOption({ sessionId: session.meta.acpSessionId, configId: id, value });
+          if (result?.configOptions) session.meta.configOptions = result.configOptions;
+        } catch {
+          continue;
+        }
+      session.meta.choices = { ...session.meta.choices, [id]: value };
+    }
   }
   sessionByAcp(acpSessionId) {
     for (const session of this.sessions.values()) if (session.meta.acpSessionId === acpSessionId) return session;
@@ -321,12 +370,7 @@ export class AiManager {
     if (session.meta.title === "新对话" && message.text.trim()) session.meta.title = message.text.trim().replace(/\s+/g, " ").slice(0, 40);
     this.publish(session);
     const work = await this.services.openWork(session.meta.work, session.meta.repo);
-    this.append(session, {
-      kind: "user",
-      id: message.id,
-      text: message.text,
-      attachments: message.attachments.map((item) => (item.data ? { ...item, type: "image", kind: item.type } : item)),
-    });
+    this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message) });
     try {
       await this.attach(session, work);
       const prompt = buildPrompt(message, work, this.services);
@@ -342,20 +386,9 @@ export class AiManager {
         }
       session.meta.status = "idle";
       this.compactFile(session.meta.id);
-      await this.autoCommit(session, work, message.text);
       this.publish(session);
       const next = session.meta.queue.shift();
       if (next) void this.runTurn(session, next);
-    }
-  }
-  async autoCommit(session, work, text) {
-    if (!this.services.settings.get("ai").autoCommit) return;
-    try {
-      const summary = text.trim().replace(/\s+/g, " ").slice(0, 60) || "AI 修改";
-      const commit = await this.services.works.commit(work, `AI：${summary}`);
-      if (commit) this.append(session, { kind: "version", commit, message: `AI：${summary}` });
-    } catch (error) {
-      this.append(session, { kind: "error", message: "自动保存版本失败：" + error.message });
     }
   }
   async cancel(id) {
@@ -369,8 +402,61 @@ export class AiManager {
     if (!session.attached) await this.attach(session);
     const result = await session.process.connection.setSessionConfigOption({ sessionId: session.meta.acpSessionId, configId, value });
     if (result?.configOptions) session.meta.configOptions = result.configOptions;
+    session.meta.choices = { ...session.meta.choices, [configId]: value };
     this.publish(session);
     return this.publicMeta(session);
+  }
+  /**
+   * Send a queued message now: injected into the running turn (ACP steering) instead
+   * of waiting for it to finish. Without a running turn it simply starts one.
+   */
+  async steer(id, messageId) {
+    const session = this.get(id);
+    const index = session.meta.queue.findIndex((item) => item.id === messageId);
+    if (index < 0) throw notFound("这条消息已经发送");
+    const [message] = session.meta.queue.splice(index, 1);
+    this.publish(session);
+    if (session.meta.status === "idle" || !session.process) {
+      void this.runTurn(session, message);
+      return { outcome: "started" };
+    }
+    const requeue = () => {
+      session.meta.queue.splice(Math.min(index, session.meta.queue.length), 0, message);
+      this.publish(session);
+    };
+    if (!session.process.steering) {
+      requeue();
+      throw problem(409, "这个 AI 不支持中途引导，消息会在这一轮结束后发送");
+    }
+    const work = await this.services.openWork(session.meta.work, session.meta.repo);
+    let result;
+    try {
+      result = await session.process.connection.request("_session/steering", {
+        sessionId: session.meta.acpSessionId,
+        prompt: buildPrompt(message, work, this.services),
+        _meta: { steering: { idleBehavior: "promptRequired" } },
+      });
+    } catch (error) {
+      requeue();
+      throw problem(502, "引导失败：" + error.message);
+    }
+    if (result?.outcome === "promptRequired") {
+      // The turn ended while the request was in flight.
+      if (session.meta.status === "idle") void this.runTurn(session, message);
+      else requeue();
+      return { outcome: "queued" };
+    }
+    if (result?.outcome === "failed") {
+      requeue();
+      throw problem(502, "AI 没有接受这条引导消息，它会在这一轮结束后发送");
+    }
+    this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message), steered: true });
+    return { outcome: "injected" };
+  }
+  removeQueued(id, messageId) {
+    const session = this.get(id);
+    session.meta.queue = session.meta.queue.filter((item) => item.id !== messageId);
+    this.publish(session);
   }
   /** Switch the profile/model of a conversation: continues in a new agent session. */
   async switchProfile(id, { profile, model = "" }) {
@@ -384,7 +470,6 @@ export class AiManager {
       model,
       acpSessionId: null,
       configOptions: null,
-      modeInitialized: false,
     });
     session.attached = false;
     session.process = null;
@@ -478,6 +563,11 @@ export class AiManager {
     this.processes.clear();
   }
 }
+
+const isModel = (options, id) => options.some((option) => option.id === id && (option.category === "model" || option.id === "model"));
+
+/** Attachments as stored in the transcript: image data becomes an image entry (saved to a file by storeImages). */
+const userAttachments = (message) => message.attachments.map((item) => (item.data ? { ...item, type: "image", kind: item.type } : item));
 
 /** Build ACP content blocks: user text, the player context, frame images and asset links. */
 function buildPrompt(message, work, services) {

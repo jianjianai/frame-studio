@@ -1,9 +1,25 @@
 import { useEffect, useState } from "react";
-import { Upload, Link2, RefreshCw, Sparkles, Trash2, Copy, Film, AudioLines, Library, PlusSquare, Music, ArrowDownToLine, FileQuestion } from "lucide-react";
+import {
+  Upload,
+  Link2,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  Copy,
+  Film,
+  AudioLines,
+  Library,
+  PlusSquare,
+  Music,
+  ArrowDownToLine,
+  FileQuestion,
+  Eye,
+} from "lucide-react";
 import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, useToast, Dialog } from "../lib/ui";
 import type { Asset } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
+import { assetDrag } from "../workbench/assetDrag";
 import { ViewHeader } from "./ViewHeader";
 import { uploadBlobs, uploadFiles } from "./upload";
 
@@ -17,7 +33,7 @@ interface LibraryItem {
 }
 
 export function AssetsView() {
-  const { work, stage, addToChat, reload } = useWorkbench();
+  const { work, stage, addToChat, reload, openFile } = useWorkbench();
   const toast = useToast();
   const [tab, setTab] = useState<"work" | "library">("work");
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -98,6 +114,7 @@ export function AssetsView() {
       ...(asset.kind === "audio" || asset.kind === "video"
         ? [{ label: "放到音轨（播放头处）", icon: <Music size={14} />, onClick: () => placeAudio(asset) }]
         : []),
+      { label: "打开", icon: <Eye size={14} />, onClick: () => openFile(asset.path) },
       { label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => addToChat({ type: "asset", url: asset.url, path: asset.path }) },
       { label: "复制引用地址", icon: <Copy size={14} />, onClick: () => navigator.clipboard.writeText(`assetUrl("${asset.url}")`).then(() => toast("已复制")) },
       { label: "存入素材库", icon: <Library size={14} />, onClick: () => toLibrary(asset) },
@@ -156,12 +173,13 @@ export function AssetsView() {
               key={asset.path}
               className="asset-card"
               draggable
-              onDragStart={(event) => event.dataTransfer.setData("text/plain", asset.url)}
+              onDragStart={(event) => assetDrag.start(event, asset)}
+              onDragEnd={() => assetDrag.end()}
               onContextMenu={(event) => assetMenu(event, asset)}
-              onDoubleClick={() =>
-                asset.kind === "audio" ? placeAudio(asset) : asset.kind === "image" || asset.kind === "video" ? addLayer(asset) : undefined
-              }
-              title={`${asset.path}\n${formatBytes(asset.size)}${asset.width ? ` · ${asset.width}×${asset.height}` : ""}${asset.duration ? ` · ${formatTime(asset.duration, false)}` : ""}\n双击添加到作品，右键更多操作`}
+              // Like VS Code: a click opens a preview tab, a double-click keeps it open.
+              onClick={() => openFile(asset.path, { preview: true })}
+              onDoubleClick={() => openFile(asset.path)}
+              title={`${asset.path}\n${formatBytes(asset.size)}${asset.width ? ` · ${asset.width}×${asset.height}` : ""}${asset.duration ? ` · ${formatTime(asset.duration, false)}` : ""}\n单击查看，拖到时间轴使用，右键更多操作`}
             >
               <div className="asset-thumb">
                 {asset.kind === "image" ? (

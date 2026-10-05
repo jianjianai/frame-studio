@@ -81,7 +81,7 @@ export interface WorkInfo {
 export interface AudioDocument {
   schemaVersion: 1;
   sources: { id: string; kind: "file" | "generated"; src?: string; module?: string }[];
-  tracks: { id: string; name: string; gain: number; pan: number; muted: boolean }[];
+  tracks: { id: string; name: string; gain: number; pan: number; muted: boolean; processors?: { type: string; track?: string }[]; [key: string]: unknown }[];
   clips: {
     id: string;
     track: string;
@@ -94,6 +94,8 @@ export interface AudioDocument {
     muted: boolean;
     fadeIn: number;
     fadeOut: number;
+    rate?: number;
+    [key: string]: unknown;
   }[];
   buses: unknown[];
   master: { gain: number };

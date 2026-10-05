@@ -17,17 +17,13 @@ import {
   Circle,
   ShieldQuestion,
   AlertTriangle,
-  GitCommitHorizontal,
-  Undo2,
   ListChecks,
   Image as ImageIcon,
   Sparkles,
   Clapperboard,
   Info,
 } from "lucide-react";
-import { api, formatTime, workPath } from "../lib/api";
-import { useAction, useConfirm } from "../lib/ui";
-import { useWorkbench } from "../workbench/store";
+import { formatTime } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { lineDiff, compactDiff } from "./lineDiff";
 import type { Block, ToolBlock, ToolContent } from "./reduce";
@@ -259,31 +255,6 @@ function Plan({ entries }: { entries: { content: string; status: string }[] }) {
   );
 }
 
-function VersionNote({ commit, message }: { commit: string; message: string }) {
-  const { work, reload, headCommit } = useWorkbench();
-  const latest = headCommit === commit;
-  const [run] = useAction();
-  const confirm = useConfirm();
-  const undo = async () => {
-    if (!(await confirm(`撤销这一轮 AI 的修改（恢复到 ${commit.slice(0, 7)} 之前的版本）？撤销本身也会保存为新版本。`, { confirm: "撤销" }))) return;
-    await run(async () => {
-      await api(`${workPath(work.repo, work.id)}/revert`, { body: { commit: commit + "~1" } });
-      await reload();
-    }, "已撤销这一轮修改");
-  };
-  return (
-    <div className="version-note" title={message}>
-      <GitCommitHorizontal size={13} />
-      <span>已保存版本 {commit.slice(0, 7)}</span>
-      {latest && (
-        <button className="link-btn" onClick={undo}>
-          <Undo2 size={12} /> 撤销这一轮
-        </button>
-      )}
-    </div>
-  );
-}
-
 export function TurnBlocks({ items, running, onRespond }: { items: Block[]; running: boolean; onRespond: (id: string, optionId?: string) => void }) {
   return (
     <div className="assistant">
@@ -305,8 +276,6 @@ export function TurnBlocks({ items, running, onRespond }: { items: Block[]; runn
             return <Plan key={index} entries={block.entries} />;
           case "permission":
             return <Permission key={block.id} block={block} onRespond={onRespond} />;
-          case "version":
-            return <VersionNote key={index} commit={block.commit} message={block.message} />;
           case "error":
             return (
               <div key={index} className="chat-error">

@@ -28,7 +28,7 @@ export interface ToolBlock {
   rawOutput?: unknown;
 }
 export type Block =
-  | { kind: "user"; id: string; text: string; attachments: Record<string, unknown>[]; at: number }
+  | { kind: "user"; id: string; text: string; attachments: Record<string, unknown>[]; at: number; steered?: boolean }
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
   | ToolBlock
@@ -41,7 +41,6 @@ export type Block =
       outcome?: { outcome: { outcome: string; optionId?: string } };
     }
   | { kind: "turn_end"; stopReason: string; usage?: { totalTokens?: number; inputTokens?: number; outputTokens?: number } | null }
-  | { kind: "version"; commit: string; message: string }
   | { kind: "error"; message: string }
   | { kind: "notice"; message: string };
 
@@ -64,6 +63,7 @@ export function reduceTranscript(entries: Entry[]): Block[] {
           text: entry.text as string,
           attachments: (entry.attachments as Record<string, unknown>[]) ?? [],
           at: entry.at,
+          steered: Boolean(entry.steered),
         });
         break;
       case "update": {
@@ -122,9 +122,6 @@ export function reduceTranscript(entries: Entry[]): Block[] {
       }
       case "turn_end":
         blocks.push({ kind: "turn_end", stopReason: entry.stopReason as string, usage: entry.usage as never });
-        break;
-      case "version":
-        blocks.push({ kind: "version", commit: entry.commit as string, message: entry.message as string });
         break;
       case "error":
         blocks.push({ kind: "error", message: entry.message as string });

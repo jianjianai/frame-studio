@@ -16,7 +16,6 @@ export function aiPlugin(services) {
     profiles: ai.profiles.list(),
     presets: PROVIDER_PRESETS,
     defaultProfile: settings.get("ai").defaultProfile,
-    autoCommit: settings.get("ai").autoCommit,
     permission: settings.get("ai").permission || "edits",
   }));
   router.post("/api/ai/profiles", async ({ req }) => ai.profiles.save(await readJson(req)));
@@ -26,7 +25,6 @@ export function aiPlugin(services) {
     return settings.update("ai", (current) => ({
       ...current,
       ...(body.defaultProfile ? { defaultProfile: ai.profiles.get(body.defaultProfile).id } : {}),
-      ...("autoCommit" in body ? { autoCommit: Boolean(body.autoCommit) } : {}),
       ...(["ask", "edits", "auto", "full"].includes(body.permission) ? { permission: body.permission } : {}),
     }));
   });
@@ -96,6 +94,8 @@ export function aiPlugin(services) {
   );
   router.post("/api/ai/sessions/:id/prompt", async ({ params, req }) => ai.prompt(params.id, await readJson(req)));
   router.post("/api/ai/sessions/:id/cancel", ({ params }) => ai.cancel(params.id));
+  router.post("/api/ai/sessions/:id/queue/:message/steer", ({ params }) => ai.steer(params.id, params.message));
+  router.delete("/api/ai/sessions/:id/queue/:message", ({ params }) => ai.removeQueued(params.id, params.message));
   router.post("/api/ai/permissions/:id", async ({ params, req }) => {
     const { optionId } = await readJson(req);
     ai.respondPermission(params.id, optionId);

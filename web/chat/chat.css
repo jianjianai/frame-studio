@@ -471,6 +471,21 @@
   color: var(--fg-muted);
   font-size: 12px;
 }
+.queued .link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  white-space: nowrap;
+}
+.steered-tag {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+  color: var(--fg-faint);
+  font-size: 11px;
+}
 .chat-input {
   position: relative;
   margin: 0 10px 10px;

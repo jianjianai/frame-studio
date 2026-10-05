@@ -141,7 +141,6 @@ export function VersionsView() {
             </div>
           </div>
         )}
-        <p className="view-hint">AI 每完成一轮修改会自动保存一个版本。</p>
       </section>
       <section className="view-section">
         <h3>

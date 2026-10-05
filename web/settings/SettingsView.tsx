@@ -73,7 +73,7 @@ interface Preset {
 }
 
 function AiSettings() {
-  const [data, setData] = useState<{ profiles: Profile[]; presets: Preset[]; defaultProfile: string; autoCommit: boolean; permission: string } | null>(null);
+  const [data, setData] = useState<{ profiles: Profile[]; presets: Preset[]; defaultProfile: string; permission: string } | null>(null);
   const [editing, setEditing] = useState<(Partial<Profile> & { apiKey?: string }) | null>(null);
   const [run] = useAction();
   const confirm = useConfirm();
@@ -157,14 +157,6 @@ function AiSettings() {
           <option value="auto">由 AI 判断，只在有风险时询问</option>
           <option value="full">完全信任，不再询问</option>
         </select>
-      </label>
-      <label className="row">
-        <input
-          type="checkbox"
-          checked={data.autoCommit}
-          onChange={(event) => run(() => patch("/api/ai/settings", { autoCommit: event.target.checked }).then(load))}
-        />
-        AI 每完成一轮修改自动保存版本（可在聊天中一键撤销）
       </label>
       {editing && <ProfileDialog value={editing} onClose={() => setEditing(null)} onSaved={load} />}
     </>
