@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
+import { useCallback, useEffect, useImperativeHandle, useState, type Ref } from "react";
 import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles } from "lucide-react";
 import { api, formatTime, workPath, useServerEvent } from "../lib/api";
-import { Sash, usePersistent, useToast, useConfirm } from "../lib/ui";
+import { useToast, useConfirm } from "../lib/ui";
 import { useWorkbench } from "./store";
 import { PreviewPane } from "./PreviewPane";
 import { CodeEditor } from "./CodeEditor";
@@ -47,15 +47,17 @@ export const fileIcon = (path: string, size = 14) => {
   );
 };
 
-/** Preview on the left; opened files in a second group on the right ("open to the side"). */
+/**
+ * One editor group like VS Code: the preview is the first (fixed) tab and opened files
+ * are tabs next to it. `active === null` shows the preview. The preview stays mounted
+ * while another tab is shown, so playback, the timeline and AI captures keep working.
+ */
 export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
   const { work } = useWorkbench();
   const toast = useToast();
   const confirm = useConfirm();
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
-  const [split, setSplit] = usePersistent("editor-split", 0.5);
-  const container = useRef<HTMLDivElement>(null);
   const base = workPath(work.repo, work.id);
 
   const load = useCallback(
@@ -141,92 +143,83 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
   };
   const current = tabs.find((tab) => tab.path === active) ?? null;
 
+  const keep = (path: string) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, preview: false } : item)));
+
   return (
-    <div className="editor-area" ref={container}>
-      <div className="editor-group" style={{ flex: tabs.length ? `${split} 1 0` : "1 1 0" }}>
+    <div className="editor-area">
+      <div className="editor-group">
         <div className="editor-tabs">
-          <div className="editor-tab active">
+          <div className={`editor-tab ${current ? "" : "active"}`} title="作品预览" onClick={() => setActive(null)}>
             <MonitorPlay size={14} /> 预览
           </div>
+          {tabs.map((tab) => (
+            <div
+              key={tab.path}
+              className={`editor-tab ${tab.path === active ? "active" : ""} ${tab.preview ? "is-preview" : ""}`}
+              title={tab.preview ? `${tab.path}（预览，双击保持打开）` : tab.path}
+              onClick={() => setActive(tab.path)}
+              onDoubleClick={() => keep(tab.path)}
+              onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
+            >
+              {fileIcon(tab.path)}
+              <span className="ellipsis">{tab.path.split("/").pop()}</span>
+              <button
+                className="tab-close"
+                aria-label="关闭"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void close(tab.path);
+                }}
+              >
+                {tab.content !== tab.saved ? <Circle size={9} fill="currentColor" /> : <X size={13} />}
+              </button>
+            </div>
+          ))}
         </div>
-        <PreviewPane />
-      </div>
-      {tabs.length > 0 && (
-        <>
-          <Sash
-            direction="vertical"
-            onDrag={(delta) => {
-              const width = container.current?.clientWidth || 1;
-              setSplit((value) => Math.max(0.2, Math.min(0.8, value + delta / width)));
-            }}
-          />
-          <div className="editor-group" style={{ flex: `${1 - split} 1 0` }}>
-            <div className="editor-tabs">
-              {tabs.map((tab) => (
-                <div
-                  key={tab.path}
-                  className={`editor-tab ${tab.path === active ? "active" : ""} ${tab.preview ? "is-preview" : ""}`}
-                  title={tab.preview ? `${tab.path}（预览，双击保持打开）` : tab.path}
-                  onClick={() => setActive(tab.path)}
-                  onDoubleClick={() => setTabs((list) => list.map((item) => (item.path === tab.path ? { ...item, preview: false } : item)))}
-                  onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
-                >
-                  {fileIcon(tab.path)}
-                  <span className="ellipsis">{tab.path.split("/").pop()}</span>
+        <div className="editor-stack">
+          <div className={`editor-layer ${current ? "covered" : ""}`} aria-hidden={Boolean(current)}>
+            <PreviewPane />
+          </div>
+          {current && (
+            <div className="editor-layer editor-content">
+              {current.external && (
+                <div className="editor-banner">
+                  这个文件已被 AI 或其他程序修改。
                   <button
-                    className="tab-close"
-                    aria-label="关闭"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void close(tab.path);
-                    }}
+                    className="btn small"
+                    onClick={() =>
+                      load(current.path).then((loaded) =>
+                        setTabs((list) => list.map((item) => (item.path === current.path ? { ...item, ...loaded, external: false } : item))),
+                      )
+                    }
                   >
-                    {tab.content !== tab.saved ? <Circle size={9} fill="currentColor" /> : <X size={13} />}
+                    载入新版本（丢弃我的修改）
+                  </button>
+                  <button className="btn small" onClick={() => save(current.path)}>
+                    用我的版本覆盖
                   </button>
                 </div>
-              ))}
-            </div>
-            {current && (
-              <div className="editor-content">
-                {current.external && (
-                  <div className="editor-banner">
-                    这个文件已被 AI 或其他程序修改。
-                    <button
-                      className="btn small"
-                      onClick={() =>
-                        load(current.path).then((loaded) =>
-                          setTabs((list) => list.map((item) => (item.path === current.path ? { ...item, ...loaded, external: false } : item))),
-                        )
-                      }
-                    >
-                      载入新版本（丢弃我的修改）
-                    </button>
-                    <button className="btn small" onClick={() => save(current.path)}>
-                      用我的版本覆盖
-                    </button>
-                  </div>
-                )}
-                {current.kind === "text" ? (
-                  current.content === undefined ? (
-                    <div className="empty">正在读取…</div>
-                  ) : (
-                    <CodeEditor
-                      key={current.path}
-                      path={current.path}
-                      value={current.content}
-                      line={current.line}
-                      onChange={(content) => setTabs((list) => list.map((item) => (item.path === current.path ? { ...item, content, preview: false } : item)))}
-                      onSave={() => save(current.path)}
-                    />
-                  )
+              )}
+              {current.kind === "text" ? (
+                current.content === undefined ? (
+                  <div className="empty">正在读取…</div>
                 ) : (
-                  <MediaViewer path={current.path} kind={current.kind} />
-                )}
-              </div>
-            )}
-          </div>
-        </>
-      )}
+                  <CodeEditor
+                    key={current.path}
+                    path={current.path}
+                    value={current.content}
+                    line={current.line}
+                    onChange={(content) => setTabs((list) => list.map((item) => (item.path === current.path ? { ...item, content, preview: false } : item)))}
+                    onSave={() => save(current.path)}
+                  />
+                )
+              ) : (
+                <MediaViewer path={current.path} kind={current.kind} />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

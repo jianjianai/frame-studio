@@ -244,10 +244,28 @@
   min-width: 0;
 }
 .editor-group {
+  flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
+}
+/* Tab contents stacked; the preview stays laid out (and running) under an open file. */
+.editor-stack {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.editor-layer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.editor-layer.covered {
+  visibility: hidden;
+  pointer-events: none;
 }
 .editor-tabs {
   display: flex;
