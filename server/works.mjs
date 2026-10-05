@@ -1,609 +1,458 @@
-import { versionTree } from "./version-review.mjs";
-import { assertSourceRevision } from "./source-control.mjs";
 import fs from "node:fs";
-import { projectDefaults } from "../src/contracts/authoring.mjs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { randomUUID } from "node:crypto";
-import { command } from "./process.mjs";
-import { confined, problem, hash } from "./security.mjs";
-import { copyTree, treeHash } from "./project-files.mjs";
-import {
-  readProject,
-  sourceFile,
-  visitNodes,
-} from "../scripts/project-metadata.mjs";
-import { applyProject } from "./apply-project.mjs";
-import { purgeWork, purgeTrash, purgedWorkKey } from "./work-purge.mjs";
+import { git, gitOk, parseStatus, addOrphanWorktree } from "./git.mjs";
+import { readProjectSource, readProjectDir, setProjectFields, validSlug } from "./project-meta.mjs";
+import { appRoot } from "./config.mjs";
+import { problem, notFound, conflict, Locks, shortId, writeFileAtomic } from "./util.mjs";
+import { createWorkFiles, platformInstructions, workTsconfig } from "./templates.mjs";
+import { LOCAL_REPO } from "./repos.mjs";
 
+const WORK_PREFIX = "works/";
+const TRASH_PREFIX = "trash/";
+const validWorkId = (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id);
+
+/**
+ * A work is one branch `works/<id>` in a content repository with its files in
+ * `projects/<slug>/`. Opening a work checks the branch out to works/<repo>/<id>,
+ * the single place where the editor, preview, AI agents, CLI and MCP all read and write.
+ */
 export class Works {
-  constructor(db, data, repos, assets, tasks) {
-    Object.assign(this, { db, data, repos, assets, tasks });
+  constructor({ config, settings, repos, events }) {
+    this.config = config;
+    this.settings = settings;
+    this.repos = repos;
+    this.events = events;
+    this.locks = new Locks();
+    this.metaCache = new Map();
   }
-  async discover(repository = null, projectId = null) {
-    await this.recoverInfo();
-    for (const repo of await this.repos.list(repository, projectId)) {
-      for (const project of repo.projects) {
-        try {
-          const discovered = await this.db.lock(`${repo.id}:${project.id}`, async () => {
-            // Recheck after taking the lock, even if the filesystem listing is stale.
-            if (await this.db.setting(purgedWorkKey(repo.id, project.id))) return;
-            const work = await this.db.one("SELECT id FROM works WHERE repo=$1 AND project=$2", [repo.id, project.id]);
-            if (work && await this.db.setting("work-purge:" + work.id)) return;
-            await this.discoverProject(repo, project, !!repository);
-            return true;
-          });
-          if (discovered) await this.repos.revisions?.refreshIfIdle(repo.id, project.id);
-        } catch (error) {
-          if (error.statusCode !== 409) throw error;
-          // Busy works keep their existing indexed row until a later refresh.
-        }
-      }
+
+  root(repo, id) {
+    return path.join(this.config.dirs.works, repo, id);
+  }
+
+  async refs(repo) {
+    const out = await git(this.repos.get(repo).dir, [
+      "for-each-ref",
+      "--format=%(refname)%09%(objectname)%09%(committerdate:iso-strict)",
+      "refs/heads/works",
+      "refs/remotes/origin/works",
+      "refs/heads/trash",
+    ]);
+    const works = new Map();
+    for (const line of out.split("\n").filter(Boolean)) {
+      const [ref, oid, date] = line.split("\t");
+      const [scope, id] = ref.startsWith("refs/heads/works/")
+        ? ["local", ref.slice("refs/heads/works/".length)]
+        : ref.startsWith("refs/heads/trash/")
+          ? ["trash", ref.slice("refs/heads/trash/".length)]
+          : ["remote", ref.slice("refs/remotes/origin/works/".length)];
+      if (!validWorkId(id)) continue;
+      const entry = works.get(id) || { id, repo };
+      entry[scope] = { ref, oid, date };
+      works.set(id, entry);
     }
-    if (!repository) this.discovered = true;
+    return [...works.values()];
   }
-  async discoverProject(repo, project, refreshAssets) {
-    const { dir } = await this.repos.project(repo.id, project.id);
-    const file = confined(dir, "production/work.json");
-    let info = {};
+
+  async metaAt(repo, ref, oid) {
+    const key = repo + ":" + oid;
+    if (this.metaCache.has(key)) return this.metaCache.get(key);
+    const dir = this.repos.get(repo).dir;
+    let summary;
     try {
-      info = JSON.parse(fs.readFileSync(file, "utf8"));
-    } catch {}
-    const title =
-      typeof info.title === "string"
-        ? info.title.slice(0, 150)
-        : project.title;
-    const inserted = await this.db.pool.query(
-      `INSERT INTO works(id,repo,project,title,category,status,description,deleted)
-      VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(repo,project) DO UPDATE
-      SET title=EXCLUDED.title,category=EXCLUDED.category,status=EXCLUDED.status,description=EXCLUDED.description,deleted=EXCLUDED.deleted,updated=now()
-      WHERE (works.title,works.category,works.status,works.description,works.deleted)
-      IS DISTINCT FROM (EXCLUDED.title,EXCLUDED.category,EXCLUDED.status,EXCLUDED.description,EXCLUDED.deleted)`,
-      [
-        randomUUID(),
-        repo.id,
-        project.id,
-        title,
-        String(info.category || "").slice(0, 80),
-        ["draft", "review", "finished"].includes(info.status)
-          ? info.status
-          : "draft",
-        String(info.description || "").slice(0, 4000),
-        info.deleted === true,
-      ],
-    );
-    const work = await this.db.one(
-      "SELECT * FROM works WHERE repo=$1 AND project=$2",
-      [repo.id, project.id],
-    );
-    const migrated = !work.branch;
-    await this.repos.isolate(work);
-    if (migrated)
-      await this.repos.checkpoint(
-        repo.id,
-        project.id,
-        "导入作品 · " + title,
-      );
-    if (inserted.rowCount || migrated || refreshAssets)
-      await this.assets.importProject(repo.id, project.id);
+      const names = (await git(dir, ["ls-tree", "--name-only", ref, "projects/"])).split("\n").filter(Boolean);
+      const slug = names.map((name) => name.slice(9)).find((name) => validSlug(name));
+      if (!slug) throw new Error("no projects/<slug>/");
+      const { meta } = readProjectSource(await git(dir, ["show", `${ref}:projects/${slug}/project.ts`]));
+      summary = metaSummary(slug, meta);
+    } catch (error) {
+      summary = { slug: "", title: "(无法读取的作品)", error: error.message };
+    }
+    this.metaCache.set(key, summary);
+    if (this.metaCache.size > 2000) this.metaCache.delete(this.metaCache.keys().next().value);
+    return summary;
   }
-  async list({
-    deleted = false,
-    search = "",
-    category = "",
-    status = "",
-    repo = null,
-    recent = false,
-    limit = 60,
-    offset = 0,
-    sort = "",
-  } = {}) {
-    if (!this.discovered) await this.discover();
-    // Fixed expressions only; order the whole result before applying pagination.
-    const ordering = sort === "title"
-      ? "lower(w.title) ASC,modified DESC"
-      : sort === "created" ? "w.created DESC"
-      : sort === "opened" || (!sort && recent) ? "w.opened DESC NULLS LAST"
-      : "modified DESC";
-    const rows = await this.db.all(
-      `SELECT w.*, r.name AS storage_name, r.url AS remote,
-      (SELECT jsonb_build_object('id',t.id,'kind',t.kind,'state',t.state,'finished',t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.input->>'version' IS NULL ORDER BY (t.state IN ('queued','running','cancelling','publishing','publish_failed')) DESC,t.created DESC LIMIT 1) AS activity,
-      greatest(w.updated,COALESCE((SELECT max(t.finished) FROM tasks t WHERE t.repo=w.repo AND t.project=w.project AND t.kind='new' AND t.state='succeeded'),w.updated)) AS modified
-      FROM works w JOIN repos r ON r.id=w.repo WHERE w.deleted=$1 AND (w.title ILIKE $2 OR w.description ILIKE $2) AND ($3='' OR w.category=$3) AND ($4='' OR w.status=$4) AND ($5::uuid IS NULL OR w.repo=$5) AND (NOT $6 OR w.opened IS NOT NULL)
-      ORDER BY ${ordering},w.id LIMIT $7 OFFSET $8`,
-      [
-        deleted,
-        "%" + search + "%",
-        category,
-        status,
-        repo,
-        recent,
-        Math.min(100, limit),
-        offset,
-      ],
-    );
-    for (const row of rows) {
-      row.metadataRevision = hash(JSON.stringify(this.info(row)));
-      try {
-        const { dir } = await this.repos.project(row.repo, row.project);
-        const { meta } = readProject(confined(dir, "project.ts"));
-        Object.assign(row, {
-          duration: meta.duration,
-          fps: meta.fps,
-          renderer: meta.renderer,
-          composition: meta.composition || { width: 1920, height: 1080 },
+
+  /** List works of one or all repositories. Checked-out works report live metadata. */
+  async list({ repo, trash = false } = {}) {
+    const repos = repo ? [this.repos.get(repo)] : this.repos.list().filter((item) => item.ready);
+    const result = [];
+    for (const { id: repoId } of repos) {
+      for (const entry of await this.refs(repoId)) {
+        if (trash ? !entry.trash : !entry.local && !entry.remote) continue;
+        const head = trash ? entry.trash : entry.local || entry.remote;
+        const root = this.root(repoId, entry.id);
+        const checkedOut = !trash && fs.existsSync(path.join(root, ".git"));
+        let summary = await this.metaAt(repoId, head.ref, head.oid);
+        if (checkedOut && summary.slug) {
+          try {
+            summary = metaSummary(summary.slug, readProjectDir(path.join(root, "projects", summary.slug)).meta);
+          } catch {}
+        }
+        result.push({
+          id: entry.id,
+          repo: repoId,
+          ...summary,
+          updatedAt: head.date,
+          location: trash ? "trash" : entry.local && entry.remote ? "both" : entry.local ? "local" : "remote",
+          checkedOut,
         });
-        row.cover = this.coverPath(dir)
-          ? `/api/works/${row.id}/cover?v=${new Date(row.modified).getTime()}`
-          : null;
-      } catch {
-        row.unavailable = true;
       }
     }
-    return rows;
+    return result.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }
-  coverPath(dir) {
-    for (const name of [
-      "poster.webp",
-      "poster.png",
-      "poster.jpg",
-      "cover.webp",
-      "cover.png",
-      "poster.svg",
-    ]) {
-      const file = confined(dir, "public/" + name);
-      if (fs.existsSync(file)) return file;
+
+  /** Find which repository holds a work id. */
+  async locate(id, repo) {
+    if (!validWorkId(id)) throw problem(400, `无效的作品 id：${id}`);
+    const candidates = repo
+      ? [repo]
+      : this.repos
+          .list()
+          .filter((item) => item.ready)
+          .map((item) => item.id);
+    const found = [];
+    for (const repoId of candidates) {
+      if (fs.existsSync(path.join(this.root(repoId, id), ".git"))) {
+        found.push(repoId);
+        continue;
+      }
+      const dir = this.repos.get(repoId).dir;
+      if (
+        (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/works/" + id])) ||
+        (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/remotes/origin/works/" + id]))
+      )
+        found.push(repoId);
     }
-    return null;
+    if (!found.length) throw notFound(`作品不存在：${id}`);
+    if (found.length > 1) throw conflict(`作品 id ${id} 同时存在于 ${found.join("、")}，请指定作品库`);
+    return found[0];
   }
-  async get(id, { active = false } = {}) {
-    const row = await this.db.one("SELECT * FROM works WHERE id=$1", [id]);
-    if (!row) throw problem(404, "Work not found");
-    if (active && row.deleted) throw problem(409, "Restore this work first");
-    if (active && await this.db.setting("work-purge:" + id))
-      throw problem(409, "作品正在永久清理，请在回收站重试完成清理");
-    return {
-      ...row,
-      metadataRevision: hash(JSON.stringify(this.info(row))),
+
+  /** Check out (if needed) and describe a work. Cheap when already open. */
+  async open(id, repo) {
+    repo = await this.locate(id, repo);
+    const root = this.root(repo, id);
+    await this.locks.run(`${repo}/${id}`, async () => {
+      if (!fs.existsSync(path.join(root, ".git"))) {
+        const dir = this.repos.get(repo).dir;
+        await git(dir, ["worktree", "prune"]);
+        fs.mkdirSync(path.dirname(root), { recursive: true });
+        const branch = WORK_PREFIX + id;
+        if (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/" + branch])) await git(dir, ["worktree", "add", "--", root, branch]);
+        else await git(dir, ["worktree", "add", "--track", "-b", branch, "--", root, "origin/" + branch]);
+      }
+      this.linkRuntime(root);
+    });
+    return this.describe(repo, id);
+  }
+
+  describe(repo, id) {
+    const root = this.root(repo, id);
+    const projects = path.join(root, "projects");
+    const slugs = fs.existsSync(projects)
+      ? fs.readdirSync(projects).filter((name) => validSlug(name) && fs.existsSync(path.join(projects, name, "project.ts")))
+      : [];
+    if (slugs.length !== 1) throw conflict(`作品分支应当只有一个 projects/<名称>/project.ts，实际找到 ${slugs.length} 个`);
+    const slug = slugs[0];
+    return { id, repo, branch: WORK_PREFIX + id, root, slug, dir: path.join(projects, slug) };
+  }
+
+  /** Read a work's metadata; invalid project.ts is reported, not thrown. */
+  meta(work) {
+    try {
+      return { ok: true, ...readProjectDir(work.dir) };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  }
+
+  /** The shared engine and dependencies are linked, never copied or committed. */
+  linkRuntime(root) {
+    const link = (name, target) => {
+      const file = path.join(root, name);
+      try {
+        const stat = fs.lstatSync(file);
+        if (stat.isSymbolicLink() && fs.readlinkSync(file) === target) return;
+        if (!stat.isSymbolicLink()) return; // a real directory belongs to the work; leave it alone
+        fs.unlinkSync(file);
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+      fs.symlinkSync(target, file, process.platform === "win32" ? "junction" : "dir");
     };
+    link("src", path.join(appRoot, "src"));
+    link("node_modules", path.join(appRoot, "node_modules"));
+    link("docs", path.join(appRoot, "docs"));
+    writeIfChanged(path.join(root, "tsconfig.json"), workTsconfig());
+    writeIfChanged(path.join(root, "AGENTS.md"), platformInstructions());
+    writeIfChanged(path.join(root, "CLAUDE.md"), "@AGENTS.md\n");
   }
-  async create({
-    title,
-    repo,
-    renderer = "composition",
-    duration = projectDefaults.duration,
-    fps = 30,
-    audio = "silent",
-    composition,
-    category = "",
-  }) {
-    if (!repo) throw problem(400, "请选择作品所属仓库");
-    return this.db.lock("create-work:" + repo, async () => {
-      const id = randomUUID(),
-        project = "work-" + id.slice(0, 8);
-      await this.db.pool.query(
-        "INSERT INTO works(id,repo,project,title,category) VALUES($1,$2,$3,$4,$5)",
-        [id, repo, project, title, category],
-      );
+
+  async create({ repo = LOCAL_REPO, title, width = 1920, height = 1080, duration = 10, fps = 30, description = "" }) {
+    if (typeof title !== "string" || !title.trim()) throw problem(400, "作品名称不能为空");
+    const dir = this.repos.get(repo).dir;
+    const id = shortId();
+    const slug = "work-" + id;
+    const root = this.root(repo, id);
+    await this.locks.run(`${repo}/${id}`, async () => {
+      fs.mkdirSync(path.dirname(root), { recursive: true });
+      await git(dir, ["worktree", "prune"]);
+      await addOrphanWorktree(dir, WORK_PREFIX + id, root);
       try {
-        const r = await this.repos.isolate(await this.get(id));
-        await command(
-          process.execPath,
-          [
-            fileURLToPath(
-              new URL("../scripts/new-animation.mjs", import.meta.url),
-            ),
-            project,
-            title,
-            "--renderer",
-            renderer,
-            "--duration",
-            String(duration),
-            "--fps",
-            String(fps),
-            "--audio",
-            audio,
-            ...(composition
-              ? [
-                  "--width",
-                  String(composition.width),
-                  "--height",
-                  String(composition.height),
-                ]
-              : []),
-          ],
-          { cwd: r.root },
-        );
-        const work = await this.get(id);
-        await this.saveInfo(work);
-        await this.repos.checkpoint(repo, project, "创建作品 · " + title);
-        await this.repos.revisions?.refresh(repo, project);
-        return work;
+        for (const [file, content] of Object.entries(createWorkFiles({ slug, title: title.trim(), width, height, duration, fps, description })))
+          writeFileAtomic(path.join(root, file), content);
+        this.linkRuntime(root);
+        await git(root, ["add", "-A", "--", "."]);
+        await git(root, ["commit", "-m", `创建作品：${title.trim()}`]);
       } catch (error) {
-        await this.removeFailedCreation(id, repo);
-        await this.db.pool.query("DELETE FROM works WHERE id=$1", [id]);
+        await git(dir, ["worktree", "remove", "--force", "--", root]).catch(() => {});
+        await git(dir, ["branch", "-D", WORK_PREFIX + id]).catch(() => {});
         throw error;
       }
     });
+    this.touch(repo, id);
+    this.events.emit({ type: "works", repo });
+    return this.describe(repo, id);
   }
-  async removeFailedCreation(id, repo) {
-    const root = path.resolve(this.data, "works"),
-      target = path.resolve(root, id);
-    if (path.dirname(target) !== root || !/^[0-9a-f-]{36}$/.test(id))
-      throw new Error("Invalid work path");
-    const r = await this.repos.get(repo);
-    if (fs.existsSync(path.join(target, ".git")))
-      await this.repos.git(r.root, [
-        "worktree",
-        "remove",
-        "--force",
-        "--",
-        target,
-      ]);
-    else if (fs.existsSync(target))
-      fs.rmSync(target, { recursive: true, force: true });
+
+  /** Create a work from an existing project folder (one containing project.ts). */
+  async importFolder({ repo = LOCAL_REPO, source }) {
+    if (!fs.existsSync(path.join(source, "project.ts"))) throw problem(400, "文件夹中没有 project.ts");
+    const slug = validSlug(path.basename(source)) ? path.basename(source) : "work-" + shortId();
+    const { meta } = readProjectSource(fs.readFileSync(path.join(source, "project.ts"), "utf8"));
+    const dir = this.repos.get(repo).dir;
+    const id = shortId();
+    const root = this.root(repo, id);
+    await this.locks.run(`${repo}/${id}`, async () => {
+      fs.mkdirSync(path.dirname(root), { recursive: true });
+      await addOrphanWorktree(dir, WORK_PREFIX + id, root);
+      try {
+        fs.cpSync(source, path.join(root, "projects", slug), {
+          recursive: true,
+          filter: (file) => !/[\\/](exports|\.cache|node_modules|\.git|test-results|playwright-report)([\\/]|$)/.test(path.relative(source, file)),
+        });
+        writeFileAtomic(path.join(root, "README.md"), `# ${meta.title || slug}\n\nFRAME 作品。使用 FRAME Studio 打开、预览和导出。\n`);
+        writeFileAtomic(path.join(root, ".gitignore"), "exports/\n.cache/\nnode_modules/\n");
+        this.linkRuntime(root);
+        await git(root, ["add", "-A", "--", "."]);
+        await git(root, ["commit", "-q", "-m", `导入作品：${meta.title || slug}`]);
+      } catch (error) {
+        await git(dir, ["worktree", "remove", "--force", "--", root]).catch(() => {});
+        await git(dir, ["branch", "-D", WORK_PREFIX + id]).catch(() => {});
+        throw error;
+      }
+    });
+    this.events.emit({ type: "works", repo });
+    return this.describe(repo, id);
   }
-  purge(id, confirm) { return purgeWork(this, id, confirm); }
-  emptyTrash(repo, confirm) { return purgeTrash(this, repo, confirm); }
-  info(work) {
-    return Object.fromEntries(
-      ["title", "category", "status", "description", "deleted"].map((key) => [
-        key,
-        work[key],
-      ]),
+
+  async update(work, changes) {
+    const file = path.join(work.dir, "project.ts");
+    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats"];
+    const picked = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.includes(key)));
+    writeFileAtomic(file, setProjectFields(fs.readFileSync(file, "utf8"), picked));
+    this.events.emit({ type: "works", repo: work.repo });
+  }
+
+  async trash(id, repo) {
+    repo = await this.locate(id, repo);
+    const dir = this.repos.get(repo).dir;
+    const root = this.root(repo, id);
+    await this.locks.run(`${repo}/${id}`, async () => {
+      if (fs.existsSync(root)) {
+        const status = parseStatus(await git(root, ["status", "--porcelain=v2", "--branch"]));
+        if (status.files.length) await this.commitAll(root, "删除前自动保存");
+        await git(dir, ["worktree", "remove", "--force", "--", root]);
+      }
+      if (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/works/" + id]))
+        await git(dir, ["branch", "-M", WORK_PREFIX + id, TRASH_PREFIX + id]);
+      else await git(dir, ["branch", TRASH_PREFIX + id, "origin/" + WORK_PREFIX + id]);
+    });
+    this.settings.update("recent", (recent) => recent.filter((item) => !(item.id === id && item.repo === repo)));
+    this.events.emit({ type: "works", repo });
+  }
+
+  async restore(id, repo) {
+    const dir = this.repos.get(repo).dir;
+    if (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/works/" + id])) throw conflict("同名作品已存在");
+    await git(dir, ["branch", "-M", TRASH_PREFIX + id, WORK_PREFIX + id]);
+    this.events.emit({ type: "works", repo });
+  }
+
+  /** Permanently delete a trashed work locally; optionally also delete the remote branch. */
+  async purge(id, repo, { remote = false } = {}) {
+    const info = this.repos.get(repo);
+    await git(info.dir, ["branch", "-D", TRASH_PREFIX + id]);
+    if (remote && info.remote) await git(info.dir, ["push", "origin", "--delete", WORK_PREFIX + id], { env: this.repos.env(info) });
+    this.events.emit({ type: "works", repo });
+  }
+
+  touch(repo, id) {
+    this.settings.update("recent", (recent) =>
+      [{ repo, id, openedAt: new Date().toISOString() }, ...recent.filter((item) => !(item.id === id && item.repo === repo))].slice(0, 30),
     );
   }
-  async recoverInfo(id = null) {
-    const root = path.join(this.data, "metadata-recovery");
-    if (!fs.existsSync(root)) return;
-    const ids = id
-      ? [id]
-      : fs.readdirSync(root).map((name) => name.replace(/\.json$/, ""));
-    for (const key of ids) {
-      if (!/^[0-9a-f-]{36}$/.test(key)) continue;
-      if (await this.db.setting("work-purge:" + key)) continue;
-      const file = path.join(root, key + ".json");
-      if (!fs.existsSync(file)) continue;
-      const recover = async () => {
-        if (!fs.existsSync(file)) return;
-        // The atomic SQL row is authoritative after an interrupted/ambiguous save.
-        await this.saveInfo(await this.get(key));
-        fs.rmSync(file);
-      };
-      if (id) await recover();
-      else {
-        const work = await this.get(key);
-        await this.db.lock(`${work.repo}:${work.project}`, recover);
-      }
-    }
+
+  // ---- versions -------------------------------------------------------
+
+  async status(work) {
+    const status = parseStatus(await git(work.root, ["status", "--porcelain=v2", "--branch", "--untracked-files=all"]));
+    const head = (await git(work.root, ["log", "-1", "--format=%H%x09%s%x09%cI"]).catch(() => "")).trim().split("\t");
+    return { ...status, head: head[0] ? { commit: head[0], message: head[1], date: head[2] } : null, remote: Boolean(this.repos.get(work.repo).remote) };
   }
-  async saveInfo(work) {
-    const { dir } = await this.repos.project(work.repo, work.project);
-    const file = confined(dir, "production/work.json");
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const temp = file + ".tmp-" + randomUUID();
-    try {
-      fs.writeFileSync(temp, JSON.stringify(this.info(work), null, 2) + "\n", {
-        flag: "wx",
+
+  async commitAll(root, message) {
+    await git(root, ["add", "-A", "--", "."]);
+    if (await gitOk(root, ["diff", "--cached", "--quiet"])) return null;
+    await git(root, ["commit", "-q", "-m", message]);
+    return (await git(root, ["rev-parse", "HEAD"])).trim();
+  }
+
+  /** Save a version of everything changed in the work. Returns null when nothing changed. */
+  async commit(work, message) {
+    const commit = await this.locks.run(`${work.repo}/${work.id}`, () => this.commitAll(work.root, message || "保存版本"));
+    if (commit) this.events.emit({ type: "work-versions", work: work.id });
+    return commit;
+  }
+
+  async history(work, { limit = 50, skip = 0 } = {}) {
+    const out = await git(work.root, ["log", `--max-count=${limit}`, `--skip=${skip}`, "--format=%H%x09%h%x09%s%x09%cI%x09%an", "--shortstat"]);
+    const versions = [];
+    for (const line of out.split("\n")) {
+      if (line.includes("\t")) {
+        const [commit, short, message, date, author] = line.split("\t");
+        versions.push({ commit, short, message, date, author });
+      } else if (line.trim() && versions.length) versions.at(-1).stat = line.trim();
+    }
+    return versions;
+  }
+
+  async changes(work, commit) {
+    const args = commit ? ["show", "--format=", "--name-status", commit] : ["diff", "HEAD", "--name-status"];
+    const out = await git(work.root, args);
+    return out
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const [status, ...rest] = line.split("\t");
+        return { status: status[0], path: rest.at(-1) };
       });
-      fs.renameSync(temp, file);
-    } finally {
-      fs.rmSync(temp, { force: true });
-    }
   }
-  async update(id, fields, { expectedRevision } = {}) {
-    const w = await this.get(id);
-    return this.db.lock(`${w.repo}:${w.project}`, async () => {
-      await this.repos.writable(w.repo, w.project);
-      await this.recoverInfo(id);
-      const current = await this.get(id);
-      if (expectedRevision && expectedRevision !== current.metadataRevision)
-        throw problem(409, "作品资料已更新，请重新打开资料后再保存");
-      const next = { ...current, ...fields };
-      const journal = path.join(this.data, "metadata-recovery", id + ".json");
-      fs.mkdirSync(path.dirname(journal), { recursive: true });
-      fs.writeFileSync(journal, JSON.stringify({ id }), { flag: "wx" });
-      try {
-        await this.repos.revisions?.invalidate(w.repo, w.project);
-        await this.saveInfo(next);
-        await this.db.pool.query(
-          "UPDATE works SET title=$2,category=$3,status=$4,description=$5,deleted=$6,updated=now() WHERE id=$1",
-          [
-            id,
-            next.title,
-            next.category,
-            next.status,
-            next.description,
-            next.deleted,
-          ],
-        );
-      } catch (error) {
-        // Re-read SQL rather than blindly restoring an old snapshot: COMMIT may
-        // have succeeded even when its response was lost. Keep the journal if offline.
-        await this.recoverInfo(id).catch(() => {});
-        throw error;
-      }
-      fs.rmSync(journal, { force: true });
-      return this.get(id);
+
+  async diff(work, { commit, file } = {}) {
+    const args = commit ? ["show", "--format=", commit] : ["diff", "HEAD"];
+    return git(work.root, [...args, "--", ...(file ? [file] : [])], { maxBytes: 4 * 1024 * 1024 });
+  }
+
+  async fileAt(work, commit, file) {
+    return git(work.root, ["show", `${commit}:${file}`], { maxBytes: 16 * 1024 * 1024 });
+  }
+
+  /** Make the work's files equal to an earlier version, as a new version (history is kept). */
+  async revert(work, commit) {
+    return this.locks.run(`${work.repo}/${work.id}`, async () => {
+      await this.commitAll(work.root, "恢复前自动保存");
+      await git(work.root, ["rev-parse", "--verify", commit + "^{commit}"]);
+      await git(work.root, ["read-tree", "-u", "--reset", commit]);
+      const short = commit.slice(0, 7);
+      const result = await this.commitAll(work.root, `恢复到版本 ${short}`);
+      this.events.emit({ type: "work-versions", work: work.id });
+      return result;
     });
   }
-  async duplicate(id, title) {
-    const w = await this.get(id, { active: true });
-    return this.db.lock(`${w.repo}:${w.project}`, async () => {
-      await this.repos.writable(w.repo, w.project);
-      const { dir } = await this.repos.project(w.repo, w.project);
-      const newId = randomUUID(),
-        project = "work-" + newId.slice(0, 8);
-      await this.db.pool.query(
-        "INSERT INTO works(id,repo,project,title,category,description) VALUES($1,$2,$3,$4,$5,$6)",
-        [newId, w.repo, project, title, w.category, w.description],
-      );
-      let dest;
-      // Only rewrite this work's identity and its own URL/path prefixes; binary material bytes remain identical.
-      const walk = (folder) => {
-        for (const entry of fs.readdirSync(folder, { withFileTypes: true })) {
-          const file = confined(
-            dest,
-            path
-              .relative(dest, path.join(folder, entry.name))
-              .replaceAll("\\", "/"),
-          );
-          if (entry.isDirectory()) walk(file);
-          else if (/\.(ts|tsx|js|mjs|json|md|txt|svg|css)$/.test(file)) {
-            const content = fs
-              .readFileSync(file, "utf8")
-              .replaceAll(`films/${w.project}/`, `films/${project}/`)
-              .replaceAll(`projects/${w.project}/`, `projects/${project}/`);
-            fs.writeFileSync(file, content);
-          }
+
+  /** Discard uncommitted changes (back to the last saved version). */
+  async discard(work, files = []) {
+    return this.locks.run(`${work.repo}/${work.id}`, async () => {
+      const paths = files.length ? files : ["."];
+      await git(work.root, ["checkout", "HEAD", "--", ...paths]).catch(() => {});
+      await git(work.root, ["clean", "-fd", "--", ...paths]);
+    });
+  }
+
+  async sync(work) {
+    const repo = this.repos.get(work.repo);
+    if (!repo.remote) return { remote: false };
+    await this.repos.fetch(work.repo);
+    const status = await this.status(work);
+    const hasRemote = await gitOk(repo.dir, ["show-ref", "--verify", "--quiet", "refs/remotes/origin/" + work.branch]);
+    return { remote: true, hasRemote, ...status };
+  }
+
+  async push(work) {
+    const repo = this.repos.get(work.repo);
+    if (!repo.remote) throw problem(400, "这个作品库没有连接 GitHub，先在作品库设置中发布到 GitHub");
+    return this.locks.run(`${work.repo}/${work.id}`, async () => {
+      await this.commitAll(work.root, "同步前自动保存");
+      await git(work.root, ["push", "-u", "origin", work.branch], { env: this.repos.env(repo) });
+      this.events.emit({ type: "work-versions", work: work.id });
+      return this.status(work);
+    });
+  }
+
+  /** Resolve a diverged work: merge both sides (fails on conflicts) or adopt the remote, keeping a backup ref. */
+  async resolve(work, strategy) {
+    return this.locks.run(`${work.repo}/${work.id}`, async () => {
+      await this.commitAll(work.root, "合并前自动保存");
+      if (strategy === "merge") {
+        try {
+          await git(work.root, ["merge", "--no-edit", "-m", "合并 GitHub 上的修改", "origin/" + work.branch]);
+        } catch (error) {
+          await git(work.root, ["merge", "--abort"]).catch(() => {});
+          throw conflict("双方修改了同一处内容，无法自动合并。可以采用 GitHub 的版本（本地版本保留为备份），或手动修改后再推送。", { git: error.message });
         }
-      };
+      } else if (strategy === "remote") {
+        const backup = `refs/frame-backup/${work.id}/${new Date().toISOString().replace(/[:.]/g, "-")}`;
+        await git(work.root, ["update-ref", backup, "HEAD"]);
+        await git(work.root, ["reset", "--hard", "origin/" + work.branch]);
+      } else throw problem(400, "未知的处理方式");
+      this.events.emit({ type: "work-versions", work: work.id });
+      return this.status(work);
+    });
+  }
+
+  async pull(work) {
+    const repo = this.repos.get(work.repo);
+    if (!repo.remote) throw problem(400, "这个作品库没有连接 GitHub");
+    return this.locks.run(`${work.repo}/${work.id}`, async () => {
+      await git(repo.dir, ["fetch", "--prune", "origin"], { env: this.repos.env(repo) });
+      const status = parseStatus(await git(work.root, ["status", "--porcelain=v2", "--branch"]));
+      if (status.files.length) throw conflict("作品有未保存的修改，请先保存版本再拉取");
       try {
-        const repo = await this.repos.isolate(await this.get(newId));
-        dest = confined(repo.root, "projects/" + project);
-        await copyTree(dir, dest);
-        walk(dest);
-        const file = path.join(dest, "project.ts"),
-          replacements = [];
-        visitNodes(sourceFile(file), (node) => {
-          if (
-            node.type === "ObjectProperty" &&
-            ["id", "title"].includes(node.key.name || node.key.value) &&
-            node.value.type === "StringLiteral"
-          ) {
-            if (
-              (node.key.name || node.key.value) === "id" &&
-              node.value.value === w.project
-            )
-              replacements.push([
-                node.value.start,
-                node.value.end,
-                JSON.stringify(project),
-              ]);
-            if (
-              (node.key.name || node.key.value) === "title" &&
-              node.value.value ===
-                readProject(path.join(dir, "project.ts")).meta.title
-            )
-              replacements.push([
-                node.value.start,
-                node.value.end,
-                JSON.stringify(title),
-              ]);
-          }
-        });
-        let source = fs.readFileSync(file, "utf8");
-        for (const [start, end, value] of replacements.sort(
-          (a, b) => b[0] - a[0],
-        ))
-          source = source.slice(0, start) + value + source.slice(end);
-        fs.writeFileSync(file, source);
-        if (readProject(file).meta.id !== project)
-          throw problem(
-            409,
-            "This work uses a computed id; duplicate requires a literal id",
-          );
-        const next = await this.get(newId);
-        await this.saveInfo(next);
-        await this.db.pool.query(
-          "INSERT INTO asset_refs(asset,repo,project,path) SELECT asset,repo,$3,path FROM asset_refs WHERE repo=$1 AND project=$2 ON CONFLICT DO NOTHING",
-          [w.repo, w.project, project],
-        );
-        await this.repos.checkpoint(w.repo, project, "复制作品 · " + title);
-        return next;
-      } catch (e) {
-        await this.removeFailedCreation(newId, w.repo);
-        await this.db.pool.query("DELETE FROM works WHERE id=$1", [newId]);
-        throw e;
-      }
-    });
-  }
-  async version(id, name) {
-    const w = await this.get(id, { active: true });
-    return this.db.lock(`${w.repo}:${w.project}`, async () => {
-      await this.repos.writable(w.repo, w.project, { exclusive: true });
-      const commit = await this.repos.checkpoint(w.repo, w.project, name, {
-        named: true,
-      });
-      return {
-        id: commit,
-        work: id,
-        name,
-        created: new Date().toISOString(),
-        kind: "git",
-      };
-    });
-  }
-  async history(id, limit = 50, offset = 0) {
-    const w = await this.get(id),
-      { repo } = await this.repos.project(w.repo, w.project, { exists: false });
-    const log = await this.repos.git(repo.root, [
-      "log",
-      `--max-count=${limit}`,
-      `--skip=${offset}`,
-      "--format=%H%x00%cI%x00%s%x00",
-      "HEAD",
-    ]);
-    const fields = log.split("\0"),
-      rows = [];
-    for (let i = 0; i + 2 < fields.length; i += 3)
-      rows.push({
-        id: fields[i].trim(),
-        created: fields[i + 1],
-        name: fields[i + 2],
-        kind: "git",
-      });
-    // Local snapshots from earlier installations remain recoverable during migration.
-    if (offset === 0)
-      rows.push(
-        ...(await this.db.all(
-          "SELECT *, 'snapshot' AS kind FROM work_versions WHERE work=$1 ORDER BY created DESC LIMIT 50",
-          [id],
-        )),
-      );
-    return rows;
-  }
-  async restore(id, version, expectedRevision) {
-    const w = await this.get(id, { active: true });
-    if (/^[a-f0-9]{40}$/.test(version))
-      return this.restoreCommit(w, version, expectedRevision);
-    if (
-      !(await this.db.one(
-        "SELECT id FROM work_versions WHERE id=$1 AND work=$2",
-        [version, id],
-      ))
-    )
-      throw problem(404, "Version not found");
-    return this.db.lock(`${w.repo}:${w.project}`, async () => {
-      await this.repos.writable(w.repo, w.project, { exclusive: true });
-      if (expectedRevision) {
-        const source = await assertSourceRevision(
-          this.repos,
-          w,
-          expectedRevision,
-        );
-        if (
-          source.outside ||
-          source.branch !== w.branch ||
-          source.merging ||
-          source.files.some((file) => !file.untracked && file.index !== ".") ||
-          source.files.some((file) => file.unsafe || file.conflict)
-        )
-          throw problem(
-            409,
-            "存在已暂存更改、作品范围外文件、冲突或不安全文件，请先处理后再恢复",
-          );
-      }
-      const { dir } = await this.repos.project(w.repo, w.project, {
-          exists: false,
-        }),
-        backup = randomUUID();
-      await copyTree(dir, path.join(this.data, "versions", backup));
-      await this.db.pool.query(
-        "INSERT INTO work_versions(id,work,name) VALUES($1,$2,$3)",
-        [backup, id, "恢复前自动备份"],
-      );
-      const run = path.join(this.data, "restores", randomUUID());
-      fs.mkdirSync(run, { recursive: true });
-      await this.repos.revisions?.invalidate(w.repo, w.project);
-      await applyProject({
-        source: path.join(this.data, "versions", version),
-        destination: dir,
-        run,
-        id: randomUUID(),
-        fingerprint: await treeHash(dir),
-      });
-      await this.saveInfo(w);
-      await this.db.pool.query("UPDATE works SET updated=now() WHERE id=$1", [
-        id,
-      ]);
-      await this.repos.checkpoint(w.repo, w.project, "恢复本地快照");
-      fs.rmSync(run, { recursive: true, force: true });
-      return this.get(id);
-    });
-  }
-  async restoreCommit(w, version, expectedRevision) {
-    await this.db.lock(`${w.repo}:${w.project}`, async () => {
-      await this.repos.writable(w.repo, w.project, { exclusive: true });
-      if (expectedRevision) {
-        const source = await assertSourceRevision(
-          this.repos,
-          w,
-          expectedRevision,
-        );
-        if (
-          source.outside ||
-          source.branch !== w.branch ||
-          source.merging ||
-          source.files.some((file) => !file.untracked && file.index !== ".") ||
-          source.files.some((file) => file.unsafe || file.conflict)
-        )
-          throw problem(
-            409,
-            "存在已暂存更改、作品范围外文件、冲突或不安全文件，请先处理后再恢复",
-          );
-      }
-      const { repo } = await this.repos.project(w.repo, w.project, {
-        exists: false,
-      });
-      const valid = await this.repos
-        .git(repo.root, ["merge-base", "--is-ancestor", version, "HEAD"])
-        .then(
-          () => true,
-          () => false,
-        );
-      if (!valid) throw problem(400, "只能恢复当前作品分支的历史版本");
-      await this.repos.git(repo.root, [
-        "cat-file",
-        "-e",
-        `${version}:projects/${w.project}/project.ts`,
-      ]);
-      await versionTree(this.repos, w, version);
-      const backup = await this.repos.checkpoint(
-        w.repo,
-        w.project,
-        "恢复前自动保存",
-      );
-      await this.repos.revisions?.invalidate(w.repo, w.project);
-      try {
-        await this.repos.git(
-          repo.root,
-          [
-            "restore",
-            "--source=" + version,
-            "--staged",
-            "--worktree",
-            "--",
-            `projects/${w.project}`,
-          ],
-          true,
-        );
-        await this.repos.checkpoint(
-          w.repo,
-          w.project,
-          "恢复版本 " + version.slice(0, 8),
-          { named: true },
-        );
+        await git(work.root, ["merge", "--ff-only", "origin/" + work.branch]);
       } catch (error) {
-        await this.repos.git(
-          repo.root,
-          [
-            "restore",
-            "--source=" + backup,
-            "--staged",
-            "--worktree",
-            "--",
-            `projects/${w.project}`,
-          ],
-          true,
-        );
-        throw error;
+        throw conflict("本地和 GitHub 上都有新的修改。可以选择合并双方，或采用 GitHub 的版本（本地版本会保留为备份）。", {
+          diverged: true,
+          git: error.message,
+        });
       }
+      this.events.emit({ type: "work-versions", work: work.id });
+      return this.status(work);
     });
-    await this.db.pool.query("UPDATE works SET updated=now() WHERE id=$1", [
-      w.id,
-    ]);
-    await this.discover(w.repo, w.project);
-    return this.get(w.id);
   }
+}
+
+function metaSummary(slug, meta) {
+  const composition = meta.composition || { width: 1920, height: 1080 };
+  return {
+    slug,
+    title: String(meta.title || slug),
+    subtitle: String(meta.subtitle || ""),
+    description: String(meta.description || ""),
+    duration: Number(meta.duration) || 0,
+    fps: Number(meta.fps) || 30,
+    width: composition.width,
+    height: composition.height,
+    accent: meta.accent || "",
+    status: meta.status || "draft",
+    poster: meta.poster || "",
+  };
+}
+
+function writeIfChanged(file, content) {
+  try {
+    if (fs.readFileSync(file, "utf8") === content) return;
+  } catch {}
+  fs.writeFileSync(file, content);
 }

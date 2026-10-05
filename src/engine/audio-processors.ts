@@ -1,6 +1,6 @@
 import type { AudioTrack } from "./types";
 import { createToneEffect } from "./tone-runtime";
-import { smoothAudioParam } from "./live-audio-update";
+import { smoothAudioParam } from "./audio-controls";
 export type Processor = { type: string; bypass?: boolean; [key: string]: any };
 export type Channel = {
   id: string;

@@ -1,9 +1,0 @@
-.task-diagnostics {
-  display: grid;
-  gap: 6px;
-  font-size: 12px;
-}
-.task-diagnostics .queue-reason {
-  border-left: 2px solid var(--accent, #7c6bff);
-  padding-left: 8px;
-}

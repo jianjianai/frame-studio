@@ -5,12 +5,11 @@ import {
   type AudioTrack,
   type GeneratedAudioModule,
 } from "./types";
-import { preparePreviewAudio } from "./preview-audio";
 import {
   audioTrackSourceSignature,
   smoothAudioParam,
   waitAudioReady,
-} from "./live-audio-update";
+} from "./audio-controls";
 import {
   PreviewBuffering,
   LIVE_BUFFER_SECONDS,
@@ -27,11 +26,9 @@ import {
   type AudioMixDocument,
 } from "./audio-processors";
 export interface PreparedAudio {
-  preview?: boolean;
   tracks: AudioTrack[];
   buffers: Map<string, AudioBuffer>;
   generated?: GeneratedAudioModule;
-  progressive?: boolean;
   files?: AudioSourcePool;
   document?: AudioMixDocument;
   modules?: Map<string, GeneratedAudioModule>;
@@ -39,7 +36,6 @@ export interface PreparedAudio {
   project?: AnimationProject;
   moduleRefs?: boolean;
   disposed?: boolean;
-  live?: boolean;
 }
 type ModuleSession = { users: number; ready: Promise<void>; settled: boolean };
 const moduleSessions = new WeakMap<
@@ -88,41 +84,24 @@ function releaseGenerator(
 }
 function generator(prepared: PreparedAudio, track: AudioTrack) {
   if (track.kind !== "generated") throw Error("Not a generated track");
-  const mod =
-    track.module && track.module !== "legacy"
-      ? prepared.generated?.generators?.[track.module]
-      : prepared.generated;
-  if (!mod) throw Error("未注册的声音生成器：" + (track.module ?? track.id));
+  const mod = track.module ? prepared.generated?.generators?.[track.module] : undefined;
+  if (!mod) throw Error("audio.ts 的 generators 中没有声音生成器：" + (track.module ?? track.id));
   return { mod, id: track.sourceTrackId ?? track.id };
 }
 export async function prepareAudio(
   project: AnimationProject,
   context: BaseAudioContext,
   signal?: AbortSignal,
-  progressive = false,
   previous?: PreparedAudio,
 ): Promise<PreparedAudio> {
-  if (progressive && !project.audioDocument && !project.livePreview) {
-    const preview = await preparePreviewAudio(project, context, signal);
-    if (preview) return preview;
-  }
   const tracks = projectAudioTracks(project),
-    generated = tracks.some((t) => t.kind === "generated")
-      ? previous?.generated &&
-        project.previewAudioGeneratorRevision &&
-        project.previewAudioGeneratorRevision ===
-          previous.project?.previewAudioGeneratorRevision
-        ? previous.generated
-        : await project.loadAudio?.()
-      : undefined;
+    generated = tracks.some((t) => t.kind === "generated") ? await project.loadAudio?.() : undefined;
   const prepared: PreparedAudio = {
     tracks,
     buffers: new Map(),
     generated,
-    progressive: progressive && !project.audioDocument && !project.livePreview,
     files: previous?.files ?? new AudioSourcePool(),
     sourceKeys: new Map(),
-    live: progressive && project.livePreview,
     project,
     document: project.audioDocument as AudioMixDocument | undefined,
     modules: new Map(),
@@ -136,11 +115,12 @@ export async function prepareAudio(
           .map((t) => (t.kind === "file" ? t.src : "")),
       ).size,
     );
-    adaptAudioSourceRenditions(prepared);
+    for (const track of tracks)
+      if (track.kind === "file") prepared.sourceKeys!.set(track.src, prepared.files!.bind(track.src));
     for (const track of tracks)
       if (track.kind === "generated") {
         const { mod } = generator(prepared, track),
-          key = track.module ?? "__legacy__";
+          key = track.module!;
         if (!prepared.modules!.has(key)) {
           prepared.modules!.set(key, mod);
           signal?.throwIfAborted();
@@ -153,26 +133,6 @@ export async function prepareAudio(
     disposePreparedAudio(prepared, context, previous);
     throw e;
   }
-}
-/** Rebuffering can lower compressed source bandwidth without changing the
- * frozen original media used by export or invalidating unrelated PCM windows. */
-export function adaptAudioSourceRenditions(prepared: PreparedAudio) {
-  for (const track of prepared.tracks)
-    if (track.kind === "file") {
-      const source = prepared.project?.previewAudioSources?.[track.src];
-      const mode = typeof window !== "undefined" ? window.__FRAME_PREVIEW_MEDIA_MODE__ : undefined;
-      const original = !prepared.live || mode === "original" || mode === "cached" ||
-        (typeof window !== "undefined" && (window.__FRAME_PREVIEW_READERS__ ?? 0) > 0);
-      prepared.sourceKeys?.set(
-        track.src,
-        prepared.files!.bind(
-          track.src,
-          original
-            ? source?.originalUrl ? { revision: source.revision, url: source.originalUrl } : undefined
-            : source,
-        ),
-      );
-    }
 }
 export function disposePreparedAudio(
   prepared: PreparedAudio,
@@ -242,24 +202,7 @@ export async function prepareAudioSegment(
   prepared.files?.setActiveSources(activeSources);
   const bufferSeconds =
     prepared.files?.bufferSeconds(rate, true) ?? LIVE_BUFFER_SECONDS;
-  if (prepared.preview && !offline) {
-    await Promise.all(
-      prepared.tracks.map(async (track) => {
-        const control = overrides.get(track.id) ?? track;
-        if (control.muted || control.gain === 0) return;
-        await prepared.generated?.prepareSegment?.({
-          trackId: track.id,
-          context,
-          offset: from,
-          duration: length,
-          rate,
-          signal,
-        });
-      }),
-    );
-    return;
-  }
-  if (!offline && prepared.files && !prepared.progressive) {
+  if (!offline && prepared.files) {
     const needed = new Set<string>(),
       budget = prepared.files.diagnostics().budgetBytes;
     for (const track of prepared.tracks) {
@@ -290,12 +233,7 @@ export async function prepareAudioSegment(
   await Promise.all(
     prepared.tracks.map(async (track) => {
       const control = overrides.get(track.id) ?? track;
-      if (
-        control.muted ||
-        control.gain === 0 ||
-        (track.kind === "file" && prepared.progressive)
-      )
-        return;
+      if (control.muted || control.gain === 0) return;
       const countLength = offline
         ? length
         : Math.min(length, bufferSeconds * rate);
@@ -383,7 +321,6 @@ export function scheduleAudio(
     overrides: Map<string, { gain: number; muted: boolean }>,
     destinationMix = mix,
   ): Instance | undefined {
-    if (track.kind === "file" && owner.progressive) return;
     const cleanups: (() => void)[] = [],
       pending: Promise<void>[] = [];
     try {
@@ -669,8 +606,8 @@ export function scheduleAudio(
               old &&
               sameGenerator &&
               nextDuration === projectDuration &&
-              audioTrackSourceSignature(old.track, old.owner.project) ===
-                audioTrackSourceSignature(track, next.project) &&
+              audioTrackSourceSignature(old.track) ===
+                audioTrackSourceSignature(track) &&
               (track.kind !== "file" ||
                 (old.track.kind === "file" &&
                   old.owner.sourceKeys?.get(old.track.src) ===

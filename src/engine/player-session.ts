@@ -1,6 +1,5 @@
 import { FrameRenderer, type PreparedRendererUpdate } from "./renderer";
 import { AudioTransport } from "./audio";
-import { previewSnapshotBusy } from "./live-preview-lock";
 import { waitForStudio, type StudioApi } from "./debug";
 import type { AnimationProject, Quality } from "./types";
 import { fitComposition } from "./dimensions.mjs";
@@ -80,7 +79,7 @@ export function createPlayerSession({
   const output = new FrameRenderer(canvas, project);
   const lifetime = new AbortController();
   let updateEpoch = 0, updating: AbortController | undefined, renderFailed = false;
-  const livePreview = { revision: 0, updates: 0, lastError: "" };
+  const hotUpdate = { revision: 0, updates: 0, lastError: "" };
   const publish = () => {
     if (!canceled) { output.setPlayback(readPlayback(sound)); onSnapshot(readPlayback(sound)); }
   };
@@ -262,7 +261,7 @@ export function createPlayerSession({
     },
     getDiagnostics: () => ({
       ...output.diagnostics(),
-      livePreview: { ...livePreview, ...window.__FRAME_LIVE_STATUS__, lastError: window.__FRAME_LIVE_STATUS__?.error ?? livePreview.lastError },
+      hotUpdate: { ...hotUpdate },
       audio: {
         state: sound.context?.state ?? "locked",
         buffering: sound.buffering,
@@ -270,7 +269,6 @@ export function createPlayerSession({
         prepareMs: sound.prepareMs,
         source: sound.diagnostics(),
         tracks: Object.fromEntries(sound.controls),
-        bufferedRanges: sound.bufferedRanges(),
       },
       errors: [...diagnosticErrors],
     }),
@@ -350,8 +348,6 @@ export function createPlayerSession({
     .then(async () => {
       if (canceled) return;
       await output.render(sound.clock.time(), subtitles());
-      if (window.__FRAME_PREVIEW_MEDIA_MODE__ === "cached")
-        await sound.warmPreview(lifetime.signal);
       if (canceled) return;
       onLoading(false);
       api.ready = true;
@@ -440,7 +436,7 @@ export function createPlayerSession({
         beforeCommit: () => candidate?.refresh(),
         onCommit: () => {
           signal.throwIfAborted();
-          if (canceled || epoch !== updateEpoch || previewSnapshotBusy())
+          if (canceled || epoch !== updateEpoch)
             throw new DOMException("Superseded player revision", "AbortError");
           if (candidate && !candidate.commit())
             throw new DOMException("Superseded scene", "AbortError");
@@ -454,9 +450,9 @@ export function createPlayerSession({
           const recovered = !api.ready;
           api.ready = true;
           renderFailed = false;
-          livePreview.revision = options.revision ?? livePreview.revision;
-          livePreview.updates++;
-          livePreview.lastError = "";
+          hotUpdate.revision = options.revision ?? hotUpdate.revision;
+          hotUpdate.updates++;
+          hotUpdate.lastError = "";
           lastRender = -1;
           committed = true;
           // Notify React and the event client before AudioContext.resume can
@@ -472,7 +468,7 @@ export function createPlayerSession({
       });
       // An abort after acceptance belongs to the next update/export. It cannot
       // turn an already paired picture/audio revision into a cancelled result.
-      if (canceled || epoch !== updateEpoch || previewSnapshotBusy()) return committed;
+      if (canceled || epoch !== updateEpoch) return committed;
       output.setPlayback(readPlayback(sound));
       try { await drawRequested(sound.clock.time(), subtitles()); }
       catch (error) { if (!canceled) { recordError(error); renderFailed = true; pausePlayback(); onError("渲染错误：" + String(error)); } }
@@ -483,8 +479,8 @@ export function createPlayerSession({
         recordError(error);
         return true;
       }
-      if (signal.aborted || canceled || epoch !== updateEpoch || previewSnapshotBusy()) return false;
-      livePreview.lastError = String(error);
+      if (signal.aborted || canceled || epoch !== updateEpoch) return false;
+      hotUpdate.lastError = String(error);
       recordError(error);
       onError("更新失败，保留当前预览：" + String(error));
       throw error;

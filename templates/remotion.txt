@@ -1,4 +1,0 @@
-import type { SceneOptions } from "../../src/engine/types";
-import { createRemotionScene } from "../../src/engine/remotion-adapter";
-import project from "./project";
-export const createScene = (options: SceneOptions) => createRemotionScene(options, project);

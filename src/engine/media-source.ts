@@ -6,7 +6,7 @@ import {
   type InputVideoTrack,
   type WrappedCanvas,
 } from "mediabunny";
-import { previewAssetUrl, type Quality } from "./types";
+import { assetUrl } from "./types";
 import { MediaRequestQueue } from "./media-buffering";
 export interface MediaFrame {
   image: CanvasImageSource;
@@ -61,12 +61,12 @@ interface VideoPoolState {
     latencySeconds: number;
   };
 }
-// Immutable live revisions can contain different copies of this module. Resource
-// limits and ref counts must span every copy while old and new scenes coexist.
+// Hot updates can load a second copy of this module. Resource limits and ref
+// counts must span every copy while old and new scenes coexist.
 const globalPool = globalThis as typeof globalThis & {
-  __FRAME_VIDEO_SOURCE_POOL_V8__?: VideoPoolState;
+  __FRAME_VIDEO_SOURCE_POOL__?: VideoPoolState;
 };
-const pool = (globalPool.__FRAME_VIDEO_SOURCE_POOL_V8__ ??= {
+const pool = (globalPool.__FRAME_VIDEO_SOURCE_POOL__ ??= {
   entries: new Set(),
   cached: new Map(),
   canvasBytes: 0,
@@ -179,31 +179,8 @@ function removeEntry(entry: VideoEntry) {
   entry.retired = true;
   entry.input.dispose();
 }
-function previewQuality(quality: Quality): Quality {
-  if (quality !== "standard") return quality;
-  const connection = (
-    globalThis.navigator as
-      | (Navigator & {
-          connection?: {
-            saveData?: boolean;
-            effectiveType?: string;
-            downlink?: number;
-          };
-        })
-      | undefined
-  )?.connection;
-  const constrained =
-    connection?.saveData ||
-    /^(slow-2g|2g|3g)$/.test(connection?.effectiveType ?? "") ||
-    (connection?.downlink !== undefined && connection.downlink < 1.5) ||
-    (pool.transfers.throughputBytesPerSecond > 0 &&
-      pool.transfers.throughputBytesPerSecond < 128 * 1024);
-  // Choose once when a source is acquired. Never repeatedly reload a playing clip.
-  return constrained ? "draft" : quality;
-}
-function acquireEntry(src: string, quality: Quality): VideoEntry {
-  // The live manifest makes this URL immutable. Different revisions never share an Input.
-  const url = previewAssetUrl(src, previewQuality(quality));
+function acquireEntry(src: string): VideoEntry {
+  const url = assetUrl(src);
   let entry = cached.get(url);
   if (!entry) {
     while ((entries.size + 1) * INPUT_CACHE_BYTES > INPUT_BUDGET_BYTES) {
@@ -332,12 +309,11 @@ export async function openVideoSource(
   src: string,
   width: number,
   signal?: AbortSignal,
-  quality: Quality = "standard",
 ): Promise<VideoSource> {
   signal?.throwIfAborted();
   if (!Number.isInteger(width) || width < 1)
     throw Error("Invalid video frame width");
-  const entry = acquireEntry(src, quality);
+  const entry = acquireEntry(src);
   let reserved = 0;
   try {
     const { track, origin, duration, aspect } = await waitFor(
@@ -506,8 +482,8 @@ function reserveImageBytes(entry: ImageEntry, bytes: number) {
   entry.bytes += bytes;
   pool.imageBytes += bytes;
 }
-function acquireImageEntry(src: string, quality: Quality): ImageEntry {
-  const url = previewAssetUrl(src, previewQuality(quality));
+function acquireImageEntry(src: string): ImageEntry {
+  const url = assetUrl(src);
   let entry = pool.imageCached.get(url);
   if (!entry) {
     if (pool.images.size >= 64) {
@@ -567,7 +543,6 @@ export async function openImageSource(
   signal?: AbortSignal,
   width?: number,
   height?: number,
-  quality: Quality = "standard",
 ): Promise<ImageBitmap> {
   signal?.throwIfAborted();
   if (
@@ -575,7 +550,7 @@ export async function openImageSource(
     (height !== undefined && (!Number.isInteger(height) || height < 1))
   )
     throw Error("Invalid image frame size");
-  const entry = acquireImageEntry(src, quality);
+  const entry = acquireImageEntry(src);
   let bitmap: ImageBitmap | undefined;
   try {
     const blob = await waitFor(entry.ready, signal);

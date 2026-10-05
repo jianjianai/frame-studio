@@ -1,159 +1,18 @@
-# Keep only long-running services in this Dockge stack.
-# One-time data ownership setup runs outside Compose; see docs/SERVER.md.
-name: frame
+# docker compose -f deploy/compose.yaml up -d --build
 services:
-  studio:
-    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-8.4.0}
+  frame:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: frame-studio:9
     restart: unless-stopped
-    user: "1000:1000"
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    environment: &platform-environment
-      FRAME_ROLE: api
-      HOME: /tmp/frame-home
-      DATABASE_URL: postgres://frame:${POSTGRES_PASSWORD}@postgres:5432/frame
-      FRAME_MASTER_KEY: ${FRAME_MASTER_KEY}
-      FRAME_ADMIN_PASSWORD: ${FRAME_ADMIN_PASSWORD}
-      FRAME_PUBLIC_URL: ${FRAME_PUBLIC_URL:-https://frame.nerviloom.com}
-      FRAME_DATA: /data
-      FRAME_HOST_DATA: ${FRAME_HOST_DATA:-/opt/stacks/frame/data}
-      FRAME_TASK_CONCURRENCY: ${FRAME_TASK_CONCURRENCY:-2}
-      FRAME_MIN_FREE_BYTES: ${FRAME_MIN_FREE_BYTES:-1073741824}
-      # Canonical workspace edits on this Docker volume are observed by the live preview.
-      FRAME_LIVE_PREVIEW_POLLING: ${FRAME_LIVE_PREVIEW_POLLING:-1}
-      FRAME_EXECUTOR_IMAGE: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-8.4.0}
-      FRAME_T3_URL: http://frame-t3:3773
-      FRAME_T3_CONTAINER: frame-t3
-      FRAME_TASK_TIMEOUT_SECONDS: ${FRAME_TASK_TIMEOUT_SECONDS:-21600}
-      FRAME_SPEECH_URL: http://speech:8000
+    ports:
+      - "4310:4310"
+    environment:
+      # Required when the studio is reachable from the network.
+      FRAME_PASSWORD: ${FRAME_PASSWORD:?set FRAME_PASSWORD}
+      # Public https:// address behind your reverse proxy (needed for microphone recording).
+      FRAME_PUBLIC_URL: ${FRAME_PUBLIC_URL:-}
     volumes:
       - ./data:/data
-    networks:
-      internal: { aliases: [frame-web] }
-      caddy:
-    labels:
-      caddy: ${FRAME_DOMAIN:-frame.nerviloom.com}
-      caddy.reverse_proxy: "{{upstreams 3000}}"
-      caddy.encode: zstd gzip
-    depends_on:
-      postgres: { condition: service_healthy }
-      speech: { condition: service_started }
-    healthcheck:
-      test:
-        [
-          CMD,
-          node,
-          -e,
-          "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-      interval: 20s
-      timeout: 5s
-      retries: 5
-    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
-  controller:
-    image: ghcr.io/jianjianai/frame-studio/app:${FRAME_VERSION:-8.4.0}
-    restart: unless-stopped
-    user: "1000:1000"
-    group_add: ["${FRAME_DOCKER_GID:?Set FRAME_DOCKER_GID to the Docker socket group ID}"]
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    environment:
-      <<: *platform-environment
-      FRAME_ROLE: controller
-    volumes:
-      - ./data:/data
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks: [internal]
-    command: [node, server/controller.mjs]
-    depends_on:
-      studio: { condition: service_healthy }
-    healthcheck:
-      test: [CMD, node, server/controller-health.mjs]
-      interval: 20s
-      timeout: 5s
-      start_period: 30s
-      retries: 5
-    stop_grace_period: 120s
-    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
-  t3:
-    image: ghcr.io/jianjianai/frame-studio/t3-code:${FRAME_T3_VERSION:-0.0.45-frame.1}
-    container_name: frame-t3
-    restart: unless-stopped
-    user: "1000:1000"
-    read_only: true
-    tmpfs: [/tmp]
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
-    environment:
-      HOME: /data/ai/t3/home
-      FRAME_DATA: /data
-      FRAME_CALLBACK_URL: http://frame-web:3000
-      FRAME_AI_CONTROL_FILE: /data/ai/shared/control.json
-      FRAME_BROWSER: /usr/bin/chromium
-    volumes:
-      - ./data:/data
-      - type: bind
-        source: ./data/runtime/current
-        target: /opt/frame
-        read_only: true
-        bind: { create_host_path: false }
-    networks: [internal]
-    depends_on:
-      studio: { condition: service_healthy }
-    stop_grace_period: 120s
-    healthcheck:
-      test:
-        [
-          CMD,
-          node,
-          -e,
-          "const fs=require('node:fs');fetch('http://127.0.0.1:3773/api/auth/session',{headers:{authorization:'Bearer '+fs.readFileSync('/data/ai/t3/frame-service-token','utf8').trim()}}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-      interval: 20s
-      timeout: 5s
-      start_period: 30s
-      retries: 5
-    logging: { driver: json-file, options: { max-size: 10m, max-file: "3" } }
-  postgres:
-    image: postgres:18-alpine
-    restart: unless-stopped
-    environment:
-      POSTGRES_DB: frame
-      POSTGRES_USER: frame
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-    volumes: [./postgres:/var/lib/postgresql]
-    networks: [internal]
-    healthcheck:
-      test: [CMD-SHELL, pg_isready -U frame]
-      interval: 5s
-      timeout: 3s
-      retries: 15
-  speech:
-    image: ghcr.io/jianjianai/frame-studio/speech:${FRAME_SPEECH_VERSION:-7.6.3}
-    restart: unless-stopped
-    environment: { OMP_NUM_THREADS: "2", MKL_NUM_THREADS: "2" }
-    volumes: [./models:/models]
-    networks: [internal]
-    mem_limit: 4g
-    cpus: 2
-    healthcheck:
-      test:
-        [
-          CMD,
-          python,
-          -c,
-          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz')",
-        ]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-    logging: { driver: json-file, options: { max-size: 10m, max-file: "2" } }
-networks:
-  internal:
-  caddy:
-    external: true
-    name: ${FRAME_PROXY_NETWORK:-caddy_caddy}
+    shm_size: "1gb"

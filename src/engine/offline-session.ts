@@ -58,7 +58,7 @@ export async function installOffline(project: AnimationProject) {
     },
     getDiagnostics: () => ({
       ...renderer.diagnostics(),
-      audio: { state: "offline", bufferedRanges: null },
+      audio: { state: "offline" },
     }),
     getParameters: () => renderer.parameters(),
     async setParameters(values) {
@@ -105,6 +105,9 @@ export async function installOffline(project: AnimationProject) {
   );
   try {
     await renderer.init(width, height, "high");
+    // Import the audio module now: a first import can make the dev server
+    // re-optimize dependencies and reload, which is only safe before ready.
+    await project.loadAudio?.();
     await document.fonts.ready;
     api.ready = true;
   } catch (error) {

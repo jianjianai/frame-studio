@@ -1,40 +1,20 @@
 node_modules/
-dist/
-studio-dist/
-exports/
-test-results/
-playwright-report/
-.logs/
+web/dist/
 .DS_Store
 *.local
+*.log
+coverage/
 
 # Local configuration and credentials
 .env
 .env.*
-.evn
-.evn.*
 !.env.example
-!.env.sample
-.secrets/
-.credentials/
-*.github_fine_grained_tok
 *.pem
 *.key
-*.p12
-*.pfx
-id_rsa
-id_ed25519
 
-# Local tooling output
+# Local tool output and data from the old layout
 .cache/
-.pnpm-store/
-coverage/
-**/__pycache__/
-*.log
-
-# Each film owns its generated files
 /projects/
-projects/*/exports/
-projects/*/.cache/
-projects/.cache/
-projects/*/.history/
+/dist/
+/studio-dist/
+test-results/

@@ -1,11 +1,9 @@
 import { Clock } from "./clock";
-import { nextAudioControls, waitAudioReady } from "./live-audio-update";
-import { MediaTracks } from "./media-tracks";
-import { PreviewBuffering } from "./preview-audio";
+import { nextAudioControls, waitAudioReady } from "./audio-controls";
+import { PreviewBuffering } from "./media-buffering";
 import {
   prepareAudio,
   disposePreparedAudio,
-  adaptAudioSourceRenditions,
   prepareAudioSegment,
   scheduleAudio,
   type PreparedAudio,
@@ -19,7 +17,6 @@ export class AudioTransport {
   private graph?: ReturnType<typeof scheduleAudio>;
   private updateAbort?: AbortController;
   private updateRevision = 0;
-  private media?: MediaTracks;
   private boundary?: AudioBufferSourceNode;
   private loadPromise?: Promise<void>;
   private closed = false;
@@ -75,12 +72,6 @@ export class AudioTransport {
         this.controls,
         signal,
       );
-    await this.media?.prepare(
-      this.clock.time(),
-      this.clock.rate,
-      this.controls,
-      signal,
-    );
     this.prepareMs = performance.now() - began;
   }
   constructor(
@@ -104,19 +95,6 @@ export class AudioTransport {
       this.gain.connect(this.context.destination);
       this.clock.seek(saved);
       this.applyGain();
-      this.media =
-        this.project.audioDocument || this.project.livePreview
-          ? undefined
-          : new MediaTracks(
-              projectAudioTracks(this.project),
-              this.context,
-              this.gain,
-              this.project.duration,
-              () => {
-                if (this.requestedPlay && !this.buffering) this.restart();
-              },
-              (error) => this.report(error, this.generation),
-            );
     }
   }
   private async load(): Promise<void> {
@@ -126,16 +104,9 @@ export class AudioTransport {
       this.project,
       this.context!,
       this.abort.signal,
-      true,
     )
       .then((prepared) => {
-        if (!this.closed) {
-          this.prepared = prepared;
-          if (prepared.preview) {
-            this.media?.dispose();
-            this.media = undefined;
-          }
-        }
+        if (!this.closed) this.prepared = prepared;
       })
       .catch((error) => {
         this.loadPromise = undefined;
@@ -193,7 +164,6 @@ export class AudioTransport {
       next,
       this.context!,
       signal,
-      true,
       previous,
     );
     let committed = false;
@@ -254,13 +224,6 @@ export class AudioTransport {
               this.controls.clear();
               for (const [id, control] of controls)this.controls.set(id, control);
               this.clock.setDuration(next.duration);
-              if (candidate.progressive !== previous.progressive) {
-                this.media?.dispose();this.media = undefined;
-                if (candidate.progressive)
-                  this.media = new MediaTracks(projectAudioTracks(next),context,this.gain!,next.duration,
-                    ()=>{if(this.requestedPlay&&!this.buffering)this.restart();},
-                    error=>this.report(error,this.generation));
-              }
               committed = true;
               notifyAccepted();
             };
@@ -356,11 +319,8 @@ export class AudioTransport {
     signal?.throwIfAborted();
     if (this.closed || !this.prepared || !this.context) return;
     const offset = this.clock.time();
-    await Promise.all([
-      this.media?.prepare(offset, this.clock.rate, this.controls, signal),
-      prepareAudioSegment(this.prepared, this.context, this.clock.duration, offset,
-        Math.min(Math.max(0, this.clock.duration - offset), 8 * this.clock.rate), this.clock.rate, this.controls, signal),
-    ]);
+    await prepareAudioSegment(this.prepared, this.context, this.clock.duration, offset,
+      Math.min(Math.max(0, this.clock.duration - offset), 8 * this.clock.rate), this.clock.rate, this.controls, signal);
     signal?.throwIfAborted();
   }
   async play(): Promise<void> {
@@ -415,8 +375,7 @@ export class AudioTransport {
     if (!Number.isFinite(control.gain) || control.gain < 0 || control.gain > 4)
       throw new Error("无效音轨音量");
     this.controls.set(id, control);
-    const mediaAdjusted = this.media?.setTrack(id, control);
-    const adjusted = this.graph?.setTrack?.(id, control) || mediaAdjusted;
+    const adjusted = this.graph?.setTrack?.(id, control);
     if (this.requestedPlay && !adjusted && !control.muted && control.gain > 0)
       this.restart();
   }
@@ -437,7 +396,6 @@ export class AudioTransport {
       );
   }
   private stopSource(): void {
-    this.media?.stop();
     if (this.boundary) {
       this.boundary.onended = null;
       this.boundary.stop();
@@ -460,7 +418,6 @@ export class AudioTransport {
     this.onError?.(error instanceof Error ? error : new Error(String(error)));
   }
   private restart(): void {
-    if (this.prepared) adaptAudioSourceRenditions(this.prepared);
     const generation = ++this.generation;
     this.preparation?.abort();
     this.clock.pause();
@@ -542,12 +499,6 @@ export class AudioTransport {
       () =>
         Promise.all([
           this.waitForVisual(request.signal),
-          this.media?.prepare(
-            offset,
-            this.clock.rate,
-            this.controls,
-            request.signal,
-          ),
           prepareAudioSegment(
             prepared,
             context,
@@ -628,12 +579,6 @@ export class AudioTransport {
           boundary.stop(when + length / this.clock.rate);
           this.boundary = boundary;
           this.clock.play(lead);
-          this.media?.start(
-            () => this.clock.time(),
-            this.clock.rate,
-            this.controls,
-            when,
-          );
           await context.resume();
           if (current()) this.buffering = false;
         } finally {
@@ -652,7 +597,6 @@ export class AudioTransport {
     this.pause();
     this.abort.abort();
     this.updateAbort?.abort();
-    this.media?.dispose();
     if (this.context && this.prepared)
       disposePreparedAudio(this.prepared, this.context);
     this.prepared = undefined;
@@ -661,17 +605,6 @@ export class AudioTransport {
       await this.context.close();
   }
   diagnostics() {
-    return {
-      files: this.prepared?.files?.diagnostics() ?? null,
-      mode:
-        this.project.audioDocument || this.project.livePreview
-          ? "direct"
-          : this.prepared?.preview
-            ? "proxy"
-            : "legacy",
-    };
-  }
-  bufferedRanges() {
-    return this.media?.ranges() || {};
+    return { files: this.prepared?.files?.diagnostics() ?? null };
   }
 }

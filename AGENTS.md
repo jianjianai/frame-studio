@@ -1,49 +1,44 @@
-# FRAME · 工程协作约定
+# FRAME Studio 开发约定
 
-本文件只约束代码、文件布局、工具与协作修改，不规定动画内容、制作方式、交付或音乐水准。
+这个仓库是 FRAME Studio 本身（平台代码）。用户的视频作品不在这里，而在数据目录（默认 `~/.frame-studio`）的 Git 仓库中，每个作品一个 `works/<id>` 分支。
 
-## 修改范围
+## 目录
 
-工作区为当前仓库根目录。主开发环境已迁至 ovh-docker：`/home/agentdock/AgentDock/frame-studio`，容器命令与持久化说明见 `docs/OVH-DEVELOPMENT.md`。先读 `docs/NEW-PROJECT-STANDARD.md`、`docs/AUTHORING.md` 和目标 `projects/<id>/README.md`，检查 Git 状态、HEAD 和相关 diff。
+| 路径 | 内容 |
+|---|---|
+| `server/` | 单进程 Node 服务：HTTP API、WebSocket、Vite 预览、MCP、AI（ACP）、渲染导出、语音 |
+| `server/tools/` | FRAME 工具注册表。MCP、CLI、内置 AI 共用；新增 AI 能力从这里加 |
+| `server/ai/` | Claude Code / Codex 的 ACP 接入、账号登录、自定义 API、聊天会话 |
+| `web/` | 工作台界面（React）：`workbench/` 布局与预览、`views/` 侧边栏、`chat/` AI 聊天、`settings/` |
+| `src/engine/` | 作品运行引擎（播放器会话、合成、音频图、各框架适配）。作品通过 `../../src/engine/` 导入，属于公开接口 |
+| `src/preview/` | 预览舞台页（stage）与无界面渲染页（render） |
+| `bin/frame.mjs` | 命令行：serve、mcp、call、export… |
+| `docs/guide/` | 作品制作指南，同时是 `frame_guide` 工具的内容 |
+| `deploy/` | Dockerfile 与 compose |
 
-**视频制作任务只允许修改 `projects/<id>/`。** 每个视频的源码、素材、音轨、代码音频、说明、制作源文件、专用脚本、测试和导出结果全部放在这个目录。不得修改其他视频，也不得改公共引擎、播放器、根配置、依赖或仓库规范；需要公共能力时提出工作台维护需求。只有用户明确要求的工作台公共功能维护任务可以修改公共目录，本次隔离、音频和导出改造属于此类维护。
+架构说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
-工程共享 pnpm 依赖，可以只读调用 `src/engine/` 的公开接口。不得导入其他工程私有文件。新增依赖由工作台维护任务通过 pnpm 更新 package.json 与锁文件。
+## 约定
 
-## 新建和接口
+- 中文界面与文档；代码注释用英文，简短说明“为什么”。
+- 引擎（`src/engine`）是作品依赖的公开接口：改签名时同步更新 `docs/guide` 和受影响的作品；不保留旧格式兼容层，也不做格式升级功能。
+- 新的 AI 能力优先做成 `server/tools/` 中的工具：参数用 zod 描述，返回 `{ text, data, images }`，描述写清楚何时使用。
+- 服务端写入作品文件只能经过 `confined()`（禁止路径穿越），Git 操作经过 `server/git.mjs`。
+- 依赖用 pnpm 管理，版本写死。运行时需要的包放 `dependencies`。
+- 修改后运行 `pnpm check`（类型检查、测试、构建）。涉及界面时启动 `pnpm dev` 实际操作一遍。
 
-新增使用 `pnpm film new <id> "标题"`，默认空白合成，不预选 2D/3D 引擎；composition 是基础容器。完整能力目录用 `pnpm --silent film capabilities --json`，支持 `--category visual|media|animation|audio`（每次传一个值）、`--query <关键词>`、`--id <能力 id>`；本地/平台 MCP 为 `frame_capabilities`，任务内 Agent 为 `node scripts/work-tool.mjs capabilities`（可带 JSON 过滤）。接入与限制见 `docs/CAPABILITIES.md`。框架和模板均为平等可选能力，按内容自主选择；显式指定 `--renderer` 仅用于选取已有引擎示例。脚手架先准备完整目录再注册，拒绝覆盖已有目录。自动发现 `projects/*/project.ts`，不改公共列表或路由。
+## 本地调试
 
-`project.ts` 保持静态元数据；`load: () => import('./scene')`，可选 `loadAudio: () => import('./audio')`。场景接口兼容 `createScene({width,height,quality}) -> Scene | Promise<Scene>`；Canvas 输出包含 canvas/render/dispose，Remotion 的 React/DOM 根通过公共适配器接入并额外声明 `loadRemotion`。DOM 不能直接作为 Canvas 合成图层，混用由 Remotion 根通过 `FrameScene` 嵌入其他场景，边界见 `docs/REMOTION.md`。支持异步初始化、`prepareFrame(time,{signal})` 和异步 render。合成项目通过 `loadVisual: () => import("./visual.json")` 声明可编辑文档；GUI/CLI/MCP 共用该文档，保存检查 SHA-256 版本。画面和声音共用绝对时间，场景不自建动画或音频时钟；随机数据可确定性重建。
+```bash
+FRAME_HOME=/tmp/frame-dev FRAME_PORT=4311 pnpm dev
+```
 
-音频通过 `loadAudioDocument: () => import('./audio.json')` 声明权威多轨混音文档；未声明文档的旧工程使用 `audioTracks`。先读 context.authority，避免修改已不控制混音的旧字段。生成器在 loadAudio 加载的模块中导出 generators，使用公共播放器提供的上下文和调度时间，必须支持任意片段、变速与释放；正常播放不需要预先合成音频文件。
+使用独立的 `FRAME_HOME` 避免影响自己的作品。AI 账号来自本机 `~/.claude`、`~/.codex`（或 `FRAME_AGENT_HOME`）。
 
-运行资源放 `projects/<id>/public/`，浏览器 URL 为 `films/<id>/...`，通过 `assetUrl()` 使用。不得跨项目引用资源或通过路径穿越、符号链接越界。`dispose` 和初始化失败路径只释放本实例资源。
+## 协作与发布（用户已明确的规则）
 
-## 工具与检查
-
-统一命令入口是 `pnpm film help`。AI 接手先用 `pnpm --silent film context <id> --json` 读取项目入口、元数据、音轨和修改范围；工具说明见 `docs/AI-WORKFLOW.md`。`film storyboard` 生成带时间标记的组帧预览，`film frame` 定位单帧；均写本工程 exports，不改运行源码。
-
-生成工具只能写目标项目目录，导出到 `projects/<id>/exports/`，临时文件在本项目 `.cache/` 或导出目录并清理。浏览器下载使用浏览器选择的保存位置。海报更新 `pnpm posters --project <id>`；全量必须明确 `--all`。检查命令只读，失败返回非零。
-
-项目任务运行 `pnpm project:check <id> --strict`、相关测试和 `pnpm project:scope <id>`。后者检查暂存、未暂存与未跟踪改动；可用 `--base <commit>` 检查相对基线提交的改动。公共维护运行 `pnpm verify`。这是工程与工具边界，不是操作系统权限沙箱；任意外部程序的写权限需要另行配置系统隔离。
-
-公共测试在 `tests/`，工程专属测试在 `projects/<id>/tests/`，自动发现。浏览器测试设置 `FRAME_TEST_PORT`，不复用未知服务。并行工作使用独立 checkout、构建目录与端口。
-
-## 发布与备份
-
-用户已明确要求：后续 Frame Studio 更新默认不执行发布前备份，避免备份耗时。不得自动进行数据库转储、作品/素材/模型目录归档，也不得把完整校验历史大备份作为每次发布的前置步骤。只有用户另行明确要求时才执行备份；历史发布记录中的备份流程不再作为默认模板。
-
-保留候选构建、测试、活动任务检查及发布后的健康和功能验收；仅切换本次需要更新的服务，不为备份停机。已有备份和可用旧镜像保留，不因本约定自动删除。涉及不可逆数据迁移或删除时，先说明影响并确认该操作，不擅自把备份步骤加回发布流程。
-
-Dockge 生产栈只声明需要长期运行的服务。初始化、迁移、检查等一次性容器不得作为常驻 Compose 服务，也不得用休眠伪装常驻；按需在栈外使用 `docker run --rm`，不附加 Compose 项目标签。移除历史退出容器前核对身份、状态及挂载，不删除数据卷，不重启无关服务。
-
-## 保留现有工作与提交
-
-后续任务直接在 `main` 分支开发，不再新建工作树。开始前检查并保留已有未提交修改，避免并行任务相互覆盖。
-
-工程说明、接口和使用指南放在 `docs/` 或项目 README；修改记录、验证报告、审查结论等过程文档统一放在独立的 `records/`。仓库公共维护记录放根 `records/`，视频专属记录放 `projects/<id>/records/`，不突破项目修改边界。项目 README 和 `production/brief.md` 不堆积过程记录，只保留说明及记录目录链接。导出器的临时机器结果仍随输出保存在忽略的 exports 中。
-
-共享文件修改前重新读取，保留他人未提交内容。只改本任务文件，不全仓格式化，不擅自 stash/reset/clean、删除他人目录或结束他人进程。需要 WSL 编译时先复制到 Linux 文件系统，完成后只清理本次创建的临时文件。
-
-按明确文件清单暂存，检查 diff，不使用 `git add .` / `git add -A` 捎带他人更改，不强推。移动/删除同步修正引用。失败检查如实记录，不把历史缓存当新结果。资源保留来源与许可证，密钥和个人配置不入库。
+- 直接在 `main` 分支开发，不新建工作树。开始前检查并保留已有的未提交修改。
+- 按明确的文件清单暂存，检查 diff；不用 `git add .` / `git add -A`，不强推，不擅自 stash/reset/clean 他人的改动。
+- 发布更新默认**不做**发布前备份（不导出数据、不归档作品/模型目录）。只有用户另行要求时才备份。涉及不可逆的数据迁移或删除时，先说明影响并确认。
+- 发布只替换需要更新的容器；发布后做健康检查和功能验收。一次性任务用 `docker run --rm`，不写成常驻服务。
+- 密钥和个人配置不入库；第三方素材保留来源与许可证。

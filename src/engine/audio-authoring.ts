@@ -9,7 +9,7 @@ import {
   type HostTone,
 } from "./tone-runtime";
 import type * as ToneType from "tone";
-import { waitAudioReady } from "./live-audio-update";
+import { waitAudioReady } from "./audio-controls";
 
 export interface AudioNote {
   at: number;

@@ -1,0 +1,138 @@
+.settings {
+  display: flex;
+  gap: 20px;
+  min-height: 460px;
+}
+.settings-nav {
+  width: 150px;
+  flex: none;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+}
+.settings-nav button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-muted);
+  text-align: left;
+  cursor: pointer;
+}
+.settings-nav button:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.settings-nav button.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.settings-body {
+  flex: 1;
+  min-width: 0;
+  max-width: 720px;
+}
+.settings-body h2 {
+  margin: 18px 0 6px;
+  font-size: 15px;
+}
+.settings-body h2:first-child {
+  margin-top: 0;
+}
+.settings-body h3 {
+  margin: 14px 0 6px;
+  font-size: 13px;
+}
+.settings-body > p {
+  margin: 0 0 10px;
+  line-height: 1.6;
+}
+.setting-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.setting-card.account {
+  align-items: flex-start;
+}
+.setting-card.highlight {
+  border-color: var(--ok);
+}
+.account-logo {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  color: #fff;
+  font-weight: 800;
+}
+.account-logo.claude {
+  background: #d97757;
+}
+.account-logo.codex {
+  background: #10a37f;
+}
+.login-steps {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+}
+.login-steps p {
+  margin: 0 0 6px;
+}
+.user-code {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+}
+.avatar-img {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+}
+.code-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--bg-sunken);
+}
+.code-line code {
+  flex: 1;
+  font: 12px var(--mono);
+}
+.code-block {
+  margin: 6px 0 10px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg-sunken);
+  font: 12px/1.5 var(--mono);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+.token-text {
+  word-break: break-all;
+  user-select: all;
+}
+@media (max-width: 720px) {
+  .settings {
+    flex-direction: column;
+  }
+  .settings-nav {
+    width: auto;
+    display: flex;
+    flex-wrap: wrap;
+  }
+}

@@ -105,7 +105,7 @@ export function createToneAudio(
         }
       });
     }
-    await import("./live-audio-update").then(({ waitAudioReady }) =>
+    await import("./audio-controls").then(({ waitAudioReady }) =>
       waitAudioReady(preparations.get(raw)!, signal),
     );
   };

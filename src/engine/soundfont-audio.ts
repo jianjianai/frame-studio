@@ -28,7 +28,7 @@ export function createSampledScoreAudio(
       )
     )
       return;
-    const response = await fetch(assetUrl(options.bank + ".parts/index.json"));
+    const response = await fetch(assetUrl(options.bank + ".parts/index.json"), { headers: { "X-Frame-Optional": "1" } });
     if (!response.ok) return;
     const manifest = await response.json();
     if (manifest.version !== 1 || manifest.sourceSha256 !== options.sha256)

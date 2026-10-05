@@ -1,0 +1,41 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+}
+#stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+.stage-canvas {
+  display: block;
+  background: #000;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 0.06);
+}
+.stage-banner {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font:
+    13px/1.5 system-ui,
+    sans-serif;
+  color: #fff;
+  background: rgb(160 110 20 / 0.92);
+  white-space: pre-wrap;
+  max-height: 40%;
+  overflow: auto;
+}
+.stage-banner[data-kind="error"] {
+  background: rgb(170 40 50 / 0.94);
+}
+.subtitle-layer {
+  pointer-events: none;
+}

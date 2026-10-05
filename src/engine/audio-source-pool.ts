@@ -190,7 +190,7 @@ export class AudioSourcePool {
           const audio = await input.getPrimaryAudioTrack();
           if (!audio || !(await audio.canDecode()))
             throw Error(
-              "音频无法解码，请使用 film audio-media 转为兼容 WAV/FLAC：" + src,
+              "音频无法解码，请把它转为 WAV、FLAC 或 AAC 后重新导入：" + src,
             );
           const video = await input.getPrimaryVideoTrack();
           const origin = await (video ?? audio).getFirstTimestamp();
@@ -212,7 +212,7 @@ export class AudioSourcePool {
           this.abort.signal.removeEventListener("abort", abort);
           if (e instanceof PreviewBuffering) throw e;
           throw Error(
-            "音频无法解码，请在音频面板转换兼容副本，或使用 film audio-media 转为 WAV/FLAC：" +
+            "音频无法解码，请把它转为 WAV、FLAC 或 AAC 后重新导入：" +
               src +
               " (" +
               String(e) +

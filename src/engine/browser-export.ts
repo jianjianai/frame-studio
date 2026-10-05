@@ -147,7 +147,7 @@ export async function exportWebm(
     }
     if (!codec)
       throw new Error(
-        "实际试编码失败，请使用 film export 命令。" + failures.join("; "),
+        "浏览器无法编码视频，请改用服务器导出（导出面板中的 MP4）。" + failures.join("; "),
       );
     options.onEncoder?.({ codec, failures });
     const video = new CanvasSource(canvas, { codec, ...encoding });

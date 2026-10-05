@@ -55,7 +55,7 @@ export async function exportRemotionWebm(
     throw Error(
       "Remotion 浏览器导出请使用工程帧率 " +
         project.fps +
-        "；转换帧率请使用 film render 或服务端导出。",
+        "；转换帧率请使用服务器导出。",
     );
   const { default: Component } = await project.loadRemotion();
   const Content = withFrameSubtitles(Component, project, options.subtitles);

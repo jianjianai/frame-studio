@@ -1,0 +1,72 @@
+import { z } from "zod";
+import { workArg, asJson } from "./registry.mjs";
+import { readVisual, editVisual, readAudio, editAudio } from "../documents.mjs";
+import { visualOperationSchema } from "../../src/engine/visual-document.mjs";
+import { audioOperationSchema } from "../../src/engine/audio-document.mjs";
+
+export function registerDocumentTools(registry) {
+  registry.add({
+    name: "layers_get",
+    title: "读取图层",
+    description:
+      "读取 visual.json 图层时间轴（图片/视频/颜色/Lottie/scene 模块图层，含位置、透明度关键帧、淡入淡出）及其 sha256。只有使用 loadVisual 的作品才有。",
+    readOnly: true,
+    input: { work: workArg },
+    async run(_, ctx) {
+      const result = readVisual(await ctx.work());
+      return asJson({ sha256: result.sha256, duration: result.duration, document: result.document });
+    },
+  });
+
+  registry.add({
+    name: "layers_edit",
+    title: "编辑图层",
+    description:
+      "原子地编辑 visual.json：add（加图层）、update（patch 部分字段，unset 删除字段）、remove、reorder（图层顺序：越靠后越在上面）、split（在某时间切开）、replace（整体替换）。transform 的 x/y/width/height 是相对画面的 0..1 比例，可以是数字或关键帧数组 [{at,value,easing}]。",
+    input: {
+      work: workArg,
+      operations: z.array(visualOperationSchema).min(1).max(100),
+      expectedSha256: z.string().optional(),
+      dryRun: z.boolean().default(false),
+    },
+    async run(args, ctx) {
+      const result = editVisual(await ctx.work(), args);
+      return asJson(
+        { sha256: result.sha256, clips: result.document.clips.length, dryRun: args.dryRun },
+        args.dryRun ? "预检通过（未写入）" : `已更新图层，共 ${result.document.clips.length} 个`,
+      );
+    },
+  });
+
+  registry.add({
+    name: "audio_get",
+    title: "读取混音",
+    description:
+      "读取 audio.json 多轨混音（sources 素材、tracks 音轨、clips 片段、buses 总线、master 主输出）。作品还没有音频时 document 为 null（audio_edit / audio_place 会自动创建）。",
+    readOnly: true,
+    input: { work: workArg },
+    async run(_, ctx) {
+      return asJson(readAudio(await ctx.work()));
+    },
+  });
+
+  registry.add({
+    name: "audio_edit",
+    title: "编辑混音",
+    description:
+      "原子地编辑 audio.json：put（新增或替换 sources/tracks/clips/buses 中的一项）、remove、split、replace。如果作品还没有 audio.json，会自动创建并在 project.ts 中声明。clip 的 start/duration 是作品时间（秒），offset 是素材内起点。",
+    input: {
+      work: workArg,
+      operations: z.array(audioOperationSchema).min(1).max(100),
+      expectedSha256: z.string().optional(),
+      dryRun: z.boolean().default(false),
+    },
+    async run(args, ctx) {
+      const result = editAudio(await ctx.work(), args);
+      return asJson(
+        { sha256: result.sha256, tracks: result.document.tracks.length, clips: result.document.clips.length, dryRun: args.dryRun },
+        args.dryRun ? "预检通过（未写入）" : "已更新混音",
+      );
+    },
+  });
+}

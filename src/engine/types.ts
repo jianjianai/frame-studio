@@ -53,8 +53,6 @@ export const projectSchema = z
     accent: z.string(),
     poster: z.string(),
     posterTime: z.number().nonnegative().optional(),
-    audio: z.string().optional(),
-    audioTracks: z.array(audioTrackSchema).max(32).optional(),
     tags: z.array(z.string()),
     status: z.enum(["demo", "draft", "film"]).default("demo"),
     beats: z.array(
@@ -71,23 +69,6 @@ export const projectSchema = z
   .superRefine((p, ctx) => {
     if (p.posterTime !== undefined && p.posterTime >= p.duration)
       ctx.addIssue({ code: "custom", message: "封面时间不能超过片长" });
-    if (p.audio && p.audioTracks?.length)
-      ctx.addIssue({
-        code: "custom",
-        message: "audio 与 audioTracks 不能同时配置",
-      });
-    const ids = new Set<string>();
-    for (const track of p.audioTracks ?? []) {
-      if (
-        ids.has(track.id) ||
-        (track.start ?? 0) >= p.duration ||
-        (track.start ?? 0) +
-          (track.duration ?? p.duration - (track.start ?? 0)) >
-          p.duration
-      )
-        ctx.addIssue({ code: "custom", message: "音轨 id 重复或时间超出片长" });
-      ids.add(track.id);
-    }
     for (const s of p.subtitles)
       if (s.end > p.duration)
         ctx.addIssue({ code: "custom", message: "字幕不能超过片长" });
@@ -133,13 +114,6 @@ export interface SceneModule {
   createScene(options: SceneOptions): Promise<Scene> | Scene;
 }
 export interface AnimationProject extends ProjectMeta {
-  /** Live sessions run source/generators without whole-film preencoding. */
-  livePreview?: boolean;
-  previewAudioGeneratorRevision?: string;
-  previewAudioSources?: Record<string, {
-    revision: string; url?: string; originalUrl?: string;
-    renditions?: Record<string, string>;
-  }>;
   load: () => Promise<SceneModule>;
   loadRemotion?: () => Promise<import('./remotion-composition').RemotionModule>;
   loadAudio?: () => Promise<GeneratedAudioModule>;
@@ -182,20 +156,15 @@ export interface GeneratedAudioModule {
   /** Release resources held for this playback/export session. */
   disposeAudio?(context: BaseAudioContext): void;
 }
-export function projectAudioTracks(
-  project: Pick<AnimationProject, "audio" | "audioTracks" | "visual" | "audioDocument">,
-): AudioTrack[] {
-  return [...(
-    project.audioDocument ? compileAudioTracks(project.audioDocument) : project.audioTracks ??
-    (project.audio
-      ? [{ id: "main", name: "配乐与音效", kind: "file", src: project.audio }]
-      : [])
-  ), ...(project.audioDocument?.linkedVideo===false?[]:visualAudioTracks(project.visual))];
+/** Playable tracks: the audio.json mix plus the sound of video layers (unless unlinked). */
+export function projectAudioTracks(project: Pick<AnimationProject, "visual" | "audioDocument">): AudioTrack[] {
+  return [
+    ...(project.audioDocument ? compileAudioTracks(project.audioDocument) : []),
+    ...(project.audioDocument?.linkedVideo === false ? [] : visualAudioTracks(project.visual)),
+  ];
 }
+/** Each previewed work sets its own asset base; builds fall back to the Vite base URL. */
 export const assetUrl = (relative: string): string =>
-  import.meta.env.BASE_URL + relative.replace(/^\//, "");
+  ((globalThis as { __FRAME_ASSET_BASE__?: string }).__FRAME_ASSET_BASE__ ?? import.meta.env.BASE_URL) +
+  relative.replace(/^\//, "");
 
-/** Live bundles select a cached preview rendition; offline rendering keeps the original. */
-export function previewAssetUrl(relative: string, _quality: Quality = "standard"): string {
-  return assetUrl(relative);
-}

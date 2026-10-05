@@ -1,44 +1,48 @@
-# FRAME · 作品管理与 AI 创作平台
+# FRAME Studio
 
-V8.1 接入完整宿主绑定的 Tone 与 Signalsmith，支持采样作曲、事件乐谱、独立移调/保调变速、共振峰和完整效果链。预览可选择原始素材、压缩素材或完整浏览器缓存；缓存显示进度与待下载文件，保存后自动准备新版本。入口见 [音频创作](docs/AUDIO-CREATIVE.md) 与 [预览素材模式](docs/PREVIEW-MODES.md)。
+用 AI 制作视频的工作台。描述你想要的画面，内置的 Claude Code / Codex 编写代码生成动画、配乐和配音；你在旁边实时预览、圈出问题、录音、微调时间轴，最后导出 MP4。
 
-V8 创作页改为增量实时预览，保存源码后在同一播放器更新画面和声音，不再每次构建整片音频。内容哈希缓存、按质量媒体代理和共同缓冲覆盖高延迟与慢网络；正式导出使用冻结版本和原始素材。行为与升级说明见 [V8 实时预览](docs/V8-LIVE-PREVIEW.md)。
+```
+新建作品（AI 或空白） → [ 上传素材 → AI 制作 → 实时预览审片 ] 循环 → 导出
+```
 
-V7 增加多轨音频文档与编辑器、Web Audio/Tone.js/PCM Worker/SoundFont 混用、轨道/总线/主输出处理链、波形与格式转换、独立音频及分轨导出。使用方法见 [V7 音频](docs/AUDIO-V7.md)。
+- **内置 AI**：通过 [Agent Client Protocol](https://agentclientprotocol.com) 驱动 Claude Code 和 Codex。在设置中登录 Claude 或 ChatGPT 账号，或添加任意 Anthropic / OpenAI 兼容 API。聊天面板与 VS Code 的 AI 聊天一致：流式回复、工具调用、文件差异、权限确认、模型与模式切换。
+- **AI 看得见、听得到**：FRAME 的 MCP 工具让 AI 渲染画面、拼分镜、分析响度、检查运行错误，并知道你在播放器里正在看哪一秒。
+- **实时预览**：保存即更新，不刷新、不丢播放位置。
+- **简单的人工编辑**：时间轴上拖动、裁剪、切开图层与音频，编辑字幕和镜头标记；内置代码编辑器。
+- **录音**：从播放头开始边看边录，录音直接落在音轨上。
+- **配音**：Edge 在线语音、OpenAI 兼容语音接口，或下载离线语音模型（Kokoro、MeloTTS、Piper 等）。
+- **版本与同步**：每个作品是 Git 分支，AI 每轮修改自动保存版本、一键撤销；作品库和共享素材库可同步到 GitHub。
+- **外部 AI 也能用**：MCP（HTTP / stdio），Claude Desktop、Cursor、Codex 等都可以直接制作作品。
 
-V6 增加统一混合合成、视频/图片/图像序列、Three/Pixi/Canvas/Babylon/Lottie 接入和异步目标帧渲染。新项目默认空白，不预选 2D/3D 引擎；GUI、CLI、MCP 共用 visual.json 及版本冲突保护。接口见 [混合合成](docs/COMPOSITION.md)。旧场景/音频协议 1 继续兼容，[V5](docs/V5-UPGRADE.md) 的 AI 直接执行、版本化审片、任务诊断和撤销能力继续复用。
+## 快速开始
 
-以 AI 创作、人类审片为中心的私人视频工作台：持久对话、精确播放器、多轨时间轴、素材与配音、独立版本历史、导出和 GitHub 同步。
+需要 Node.js 22.13+、Git，以及 Chrome / Chromium（用于 AI 看画面和导出）。
 
-## 两类独立仓库
+```bash
+corepack enable
+pnpm install
+pnpm build
+pnpm start
+```
 
-- **平台代码**：[frame-studio](https://github.com/jianjianai/frame-studio)，包含网页、服务端、引擎、制作工具及 Docker 配置。
-- **作品内容**：[frame-works](https://github.com/jianjianai/frame-works)，包含作品源码、关联素材和制作资料。可在网页设置中连接更多作品仓库。
+打开 http://127.0.0.1:4310 。首次使用在 设置 → AI 中登录 Claude 或 ChatGPT（本机已登录的 `claude` / `codex` CLI 会被自动识别）。数据保存在 `~/.frame-studio`（可用 `FRAME_HOME` 修改）。
 
-平台仓库不保存作品，作品仓库不复制平台代码。镜像升级更新软件，GitHub 同步更新作品，两条流程独立。
+服务器部署见 [docs/DEPLOY.md](docs/DEPLOY.md)。
 
-## 使用
+## 文档
 
-Windows 客户端见 [Windows 本地模式](docs/WINDOWS-LOCAL.md)；服务器部署见 [Docker / Dockge 部署](docs/SERVER.md)。产品与数据边界见 [作品平台设计](docs/WORKS-PLATFORM.md)。
+- [使用指南](docs/USER-GUIDE.md)：创作流程、时间轴、录音、配音、素材、版本、导出
+- [AI 与 MCP](docs/AI.md)：账号登录、自定义 API、聊天、外部 AI 接入、工具列表
+- [作品制作指南](docs/guide/overview.md)：作品代码结构与接口（AI 通过 `frame_guide` 工具读取同一份内容）
+- [架构](docs/ARCHITECTURE.md)：代码结构与运行原理
+- [部署](docs/DEPLOY.md)：Docker、反向代理、环境变量
 
-Windows 提供 Setup.exe 安装向导，安装时自动检查并下载工具与 Python 运行环境，Node 依赖由 pnpm 按锁文件安装并缓存，更新时复用。Windows 安装程序和服务器语音镜像均不携带语音权重；在设置中按需下载推荐模型或上传自定义 Kokoro 模型。
+## 开发
 
-首页显示最近打开。通过仓库进入作品列表，新建只填名称。每个作品使用同仓库内独立的 `works/<id>` 分支，素材库独立使用 `frame/materials`；作品历史和拉取/推送互不干扰。具体产品契约见 [AI 工作台](docs/AI-WORKBENCH.md)。 创作聊天使用 [T3 Code 原生聊天](docs/T3-CODE.md)，音频支持完整 Tone / Signalsmith API 和三种预览资源模式。
+```bash
+pnpm dev        # 界面热更新
+pnpm check      # 类型检查 + 测试 + 构建
+```
 
-作品在新标签页打开，无全局侧栏。AI 对话与时间轴均可显隐，播放器始终保留进度条；左右分栏及视频/时间轴高度可拖动，细分割线仅在交互时显示。素材、版本比较、统一导出和资料在弹窗操作。AI 提供商、模型及登录使用 T3 原生页面与 CLI；FRAME 设置保留多 GitHub 账号、CLI 独立升级及语音模型。服务器管理员密码仅通过 `FRAME_ADMIN_PASSWORD` 配置。本地模式直接使用电脑上已安装并登录的 Codex 和 Claude CLI，使用 SQLite，无工作台登录密码。
-
-所有作品共用一个 T3 服务；作品侧栏只显示当前作品的聊天，独立页面保留完整工作台。AI、CLI、MCP 和可视编辑操作同一个作品工作区，保存后实时播放器更新；检查报告绑定确切源码版本，失败保留修改。关闭浏览器不停止原生回合。T3 与 FRAME 可独立升级。显式不可变预览与正式导出仍运行对应构建。导出文件有保留期限，与素材库分离；可发布到对应作品仓库 Releases。
-
-外部 AI 使用带 Bearer 令牌的 `/mcp`，从 `frame_help` 发现操作；CLI 使用 `FRAME_URL`、`FRAME_TOKEN` 和 `pnpm platform help`。作品操作统一使用作品 UUID，支持参数发现、局部补丁、批量事务、任务等待、上传续传和产物下载，详见 [平台 MCP / CLI 工作流](docs/PLATFORM-TOOLS.md)。隔离任务内使用 `pnpm film` 和 `node scripts/work-tool.mjs`。
-
-远程接手先用 `frame_workspace_context`，查询参数用 `frame_tool_describe` / `pnpm --silent platform describe`。分页搜索、精确补丁、任务等待、产物下载与断点上传见 [远程 MCP 与 CLI 工具指南](docs/PLATFORM-TOOLS.md)。
-
-支持浏览器的 AI 可通过 `works_browser` 默认获取实时[专用审片页](docs/AI-BROWSER.md)，使用控制台 `FRAME_AI` 在本机浏览器查看帧、播放片段、截图和导出，减少服务器计算。
-
-## 开发与验证
-
-`pnpm dev` 启动平台前端，代理到本机 3000 端口服务端。服务端需要 PostgreSQL 和部署文档中的环境变量。`pnpm dev:player` 是内部播放器调试入口。
-
-制作接口见 [AUTHORING](docs/AUTHORING.md)，引擎规范见 [NEW-PROJECT-STANDARD](docs/NEW-PROJECT-STANDARD.md)。规范中的 `projects/<id>/` 指作品仓库或隔离任务内的作品路径。
-
-公共维护执行 `pnpm verify`。历史作品回归单独执行 `pnpm verify:content`，需要先将独立作品仓库的 `projects/` 复制到临时测试 checkout。复制的作品不提交、不进入镜像。服务端测试使用独立的 `FRAME_TEST_DATABASE_URL` 数据库（名称含 `frame_test`）。验证与部署证据位于 [records](records/)。
+开发约定见 [AGENTS.md](AGENTS.md)。
