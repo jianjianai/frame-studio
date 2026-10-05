@@ -1,17 +1,23 @@
 import { useCallback, useEffect, useImperativeHandle, useState, type Ref } from "react";
-import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles } from "lucide-react";
+import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff } from "lucide-react";
 import { api, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useToast, useConfirm } from "../lib/ui";
 import { useWorkbench } from "./store";
 import { PreviewPane } from "./PreviewPane";
 import { CodeEditor } from "./CodeEditor";
+import { DiffEditor } from "./DiffEditor";
 
 export interface EditorHandle {
   openFile(path: string, options?: { line?: number; preview?: boolean }): void;
+  /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
+  openDiff(title: string, query: string, options?: { preview?: boolean }): void;
 }
 interface Tab {
+  /** File path, or `diff:<query>` for a diff tab. */
   path: string;
-  kind: "text" | "image" | "audio" | "video" | "file";
+  kind: "text" | "image" | "audio" | "video" | "file" | "diff";
+  title?: string;
+  diff?: string;
   content?: string;
   saved?: string;
   hash?: string | null;
@@ -68,22 +74,29 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
     [base],
   );
 
-  const openFile = useCallback(
-    async (path: string, options: { line?: number; preview?: boolean } = {}) => {
-      setActive(path);
-      if (tabs.some((tab) => tab.path === path)) {
+  /** Show a tab: an open one is activated (and kept unless opened as preview); a new preview replaces the old one. */
+  const place = useCallback(
+    (tab: Tab, options: { line?: number; preview?: boolean }) => {
+      setActive(tab.path);
+      if (tabs.some((item) => item.path === tab.path)) {
         setTabs((list) =>
-          list.map((tab) => (tab.path === path ? { ...tab, line: options.line ?? tab.line, preview: options.preview ? tab.preview : false } : tab)),
+          list.map((item) => (item.path === tab.path ? { ...item, line: options.line ?? item.line, preview: options.preview ? item.preview : false } : item)),
         );
-        return;
+        return false;
       }
-      const kind = kindOf(path);
-      const tab: Tab = { path, kind, line: options.line, preview: Boolean(options.preview) };
       setTabs((list) => {
-        // A new preview takes the place of the current (unchanged) preview tab.
         const reuse = options.preview ? list.findIndex((item) => item.preview && item.content === item.saved) : -1;
         return reuse >= 0 ? list.map((item, index) => (index === reuse ? tab : item)) : [...list, tab];
       });
+      return true;
+    },
+    [tabs],
+  );
+
+  const openFile = useCallback(
+    async (path: string, options: { line?: number; preview?: boolean } = {}) => {
+      const kind = kindOf(path);
+      if (!place({ path, kind, line: options.line, preview: Boolean(options.preview) }, options)) return;
       if (kind === "text") {
         try {
           const loaded = await load(path);
@@ -94,9 +107,16 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
         }
       }
     },
-    [tabs, load, toast],
+    [place, load, toast],
   );
-  useImperativeHandle(ref, () => ({ openFile: (path, options) => void openFile(path, options) }), [openFile]);
+  const openDiff = useCallback(
+    (title: string, query: string, options: { preview?: boolean } = {}) => {
+      const preview = options.preview ?? true;
+      place({ path: `diff:${query}`, kind: "diff", title, diff: query, preview }, { preview });
+    },
+    [place],
+  );
+  useImperativeHandle(ref, () => ({ openFile: (path, options) => void openFile(path, options), openDiff }), [openFile, openDiff]);
 
   // Files changed by AI or other tools: refresh clean tabs, flag dirty ones.
   useServerEvent(
@@ -156,13 +176,13 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
             <div
               key={tab.path}
               className={`editor-tab ${tab.path === active ? "active" : ""} ${tab.preview ? "is-preview" : ""}`}
-              title={tab.preview ? `${tab.path}（预览，双击保持打开）` : tab.path}
+              title={`${tab.kind === "diff" ? `改动：${tab.title}` : tab.path}${tab.preview ? "（预览，双击保持打开）" : ""}`}
               onClick={() => setActive(tab.path)}
               onDoubleClick={() => keep(tab.path)}
               onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
             >
-              {fileIcon(tab.path)}
-              <span className="ellipsis">{tab.path.split("/").pop()}</span>
+              {tab.kind === "diff" ? <FileDiff size={14} /> : fileIcon(tab.path)}
+              <span className="ellipsis">{tab.title ?? tab.path.split("/").pop()}</span>
               <button
                 className="tab-close"
                 aria-label="关闭"
@@ -200,7 +220,9 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
                   </button>
                 </div>
               )}
-              {current.kind === "text" ? (
+              {current.kind === "diff" ? (
+                <DiffEditor query={current.diff!} />
+              ) : current.kind === "text" ? (
                 current.content === undefined ? (
                   <div className="empty">正在读取…</div>
                 ) : (

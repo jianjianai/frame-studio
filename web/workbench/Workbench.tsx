@@ -127,6 +127,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     check,
     runCheck,
     openFile: (path, options) => editor.current?.openFile(path, options),
+    openDiff: (title, query, options) => editor.current?.openDiff(title, query, options),
     addToChat: (attachment: ChatAttachment, prompt?: string) => {
       setChat((value) => ({ ...value, visible: true }));
       setTimeout(() => chatRef.current?.attach(attachment, prompt), 0);

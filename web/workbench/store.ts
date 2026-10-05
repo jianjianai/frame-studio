@@ -138,6 +138,8 @@ export interface WorkbenchContextValue {
   runCheck: () => Promise<void>;
   /** `preview`: a VS Code preview tab, replaced by the next preview until it is kept (double-click or edit). */
   openFile: (path: string, options?: { line?: number; preview?: boolean }) => void;
+  /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. */
+  openDiff: (title: string, query: string, options?: { preview?: boolean }) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
   selection: Selection | null;

@@ -1231,35 +1231,82 @@
   max-height: 70vh;
   background: #000;
 }
-.diff {
-  margin: 0;
-  max-height: 65vh;
+/* ---- diff editor tab (VS Code inline diff) ---- */
+.diff-editor {
+  flex: 1;
+  min-height: 0;
   overflow: auto;
-  font: 12px/1.55 var(--mono);
-  background: var(--bg-sunken);
+  padding: 10px 12px 24px;
+}
+.diff-file {
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 8px 0;
+  overflow: hidden;
 }
-.diff > div {
-  padding: 0 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
+.diff-file header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
 }
-.diff .add {
-  background: var(--ok-soft);
+.diff-count {
+  font: 12px var(--mono);
+}
+.diff-count.add {
   color: var(--ok);
 }
-.diff .del {
-  background: var(--danger-soft);
+.diff-count.del {
   color: var(--danger);
 }
-.diff .hunk {
-  color: var(--accent);
+.diff-lines {
+  font: 12px/1.6 var(--mono);
+  background: var(--bg-sunken);
 }
-.diff .file {
-  color: var(--fg);
-  font-weight: 700;
-  margin-top: 6px;
+.diff-line {
+  display: flex;
+  min-width: max-content;
+}
+.diff-gutter {
+  flex: none;
+  width: 44px;
+  padding-right: 8px;
+  text-align: right;
+  color: var(--fg-faint);
+  user-select: none;
+}
+.diff-text {
+  flex: 1;
+  padding-left: 6px;
+  white-space: pre;
+}
+.diff-sign {
+  display: inline-block;
+  width: 14px;
+  color: var(--fg-faint);
+  user-select: none;
+}
+.diff-line.add {
+  background: var(--ok-soft);
+}
+.diff-line.add .diff-sign {
+  color: var(--ok);
+}
+.diff-line.del {
+  background: var(--danger-soft);
+}
+.diff-line.del .diff-sign {
+  color: var(--danger);
+}
+.diff-line.hunk {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
 
 /* ---- small screens: side bar and chat float over the preview ---- */

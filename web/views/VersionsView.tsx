@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, Save, Undo2, ArrowUp, ArrowDown, CloudUpload, History, FileDiff, RotateCcw } from "lucide-react";
 import { api, timeAgo, workPath, useServerEvent, type ApiError } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, Dialog } from "../lib/ui";
+import { useAction, useConfirm, useContextMenu } from "../lib/ui";
 import type { Version, WorkStatus } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { RepoDialog } from "../components/RepoDialog";
@@ -10,11 +10,10 @@ import { ViewHeader } from "./ViewHeader";
 const statusLabel: Record<string, string> = { M: "修改", A: "新增", D: "删除", "?": "新增", R: "重命名", U: "冲突" };
 
 export function VersionsView() {
-  const { work, reload } = useWorkbench();
+  const { work, reload, openDiff } = useWorkbench();
   const [status, setStatus] = useState<WorkStatus | null>(null);
   const [history, setHistory] = useState<Version[]>([]);
   const [message, setMessage] = useState("");
-  const [diff, setDiff] = useState<{ title: string; text: string } | null>(null);
   const [publish, setPublish] = useState(false);
   const [run, busy] = useAction();
   const confirm = useConfirm();
@@ -41,8 +40,8 @@ export function VersionsView() {
       await load();
       return result;
     }, "已保存版本");
-  const showDiff = (title: string, query: string) =>
-    run(async () => setDiff({ title, text: (await api<{ diff: string }>(`${base}/diff?${query}`)).diff || "没有改动" }));
+  // Like VS Code: a click previews the changes in a tab, a double-click keeps the tab.
+  const showDiff = (title: string, query: string, preview = true) => openDiff(title, query, { preview });
   const revert = async (version: Version) => {
     if (
       !(await confirm(`把作品恢复成「${version.message}」时的样子？\n当前内容会先自动保存，恢复本身也会成为一个新版本，随时可以再恢复回来。`, {
@@ -153,7 +152,13 @@ export function VersionsView() {
           )}
         </h3>
         {status?.files.map((file) => (
-          <div key={file.path} className="change-row" onClick={() => showDiff(file.path.replace(prefix, ""), `file=${encodeURIComponent(file.path)}`)}>
+          <div
+            key={file.path}
+            className="change-row"
+            title="单击查看改动，双击保持打开"
+            onClick={() => showDiff(`${file.path.split("/").pop()}（未保存）`, `file=${encodeURIComponent(file.path)}`)}
+            onDoubleClick={() => showDiff(`${file.path.split("/").pop()}（未保存）`, `file=${encodeURIComponent(file.path)}`, false)}
+          >
             <span className={`change-status s-${file.status === "?" ? "A" : file.status}`}>{file.status === "?" ? "A" : file.status}</span>
             <span className="ellipsis grow" title={statusLabel[file.status] || file.status}>
               {file.path.replace(prefix, "")}
@@ -179,10 +184,15 @@ export function VersionsView() {
           <div
             key={version.commit}
             className="version-row"
-            onClick={() => showDiff(version.message, `commit=${version.commit}`)}
+            onClick={() => showDiff(`${version.short} ${version.message}`, `commit=${version.commit}`)}
+            onDoubleClick={() => showDiff(`${version.short} ${version.message}`, `commit=${version.commit}`, false)}
             onContextMenu={(event) =>
               openMenu(event, [
-                { label: "查看改动", icon: <FileDiff size={14} />, onClick: () => showDiff(version.message, `commit=${version.commit}`) },
+                {
+                  label: "查看改动",
+                  icon: <FileDiff size={14} />,
+                  onClick: () => showDiff(`${version.short} ${version.message}`, `commit=${version.commit}`, false),
+                },
                 { label: "恢复到这个版本", icon: <RotateCcw size={14} />, onClick: () => revert(version), disabled: index === 0 },
               ])
             }
@@ -217,38 +227,8 @@ export function VersionsView() {
           </div>
         ))}
       </section>
-      {diff && (
-        <Dialog title={diff.title} onClose={() => setDiff(null)} width={900}>
-          <DiffView text={diff.text} />
-        </Dialog>
-      )}
       {publish && <RepoDialog mode="publish" onClose={() => setPublish(false)} onDone={load} />}
       {menu}
     </div>
-  );
-}
-
-export function DiffView({ text }: { text: string }) {
-  return (
-    <pre className="diff">
-      {text.split("\n").map((line, index) => (
-        <div
-          key={index}
-          className={
-            line.startsWith("+") && !line.startsWith("+++")
-              ? "add"
-              : line.startsWith("-") && !line.startsWith("---")
-                ? "del"
-                : line.startsWith("@@")
-                  ? "hunk"
-                  : line.startsWith("diff ")
-                    ? "file"
-                    : ""
-          }
-        >
-          {line || " "}
-        </div>
-      ))}
-    </pre>
   );
 }
