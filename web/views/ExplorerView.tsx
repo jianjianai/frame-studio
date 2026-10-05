@@ -89,8 +89,10 @@ export function ExplorerView() {
                   else next.add(node.path);
                   return next;
                 })
-              : openFile(node.path)
+              : // Like VS Code: a click previews the file, a double-click (or an edit) keeps the tab.
+                openFile(node.path, { preview: true })
           }
+          onDoubleClick={() => node.type === "file" && openFile(node.path)}
           onContextMenu={(event) => menuFor(event, node)}
           title={node.path}
         >
