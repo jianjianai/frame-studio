@@ -3,7 +3,7 @@ import { rendererIds } from "./adapters.mjs";
 const number = z.number().finite();
 const id = z
   .string()
-  .regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/)
+  .regex(/^[a-zA-Z][a-zA-Z0-9_-]*$/, "id 只能包含字母、数字、_ 和 -，且以字母开头")
   .max(80);
 export const assetReferenceSchema = z
   .string()
@@ -14,7 +14,7 @@ export const assetReferenceSchema = z
       /^films\/[a-z][a-z0-9-]*\//.test(value) &&
       !/[\\\\:%?#\u0000-\u001f]/.test(value) &&
       value.split("/").every((part) => part && part !== "." && part !== ".."),
-    "Use a project-owned films/<id>/ asset",
+    "素材地址应为 films/<作品名称>/<public 下的路径>",
   );
 const key = z.strictObject({
   at: number.nonnegative(),
@@ -29,7 +29,7 @@ const animated = z.union([
     .max(1000)
     .refine(
       (keys) => keys.every((k, i) => !i || k.at > keys[i - 1].at),
-      "Keyframes must have increasing unique times",
+      "关键帧的 at 必须严格递增",
     ),
 ]);
 export const visualSourceSchema = z.discriminatedUnion("kind", [
@@ -49,7 +49,7 @@ export const visualSourceSchema = z.discriminatedUnion("kind", [
   }),
   z.strictObject({
     kind: z.literal("color"),
-    color: z.string().regex(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/),
+    color: z.string().regex(/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/, "颜色应为 #rrggbb 或 #rrggbbaa"),
   }),
 ]);
 export const visualClipSchema = z
@@ -114,30 +114,30 @@ export const visualClipSchema = z
       (clip.fadeIn ?? 0) + (clip.fadeOut ?? 0) >
       (clip.fadeDuration ?? clip.duration)
     )
-      ctx.addIssue({ code: "custom", message: "Fades exceed clip duration" });
+      ctx.addIssue({ code: "custom", message: "淡入 + 淡出超过了图层时长" });
   });
 export const visualDocumentSchema = z
   .strictObject({
     schemaVersion: z.literal(1),
     background: z
       .string()
-      .regex(/^(transparent|#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?)$/)
+      .regex(/^(transparent|#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?)$/, "背景应为 transparent、#rrggbb 或 #rrggbbaa")
       .default("transparent"),
     clips: z.array(visualClipSchema).max(128),
   })
   .superRefine((doc, ctx) => {
     if (new Set(doc.clips.map((c) => c.id)).size !== doc.clips.length)
-      ctx.addIssue({ code: "custom", message: "Clip ids must be unique" });
+      ctx.addIssue({ code: "custom", message: "图层 id 不能重复" });
   });
 export function validateVisualDocument(value, { projectId, duration } = {}) {
   const doc = visualDocumentSchema.parse(value);
   for (const clip of doc.clips) {
     if (duration !== undefined && clip.start + clip.duration > duration + 1e-7)
-      throw new Error("Clip exceeds project duration: " + clip.id);
+      throw new Error(`图层 ${clip.id} 超出作品时长：start ${clip.start} + duration ${clip.duration} = ${+(clip.start + clip.duration).toFixed(3)} > ${duration} 秒`);
     for (const src of clip.source.frames ??
       (clip.source.src ? [clip.source.src] : []))
       if (projectId && !src.startsWith("films/" + projectId + "/"))
-        throw new Error("Cross-project visual asset: " + src);
+        throw new Error(`图层 ${clip.id} 的素材 ${src} 不属于这个作品，应为 films/${projectId}/...`);
   }
   return doc;
 }
@@ -228,7 +228,7 @@ export function editVisualDocument(value, operations, context) {
       continue;
     }
     const index = "id" in op ? doc.clips.findIndex((c) => c.id === op.id) : -1;
-    if ("id" in op && index < 0) throw new Error("Unknown clip: " + op.id);
+    if ("id" in op && index < 0) throw new Error(`没有 id 为 ${op.id} 的图层（现有：${doc.clips.map((c) => c.id).join("、") || "无"}）`);
     if (op.op === "add")
       doc.clips.splice(
         Math.min(op.index ?? doc.clips.length, doc.clips.length),
@@ -248,7 +248,7 @@ export function editVisualDocument(value, operations, context) {
       const clip = doc.clips[index],
         elapsed = op.at - clip.start;
       if (elapsed <= 0 || elapsed >= clip.duration)
-        throw new Error("Split must be inside the clip");
+        throw new Error(`切分点 ${op.at} 必须在图层 ${op.id} 内部（${clip.start}–${clip.start + clip.duration} 秒）`);
       // Keyframes are measured in source time; splitting preserves motion and media phase.
       clip.fadeDuration ??= clip.duration;
       const right = {

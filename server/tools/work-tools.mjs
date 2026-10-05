@@ -7,6 +7,22 @@ import { checkWork } from "../checks.mjs";
 import { problem, confined } from "../util.mjs";
 import { probe } from "../media.mjs";
 import { projectAudioTracks } from "../../src/engine/types.ts";
+import { formatTime } from "../render.mjs";
+
+const cueSchema = z
+  .strictObject({ start: z.number().nonnegative(), end: z.number().positive(), text: z.string().min(1).max(500) })
+  .refine((cue) => cue.end > cue.start, "end 必须大于 start");
+
+/** Explain why an exact replacement missed: usually indentation or a stale copy of the file. */
+function nearMiss(content, oldText) {
+  const squash = (text) => text.replace(/\s+/g, " ").trim();
+  if (squash(content).includes(squash(oldText))) return "忽略空白后能找到：请按文件中的缩进和换行逐字复制。";
+  const first = oldText.split("\n").find((line) => line.trim())?.trim();
+  const lines = content.split("\n");
+  const at = first ? lines.findIndex((line) => line.includes(first)) : -1;
+  if (at >= 0) return `第一行出现在第 ${at + 1} 行，但后面的内容不同；先用 file_read 读取最新内容。`;
+  return "文件可能已经改变，先用 file_read 读取最新内容。";
+}
 
 const relativePath = z.string().min(1).max(400).describe("相对作品目录 projects/<名称>/ 的路径，例如 scene.ts 或 public/bg.png");
 
@@ -180,26 +196,29 @@ export function registerWorkTools(registry) {
   registry.add({
     name: "file_read",
     title: "读取文件",
-    description: "读取作品中的文本文件，返回内容和 sha256（写入时可用于防止覆盖他人修改）。",
+    description: "读取作品中的文本文件。返回文件内容，另附 {sha256, lines}：sha256 可传给 file_write 的 expectedSha256，防止覆盖用户刚做的修改。",
     readOnly: true,
     input: { work: workArg, path: relativePath, startLine: z.number().int().min(1).optional(), lineCount: z.number().int().min(1).max(5000).optional() },
     async run({ path: file, startLine, lineCount }, ctx) {
       const work = await ctx.work();
       const result = readText(work.dir, file);
       let content = result.content;
+      const lines = content.split("\n");
+      const meta = { path: file, sha256: result.hash, lines: lines.length };
       if (startLine || lineCount) {
-        const lines = content.split("\n");
-        const from = (startLine || 1) - 1;
+        const from = Math.min((startLine || 1) - 1, lines.length);
         content = lines.slice(from, from + (lineCount || lines.length)).join("\n");
+        meta.range = [from + 1, Math.min(from + (lineCount || lines.length), lines.length)];
       }
-      return { data: { path: file, sha256: result.hash, size: result.size }, text: content };
+      return { data: { ...meta, size: result.size }, meta, text: content };
     },
   });
 
   registry.add({
     name: "file_write",
     title: "写入文件",
-    description: "创建或整体替换作品中的文本文件。保存后预览自动更新。",
+    description: "创建或整体替换作品中的文本文件，自动创建所在文件夹。保存后用户的预览立即更新。只改几处时用 file_edit。",
+    destructive: true,
     input: {
       work: workArg,
       path: relativePath,
@@ -210,14 +229,14 @@ export function registerWorkTools(registry) {
       const work = await ctx.work();
       if (file.split("/")[0] === "exports") throw problem(400, "exports/ 是导出目录");
       const result = writeText(work.dir, file, content, { expectedHash: expectedSha256 });
-      return asJson({ path: file, sha256: result.hash }, `已写入 ${file}`);
+      return { data: { path: file, sha256: result.hash }, meta: { sha256: result.hash }, text: `已写入 ${file}` };
     },
   });
 
   registry.add({
     name: "file_edit",
     title: "编辑文件",
-    description: "在文本文件中做精确替换。每个 oldText 必须恰好出现一次（或设置 replaceAll）。",
+    description: "在文本文件中做精确替换（按顺序执行，全部成功才写入）。每个 oldText 必须与文件内容逐字一致（含缩进）且恰好出现一次，否则设置 replaceAll。",
     input: {
       work: workArg,
       path: relativePath,
@@ -232,12 +251,12 @@ export function registerWorkTools(registry) {
       let content = current.content;
       for (const [index, edit] of edits.entries()) {
         const count = content.split(edit.oldText).length - 1;
-        if (count === 0) throw problem(400, `第 ${index + 1} 处替换：找不到 oldText`);
+        if (count === 0) throw problem(400, `第 ${index + 1} 处替换：找不到 oldText。${nearMiss(content, edit.oldText)}`);
         if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${index + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
         content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
       }
       const result = writeText(work.dir, file, content, { expectedHash: current.hash });
-      return asJson({ path: file, sha256: result.hash }, `已修改 ${file}（${edits.length} 处）`);
+      return { data: { path: file, sha256: result.hash }, meta: { sha256: result.hash }, text: `已修改 ${file}（${edits.length} 处）` };
     },
   });
 
@@ -319,7 +338,7 @@ export function registerWorkTools(registry) {
   registry.add({
     name: "work_update",
     title: "修改作品信息",
-    description: "修改 project.ts 中的标题、副标题、描述、时长、帧率等简单字段。",
+    description: "修改 project.ts 中的标题、副标题、描述、时长、帧率、镜头标记，只替换字段值、保留文件其余内容。字幕用 subtitles_edit。",
     input: {
       work: workArg,
       title: z.string().min(1).max(120).optional(),
@@ -327,10 +346,48 @@ export function registerWorkTools(registry) {
       description: z.string().max(4000).optional(),
       duration: z.number().positive().max(3600).optional(),
       fps: z.number().int().min(12).max(60).optional(),
+      beats: z
+        .array(z.strictObject({ at: z.number().nonnegative(), title: z.string(), detail: z.string().default(""), id: z.string().optional() }))
+        .max(200)
+        .optional()
+        .describe("镜头标记（整体替换），显示在时间轴上，方便和用户指代片段"),
     },
     async run({ work: _ignored, ...changes }, ctx) {
-      await works.update(await ctx.work(), changes);
-      return asJson(changes, "已更新作品信息");
+      const work = await ctx.work();
+      await works.update(work, changes);
+      const meta = works.meta(work);
+      const after = meta.ok ? `。现在：${meta.meta.title}，${meta.meta.duration} 秒，${meta.meta.fps} fps` : "";
+      return asJson(changes, `已更新 ${Object.keys(changes).join("、") || "（无改动）"}${after}`);
+    },
+  });
+
+  registry.add({
+    name: "subtitles_edit",
+    title: "编辑字幕",
+    description:
+      "编辑 project.ts 的字幕（播放器绘制在画面底部，导出时可烧录）。set 整体替换；add 追加（与已有字幕时间重叠的旧字幕会被替换）；removeBetween 删除与某时间段重叠的字幕。返回全部字幕。",
+    input: {
+      work: workArg,
+      set: z.array(cueSchema).max(2000).optional(),
+      add: z.array(cueSchema).max(500).optional(),
+      removeBetween: z.strictObject({ start: z.number().nonnegative(), end: z.number().positive() }).optional(),
+    },
+    async run({ set, add, removeBetween }, ctx) {
+      const work = await ctx.work();
+      const meta = works.meta(work);
+      if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error);
+      const overlaps = (cue, start, end) => cue.start < end && cue.end > start;
+      let cues = set ?? meta.meta.subtitles ?? [];
+      if (removeBetween) cues = cues.filter((cue) => !overlaps(cue, removeBetween.start, removeBetween.end));
+      for (const cue of add ?? []) cues = [...cues.filter((old) => !overlaps(old, cue.start, cue.end)), cue];
+      cues = cues.map(({ start, end, text }) => ({ start, end, text })).sort((a, b) => a.start - b.start);
+      const late = cues.find((cue) => cue.end > meta.meta.duration + 1e-7);
+      if (late) throw problem(400, `字幕「${late.text}」结束于 ${late.end} 秒，超过作品时长 ${meta.meta.duration} 秒`);
+      await works.update(work, { subtitles: cues });
+      return asJson(
+        { subtitles: cues },
+        `共 ${cues.length} 条字幕：\n` + cues.map((cue) => `${formatTime(cue.start)}–${formatTime(cue.end)} ${cue.text}`).join("\n"),
+      );
     },
   });
 }

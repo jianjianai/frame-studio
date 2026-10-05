@@ -69,7 +69,7 @@ frame export ab12cd34 --width 1920
 | 工具 | 作用 |
 |---|---|
 | `frame_guide` | 制作指南（接口与示例），按主题读取 |
-| `works_list` / `work_create` / `work_update` | 列出、新建作品，修改标题时长等 |
+| `works_list` / `work_create` / `work_update` | 列出、新建作品，修改标题、时长、镜头标记等 |
 | `work_context` | 作品现状：元数据、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查 |
 | `work_check` | 类型、素材引用、真实浏览器加载并渲染几帧和一段音频 |
 | `preview_frames` / `storyboard` | 渲染指定时间的画面 / 带时间标注的分镜总览图 |
@@ -78,6 +78,14 @@ frame export ab12cd34 --width 1920
 | `assets_list` / `asset_import` / `library_list` | 素材与共享素材库 |
 | `layers_get` / `layers_edit` | visual.json 图层 |
 | `audio_get` / `audio_edit` / `audio_place` | audio.json 混音 |
-| `speech_voices` / `speech_synthesize` | 配音 |
+| `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
+| `subtitles_edit` | 字幕：整体替换、追加（替换重叠的旧字幕）、按时间段删除 |
 | `versions_list` / `version_save` / `version_diff` / `version_restore` | 版本 |
 | `export_video` / `task_status` / `exports_list` | 导出 MP4 |
+
+工具设计约定（新增工具时遵守）：
+
+- 返回给 AI 的文字要能直接行动：报错说明哪里错、应该怎么改；运行错误的位置是作品源码的 `文件:行:列`。
+- 自定义文字之外 AI 还需要的小数据（如 `sha256`）放在 `meta`，所有客户端都会收到。
+- 参数结构很大时（`layers_edit`、`audio_edit` 的文档操作）用 `publicInput` 向客户端公布精简结构，详细格式写进 `docs/guide`，并用 `guide` 指向该主题；服务端仍按完整结构校验。
+- 会覆盖或删除内容的工具标记 `destructive`。

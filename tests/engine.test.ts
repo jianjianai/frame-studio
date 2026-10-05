@@ -36,7 +36,7 @@ describe("engine contracts", () => {
       clips: [{ id: "c", track: "t", source: "s", start: 1, duration: 2 }],
     };
     expect(compileAudioTracks(doc)[0]).toMatchObject({ id: "audio:c", src: "films/x/a.wav", start: 1, duration: 2 });
-    expect(() => validateAudioDocument({ ...doc, tracks: [{ id: "t", name: "T", output: "missing" }] })).toThrow(/bus/);
+    expect(() => validateAudioDocument({ ...doc, tracks: [{ id: "t", name: "T", output: "missing" }] })).toThrow(/不存在的总线：missing/);
     expect(editAudioDocument(doc, [{ op: "split", id: "c", at: 2, newId: "d" }]).clips).toHaveLength(2);
   });
   it("finds the active subtitle", () => {

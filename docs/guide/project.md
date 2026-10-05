@@ -32,6 +32,6 @@ export default project;
 
 - `renderer` 只是说明主要技术，真正的画面由 `load` 指向的 `scene.ts` 决定。Remotion 作品还要 `loadRemotion: () => import("./composition")`。
 - `beats` 是镜头标记，显示在时间轴上，方便用户和 AI 指代片段；可加唯一 `id`。
-- `subtitles` 由播放器绘制在画面底部（导出时可选择烧录）。用户也会在时间轴上编辑字幕。
-- 修改时长、标题等简单字段可以用 `work_update` 工具；它只替换字段值，保留文件其余格式。
+- `subtitles` 由播放器绘制在画面底部（导出时可选择烧录）。用户也会在时间轴上编辑字幕。用 `subtitles_edit` 修改（见 `subtitles`）。
+- 修改时长、标题、镜头标记等字段用 `work_update` 工具；它只替换字段值，保留文件其余格式。
 - 改变 `duration` 后检查 `visual.json` 和 `audio.json` 中超出时长的片段（`work_check` 会报错）。

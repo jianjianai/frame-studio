@@ -44,7 +44,7 @@ export function createScene(options: SceneOptions) {
 
 ## 修改方式
 
-- 直接编辑 visual.json，或用 `layers_edit` 工具做原子操作（失败不会写坏文件）：
+- 直接编辑 visual.json，或用 `layers_edit` 工具做原子操作（按顺序执行，全部成功才写入，失败不会写坏文件；`dryRun: true` 只校验）：
 
 ```json
 { "operations": [
@@ -56,5 +56,7 @@ export function createScene(options: SceneOptions) {
 ]}
 ```
 
+- `add` 可带 `index` 指定插入位置；`update` 的 `patch` 只写要改的字段，`unset` 列出要删除的可选字段；`replace` 为 `{ "op": "replace", "document": {…} }`。
+- 新的 scene 模块要先在 `scene.ts` 的 loaders 中注册（`名称: () => import("./scenes/名称")`），否则会报“场景模块未注册”。
 - scene 图层的模块是普通 Scene（见 `scene`），收到的 `time` 是图层内时间（已减去 start、考虑 rate/offset）。scene 图层输出透明画布即可叠加在下层之上。
 - 同时活跃的图层不超过 32 个。

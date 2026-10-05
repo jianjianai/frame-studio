@@ -72,6 +72,7 @@ async function callTool(name, args) {
   const result = await request(`/api/tools/${name}`, args);
   if (result.text) console.log(result.text);
   else console.log(JSON.stringify(result.data, null, 2));
+  if (result.meta) console.log(JSON.stringify(result.meta));
   if (result.images?.length) {
     const dir = path.resolve(values.out || ".");
     fs.mkdirSync(dir, { recursive: true });
@@ -105,6 +106,7 @@ try {
           const server = new McpServer({ name: "frame", version: "proxy" }, { instructions: MCP_INSTRUCTIONS });
           for (const tool of tools) {
             if (scope.readOnly && !tool.readOnly) continue;
+            if (scope.work && ["work_create", "works_list"].includes(tool.name)) continue;
             const passthrough = {
               "~standard": {
                 version: 1,
@@ -115,14 +117,22 @@ try {
             };
             server.registerTool(
               tool.name,
-              { title: tool.title, description: tool.description, inputSchema: passthrough, annotations: { readOnlyHint: tool.readOnly } },
+              {
+                title: tool.title,
+                description: tool.description,
+                inputSchema: passthrough,
+                annotations: { title: tool.title, readOnlyHint: tool.readOnly, destructiveHint: tool.destructive, openWorldHint: false },
+              },
               async (args) => {
                 try {
-                  const result = await request(`/api/tools/${tool.name}`, scope.work && !args.work ? { ...args, work: values.work } : args);
+                  // Same binding as an in-process scoped server: only the --work work is reachable.
+                  if (scope.work && args.work && ![values.work, scope.work].includes(args.work)) throw new Error("这个 MCP 服务只能操作作品 " + values.work);
+                  const result = await request(`/api/tools/${tool.name}`, scope.work && tool.inputSchema.properties?.work ? { ...args, work: values.work } : args);
                   const content = [];
                   if (result.text) content.push({ type: "text", text: result.text });
                   for (const image of result.images || []) content.push({ type: "image", data: image.data, mimeType: image.mimeType });
                   if (!content.length) content.push({ type: "text", text: JSON.stringify(result.data) });
+                  if (result.meta) content.push({ type: "text", text: JSON.stringify(result.meta) });
                   return {
                     content,
                     ...(result.structured && result.data && typeof result.data === "object" && !Array.isArray(result.data)

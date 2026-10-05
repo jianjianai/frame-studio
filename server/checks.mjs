@@ -26,17 +26,27 @@ export async function typeCheck(work) {
   const problems = [];
   for (const line of out.split("\n")) {
     const match = /^(projects\/[^(]+)\((\d+),(\d+)\): (error|warning) (TS\d+): (.*)$/.exec(line.trim());
-    if (match)
+    if (match) {
+      const file = match[1].replace(/^projects\/[^/]+\//, "");
       problems.push({
         severity: match[4],
         source: "types",
-        file: match[1].replace(/^projects\/[^/]+\//, ""),
+        file,
         line: Number(match[2]),
         column: Number(match[3]),
-        message: `${match[6]} (${match[5]})`,
+        message: `${match[6]} (${match[5]})${engineImportHint(file, match[5], match[6])}`,
       });
+    }
   }
   return problems.slice(0, 100);
+}
+
+/** The most common slip: copying a scene.ts import into scenes/x.ts keeps one "../" too few. */
+export function engineImportHint(file, code, message) {
+  const spec = code === "TS2307" && /'([^']*src\/engine\/[^']*)'/.exec(message)?.[1];
+  if (!spec) return "";
+  const correct = "../".repeat(file.split("/").length + 1) + "src/engine/" + spec.split("src/engine/")[1];
+  return correct === spec ? "" : `。这个文件应写 "${correct}"`;
 }
 
 /** Static references films/<slug>/... must point at existing files of this work. */

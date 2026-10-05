@@ -15,7 +15,14 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | `public/` | 素材。代码中写 `assetUrl("films/<名称>/文件名")` |
 | `AGENTS.md` | 这个作品的需求和约定。新确认的需求写回这里 |
 
-`../../src/engine/` 是引擎（只读），可以直接 import 其中的公开模块。
+引擎（只读）在作品根目录的 `src/engine/`，按文件所在层级写相对路径：
+
+| 文件位置 | 引擎导入写法 |
+|---|---|
+| `scene.ts`、`project.ts`、`audio.ts` | `"../../src/engine/types"` |
+| `scenes/*.ts` | `"../../../src/engine/types"` |
+
+写错时 `work_check` 会给出这个文件应写的路径。
 
 ## 工作循环
 
@@ -23,12 +30,25 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 2. 用 `frame_guide <主题>` 确认接口，再修改文件。保存后用户的预览立刻更新。
 3. `work_check`：类型、素材引用、真实浏览器加载。有错先修。
 4. `preview_frames`（几个时间点）或 `storyboard`（整体节奏）亲眼检查画面；有声音时用 `preview_audio`。
+   报错里的 `scenes/x.ts:行:列` 是作品源码中的位置，可以直接定位。
 5. 用一两句话告诉用户改了什么、在哪个时间点能看到。每轮结束平台自动保存版本，用户可以一键撤销。
+
+## 常用工具
+
+| 要做的事 | 工具 |
+|---|---|
+| 改代码 | `file_read` / `file_edit` / `file_write`（内置 AI 也可直接用自己的读写工具） |
+| 排图层 | `layers_get` / `layers_edit`（见 `layers`） |
+| 配乐、音效、混音 | `audio_place`、`audio_get` / `audio_edit`（见 `audio`） |
+| 配音和字幕 | `speech_synthesize`（`lines` + `place` + `subtitles: true` 一次完成整段旁白）、`subtitles_edit`（见 `speech`、`subtitles`） |
+| 标题、时长、镜头标记 | `work_update` |
+| 素材 | `assets_list`、`asset_import`、`library_list`（见 `assets`） |
+| 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status` |
 
 ## 选择做法
 
 - **以素材为主**（图片、视频、配音、字幕的剪辑排版）：用 `visual.json` 图层 + `audio.json`，见 `layers`、`audio`。
-- **动态图形 / 文字动画 / 数据可视化**：Canvas 2D 场景，见 `scene`、`canvas`。需要大量精灵、滤镜用 `pixi`。
+- **动态图形 / 文字动画 / 数据可视化**：Canvas 2D 场景，见 `scene`。需要大量精灵、滤镜用 `pixi`。
 - **三维**：`three`（或 `babylon`），可加载 GLB 模型。
 - **React / CSS / SVG 排版**：`remotion`。
 - 以上可以混用：在 `visual.json` 里叠加多个 scene 图层，或在 Remotion 中用 `FrameScene` 嵌入 Canvas/WebGL 场景。

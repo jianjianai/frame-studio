@@ -36,7 +36,26 @@
 - clip：`start`/`duration` 是作品时间；`offset` 是素材内起点；`rate` 速度（默认变调，`preservePitch: true` 保持音高）；`pitch` 半音移调；`gain` 0–4；`pan` -1–1；`fadeIn`/`fadeOut`；`loop` 循环长度；`automation: [{at, value}]` 音量自动化（at 为片段内时间）；`muted`。
 - 片段不能超过作品时长；所有 id 唯一、字母开头。
 - 处理器（轨道/总线/master 的 `processors`）：`gain`、`pan`、`filter`（type/frequency/q/gain）、`compressor`、`limiter`、`delay`、`reverb`、`distortion`、`stereo`、`duck`（被 `track` 指定的音轨触发时压低本轨，用于人声避让）、`tone`（任意 Tone.js 效果：`{ "type": "tone", "effect": "Chorus", "options": { "wet": 0.4 } }`，effect 可选 AutoFilter、AutoPanner、AutoWah、BitCrusher、Chebyshev、Chorus、Distortion、FeedbackDelay、FrequencyShifter、Freeverb、JCReverb、PingPongDelay、PitchShift、Phaser、Reverb、StereoWidener、Tremolo、Vibrato）。
-- `audio_edit` 操作：`put`（新增或替换 sources/tracks/clips/buses 中 id 相同的一项）、`remove`、`split`、`replace`。
+- 音轨/总线：`id`、`name`（必填），`gain` 0–4、`pan`、`muted`、`processors`、`output`（默认 `master`，或某个总线 id）、`sends: [{ bus, gain }]`。
+- 处理器参数（都可省略用默认值）：`gain{gain}`、`pan{pan}`、`filter{type: lowpass|highpass|bandpass|notch|lowshelf|highshelf|peaking|allpass, frequency, q, gain}`、`compressor{threshold, knee, ratio, attack, release}`、`limiter{ceiling, release}`、`delay{time, feedback, mix}`、`reverb{seconds, decay, mix}`、`distortion{drive, mix}`、`stereo{width}`、`duck{track, amount, attack, release}`、`tone{effect, options, tail}`。
+
+## audio_edit 操作
+
+按顺序执行，全部成功才写入；`dryRun: true` 只校验。
+
+```json
+{ "operations": [
+  { "op": "put", "collection": "sources", "value": { "id": "bgm", "kind": "file", "src": "films/work-1a2b3c4d/music/bgm.mp3" } },
+  { "op": "put", "collection": "tracks", "value": { "id": "music", "name": "配乐", "gain": 0.6 } },
+  { "op": "put", "collection": "clips", "value": { "id": "c1", "track": "music", "source": "bgm", "start": 0, "duration": 15, "fadeOut": 2 } },
+  { "op": "split", "id": "c1", "at": 8, "newId": "c1b" },
+  { "op": "remove", "collection": "clips", "id": "c1b" }
+]}
+```
+
+- `put`：在 sources/tracks/clips/buses 中新增，或**整项替换** id 相同的一项（先 `audio_get` 拿到原值再改）。
+- `remove`：按 collection + id 删除；`split`：在作品时间 `at` 切开片段；`replace`：`{ "op": "replace", "document": {…} }` 替换整个文档。
+- 只是把一个文件放上音轨时，`audio_place` 更简单。
 
 ## 代码生成的声音
 

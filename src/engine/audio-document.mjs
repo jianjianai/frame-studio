@@ -197,9 +197,13 @@ export function validateAudioDocument(value, { projectId, duration } = {}) {
     track: d.tracks,
     clip: d.clips,
     bus: d.buses,
-  }))
-    if (new Set(items.map((v) => v.id)).size !== items.length)
-      throw Error("Duplicate audio " + kind + " id");
+  })) {
+    const seen = new Set();
+    for (const v of items) {
+      if (seen.has(v.id)) throw Error(`audio.json 中 ${kind} id 重复：${v.id}`);
+      seen.add(v.id);
+    }
+  }
   const sources = new Set(d.sources.map((s) => s.id)),
     tracks = new Set(d.tracks.map((t) => t.id)),
     buses = new Map(d.buses.map((b) => [b.id, b]));
@@ -207,35 +211,37 @@ export function validateAudioDocument(value, { projectId, duration } = {}) {
     buses.has("master") ||
     d.tracks.some((t) => buses.has(t.id) || t.id === "master")
   )
-    throw Error("Track/bus ids must be distinct and cannot be master");
+    throw Error("音轨与总线的 id 不能相同，也不能叫 master");
   for (const s of d.sources)
     if (
       s.kind === "file" &&
       projectId &&
       !s.src.startsWith("films/" + projectId + "/")
     )
-      throw Error("Cross-project audio asset");
+      throw Error(`素材 ${s.src} 不属于这个作品，应为 films/${projectId}/...（来源 ${s.id}）`);
   for (const c of d.clips) {
-    if (!sources.has(c.source) || !tracks.has(c.track))
-      throw Error("Unknown audio source/track: " + c.id);
+    if (!sources.has(c.source))
+      throw Error(`片段 ${c.id} 的 source「${c.source}」不存在（现有：${[...sources].join("、") || "无"}）`);
+    if (!tracks.has(c.track))
+      throw Error(`片段 ${c.id} 的 track「${c.track}」不存在（现有：${[...tracks].join("、") || "无"}）`);
     if (duration !== undefined && c.start + c.duration > duration + 1e-7)
-      throw Error("Audio clip exceeds project duration");
+      throw Error(`片段 ${c.id} 超出作品时长：start ${c.start} + duration ${c.duration} = ${+(c.start + c.duration).toFixed(3)} > ${duration} 秒`);
     if (c.fadeIn + c.fadeOut > (c.fadeDuration ?? c.duration) + 1e-7)
-      throw Error("Audio fades exceed clip duration");
+      throw Error(`片段 ${c.id} 的淡入 ${c.fadeIn} + 淡出 ${c.fadeOut} 超过了片段长度 ${c.fadeDuration ?? c.duration}`);
     if (c.automation.some((k) => k.value < 0 || k.value > 4))
-      throw Error("Audio gain automation must be 0..4");
+      throw Error(`片段 ${c.id} 的音量自动化取值必须在 0–4 之间`);
   }
   const done = new Set(),
     visiting = new Set();
   const visit = (c) => {
-    if (visiting.has(c.id)) throw Error("Audio routing cycle");
+    if (visiting.has(c.id)) throw Error(`音频路由形成了循环：${c.id}`);
     if (done.has(c.id)) return;
     if (new Set(c.sends.map((s) => s.bus)).size !== c.sends.length)
-      throw Error("Duplicate audio send");
+      throw Error(`${c.id} 向同一总线发送了多次`);
     visiting.add(c.id);
     for (const dest of [c.output, ...c.sends.map((s) => s.bus)]) {
       if (dest === "master") continue;
-      if (!buses.has(dest)) throw Error("Unknown audio bus: " + dest);
+      if (!buses.has(dest)) throw Error(`${c.id} 输出到不存在的总线：${dest}`);
       visit(buses.get(dest));
     }
     visiting.delete(c.id);
@@ -245,10 +251,10 @@ export function validateAudioDocument(value, { projectId, duration } = {}) {
   for (const c of [...d.tracks, ...d.buses, d.master]) {
     const ids = c.processors.map((p) => p.id).filter(Boolean);
     if (new Set(ids).size !== ids.length)
-      throw Error("Duplicate processor id in channel");
+      throw Error(`${c.id ?? "master"} 的处理器 id 重复`);
     for (const p of c.processors)
       if (p.type === "duck" && !tracks.has(p.track))
-        throw Error("Unknown ducking trigger track");
+        throw Error(`${c.id ?? "master"} 的 duck 处理器指向不存在的音轨：${p.track}`);
   }
   return d;
 }
@@ -322,16 +328,16 @@ export function editAudioDocument(value, operations, context) {
     if (op.op === "remove") {
       const a = d[op.collection],
         i = a.findIndex((v) => v.id === op.id);
-      if (i < 0) throw Error("Unknown audio item");
+      if (i < 0) throw Error(`${op.collection} 中没有 id 为 ${op.id} 的项`);
       a.splice(i, 1);
     }
     if (op.op === "split") {
       const i = d.clips.findIndex((c) => c.id === op.id);
-      if (i < 0) throw Error("Unknown audio clip");
+      if (i < 0) throw Error(`没有 id 为 ${op.id} 的片段`);
       const c = d.clips[i],
         elapsed = op.at - c.start;
       if (elapsed <= 0 || elapsed >= c.duration)
-        throw Error("Split must be inside clip");
+        throw Error(`切分点 ${op.at} 必须在片段 ${op.id} 内部（${c.start}–${c.start + c.duration} 秒）`);
       c.fadeDuration ??= c.duration;
       const right = {
         ...structuredClone(c),

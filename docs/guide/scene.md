@@ -2,6 +2,8 @@
 
 `scene.ts` 导出 `createScene`。播放器、截图和导出都调用同一个 `render(time)`。
 
+> 下面的示例写在 `scene.ts` 里。放在 `scenes/` 下的模块要多一层：`"../../../src/engine/types"`。
+
 ```ts
 import type { Scene, SceneOptions } from "../../src/engine/types";
 

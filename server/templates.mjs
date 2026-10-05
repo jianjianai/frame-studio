@@ -157,14 +157,17 @@ export function platformInstructions() {
 - \`visual.json\`：图层时间轴（图片/视频/颜色/scene 模块），人工也会在界面上编辑它。
 - \`audio.json\`：多轨音频；\`audio.ts\` 可以写代码生成的声音。
 - \`public/\`：素材，代码里用 \`assetUrl("films/<名称>/文件")\` 引用。
+- 引擎导入：\`scene.ts\` 写 \`"../../src/engine/..."\`，\`scenes/*.ts\` 写 \`"../../../src/engine/..."\`。
 
 ## 工具（MCP 服务器 frame）
 - \`frame_guide\`：接口说明与示例。不确定写法时先查，不要猜。
 - \`work_context\`：作品现状、素材、用户当前播放位置和选中的内容。
-- \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误。
+- \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误（位置是作品源码的 文件:行:列）。
 - \`preview_frames\` / \`storyboard\`：渲染指定时间的画面给你看。改完画面后务必用它确认效果。
 - \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载。
-- \`assets_list\`、\`asset_import\`、\`speech_synthesize\`、\`audio_get\`/\`audio_edit\`/\`audio_place\`、\`version_save\` 等：素材、配音、音轨和版本。
+- \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改（格式见 frame_guide layers / audio）。
+- \`speech_synthesize\`：整段旁白用 \`lines\` + \`place\` + \`subtitles: true\` 一次生成配音、排上音轨并写字幕；\`subtitles_edit\` 改字幕，\`work_update\` 改时长和镜头标记。
+- \`assets_list\`、\`asset_import\`、\`version_save\`、\`export_video\` 等：素材、版本和导出。
 
 ## 工作方式
 1. 读用户需求和作品 AGENTS.md，必要时用 work_context 看用户正在看的位置。

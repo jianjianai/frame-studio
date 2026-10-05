@@ -20,6 +20,16 @@ function save(file, value) {
   return sha256(text);
 }
 
+/** Rule violations in an edit are the caller's mistake (400), not a server failure; ZodErrors are formatted by the caller. */
+function asBadRequest(edit) {
+  try {
+    return edit();
+  } catch (error) {
+    if (error.name === "ZodError" || error.status) throw error;
+    throw problem(400, error.message, "INVALID_CONTENT");
+  }
+}
+
 export function readVisual(work) {
   const { meta, loads } = readProjectDir(work.dir);
   if (loads.visual !== "./visual.json")
@@ -32,7 +42,7 @@ export function readVisual(work) {
 export function editVisual(work, { operations, expectedSha256, dryRun = false }) {
   const current = readVisual(work);
   if (expectedSha256 && expectedSha256 !== current.sha256) throw problem(409, "visual.json 已被修改，请重新读取", "CONFLICT", { sha256: current.sha256 });
-  const next = editVisualDocument(current.document, operations, { projectId: work.slug, duration: current.duration });
+  const next = asBadRequest(() => editVisualDocument(current.document, operations, { projectId: work.slug, duration: current.duration }));
   if (dryRun) return { document: next, sha256: current.sha256, dryRun: true };
   return { document: next, sha256: save(path.join(work.dir, "visual.json"), next) };
 }
@@ -61,7 +71,7 @@ export function ensureAudioDocument(work) {
 export function editAudio(work, { operations, expectedSha256, dryRun = false }) {
   const current = ensureAudioDocument(work);
   if (expectedSha256 && expectedSha256 !== current.sha256) throw problem(409, "audio.json 已被修改，请重新读取", "CONFLICT", { sha256: current.sha256 });
-  const next = editAudioDocument(current.document, operations, { projectId: work.slug, duration: current.duration });
+  const next = asBadRequest(() => editAudioDocument(current.document, operations, { projectId: work.slug, duration: current.duration }));
   if (dryRun) return { document: next, sha256: current.sha256, dryRun: true };
   const sha = save(path.join(work.dir, "audio.json"), next);
   ensureGeneratorLoader(work, next);
@@ -95,7 +105,7 @@ export function placeAudio(work, { src, start = 0, duration, trackName = "录音
   const sourceId = "src_" + shortId();
   operations.push({ op: "put", collection: "sources", value: { id: sourceId, kind: "file", src } });
   const length = Math.min(duration ?? current.duration - start, current.duration - start);
-  if (length <= 0) throw problem(400, "开始时间超出了作品时长");
+  if (length <= 0) throw problem(400, `开始时间 ${start} 秒超出了作品时长 ${current.duration} 秒；需要更长的作品时先用 work_update 修改 duration`);
   const clip = { id: "clip_" + shortId(), track: track.id, source: sourceId, name: name || undefined, start, duration: length, gain };
   operations.push({ op: "put", collection: "clips", value: clip });
   const result = editAudio(work, { operations, expectedSha256: current.sha256 });

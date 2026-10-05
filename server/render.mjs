@@ -9,6 +9,7 @@ import { createExportPlan } from "../src/engine/export-plan.mjs";
 import { frameDimensions, fitComposition } from "../src/engine/dimensions.mjs";
 import { appRoot } from "./config.mjs";
 import { problem } from "./util.mjs";
+import { cleanBrowserError, mergeTimedErrors } from "./stack.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -151,7 +152,8 @@ export class Renderer {
     const page = await context.newPage();
     const errors = [];
     const logs = [];
-    page.on("pageerror", (error) => errors.push(error.message));
+    // The stack carries the location; cleanBrowserError maps it back to the work's source.
+    page.on("pageerror", (error) => errors.push(error.stack || error.message));
     page.on("console", (message) => {
       if (["error", "warning"].includes(message.type())) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
       if (logs.length > 50) logs.shift();
@@ -243,22 +245,40 @@ export class Renderer {
   /** Render frames at absolute times. Returns PNG buffers. */
   async frames(work, { times, width, subtitles = true }) {
     this.lastUse = Date.now();
-    const handle = await this.warmPage(work, width);
+    let handle;
+    try {
+      handle = await this.warmPage(work, width);
+    } catch (error) {
+      error.message = this.clean(work, error.message);
+      throw error;
+    }
     const duration = handle.project.duration;
     const errorsBefore = handle.errors.length;
     const result = [];
+    const failed = [];
     for (const raw of times) {
       const time = Math.max(0, Math.min(duration - 1e-3, Number(raw)));
-      const data = await handle.page.evaluate(
-        async ({ time, subtitles }) => {
-          await window.__FRAME_STUDIO__.frame(time, subtitles);
-          return (await window.__FRAME_STUDIO__.capture()).split(",")[1];
-        },
-        { time, subtitles },
-      );
-      result.push({ time, png: Buffer.from(data, "base64") });
+      try {
+        const data = await handle.page.evaluate(
+          async ({ time, subtitles }) => {
+            await window.__FRAME_STUDIO__.frame(time, subtitles);
+            return (await window.__FRAME_STUDIO__.capture()).split(",")[1];
+          },
+          { time, subtitles },
+        );
+        result.push({ time, png: Buffer.from(data, "base64") });
+      } catch (error) {
+        // Keep the frames that did render; one broken moment should not hide the rest.
+        failed.push(`${formatTime(time)} 渲染失败：${error.message}`);
+      }
     }
-    return { frames: result, width: handle.size.width, height: handle.size.height, errors: handle.errors.slice(errorsBefore), console: [...handle.logs] };
+    const errors = mergeTimedErrors([...new Set([...failed, ...handle.errors.slice(errorsBefore)].map((text) => this.clean(work, text)))]);
+    if (!result.length) throw problem(422, errors.join("\n") || "没有渲染出画面", "RENDER_FAILED");
+    return { frames: result, width: handle.size.width, height: handle.size.height, errors, console: [...handle.logs] };
+  }
+
+  clean(work, text) {
+    return cleanBrowserError(text, { work, vite: this.services.preview?.vite });
   }
 
   /** One labelled contact sheet; much cheaper for AI context than many images. */
@@ -375,9 +395,10 @@ export class Renderer {
       } catch (error) {
         handle.errors.push("音频生成失败：" + error.message);
       }
-      return { ok: !handle.errors.length, errors: [...new Set(handle.errors)], console: handle.logs, checkedTimes: times };
+      const errors = mergeTimedErrors([...new Set(handle.errors.map((text) => this.clean(work, text)))]);
+      return { ok: !errors.length, errors, console: handle.logs, checkedTimes: times };
     } catch (error) {
-      return { ok: false, errors: [error.message], console: error.details?.console || [] };
+      return { ok: false, errors: [this.clean(work, error.message)], console: error.details?.console || [] };
     } finally {
       await handle?.close();
     }
@@ -457,7 +478,9 @@ export class Renderer {
       encoder.stdin.end();
       const [code] = await closed;
       if (code !== 0) throw new Error("FFmpeg 失败：" + stderr);
-      if (handle.errors.length) throw new Error("渲染过程中出现错误：" + handle.errors.join("\n"));
+      // Snapshot paths read as the work's own files.
+      if (handle.errors.length)
+        throw new Error("渲染过程中出现错误：" + [...new Set(handle.errors.map((text) => this.clean({ dir: snapshot.dir }, text)))].join("\n"));
       fs.renameSync(temp, output);
       return { file: output, frames: plan.frames, width: plan.width, height: plan.height, fps: plan.fps, duration: plan.duration, audio: Boolean(audioFile) };
     } catch (error) {

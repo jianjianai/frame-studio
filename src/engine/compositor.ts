@@ -77,7 +77,10 @@ async function source(
   }
   if (src.kind === "scene") {
     const load = loaders[src.module];
-    if (!load) throw new Error("场景模块未注册：" + src.module);
+    if (!load)
+      throw new Error(
+        `场景模块未注册：${src.module}。在 scene.ts 的 createCompositionScene 第三个参数中加入 ${src.module}: () => import("./scenes/${src.module}")（已注册：${Object.keys(loaders).join("、") || "无"}）`,
+      );
     if (src.engine === "pixi") await import("pixi.js/unsafe-eval");
     const mod = await load();
     signal.throwIfAborted();
