@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Sparkles,
   AudioLines,
@@ -15,6 +15,7 @@ import {
   Loader2,
   Copy,
   KeyRound,
+  ShieldCheck,
 } from "lucide-react";
 import { api, del, patch, formatBytes, useServerEvent } from "../lib/api";
 import { Dialog, useAction, useConfirm, useToast } from "../lib/ui";
@@ -555,6 +556,47 @@ function GitHubSettings() {
 }
 
 // ---- MCP ---------------------------------------------------------------------------
+type Grant = { id: string; clientName: string; readOnly: boolean; work: string | null; repo: string | null; workTitle: string | null; createdAt: string; lastUsedAt: string };
+
+/** Apps that connected through OAuth; revoking stops their tokens immediately. */
+function OAuthGrants() {
+  const [grants, setGrants] = useState<Grant[]>([]);
+  const [run] = useAction();
+  // A connecting client changes settings several times in a row; only the newest answer counts.
+  const latest = useRef(0);
+  const load = () => {
+    const request = ++latest.current;
+    return api<Grant[]>("/api/mcp/oauth").then((list) => request === latest.current && setGrants(list));
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+  useServerEvent((event) => {
+    if (event.type === "settings" && event.key === "mcp") void load();
+  }, []);
+  return (
+    <>
+      <h3>已授权的应用</h3>
+      {!grants.length && <p className="muted small-text">还没有应用通过 OAuth 连接。</p>}
+      {grants.map((grant) => (
+        <div className="setting-card" key={grant.id}>
+          <ShieldCheck size={15} className="muted" />
+          <div className="grow">
+            <strong>{grant.clientName}</strong> {grant.readOnly && <span className="badge">只读</span>}{" "}
+            <span className="badge">{grant.work ? `仅 ${grant.workTitle || grant.work}` : "全部作品"}</span>
+            <div className="faint small-text">
+              授权于 {new Date(grant.createdAt).toLocaleString()}，最近使用 {new Date(grant.lastUsedAt).toLocaleString()}
+            </div>
+          </div>
+          <button className="btn small" onClick={() => run(() => del(`/api/mcp/oauth/${grant.id}`).then(load))}>
+            撤销
+          </button>
+        </div>
+      ))}
+    </>
+  );
+}
+
 function McpSettings() {
   const toast = useToast();
   const [tokens, setTokens] = useState<{ id: string; name: string; readOnly: boolean; createdAt: string }[]>([]);
@@ -579,10 +621,15 @@ function McpSettings() {
           <Copy size={13} />
         </button>
       </div>
-      <p className="muted small-text">请求头 Authorization: Bearer &lt;令牌&gt;。例如：</p>
-      <pre className="code-block">{`claude mcp add --transport http frame ${url} --header "Authorization: Bearer <令牌>"`}</pre>
+      <p className="muted small-text">
+        支持 OAuth 的客户端（Claude 网页版和桌面版的自定义连接器、ChatGPT、Claude Code、Cursor 等）只需要这个地址：连接时会打开授权页，选择权限和可访问的作品后点「允许」即可，不需要令牌。
+        网页版客户端需要能从公网访问 Studio（HTTPS 反向代理并设置 FRAME_PUBLIC_URL）。
+      </p>
+      <pre className="code-block">{`claude mcp add --transport http frame ${url}`}</pre>
+      <p className="muted small-text">不支持 OAuth 的客户端在请求头中加 Authorization: Bearer &lt;令牌&gt;（见下方「令牌」）。</p>
       <h3>stdio</h3>
       <pre className="code-block">{stdio}</pre>
+      <OAuthGrants />
       <h3>令牌</h3>
       {tokens.map((token) => (
         <div className="setting-card" key={token.id}>

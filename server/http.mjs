@@ -126,6 +126,8 @@ export class Auth {
       settings.setSecret("session-key", this.key.toString("base64"));
     }
     this.internal = new Map();
+    /** Extra bearer formats (OAuth access tokens): token → principal or null. */
+    this.verifiers = [];
   }
   get required() {
     return Boolean(this.config.password);
@@ -162,6 +164,10 @@ export class Auth {
       const hash = sha256(bearer);
       const token = this.settings.get("mcp").tokens.find((item) => item.hash === hash);
       if (token) return { kind: "token", id: token.id, name: token.name, readOnly: Boolean(token.readOnly) };
+      for (const verify of this.verifiers) {
+        const principal = verify(bearer);
+        if (principal) return principal;
+      }
       return null;
     }
     if (!this.required) return { kind: "local" };
@@ -176,15 +182,18 @@ export class Auth {
     }
     return null;
   }
-  /** Reject cross-site requests and DNS-rebinding attempts against the local studio. */
-  guard(req) {
+  /**
+   * Reject cross-site requests and DNS-rebinding attempts against the local studio.
+   * `crossOrigin` allows other origins for endpoints that never rely on cookies (OAuth client endpoints).
+   */
+  guard(req, { crossOrigin = false } = {}) {
     if (!this.required && !this.config.publicUrl) {
       const host = (req.headers.host || "").replace(/:\d+$/, "").replace(/^\[|\]$/g, "");
       if (!["127.0.0.1", "localhost", "::1"].includes(host) && !host.endsWith(".localhost"))
         throw problem(403, "Studio only accepts loopback host names", "FORBIDDEN");
     }
     const origin = req.headers.origin;
-    if (origin && req.method !== "GET" && req.method !== "HEAD") {
+    if (origin && !crossOrigin && req.method !== "GET" && req.method !== "HEAD") {
       const expected = new URL(`http://${req.headers.host}`).host;
       if (new URL(origin).host !== expected) throw problem(403, "Cross-origin request rejected", "FORBIDDEN");
     }

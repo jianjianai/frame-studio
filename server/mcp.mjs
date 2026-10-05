@@ -53,9 +53,11 @@ export function createMcpServer(registry, scope = {}) {
   return server;
 }
 
-/** Scope of a request: internal agent tokens are bound to their work. */
+/** Scope of a request: internal agent tokens are bound to their work; OAuth grants may be bound and/or read-only. */
 export function scopeOf(principal) {
   if (principal?.kind === "internal" && principal.work) return { work: principal.work, repo: principal.repo };
+  if (principal?.kind === "oauth")
+    return { ...(principal.work ? { work: principal.work, repo: principal.repo } : {}), ...(principal.readOnly ? { readOnly: true } : {}) };
   if (principal?.kind === "token" && principal.readOnly) return { readOnly: true };
   return {};
 }

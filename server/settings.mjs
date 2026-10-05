@@ -9,7 +9,7 @@ const defaults = () => ({
   ai: { profiles: [], defaultProfile: "claude-account", autoCommit: true, permission: "edits" },
   speech: { defaultProvider: "edge", providers: {} },
   github: { accounts: [] },
-  mcp: { tokens: [] },
+  mcp: { tokens: [], clients: [], grants: [] },
 });
 
 function readJson(file, fallback) {

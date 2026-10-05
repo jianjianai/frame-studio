@@ -41,11 +41,24 @@ AI 在作品目录中工作，拥有读写文件和运行命令的能力（与�
 
 ### HTTP
 
-地址 `http://<主机>:4310/mcp`（Streamable HTTP）。本机未设置密码时无需令牌；否则在 设置 → MCP 中创建令牌，请求头加 `Authorization: Bearer <令牌>`。
+地址 `http://<主机>:4310/mcp`（Streamable HTTP）。本机未设置密码时无需认证；否则用 OAuth（见下节），或在 设置 → MCP 中创建令牌，请求头加 `Authorization: Bearer <令牌>`。
 
 ```bash
 claude mcp add --transport http frame http://127.0.0.1:4310/mcp --header "Authorization: Bearer <令牌>"
 ```
+
+### OAuth
+
+支持 MCP 授权规范的客户端（Claude 网页版/桌面版自定义连接器、ChatGPT、Claude Code、Cursor、MCP Inspector 等）只需填写地址 `https://<域名>/mcp`：
+
+1. 客户端访问 `/mcp` 得到 401，按 `WWW-Authenticate` 找到 `/.well-known/oauth-protected-resource/mcp` 和 `/.well-known/oauth-authorization-server`。
+2. 客户端在 `/oauth/register` 动态注册，然后打开 `/oauth/authorize`（必须使用 PKCE S256）。
+3. 授权页上输入 Studio 密码（已登录则不需要），选择 **读写/只读** 和 **全部作品/某一个作品**，点「允许」。
+4. 客户端用授权码在 `/oauth/token` 换取访问令牌（1 小时）和刷新令牌（每次使用后轮换；90 天未使用失效）。
+
+已授权的应用列在 设置 → MCP 接入，撤销后立即失效。OAuth 令牌只能调用 FRAME 工具（`/mcp`），不能访问 Studio 的其他接口和作品文件。
+
+网页版客户端（如 claude.ai）从公网连接，需要 HTTPS 反向代理、`FRAME_PUBLIC_URL` 和 `FRAME_PASSWORD`（见 [DEPLOY.md](DEPLOY.md)）。本机未设置密码时 `/mcp` 对本机进程开放，客户端不会触发 OAuth。
 
 ### stdio
 

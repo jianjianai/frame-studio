@@ -37,7 +37,7 @@ frame.example.com {
 | `FRAME_HOME` | `~/.frame-studio` | 数据目录 |
 | `FRAME_HOST` / `FRAME_PORT` | `127.0.0.1` / `4310` | 监听地址 |
 | `FRAME_PASSWORD` | （无） | 登录密码；监听非本机地址时必须设置 |
-| `FRAME_PUBLIC_URL` | （无） | 对外访问地址（反向代理后） |
+| `FRAME_PUBLIC_URL` | （无） | 对外访问地址（反向代理后）；也是 MCP OAuth 的签发者地址，外部客户端据此完成授权 |
 | `FRAME_BROWSER` | 自动查找 | Chrome/Chromium 路径 |
 | `FFMPEG_PATH` | 自动查找 | ffmpeg 路径 |
 | `FRAME_AGENT_HOME` | 用户主目录 | AI 代理（claude/codex）的 HOME，凭据保存于此 |

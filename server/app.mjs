@@ -6,6 +6,7 @@ import { loadConfig, ensureDirs, appRoot, appVersion } from "./config.mjs";
 import { Settings } from "./settings.mjs";
 import { Events, problem, inside } from "./util.mjs";
 import { Router, Auth, sendJson, sendError, sendFile, serveStatic, readJson } from "./http.mjs";
+import { isOAuthClientEndpoint, oauthCors, resourceMetadataUrl } from "./oauth.mjs";
 import { GitHub } from "./github.mjs";
 import { Repos } from "./repos.mjs";
 import { Works } from "./works.mjs";
@@ -80,12 +81,18 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     const url = new URL(req.url, "http://local");
     const { pathname } = url;
     try {
-      auth.guard(req);
+      if (oauthCors(req, res, pathname)) return;
+      auth.guard(req, { crossOrigin: isOAuthClientEndpoint(pathname) });
       const principal = auth.identify(req);
-      const matched = pathname.startsWith("/api/") || pathname === "/mcp" ? router.match(req.method, pathname) : null;
+      const routed = pathname.startsWith("/api/") || pathname === "/mcp" || pathname.startsWith("/oauth/") || pathname.startsWith("/.well-known/");
+      const matched = routed ? router.match(req.method, pathname) : null;
       if (matched) {
-        if (!principal && !matched.route.options.public) throw problem(401, "需要登录", "UNAUTHORIZED");
-        if (principal?.kind === "internal" && !matched.route.options.internal && !matched.route.options.public)
+        if (!principal && !matched.route.options.public) {
+          // Tells MCP clients where to start OAuth (RFC 9728 / MCP authorization).
+          if (pathname === "/mcp") res.setHeader("WWW-Authenticate", `Bearer resource_metadata="${resourceMetadataUrl(req, config)}"`);
+          throw problem(401, "需要登录", "UNAUTHORIZED");
+        }
+        if (["internal", "oauth"].includes(principal?.kind) && !matched.route.options.internal && !matched.route.options.public)
           throw problem(403, "This token can only call FRAME tools", "FORBIDDEN");
         if (
           !["GET", "HEAD"].includes(req.method) &&
@@ -98,7 +105,9 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
         if (!res.headersSent && !res.writableEnded) sendJson(res, 200, result === undefined ? { ok: true } : result);
         return;
       }
-      if (pathname.startsWith("/api/")) throw problem(404, "接口不存在", "NOT_FOUND");
+      if (routed) throw problem(404, "接口不存在", "NOT_FOUND");
+      // OAuth access tokens are for MCP only, not for browsing work files or the studio.
+      if (principal?.kind === "oauth") throw problem(403, "This token can only call FRAME tools", "FORBIDDEN");
       // Everything below serves the browser: login required when a password is set.
       if (!principal && !pathname.startsWith("/assets/") && pathname !== "/favicon.svg") {
         if (req.method === "GET" && !pathname.includes(".")) {
@@ -173,7 +182,8 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
   server.prependListener("upgrade", (req, socket) => {
     try {
       auth.guard(req);
-      if (!auth.identify(req)) throw new Error("unauthorized");
+      const principal = auth.identify(req);
+      if (!principal || principal.kind === "oauth") throw new Error("unauthorized");
     } catch {
       socket.write("HTTP/1.1 401 Unauthorized\r\nConnection: close\r\n\r\n");
       socket.destroy();
