@@ -148,10 +148,31 @@ async function load(timestamp?: number) {
 }
 
 let updating: Promise<void> = Promise.resolve();
+/**
+ * Changed public files must not be played from the asset precache: drop them
+ * from it before the work reloads them (the workbench caches the new versions).
+ */
+async function dropCachedAssets(files: string[]) {
+  const worker = navigator.serviceWorker?.controller;
+  const urls = files.flatMap((file) => {
+    const match = /(?:^|\/)projects\/([^/]+)\/public\/(.+)$/.exec(file);
+    return match ? [new URL(`${source.assetBase}films/${match[1]}/${match[2]}`, location.origin).href] : [];
+  });
+  if (!worker || !urls.length) return;
+  const channel = new MessageChannel();
+  const done = new Promise((resolve) => {
+    channel.port1.onmessage = resolve;
+    setTimeout(resolve, 1000);
+  });
+  worker.postMessage({ type: "invalidate", urls }, [channel.port2]);
+  await done;
+}
+
 async function hotUpdate(timestamp: number, files: string[]) {
   const run = async () => {
     setStatus({ updating: true });
     try {
+      await dropCachedAssets(files);
       const next = await importWork(source, timestamp);
       const kinds = changeKinds(files);
       if (!session || state.status === "error" || next.renderer !== project?.renderer) start(next, lastSnapshot);

@@ -1,8 +1,26 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { confined, problem, writeFileAtomic, mediaKind, sha256 } from "./util.mjs";
 
 const HIDDEN = new Set([".git", "node_modules", ".cache", "exports", ".DS_Store"]);
+const versions = new Map(); // file -> { size, mtimeMs, ino, version }
+
+/**
+ * Content version of a file (sha256 prefix), remembered until its size, mtime or
+ * inode change. Equal content gives equal versions, also across works, so the
+ * browser precache never downloads the same bytes twice.
+ */
+export async function contentVersion(file, stat = fs.statSync(file)) {
+  const known = versions.get(file);
+  if (known && known.size === stat.size && known.mtimeMs === stat.mtimeMs && known.ino === stat.ino) return known.version;
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  const version = hash.digest("hex").slice(0, 32);
+  versions.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, ino: stat.ino, version });
+  return version;
+}
+
 export const TEXT_LIMIT = 2 * 1024 * 1024;
 const textExtensions = /\.(ts|tsx|js|mjs|cjs|jsx|json|md|txt|css|html|svg|glsl|frag|vert|srt|vtt|csv|yaml|yml|toml)$/i;
 export const isText = (file) => textExtensions.test(file);

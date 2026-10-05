@@ -2,13 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { randomBytes, randomUUID } from "node:crypto";
 import { readJson, sendFile } from "../http.mjs";
-import { writeStream, uniquePath } from "../files.mjs";
+import { writeStream, uniquePath, contentVersion } from "../files.mjs";
 import { checkWork } from "../checks.mjs";
 import { placeAudio, readVisual, editVisual, readAudio, editAudio } from "../documents.mjs";
 import { probe } from "../media.mjs";
 import { listAssets } from "../tools/work-tools.mjs";
 import { importFromUrl } from "../tools/asset-tools.mjs";
-import { problem, sha256 } from "../util.mjs";
+import { problem, sha256, confined, mimeType } from "../util.mjs";
 
 /** Studio-facing routes for exports, assets, documents, checks, tasks and tokens. */
 export function studioRoutes(services) {
@@ -20,6 +20,71 @@ export function studioRoutes(services) {
   router.get("/api/works/:repo/:id/check", async ({ params }) => services.checks.get(`${params.repo}/${params.id}`) || null);
 
   // ---- assets -------------------------------------------------------------
+  /** Everything playback may load: the browser precaches these and refreshes changed ones by ETag. */
+  router.get("/api/works/:repo/:id/precache", async ({ params }) => {
+    const work = await open(params);
+    const root = path.join(work.dir, "public");
+    const found = [];
+    const walk = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else if (entry.isFile()) found.push(full);
+      }
+    };
+    walk(root);
+    const files = [];
+    for (let index = 0; index < found.length; index += 4)
+      files.push(
+        ...(await Promise.all(
+          found.slice(index, index + 4).map(async (full) => {
+            const stat = fs.statSync(full);
+            return { path: path.relative(root, full).split(path.sep).join("/"), size: stat.size, version: await contentVersion(full, stat) };
+          }),
+        )),
+      );
+    // Same base as the preview's asset URLs (Renderer.sourceOf / the stage query).
+    return { base: `/files/${work.repo}/${work.id}/films/${work.slug}/`, files };
+  });
+
+  /**
+   * Many small files in one response, so high-latency links pay one round trip
+   * instead of one per file. Framing per file: u32 header length, JSON header
+   * { path, size, version, type }, then exactly `size` bytes.
+   */
+  router.post("/api/works/:repo/:id/precache/bundle", async ({ params, req, res }) => {
+    const work = await open(params);
+    const { paths } = await readJson(req);
+    if (!Array.isArray(paths) || !paths.length || paths.length > 1000) throw problem(400, "paths 必须是 1–1000 个文件");
+    const root = path.join(work.dir, "public");
+    const files = paths.map((relative) => {
+      const file = confined(root, String(relative));
+      const stat = fs.statSync(file, { throwIfNoEntry: false });
+      if (!stat?.isFile()) throw problem(404, "文件不存在：" + relative, "NOT_FOUND");
+      return { relative: String(relative), file, stat };
+    });
+    res.writeHead(200, { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" });
+    const write = (chunk) => (res.write(chunk) ? undefined : new Promise((resolve) => res.once("drain", resolve)));
+    for (const { relative, file, stat } of files) {
+      const header = Buffer.from(JSON.stringify({ path: relative, size: stat.size, version: await contentVersion(file, stat), type: mimeType(file) }));
+      const length = Buffer.alloc(4);
+      length.writeUInt32BE(header.length);
+      await write(Buffer.concat([length, header]));
+      let sent = 0;
+      for await (const chunk of fs.createReadStream(file, { start: 0, end: Math.max(0, stat.size - 1) })) {
+        if (!stat.size) break;
+        // The header promised stat.size bytes; a file growing meanwhile must not break the framing.
+        const part = chunk.subarray(0, stat.size - sent);
+        sent += part.length;
+        await write(part);
+        if (sent >= stat.size) break;
+      }
+      if (sent < stat.size) await write(Buffer.alloc(stat.size - sent));
+    }
+    res.end();
+  });
+
   router.get("/api/works/:repo/:id/assets", async ({ params }) => listAssets(await open(params)));
   router.post("/api/works/:repo/:id/assets/import", async ({ params, req }) => {
     const work = await open(params);

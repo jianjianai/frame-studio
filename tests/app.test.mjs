@@ -51,6 +51,55 @@ describe("studio API (local mode)", () => {
     expect(response.status).toBe(400);
   });
 
+  it("lists playback files for the precache with content versions", async () => {
+    const created = await server.call("/api/works", { method: "POST", body: { title: "预缓存" } });
+    const dir = (await server.app.services.works.open(created.body.id, "local")).dir;
+    const file = (name) => path.join(dir, "public", name);
+    fs.mkdirSync(file("sub"), { recursive: true });
+    fs.writeFileSync(file("sub/声音.wav"), "RIFFdata");
+    fs.writeFileSync(file("copy.wav"), "RIFFdata");
+    const manifest = async () => {
+      const response = await server.call(`/api/works/local/${created.body.id}/precache`);
+      return Object.fromEntries(response.body.files.map((item) => [item.path, item]));
+    };
+    const first = await manifest();
+    expect((await server.call(`/api/works/local/${created.body.id}/precache`)).body.base).toBe(`/files/local/${created.body.id}/films/${created.body.slug}/`);
+    expect(first["sub/声音.wav"]).toMatchObject({ size: 8, version: expect.stringMatching(/^[0-9a-f]{32}$/) });
+    // Equal content, equal version: the browser copies instead of downloading again.
+    expect(first["copy.wav"].version).toBe(first["sub/声音.wav"].version);
+    expect(first["poster.svg"]).toBeDefined();
+    // A new mtime alone does not make it a new version; new content does.
+    fs.utimesSync(file("sub/声音.wav"), new Date(), new Date(Date.now() + 5000));
+    expect((await manifest())["sub/声音.wav"].version).toBe(first["sub/声音.wav"].version);
+    fs.writeFileSync(file("sub/声音.wav"), "RIFFother");
+    expect((await manifest())["sub/声音.wav"].version).not.toBe(first["sub/声音.wav"].version);
+  });
+
+  it("bundles small files in one framed response", async () => {
+    const created = await server.call("/api/works", { method: "POST", body: { title: "打包" } });
+    const dir = (await server.app.services.works.open(created.body.id, "local")).dir;
+    fs.writeFileSync(path.join(dir, "public", "a.txt"), "hello");
+    fs.writeFileSync(path.join(dir, "public", "空.bin"), "");
+    const url = `${server.base}/api/works/local/${created.body.id}/precache/bundle`;
+    const post = (paths) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths }) });
+    const response = await post(["a.txt", "空.bin", "poster.svg"]);
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const parsed = [];
+    for (let offset = 0; offset < bytes.length; ) {
+      const length = bytes.readUInt32BE(offset);
+      const header = JSON.parse(bytes.subarray(offset + 4, offset + 4 + length).toString());
+      offset += 4 + length;
+      parsed.push({ ...header, body: bytes.subarray(offset, offset + header.size).toString() });
+      offset += header.size;
+    }
+    expect(parsed.map((item) => item.path)).toEqual(["a.txt", "空.bin", "poster.svg"]);
+    expect(parsed[0]).toMatchObject({ size: 5, body: "hello", type: expect.stringContaining("text/plain"), version: expect.stringMatching(/^[0-9a-f]{32}$/) });
+    expect(parsed[1]).toMatchObject({ size: 0, body: "" });
+    expect(parsed[2].body).toContain("<svg");
+    expect((await post(["../project.ts"])).status).toBe(400);
+    expect((await post(["missing.png"])).status).toBe(404);
+  });
+
   it("answers missing work files with 404 and keeps serving", async () => {
     const created = await server.call("/api/works", { method: "POST", body: { title: "缺失文件" } });
     for (const route of [`/files/local/${created.body.id}/films/${created.body.slug}/missing.png`, "/files/local/nope/films/x/y.png", "/films/nope/missing.png"])

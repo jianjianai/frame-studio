@@ -20,6 +20,7 @@ import type { CheckResult, WorkInfo, WorkStatus } from "../lib/types";
 import { navigate } from "../App";
 import { StageController, WorkbenchContext, useWorkbench, type ChatAttachment, type Selection, type WorkbenchContextValue } from "./store";
 import { EditorArea, type EditorHandle } from "./EditorArea";
+import { PrecacheBar } from "./PrecacheBar";
 import { BottomPanel } from "./BottomPanel";
 import { StatusBar } from "./StatusBar";
 import { ExplorerView } from "../views/ExplorerView";
@@ -199,6 +200,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   return (
     <WorkbenchContext.Provider value={context}>
       <div className="wb">
+        <PrecacheBar />
         <header className="wb-title">
           <button className="icon-btn" title="返回首页" onClick={() => navigate("/")}>
             <Home size={16} />
