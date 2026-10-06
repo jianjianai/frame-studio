@@ -1,6 +1,31 @@
 import { ENGINE_PROTOCOL_VERSION } from "../src/engine/protocol.mjs";
 
 /** Files of a new work branch: a playable blank composition with one editable title layer. */
+/**
+ * Media go to Git LFS: GitHub refuses ordinary files over 100 MB, and binary history
+ * would make every clone of the content repository slower. Written on every new work
+ * and materials branch. Patterns match both cases (".PNG" from cameras).
+ */
+const LFS_EXTENSIONS = [
+  ["音频", "wav mp3 m4a aac flac ogg oga opus weba"],
+  ["视频", "mp4 m4v mov webm mkv avi"],
+  ["图片", "png jpg jpeg webp gif avif bmp tif tiff psd"],
+  ["字体", "ttf otf woff woff2"],
+  ["三维与贴图", "glb fbx usdz hdr exr ktx2"],
+  ["音色库与其他二进制", "sf2 sf3 bin zip onnx"],
+];
+const anyCase = (ext) => [...ext].map((char) => (/[a-z]/.test(char) ? `[${char}${char.toUpperCase()}]` : char)).join("");
+export const GIT_ATTRIBUTES =
+  "# 媒体素材用 Git LFS 存储（GitHub 不接受超过 100 MB 的普通文件）\n" +
+  LFS_EXTENSIONS.map(
+    ([group, list]) =>
+      `# ${group}\n` +
+      list
+        .split(" ")
+        .map((ext) => `*.${anyCase(ext)} filter=lfs diff=lfs merge=lfs -text\n`)
+        .join(""),
+  ).join("");
+
 export function createWorkFiles({ slug, title, width, height, duration, fps, description }) {
   const base = `projects/${slug}/`;
   const meta = {
@@ -50,6 +75,7 @@ export default project;
   return {
     "README.md": `# ${title}\n\nFRAME 作品。使用 FRAME Studio 打开、预览和导出。\n`,
     ".gitignore": "exports/\n.cache/\nnode_modules/\n",
+    ".gitattributes": GIT_ATTRIBUTES,
     [base + "project.ts"]: project,
     [base + "visual.json"]: JSON.stringify(visual, null, 2) + "\n",
     [base + "scene.ts"]: `import type { SceneOptions } from "../../src/engine/types";

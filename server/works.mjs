@@ -4,7 +4,7 @@ import { git, gitOk, parseStatus, addOrphanWorktree } from "./git.mjs";
 import { readProjectSource, readProjectDir, setProjectFields, validSlug } from "./project-meta.mjs";
 import { appRoot } from "./config.mjs";
 import { problem, notFound, conflict, Locks, shortId, writeFileAtomic } from "./util.mjs";
-import { createWorkFiles, platformInstructions, workTsconfig } from "./templates.mjs";
+import { createWorkFiles, platformInstructions, workTsconfig, GIT_ATTRIBUTES } from "./templates.mjs";
 import { LOCAL_REPO } from "./repos.mjs";
 
 const WORK_PREFIX = "works/";
@@ -234,6 +234,8 @@ export class Works {
         });
         writeFileAtomic(path.join(root, "README.md"), `# ${meta.title || slug}\n\nFRAME 作品。使用 FRAME Studio 打开、预览和导出。\n`);
         writeFileAtomic(path.join(root, ".gitignore"), "exports/\n.cache/\nnode_modules/\n");
+        // Before the copied media are added, so they are stored in LFS.
+        writeFileAtomic(path.join(root, ".gitattributes"), GIT_ATTRIBUTES);
         this.linkRuntime(root);
         await git(root, ["add", "-A", "--", "."]);
         await git(root, ["commit", "-q", "-m", `导入作品：${meta.title || slug}`]);

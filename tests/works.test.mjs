@@ -34,6 +34,13 @@ describe("works as git branches", () => {
     expect(list.find((item) => item.id === work.id)).toMatchObject({ title: "第一部", duration: 5, checkedOut: true });
   });
 
+  it("stores the media of new works in Git LFS", async () => {
+    const work = await works.create({ title: "LFS" });
+    expect((await git(work.root, ["ls-files"])).split("\n")).toContain(".gitattributes");
+    const media = ["a.mp3", "b.PNG", "c.mov", "d.woff2", "e.sf2"].map((name) => `projects/${work.slug}/public/${name}`);
+    const attributes = await git(work.root, ["check-attr", "filter", "--", ...media, `projects/${work.slug}/scene.ts`]);
+    expect(attributes.trim().split("\n").map((line) => line.split(": ").pop())).toEqual(["lfs", "lfs", "lfs", "lfs", "lfs", "unspecified"]);
+  });
   it("keeps histories independent and supports revert", async () => {
     const a = await works.create({ title: "A" });
     const b = await works.create({ title: "B" });

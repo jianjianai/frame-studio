@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { git, gitOk, authEnv, addOrphanWorktree } from "./git.mjs";
+import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { problem, notFound, Locks } from "./util.mjs";
 
 export const LOCAL_REPO = "local";
@@ -186,7 +187,8 @@ export class Repos {
         await addOrphanWorktree(repo.dir, MATERIALS_BRANCH, dir);
         fs.mkdirSync(path.join(dir, "materials"), { recursive: true });
         fs.writeFileSync(path.join(dir, "materials", "index.json"), "[]\n");
-        await git(dir, ["add", "--", "materials/index.json"]);
+        fs.writeFileSync(path.join(dir, ".gitattributes"), GIT_ATTRIBUTES);
+        await git(dir, ["add", "--", "materials/index.json", ".gitattributes"]);
         await git(dir, ["commit", "-m", "Create materials library"]);
       }
       return dir;
