@@ -1,7 +1,8 @@
-import { useEffect, useState, type ReactNode } from "react";
-import { Layers, AudioLines, Captions, Flag, Film, Crosshair, Sparkles } from "lucide-react";
-import { api, formatTime, workPath } from "../lib/api";
-import { useAction } from "../lib/ui";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { Layers, AudioLines, Captions, Flag, Film, Crosshair, Sparkles, GalleryThumbnails, ImageUp, Wand2 } from "lucide-react";
+import { api, formatTime, useServerEvent, workPath } from "../lib/api";
+import { automaticCover, coverFromFrame, coverUrl, uploadCover, type CoverState } from "../lib/covers";
+import { useAction, useToast } from "../lib/ui";
 import type { AudioDocument, VisualClip } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { VolumeSlider, formatDb } from "../workbench/Timeline";
@@ -463,6 +464,9 @@ export function PropertiesView() {
             <span className="prop-static">{meta.composition ? `${meta.composition.width}×${meta.composition.height}` : "1920×1080"}（让 AI 修改）</span>
           </Prop>
         </Section>
+        <Section title="封面">
+          <CoverEditor />
+        </Section>
         <p className="view-hint">在时间轴上选中图层、音频片段、音轨、字幕或标记，这里会显示它的属性。所有修改都可以用 Ctrl+Z 撤销。</p>
       </>
     );
@@ -516,6 +520,71 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
       <h3>{title}</h3>
       {children}
     </section>
+  );
+}
+
+/** The work's cover (as shown on the home page) and the ways to choose it. */
+function CoverEditor() {
+  const { work, stage } = useWorkbench();
+  const [state, setState] = useState<CoverState | null>(null);
+  const [run, busy] = useAction();
+  const toast = useToast();
+  const meta = work.meta!;
+  const base = workPath(work.repo, work.id);
+  // Opening the view makes a stale cover anew; cover events only re-read the result.
+  const load = useCallback((refresh: boolean) => api<CoverState>(`${base}/cover/state?refresh=${refresh ? 1 : 0}`).then(setState, () => {}), [base]);
+  useEffect(() => void load(true), [load]);
+  useServerEvent(
+    (event) => {
+      if (event.type === "work-cover" && event.repo === work.repo && event.work === work.id) void load(false);
+    },
+    [work.repo, work.id, load],
+  );
+  const save = (action: () => Promise<CoverState | null>, done: string) =>
+    run(async () => {
+      const next = await action();
+      if (!next) return;
+      setState(next);
+      toast(done, "ok");
+    });
+  const mode = meta.poster ? "image" : meta.posterTime !== undefined ? "time" : "auto";
+  const what =
+    mode === "image"
+      ? `图片 ${meta.poster!.replace(/^films\/[^/]+\//, "public/")}`
+      : mode === "time"
+        ? `${formatTime(meta.posterTime!)} 的画面`
+        : `自动选取的画面${state?.time != null ? `（${formatTime(state.time)}）` : ""}`;
+  return (
+    <div className="cover-editor">
+      {state?.cover ? (
+        <div className="cover-preview">
+          <img src={coverUrl(work.repo, work.id, state.cover)} alt="封面" />
+          {state.updating && <span className="cover-updating">作品有改动，正在更新…</span>}
+        </div>
+      ) : (
+        <div className="cover-preview empty">{!state ? "" : state.updating ? "正在生成封面…" : "还没有封面"}</div>
+      )}
+      <div className="faint small-text">{what}</div>
+      {state?.error && <div className="danger-text small-text cover-error">封面没能生成：{state.error}</div>}
+      <div className="cover-actions">
+        <button
+          className="btn small"
+          disabled={busy}
+          title="把预览中正在显示的画面设为封面；以后作品改动时，封面会跟着这一秒的画面更新"
+          onClick={() => save(() => coverFromFrame(work.repo, work.id, stage.playback.get().time), "已把当前画面设为封面")}
+        >
+          <GalleryThumbnails size={13} /> 用当前画面
+        </button>
+        <button className="btn small" disabled={busy} title="用一张图片作为封面（保存为 public/poster.webp）" onClick={() => save(() => uploadCover(work.repo, work.id), "封面已更换")}>
+          <ImageUp size={13} /> 上传图片…
+        </button>
+        {mode !== "auto" && (
+          <button className="btn small ghost" disabled={busy} title="从作品中自动挑一个画面饱满的时刻" onClick={() => save(() => automaticCover(work.repo, work.id), "封面改为自动选取")}>
+            <Wand2 size={13} /> 自动选取
+          </button>
+        )}
+      </div>
+    </div>
   );
 }
 

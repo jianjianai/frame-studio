@@ -39,7 +39,6 @@ export function createWorkFiles({ slug, title, width, height, duration, fps, des
     duration,
     fps,
     accent: "#7aa2f7",
-    poster: `films/${slug}/poster.svg`,
     tags: [],
     status: "draft",
     beats: [],
@@ -125,12 +124,8 @@ export function createScene({ width, height }: SceneOptions): Scene {
 ## 需求
 ${description || "（尚未填写）"}
 `,
-    [base + "public/poster.svg"]:
-      `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#101418"/><text x="50%" y="50%" fill="#e8edf2" font-family="system-ui,sans-serif" font-size="${Math.round(height * 0.08)}" text-anchor="middle" dominant-baseline="middle">${escapeXml(title)}</text></svg>\n`,
   };
 }
-
-const escapeXml = (text) => text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&apos;" })[c]);
 
 /** TypeScript config generated at the worktree root so agents can type-check a work. */
 export function workTsconfig() {

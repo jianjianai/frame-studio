@@ -15,14 +15,17 @@ import {
   Sparkles,
   AlertTriangle,
   Loader2,
+  GalleryThumbnails,
 } from "lucide-react";
 import { formatTime } from "../lib/api";
-import { usePersistent } from "../lib/ui";
+import { coverFromFrame } from "../lib/covers";
+import { usePersistent, useToast } from "../lib/ui";
 import { useObservable, useWorkbench } from "./store";
 import { RecordButton } from "./RecordButton";
 
 export function PreviewPane() {
-  const { work, stage, askAi, addToChat } = useWorkbench();
+  const { work, stage, askAi, addToChat, readOnly } = useWorkbench();
+  const toast = useToast();
   const frame = useRef<HTMLIFrameElement>(null);
   const [quality, setQuality] = usePersistent<"draft" | "standard" | "high">("quality", "standard");
   const [subtitles, setSubtitles] = usePersistent("subtitles", true);
@@ -62,6 +65,15 @@ export function PreviewPane() {
     const dataUrl = await stage.capture();
     addToChat({ type: "frame", time: stage.playback.get().time, data: dataUrl.split(",")[1], mimeType: "image/png" });
   };
+  const coverHere = async () => {
+    const time = stage.playback.get().time;
+    try {
+      await coverFromFrame(work.repo, work.id, time);
+      toast(`已把 ${formatTime(time)} 的画面设为封面`, "ok");
+    } catch (error) {
+      toast((error as Error).message, "error");
+    }
+  };
 
   return (
     <div className="preview">
@@ -95,6 +107,7 @@ export function PreviewPane() {
         subtitles={subtitles}
         setSubtitles={setSubtitles}
         onCapture={capture}
+        onCover={readOnly ? undefined : coverHere}
         onFullscreen={() => frame.current?.requestFullscreen()}
       />
     </div>
@@ -107,6 +120,7 @@ function Transport({
   subtitles,
   setSubtitles,
   onCapture,
+  onCover,
   onFullscreen,
 }: {
   quality: string;
@@ -114,6 +128,8 @@ function Transport({
   subtitles: boolean;
   setSubtitles: (value: boolean) => void;
   onCapture: () => void;
+  /** Absent for a published work. */
+  onCover?: () => void;
   onFullscreen: () => void;
 }) {
   const { stage } = useWorkbench();
@@ -166,6 +182,11 @@ function Transport({
         <button className="icon-btn" title="把当前画面发给 AI" disabled={!ready} onClick={onCapture}>
           <Camera size={16} />
         </button>
+        {onCover && (
+          <button className="icon-btn" title="把当前画面设为封面" disabled={!ready} onClick={onCover}>
+            <GalleryThumbnails size={16} />
+          </button>
+        )}
         <button className={`icon-btn ${playback.loop ? "active" : ""}`} title="循环" disabled={!ready} onClick={() => stage.api?.setLoop?.(!playback.loop)}>
           <Repeat size={16} />
         </button>

@@ -283,6 +283,45 @@ export class Renderer {
     return cleanBrowserError(text, { work, vite: this.services.preview?.vite });
   }
 
+  /**
+   * The frame for a work's cover, without subtitles: at `time`, or else the fullest of a few
+   * moments (by entropy), since a fade to black or an empty frame makes a poor cover.
+   */
+  async cover(work, { time, width = 640 }) {
+    this.lastUse = Date.now();
+    const meta = this.services.works.meta(work);
+    if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
+    const duration = meta.meta.duration;
+    const times = typeof time === "number" ? [time] : [0.35, 0.2, 0.5, 0.65].map((share) => share * duration);
+    let handle;
+    try {
+      handle = await this.openPage(this.sourceOf(work), { width, project: meta.meta, timeoutMs: 60000 });
+      let best = null;
+      let failure = null;
+      for (const at of times) {
+        try {
+          const data = await handle.page.evaluate(
+            async (t) => {
+              await window.__FRAME_STUDIO__.frame(t, false);
+              return (await window.__FRAME_STUDIO__.capture()).split(",")[1];
+            },
+            Math.max(0, Math.min(duration - 1e-3, at)),
+          );
+          const png = Buffer.from(data, "base64");
+          const { entropy } = await sharp(png).stats();
+          // Earlier candidates win ties: 35% in is usually past the opening and still representative.
+          if (!best || entropy > best.entropy + 0.25) best = { png, time: at, entropy };
+        } catch (error) {
+          failure = error;
+        }
+      }
+      if (!best) throw problem(422, this.clean(work, failure?.message || "没有渲染出画面"), "RENDER_FAILED");
+      return { png: best.png, time: best.time };
+    } finally {
+      await handle?.close();
+    }
+  }
+
   /** One labelled contact sheet; much cheaper for AI context than many images. */
   async storyboard(work, { times, columns, width = 480 }) {
     const { frames, width: w, height: h, errors } = await this.frames(work, { times, width, subtitles: true });

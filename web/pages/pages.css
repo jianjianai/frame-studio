@@ -224,6 +224,10 @@
   font-size: 30px;
   font-weight: 700;
 }
+/* The initial shows until the cover has loaded (or when there is none). */
+.work-thumb-frame > * {
+  grid-area: 1 / 1;
+}
 .work-thumb-frame img {
   width: 100%;
   height: 100%;

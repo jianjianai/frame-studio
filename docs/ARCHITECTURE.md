@@ -23,11 +23,12 @@ works/<库>/<作品>/                   作品工作目录 = works/<作品> 分�
    src → 引擎, node_modules → 依赖, docs → 文档     （链接，不提交）
    AGENTS.md, CLAUDE.md, tsconfig.json             （平台生成，不提交；AGENTS.md 是 AI 的会话说明）
 libraries/<库>/                      frame/materials 分支的 worktree：素材库（每个文件夹一个库；作品在 project.ts 的 materials 中引用，用到的文件版本锁定在作品的 materials.lock.json）
-experience/<库>/                     frame/experience 分支的 worktree：经验库（每个文件夹一个库，作品在 project.ts 的 experience 中关联）
+experience/<库>/                     frame/experience 分支的 worktree：经验库（每个文件夹一个库，作品在 project.ts 的 experiences 中关联）
 exports/<库>/<作品>/                  导出的视频
 models/speech/                       下载的语音模型
 ai/sessions/                         AI 对话记录（JSONL）、图片、AI 上一轮结束时的作品文件快照
 tmp/                                 导出快照、Vite 缓存
+cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图片的缩略图）及其来源版本
 ```
 
 一个作品 = 一个分支，所以各作品的历史、推送、拉取互不影响。回收站也是分支名：移到回收站把 `works/<id>` 改名为 `trash/<id>`（本机和 GitHub 一起改，GitHub 上的改名是带 `--force-with-lease` 的原子推送）。「释放本地空间」删除已同步作品的本地分支和工作目录，再删除没有本地分支引用的 LFS 文件并 `git gc`。打开作品时检出到唯一的工作目录：编辑器、预览、AI、CLI、MCP 都读写这里的同一份文件。
@@ -43,7 +44,8 @@ tmp/                                 导出快照、Vite 缓存
 | `project-meta.mjs` | 不执行代码地读取/修改 `project.ts` 字面量字段 |
 | `documents.mjs` | `visual.json` / `audio.json` 的读取与原子编辑（UI 与 AI 共用） |
 | `preview.mjs` | Vite 中间件；拦截作品文件的热更新，改为向舞台发送 `preview-update` |
-| `render.mjs` | 无界面 Chromium：渲染帧、分镜、响度分析、运行检查、MP4 导出（ffmpeg） |
+| `render.mjs` | 无界面 Chromium：渲染帧、分镜、封面画面、响度分析、运行检查、MP4 导出（ffmpeg） |
+| `covers.mjs` | 首页封面：`project.ts` 的 `poster` 图片，或作品在 `posterTime`（不写时自动挑选）的画面。按作品文件的版本缓存；列出作品时在后台逐个重做过期的封面，完成后广播 `work-cover` |
 | `checks.mjs` | 作品检查：元数据、TypeScript、素材引用、真实加载 |
 | `tools/` | 工具注册表（zod 参数），MCP、CLI、内置 AI 共用 |
 | `mcp.mjs` | `/mcp`（Streamable HTTP）与 `/api/tools` |

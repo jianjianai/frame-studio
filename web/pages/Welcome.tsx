@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
   Settings as SettingsIcon,
@@ -17,8 +17,10 @@ import {
   Copy,
   Send,
   Lock,
+  ImageUp,
 } from "lucide-react";
 import { api, del, formatBytes, timeAgo, useServerEvent } from "../lib/api";
+import { coverUrl, uploadCover } from "../lib/covers";
 import { Dialog, useAction, useConfirm, useContextMenu, usePrompt, useToast } from "../lib/ui";
 import type { Repo, WorkSummary } from "../lib/types";
 import { navigate } from "../App";
@@ -31,7 +33,8 @@ import "./pages.css";
 const openWork = (work: Pick<WorkSummary, "repo" | "id">) => navigate(`/work/${encodeURIComponent(work.repo)}/${encodeURIComponent(work.id)}`);
 
 export function WorkCard({ work, onMenu, remote }: { work: WorkSummary; onMenu?: (event: React.MouseEvent) => void; remote?: boolean }) {
-  const poster = work.checkedOut && work.poster?.startsWith("films/") ? `/files/${work.repo}/${work.id}/${work.poster}` : "";
+  const cover = work.cover ? coverUrl(work.repo, work.id, work.cover) : "";
+  const [broken, setBroken] = useState("");
   const ratio = work.width && work.height ? `${work.width} / ${work.height}` : "16 / 9";
   return (
     <div
@@ -44,11 +47,8 @@ export function WorkCard({ work, onMenu, remote }: { work: WorkSummary; onMenu?:
     >
       <div className="work-thumb" style={{ "--accent": work.accent || "var(--accent)" } as React.CSSProperties}>
         <div className="work-thumb-frame" style={{ aspectRatio: ratio }}>
-          {poster ? (
-            <img src={poster} alt="" loading="lazy" onError={(event) => ((event.target as HTMLImageElement).style.display = "none")} />
-          ) : (
-            <span>{work.title.slice(0, 1)}</span>
-          )}
+          <span>{work.title.slice(0, 1)}</span>
+          {cover && cover !== broken && <img src={cover} alt="" loading="lazy" onError={() => setBroken(cover)} />}
         </div>
       </div>
       <div className="work-info">
@@ -117,8 +117,23 @@ export function Welcome({ version }: { version: string }) {
     document.title = "FRAME Studio";
     void load();
   }, []);
+  // Files of a work changed (the AI or another window at work): list again once it calms down,
+  // which also has the server make that work's cover anew.
+  const later = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(later.current), []);
   useServerEvent((event) => {
     if (["works", "repos"].includes(event.type)) void load();
+    if (event.type === "work-files") {
+      clearTimeout(later.current);
+      later.current = setTimeout(() => void load(), 4000);
+    }
+    // A cover made in the background: only that card changes.
+    if (event.type === "work-cover") {
+      const patch = (list: WorkSummary[]) =>
+        list.map((work) => (work.repo === event.repo && work.id === event.work ? { ...work, cover: String(event.cover || "") } : work));
+      setWorks(patch);
+      setRecent(patch);
+    }
   });
 
   const filtered = useMemo(() => works.filter((work) => !query || work.title.toLowerCase().includes(query.toLowerCase())), [works, query]);
@@ -128,6 +143,15 @@ export function Welcome({ version }: { version: string }) {
   const workMenu = (work: WorkSummary) => (event: React.MouseEvent) =>
     openMenu(event, [
       { label: "打开", onClick: () => openWork(work) },
+      ...(work.checkedOut && !work.publishedAt
+        ? [
+            {
+              label: "上传封面图片…",
+              icon: <ImageUp size={14} />,
+              onClick: () => run(async () => (await uploadCover(work.repo, work.id)) && toast("封面已更换", "ok")),
+            },
+          ]
+        : []),
       {
         label: "创建副本",
         icon: <Copy size={14} />,

@@ -9,9 +9,11 @@ export function workRoutes(services) {
   const open = (params) => services.openWork(params.id, params.repo);
   const editable = (params) => services.openEditable(params.id, params.repo);
 
-  router.get("/api/works", ({ query }) => works.list({ repo: query.repo || undefined, trash: query.trash === "1" }));
+  // Covers come from the covers plugin; stale ones are redone in the background.
+  const covered = (list) => services.covers?.annotate(list) ?? list;
+  router.get("/api/works", async ({ query }) => covered(await works.list({ repo: query.repo || undefined, trash: query.trash === "1" })));
   router.get("/api/recent", async () => {
-    const all = await works.list();
+    const all = covered(await works.list());
     const byKey = new Map(all.map((work) => [`${work.repo}/${work.id}`, work]));
     return settings
       .get("recent")
@@ -87,9 +89,10 @@ export function workRoutes(services) {
     services.watcher.unwatch({ repo: params.repo, id: params.id });
     return works.freeLocal(params.id, params.repo);
   });
-  /** What a deleted work leaves behind outside its branch: exported videos, AI conversations. */
+  /** What a deleted work leaves behind outside its branch: exported videos, its cover, AI conversations. */
   const forget = async (repo, id) => {
     fs.rmSync(path.join(services.config.dirs.exports, repo, id), { recursive: true, force: true });
+    services.covers?.forget(repo, id);
     for (const session of services.ai?.list({ work: id, repo }) ?? []) await services.ai.remove(session.id);
   };
   router.delete("/api/trash/:repo/:id", async ({ params }) => {

@@ -75,6 +75,7 @@ describe("published works and copies", () => {
 
   it("copies a work with its current files into a new, unpublished work", async () => {
     const source = await works.create({ title: "原作品" });
+    fs.mkdirSync(path.join(source.dir, "public"), { recursive: true });
     fs.writeFileSync(path.join(source.dir, "public", "logo.svg"), "<svg/>");
     await works.commit(source, "logo");
     fs.writeFileSync(path.join(source.dir, "draft.md"), "还没保存");

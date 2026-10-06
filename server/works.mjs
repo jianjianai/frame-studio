@@ -793,7 +793,6 @@ function metaSummary(slug, meta) {
     accent: meta.accent || "",
     status: meta.status || "draft",
     publishedAt: meta.publishedAt || "",
-    poster: meta.poster || "",
   };
 }
 

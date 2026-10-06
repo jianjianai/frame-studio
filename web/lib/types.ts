@@ -11,7 +11,8 @@ export interface WorkSummary {
   height: number;
   accent: string;
   status: string;
-  poster: string;
+  /** Version of the cached cover image ("" while there is none); see lib/covers.ts. */
+  cover?: string;
   updatedAt: string;
   openedAt?: string;
   /** Where the branch is (for the recycle bin: where the trash/<id> branch is). */
@@ -79,6 +80,9 @@ export interface WorkInfo {
     materials?: string[];
     /** When the work was published; a published work is view-only. */
     publishedAt?: string;
+    /** Cover image of the work; without it the cover is the frame at posterTime (or one picked automatically). */
+    poster?: string;
+    posterTime?: number;
     beats: Beat[];
     subtitles: Subtitle[];
     visual?: { background: string; clips: VisualClip[] };

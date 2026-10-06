@@ -43,6 +43,7 @@ export function loadConfig(env = process.env) {
       models: path.join(home, "models"),
       ai: path.join(home, "ai"),
       tmp: path.join(home, "tmp"),
+      cache: path.join(home, "cache"),
     },
   };
 }

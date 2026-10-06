@@ -16,7 +16,7 @@ const project: AnimationProject = {
   duration: 15,                    // 秒，最长 3600
   fps: 30,                         // 12–60
   accent: "#f5a524",
-  poster: "films/work-1a2b3c4d/poster.svg",
+  posterTime: 6.5,                 // 封面用这一秒的画面（可选）
   tags: [],
   status: "draft",
   beats: [{ at: 0, title: "开场", detail: "标题从下方升起" }],
@@ -36,5 +36,6 @@ export default project;
 - 修改时长、标题、镜头标记等字段用 `work_update` 工具；它只替换字段值，保留文件其余格式。
 - `experiences` 是作品关联的经验库名称列表，由用户在「经验」面板中勾选，不要自己修改。
 - `materials` 是作品引用的素材库名称列表，用 `materials_link` 修改；用到的素材文件版本记录在 `materials.lock.json`（不要手改，见 `assets`）。
+- 封面：默认是作品自己的一帧画面，FRAME 在作品变化后重新截取（`posterTime` 指定用哪一秒，不写时自动挑一个画面饱满的时刻）。`poster: "films/<名称>/poster.webp"` 指定一张 `public/` 里的图片作为封面，有它时不再截取。用户在预览栏「设为封面」或在属性中上传图片时，FRAME 会写入这两个字段。
 - `publishedAt` 由 FRAME Studio 在用户发布作品时写入。有这个字段的作品已发布、只能查看，工具会拒绝修改；不要自己添加或删除它。
 - 改变 `duration` 后检查 `visual.json` 和 `audio.json` 中超出时长的片段（`work_check` 会报错）。

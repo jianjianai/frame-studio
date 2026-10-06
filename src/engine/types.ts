@@ -51,7 +51,8 @@ export const projectSchema = z
     duration: z.number().positive().max(3600),
     fps: z.number().int().min(12).max(60),
     accent: z.string(),
-    poster: z.string(),
+    /** Cover image (films/<slug>/...). Without it the cover is a frame of the work: at posterTime, or picked automatically. */
+    poster: z.string().optional(),
     posterTime: z.number().nonnegative().optional(),
     tags: z.array(z.string()),
     status: z.enum(["demo", "draft", "film"]).default("demo"),

@@ -169,6 +169,7 @@ describe("recycle bin and local space", () => {
     const store = (char) => path.join(dir, "lfs", "objects", char + char, char + char, oid(char));
     const kept = await a.works.create({ repo: repoA.id, title: "保留的媒体" });
     const gone = await a.works.create({ repo: repoA.id, title: "删除的媒体" });
+    for (const work of [kept, gone]) fs.mkdirSync(path.join(work.dir, "public"), { recursive: true });
     fs.writeFileSync(path.join(kept.dir, "public", "a.png"), pointer("a"));
     fs.writeFileSync(path.join(gone.dir, "public", "b.png"), pointer("b"));
     await a.works.commit(kept, "媒体");
