@@ -82,6 +82,29 @@ describe("conversation branches", () => {
     expect(prompts.at(-1)).toMatchObject({ id: branch.id, text: "重新开始" });
   });
 
+  it("changes a detached session's options at once, applying them when it next starts", async () => {
+    const id = parentSession();
+    const session = ai.get(id);
+    session.meta.configOptions = [
+      { id: "mode", currentValue: "acceptEdits", options: [{ value: "acceptEdits" }, { value: "default" }] },
+      { id: "model", currentValue: "haiku", options: [{ value: "haiku" }, { value: "sonnet" }] },
+    ];
+    const started = Date.now();
+    const meta = await ai.setConfig(id, "mode", "default");
+    expect(Date.now() - started).toBeLessThan(200); // no agent was started for it
+    expect(meta.configOptions.find((option) => option.id === "mode").currentValue).toBe("default");
+    expect(session.meta.choices).toMatchObject({ model: "haiku", mode: "default" });
+    await expect(ai.setConfig(id, "model", "opus")).rejects.toThrow(/没有这个选项/);
+    // A live session gets it right away; a failure puts the old value back.
+    session.attached = true;
+    session.process = { connection: { setSessionConfigOption: async () => Promise.reject(new Error("boom")) } };
+    await expect(ai.setConfig(id, "model", "sonnet")).rejects.toThrow(/切换失败/);
+    expect(session.meta.configOptions.find((option) => option.id === "model").currentValue).toBe("haiku");
+    expect(session.meta.choices.model).toBe("haiku");
+    session.process = { connection: { setSessionConfigOption: async ({ value }) => ({ configOptions: [{ id: "model", currentValue: value, options: [] }] }) } };
+    expect((await ai.setConfig(id, "model", "sonnet")).configOptions).toEqual([{ id: "model", currentValue: "sonnet", options: [] }]);
+  });
+
   it("tells the branch once that dropped turns may have changed files", () => {
     const parent = parentSession();
     const session = ai.get(parent);

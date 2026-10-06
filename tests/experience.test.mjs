@@ -60,7 +60,7 @@ describe("experience libraries", () => {
     expect((await call(`${lib}/commit`, { method: "POST", body: { message: "开场经验" } })).body.commit).toMatch(/^[0-9a-f]{40}$/);
     expect((await call(`${lib}/history`)).body.map((version) => version.message)).toEqual(["开场经验", "创建经验库"]);
     expect((await call(`${lib}/diff?commit=HEAD`)).body.diff).toContain("+- 前 2 秒给出问题");
-    expect((await call(`${lib}/libraries`)).body).toEqual([{ id: "知识类视频", title: "知识类视频", files: 2 }]);
+    expect((await call(`${lib}/libraries`)).body).toEqual([{ id: "知识类视频", title: "知识类视频", files: 2, aliases: [] }]);
 
     // The session brief carries the work's notes and the whole (small) library.
     const opened = await app.services.openWork(work.id, "local");
@@ -69,6 +69,42 @@ describe("experience libraries", () => {
     expect(brief).toContain("## 经验库「知识类视频」");
     expect(brief).toContain("前 2 秒给出问题");
     expect(fs.readFileSync(path.join(opened.root, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
+  });
+
+  it("renames a library and keeps the works that link its old name", async () => {
+    const created = await call(`${lib}/libraries`, { method: "POST", body: { name: "旧名称" } });
+    const work = (await call("/api/works", { method: "POST", body: { title: "改名测试" } })).body;
+    await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experience: created.body.id } });
+    await tool("experience_write", { work: work.id, path: "做法.md", content: "# 做法\n\n- 先画分镜\n" });
+
+    const renamed = await call(`${lib}/libraries/${encodeURIComponent("旧名称")}/rename`, { method: "POST", body: { name: "新名称" } });
+    expect(renamed.body).toEqual({ id: "新名称", title: "新名称" });
+    const libraries = (await call(`${lib}/libraries`)).body;
+    expect(libraries.find((item) => item.id === "新名称")).toMatchObject({ title: "新名称", files: 2, aliases: ["旧名称"] });
+    expect(libraries.some((item) => item.id === "旧名称")).toBe(false);
+    expect((await call(`${lib}/file?path=${encodeURIComponent("新名称/README.md")}`)).body.content).toMatch(/^# 新名称\n/);
+
+    // The work still links "旧名称" in its project.ts, and finds the library under its new name.
+    const info = (await call(`/api/works/local/${work.id}`)).body;
+    expect(info.meta.experience).toBe("旧名称");
+    expect(info.experience).toEqual({ id: "新名称", title: "新名称" });
+    expect((await tool("experience_read", { work: work.id, path: "做法.md" })).body.text).toContain("先画分镜");
+    const opened = await app.services.openWork(work.id, "local");
+    expect(app.services.works.writeBrief(opened).experience.library).toBe("新名称");
+    expect(fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8")).toContain("## 经验库「新名称」");
+
+    // The old name stays reserved while works may use it; going back to it is fine.
+    expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "旧名称" } })).status).toBe(409);
+    expect((await call(`${lib}/libraries/${encodeURIComponent("新名称")}/rename`, { method: "POST", body: { name: "第三个名字" } })).body.id).toBe("第三个名字");
+    expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "第三个名字").aliases.sort()).toEqual(["新名称", "旧名称"].sort());
+    expect((await call(`${lib}/libraries/${encodeURIComponent("第三个名字")}/rename`, { method: "POST", body: { name: "旧名称" } })).body.id).toBe("旧名称");
+    expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "旧名称").aliases.sort()).toEqual(["新名称", "第三个名字"].sort());
+    expect((await call(`/api/works/local/${work.id}`)).body.experience).toEqual({ id: "旧名称", title: "旧名称" });
+
+    // Deleting the library also drops its earlier names.
+    await call(`${lib}/libraries/${encodeURIComponent("旧名称")}`, { method: "DELETE" });
+    expect((await call(`/api/works/local/${work.id}`)).body.experience).toMatchObject({ id: "旧名称", missing: true });
+    expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "新名称" } })).status).toBe(200);
   });
 
   it("tells a chat session only what changed since it last knew", async () => {

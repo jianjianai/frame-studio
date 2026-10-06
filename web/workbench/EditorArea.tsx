@@ -168,6 +168,21 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         const changed = new Set((event.files as string[]).map((file) => file.replace(/^projects\/[^/]+\//, "")));
         refresh((tab) => tab.source === "work" && changed.has(tab.file));
       } else if (event.type === "experience-files" && event.repo === work.repo) {
+        // A renamed library or document: its open tabs follow it.
+        const moved = event.moved as { from: string; to: string } | undefined;
+        if (moved) {
+          const follow = (file: string) => (file === moved.from || file.startsWith(moved.from + "/") ? moved.to + file.slice(moved.from.length) : null);
+          setTabs((list) =>
+            list.map((tab) => {
+              const file = tab.source === "experience" && tab.kind !== "diff" ? follow(tab.file) : null;
+              return file ? { ...tab, file, path: `exp:${file}` } : tab;
+            }),
+          );
+          setActive((current) => {
+            const file = current?.startsWith("exp:") ? follow(current.slice(4)) : null;
+            return file ? `exp:${file}` : current;
+          });
+        }
         const changed = event.files as string[];
         refresh((tab) => tab.source === "experience" && (!changed.length || changed.some((file) => tab.file === file || tab.file.startsWith(file + "/"))));
       }

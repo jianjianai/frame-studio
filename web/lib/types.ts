@@ -84,6 +84,8 @@ export interface WorkInfo {
   };
   loads: Record<string, string> | null;
   metaError: string | null;
+  /** The linked experience library (renames followed); null when none. */
+  experience?: { id: string; title: string; missing?: boolean } | null;
   preview: { module: string; assetBase: string };
 }
 

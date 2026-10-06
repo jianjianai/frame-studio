@@ -26,7 +26,7 @@ FRAME 通过 [Agent Client Protocol](https://agentclientprotocol.com) 运行两�
 
 - Anthropic 兼容：由 Claude Code 驱动。模型列表的第一个是默认模型，聊天中可切换。
 - OpenAI 兼容：由 Codex 驱动，需要接口支持 Responses API（`/v1/responses`）。
-- AI 配置和自定义 API 的模型在对话开始时选定，对话开始后不能切换（换了就是另一个上下文），要换请新建对话。
+- 一个对话固定使用一个 AI 配置和自定义 API 的一个模型（换了就是另一个上下文）：在对话中选择其他的，会新建一个对话。模型、模式、思考强度的切换立即显示；AI 进程空闲退出后的对话在下次启动时应用。
 
 ### AI 能做什么
 

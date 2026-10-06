@@ -4,7 +4,7 @@ import { z } from "zod";
 import { git, gitOk, addOrphanWorktree } from "./git.mjs";
 import { tree, readText, writeText, removePath, movePath } from "./files.mjs";
 import { readJson } from "./http.mjs";
-import { problem, notFound, confined, Locks } from "./util.mjs";
+import { problem, notFound, conflict, confined, Locks } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
 import { readLibrary, libraryBrief } from "./ai/context.mjs";
@@ -14,8 +14,11 @@ import { nearMiss } from "./tools/work-tools.mjs";
  * Experience libraries: Markdown documents of production know-how, shared by the works
  * of a content repository. They live on the repository's `frame/experience` branch
  * (checked out at <home>/experience/<repo>/); each top-level folder is one library.
- * A work links one library (`experience` in project.ts). The AI reads it before working
- * and keeps it organized; people edit it in the studio. Versions work like a work's.
+ * A work links one library (`experience` in project.ts) by its folder name. The AI reads it
+ * before working and keeps it organized; people edit it in the studio. Versions work like a
+ * work's. Renaming a library leaves an alias (old name → new name in .aliases.json, on the
+ * same branch), so links in works that cannot be rewritten (published, only on GitHub) still
+ * find it.
  */
 export const EXPERIENCE_BRANCH = "frame/experience";
 const ROOT_README = `# FRAME 经验库
@@ -35,6 +38,15 @@ const libraryReadme = (title) => `# ${title}
 
 - （这类作品都适用的结构、节奏、风格。按主题展开的经验另建文档，例如“开场.md”“配色与字体.md”）
 `;
+
+const ALIASES = ".aliases.json";
+/** A library folder name from what the user typed. */
+const folderOf = (name) =>
+  String(name || "")
+    .trim()
+    .replace(/[\\/:*?"<>|#%\x00-\x1f]+/g, "-")
+    .replace(/^[.\s-]+/, "")
+    .slice(0, 60);
 
 const validId = (id) => typeof id === "string" && /^[^\\/:*?"<>|#%\x00-\x1f.][^\\/:*?"<>|#%\x00-\x1f]{0,59}$/.test(id);
 
@@ -82,7 +94,9 @@ export class Experience {
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
       .map((entry) => {
         const files = tree(path.join(dir, entry.name)).filter((item) => item.type === "file");
-        return { id: entry.name, title: this.title(dir, entry.name), files: files.length };
+        // Earlier names, which works may still link.
+        const aliases = Object.keys(this.aliases(dir)).filter((name) => this.resolve(dir, name) === entry.name);
+        return { id: entry.name, title: this.title(dir, entry.name), files: files.length, aliases };
       })
       .sort((a, b) => a.title.localeCompare(b.title, "zh"));
   }
@@ -97,16 +111,48 @@ export class Experience {
 
   async create(repoId, name) {
     const title = String(name || "").trim();
-    const id = title
-      .replace(/[\\/:*?"<>|#%\x00-\x1f]+/g, "-")
-      .replace(/^[.\s-]+/, "")
-      .slice(0, 60);
+    const id = folderOf(title);
     if (!validId(id)) throw problem(400, "请填写经验库名称");
     const dir = await this.dir(repoId);
-    if (fs.existsSync(path.join(dir, id))) throw problem(409, `已经有名为「${id}」的经验库`);
+    this.assertFree(dir, id);
     writeText(dir, `${id}/README.md`, libraryReadme(title));
     this.changed(repoId, [`${id}/README.md`]);
     return { id, title };
+  }
+
+  /** A new folder name may be neither a library nor an earlier name works still link. */
+  assertFree(dir, id) {
+    if (fs.existsSync(path.join(dir, id))) throw conflict(`已经有名为「${id}」的经验库`);
+    const target = this.resolve(dir, id);
+    if (target) throw conflict(`「${id}」是经验库「${this.title(dir, target)}」以前的名称，有作品还在用它，请换一个名称`);
+  }
+
+  /**
+   * Rename a library: its folder (with an alias from the old name) and its README title.
+   * Like other edits of the libraries it is unsaved until the user saves a version.
+   */
+  async rename(repoId, id, name) {
+    const title = String(name || "").trim();
+    const next = folderOf(title);
+    if (!validId(next)) throw problem(400, "请填写经验库名称");
+    const dir = await this.dir(repoId);
+    if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound("经验库不存在");
+    if (next !== id) {
+      // Going back to one of its own earlier names is fine.
+      if (this.resolve(dir, next) !== id) this.assertFree(dir, next);
+      movePath(dir, id, next);
+      const aliases = this.aliases(dir);
+      // Keep every earlier name one step from the library.
+      for (const [from, to] of Object.entries(aliases)) if (to === id) aliases[from] = next;
+      delete aliases[next];
+      aliases[id] = next;
+      writeText(dir, ALIASES, JSON.stringify(aliases, null, 2) + "\n");
+    }
+    const readme = path.join(dir, next, "README.md");
+    const content = fs.existsSync(readme) ? fs.readFileSync(readme, "utf8") : "";
+    writeText(dir, `${next}/README.md`, /^#\s+.*$/m.test(content) ? content.replace(/^#\s+.*$/m, `# ${title}`) : `# ${title}\n\n${content}`);
+    this.changed(repoId, [id, next, ALIASES], next !== id ? { from: id, to: next } : undefined);
+    return { id: next, title };
   }
 
   async remove(repoId, id) {
@@ -114,21 +160,60 @@ export class Experience {
     const dir = await this.dir(repoId);
     if (!fs.existsSync(path.join(dir, id))) throw notFound("经验库不存在");
     removePath(dir, id);
-    this.changed(repoId, [id]);
+    // Earlier names led here; links through them now point at nothing, like the library's own.
+    const aliases = this.aliases(dir);
+    const left = Object.fromEntries(Object.entries(aliases).filter(([, to]) => to !== id));
+    if (Object.keys(left).length !== Object.keys(aliases).length)
+      Object.keys(left).length ? writeText(dir, ALIASES, JSON.stringify(left, null, 2) + "\n") : removePath(dir, ALIASES);
+    this.changed(repoId, [id, ALIASES]);
   }
 
-  changed(repo, files) {
-    this.services.events.emit({ type: "experience-files", repo, files });
+  /** Earlier library names: { old folder name: newer folder name }. */
+  aliases(dir) {
+    try {
+      const value = JSON.parse(fs.readFileSync(path.join(dir, ALIASES), "utf8"));
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    } catch {
+      return {};
+    }
+  }
+  /** The library folder a (possibly earlier) name stands for, or null. */
+  resolve(dir, id) {
+    const aliases = this.aliases(dir);
+    for (let hops = 0; validId(id) && hops < 20; hops++) {
+      if (fs.existsSync(path.join(dir, id))) return id;
+      id = aliases[id];
+    }
+    return null;
+  }
+
+  /** `moved` ({from, to}) lets open editor tabs follow a renamed folder or document. */
+  changed(repo, files, moved) {
+    this.services.events.emit({ type: "experience-files", repo, files, ...(moved ? { moved } : {}) });
   }
 
   /** The library a work is linked to, or null (unlinked, or the library was removed). */
   async linked(work) {
-    const id = this.services.works.meta(work).meta?.experience;
-    if (!validId(id)) return null;
+    const linked = this.services.works.meta(work).meta?.experience;
+    if (!validId(linked)) return null;
     const dir = await this.dir(work.repo);
-    const root = path.join(dir, id);
-    if (!fs.existsSync(root)) return { id, missing: true };
-    return { id, title: this.title(dir, id), root, dir };
+    const id = this.resolve(dir, linked);
+    if (!id) return { id: linked, missing: true };
+    return { id, title: this.title(dir, id), root: path.join(dir, id), dir };
+  }
+
+  /** Check the libraries out if the work links one (the synchronous readers below need the folder). */
+  async prepare(work) {
+    if (validId(this.services.works.meta(work).meta?.experience)) await this.dir(work.repo);
+  }
+
+  /** The linked library's id and title, cheaply (for the work's description); null when none. */
+  link(work) {
+    const linked = this.services.works.meta(work).meta?.experience;
+    if (!validId(linked)) return null;
+    const dir = path.join(this.services.config.dirs.experience, work.repo);
+    const id = this.resolve(dir, linked);
+    return id ? { id, title: this.title(dir, id) } : { id: linked, title: linked, missing: true };
   }
 
   /**
@@ -136,12 +221,12 @@ export class Experience {
    * per-message changes): { library: {id, title}, documents } or null.
    */
   current(work) {
-    const id = this.services.works.meta(work).meta?.experience;
-    if (!validId(id)) return null;
+    const linked = this.services.works.meta(work).meta?.experience;
+    if (!validId(linked)) return null;
     const dir = path.join(this.services.config.dirs.experience, work.repo);
-    const root = path.join(dir, id);
-    if (!fs.existsSync(root)) return null;
-    return { library: { id, title: this.title(dir, id) }, documents: readLibrary(root) };
+    const id = this.resolve(dir, linked);
+    if (!id) return null;
+    return { library: { id, title: this.title(dir, id) }, documents: readLibrary(path.join(dir, id)) };
   }
 
   /** The library's section of the session brief, and what it tells the AI. */
@@ -185,6 +270,7 @@ export function experiencePlugin(services) {
   router.get(`${base}/libraries`, ({ params }) => experience.libraries(params.repo));
   router.post(`${base}/libraries`, async ({ params, req }) => experience.create(params.repo, (await readJson(req)).name));
   router.delete(`${base}/libraries/:lib`, ({ params }) => experience.remove(params.repo, params.lib));
+  router.post(`${base}/libraries/:lib/rename`, async ({ params, req }) => experience.rename(params.repo, params.lib, (await readJson(req)).name));
 
   // ---- files (same shape as a work's file API, so the editor tabs reuse it) --------------
   router.get(`${base}/tree`, async ({ params }) => tree(await experience.dir(params.repo)));
@@ -198,7 +284,7 @@ export function experiencePlugin(services) {
   router.post(`${base}/move`, async ({ params, req }) => {
     const body = await readJson(req);
     movePath(await experience.dir(params.repo), body.from, body.to);
-    experience.changed(params.repo, [body.from, body.to]);
+    experience.changed(params.repo, [body.from, body.to], { from: body.from, to: body.to });
   });
   router.delete(`${base}/file`, async ({ params, query }) => {
     removePath(await experience.dir(params.repo), query.path);

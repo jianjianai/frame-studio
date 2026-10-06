@@ -41,6 +41,7 @@ export function workRoutes(services) {
 
   async function describe(work) {
     const meta = works.meta(work);
+    await services.experience?.prepare(work);
     return {
       id: work.id,
       repo: work.repo,
@@ -51,6 +52,8 @@ export function workRoutes(services) {
       meta: meta.ok ? meta.meta : null,
       loads: meta.ok ? meta.loads : null,
       metaError: meta.ok ? null : meta.error,
+      // The linked experience library, following renames.
+      experience: services.experience?.link(work) ?? null,
       preview: {
         module: preview.moduleUrl(work.dir + "/project.ts"),
         assetBase: `/files/${work.repo}/${work.id}/`,

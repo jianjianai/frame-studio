@@ -310,6 +310,11 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     setShowHistory(false);
     input.current?.focus();
   };
+  /** Another AI is another conversation: start one (the draft in the input box stays). */
+  const startOver = (message: string) => {
+    newChat();
+    toast(message, "ok");
+  };
   const captureFrame = async () => {
     try {
       const data = await stage.capture();
@@ -638,15 +643,26 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           )}
         </div>
         <div className="chat-pickers">
-          {/* An AI (or a custom API's model) is chosen when a conversation starts: another one is another conversation. */}
-          <ProfilePicker profiles={profiles} accounts={accounts} value={profile?.id} locked={Boolean(session)} onChange={setProfileId} />
+          {/* An AI (or a custom API's model) belongs to a conversation: choosing another one starts a new conversation. */}
+          <ProfilePicker
+            profiles={profiles}
+            accounts={accounts}
+            value={profile?.id}
+            inConversation={Boolean(session)}
+            onChange={(id) => {
+              setProfileId(id);
+              if (session && id !== session.profile) startOver(`已新建对话，使用 ${profiles.find((item) => item.id === id)?.name ?? "所选 AI"}`);
+            }}
+          />
           {profile && profile.kind !== "account" && (profile.models?.length ?? 0) > 0 && (
             <OptionPicker
-              label="模型"
+              label={session ? "模型（选择其他模型会新建对话）" : "模型"}
               value={session?.model || readPrefs(profile.id).customModel || profile.defaultModel || ""}
               options={(profile.models ?? []).map((model) => ({ value: model, name: model }))}
-              locked={session ? "对话开始后不能切换这个 API 的模型，请新建对话" : undefined}
-              onChange={(model) => writePref(profile.id, "customModel", model)}
+              onChange={(model) => {
+                writePref(profile.id, "customModel", model);
+                if (session && model !== session.model) startOver(`已新建对话，使用 ${model}`);
+              }}
             />
           )}
           {(session?.configOptions ?? cachedOptions(profile?.id))
@@ -664,9 +680,19 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
                 options={option.options}
                 onChange={async (value) => {
                   writePref(profile?.id, option.category || option.id, value);
-                  if (session)
-                    await patch(`/api/ai/sessions/${session.id}`, { configId: option.id, value }).catch((error) => toast((error as Error).message, "error"));
-                  else setText((current) => current);
+                  if (!session) return setText((current) => current);
+                  // Shown at once; the server confirms (or the list reloads to undo it).
+                  setSessions((list) =>
+                    list.map((item) =>
+                      item.id === session.id
+                        ? { ...item, configOptions: item.configOptions?.map((entry) => (entry.id === option.id ? { ...entry, currentValue: value } : entry)) }
+                        : item,
+                    ),
+                  );
+                  await patch(`/api/ai/sessions/${session.id}`, { configId: option.id, value }).catch((error) => {
+                    toast((error as Error).message, "error");
+                    void loadSessions();
+                  });
                 }}
               />
             ))}
@@ -1062,24 +1088,22 @@ function ProfilePicker({
   accounts,
   value,
   onChange,
-  locked,
+  inConversation,
 }: {
   profiles: Profile[];
   accounts: Record<string, boolean | undefined>;
   value?: string;
   onChange: (id: string) => void;
-  locked?: boolean;
+  /** Choosing another AI then starts a new conversation (one conversation keeps one AI). */
+  inConversation?: boolean;
 }) {
   const { openSettings } = useWorkbench();
   const current = profiles.find((item) => item.id === value);
   return (
-    <Popover
-      disabled={locked}
-      title={locked ? "对话开始后不能切换 AI。要换 AI，请点右上角 + 新建对话" : "选择 AI"}
-      button={<span className="ellipsis">{current?.name ?? "选择 AI"}</span>}
-    >
+    <Popover title="选择 AI" button={<span className="ellipsis">{current?.name ?? "选择 AI"}</span>}>
       {(close) => (
         <>
+          {inConversation && <div className="popover-label">这个对话使用「{current?.name}」。选择其他 AI 会新建一个对话。</div>}
           {profiles.map((item) => (
             <button
               key={item.id}
@@ -1117,20 +1141,15 @@ function OptionPicker({
   value,
   options,
   onChange,
-  locked,
 }: {
   label: string;
   value: string;
   options: { value: string; name: string; description?: string }[];
   onChange: (value: string) => void;
-  /** Why it cannot be changed now. */
-  locked?: string;
 }) {
   const current = options.find((item) => item.value === value);
   return (
     <Popover
-      disabled={Boolean(locked)}
-      title={locked}
       button={
         <span className="ellipsis" title={label}>
           {current?.name ?? value ?? label}

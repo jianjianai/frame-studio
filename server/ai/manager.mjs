@@ -387,6 +387,7 @@ export class AiManager {
     work ||= await this.services.openWork(session.meta.work, session.meta.repo);
     const process = await this.process(session.meta.profile, session.meta.model);
     // The agent loads the brief (AGENTS.md) as the session starts or resumes: it is the baseline.
+    await this.services.experience?.prepare(work);
     const brief = this.services.works.writeBrief(work);
     let result;
     // The work root holds the platform AGENTS.md/CLAUDE.md and the engine links; the work itself is projects/<name>/.
@@ -525,12 +526,30 @@ export class AiManager {
     if (session.meta.status !== "idle" && session.process) await session.process.connection.cancel({ sessionId: session.meta.acpSessionId });
     this.publish(session);
   }
+  /**
+   * Change a session option (model, mode, effort). The choice shows at once; a live agent
+   * session gets it right away, a detached one when it next starts (restoreChoices), so
+   * nobody waits seconds for an agent to start just to flip a picker.
+   */
   async setConfig(id, configId, value) {
     const session = this.get(id);
-    if (!session.attached) await this.attach(session);
-    const result = await session.process.connection.setSessionConfigOption({ sessionId: session.meta.acpSessionId, configId, value });
-    if (result?.configOptions) session.meta.configOptions = result.configOptions;
+    const option = session.meta.configOptions?.find((item) => item.id === configId);
+    if (option?.options && !option.options.some((item) => item.value === value)) throw problem(400, "没有这个选项");
+    const before = { configOptions: session.meta.configOptions, choices: session.meta.choices };
     session.meta.choices = { ...session.meta.choices, [configId]: value };
+    if (session.meta.configOptions)
+      session.meta.configOptions = session.meta.configOptions.map((item) => (item.id === configId ? { ...item, currentValue: value } : item));
+    this.publish(session);
+    if (!session.attached || !session.process) return this.publicMeta(session);
+    try {
+      const result = await session.process.connection.setSessionConfigOption({ sessionId: session.meta.acpSessionId, configId, value });
+      // The agent's answer is authoritative (another model may offer other efforts).
+      if (result?.configOptions) session.meta.configOptions = result.configOptions;
+    } catch (error) {
+      Object.assign(session.meta, before);
+      this.publish(session);
+      throw problem(502, "切换失败：" + (error?.message || error));
+    }
     this.publish(session);
     return this.publicMeta(session);
   }

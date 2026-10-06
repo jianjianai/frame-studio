@@ -12,6 +12,8 @@ interface Library {
   id: string;
   title: string;
   files: number;
+  /** Earlier names (works may still link them). */
+  aliases?: string[];
 }
 
 const ORGANIZE = (title: string) =>
@@ -34,8 +36,10 @@ export function ExperienceView() {
   const prompt = usePrompt();
   const [openMenu, menu] = useContextMenu();
   const base = experiencePath(work.repo);
-  const linked = work.meta?.experience || "";
-  const linkedLibrary = libraries.find((item) => item.id === linked);
+  // The work links a library by name; a renamed library is found through its earlier names.
+  const linkedName = work.meta?.experience || "";
+  const linkedLibrary = libraries.find((item) => item.id === linkedName || item.aliases?.includes(linkedName));
+  const linked = linkedLibrary?.id ?? linkedName;
 
   const load = () =>
     Promise.all([api<Library[]>(`${base}/libraries`), api<FileEntry[]>(`${base}/tree`), api<WorkStatus>(`${base}/status`)]).then(
@@ -83,6 +87,15 @@ export function ExperienceView() {
       if (!linked && (await confirm(`把经验库「${created.title}」关联到当前作品？`, { confirm: "关联" }))) await link(created.id);
       openExperience(`${created.id}/README.md`);
     });
+  const renameLibrary = (id: string) =>
+    run(async () => {
+      const name = (await prompt("重命名经验库", titleOf(id)))?.trim();
+      if (!name || name === titleOf(id)) return;
+      const renamed = await api<{ id: string; title: string }>(`${base}/libraries/${encodeURIComponent(id)}/rename`, { body: { name } });
+      setOpen((current) => new Set([...current].map((item) => (item === id ? renamed.id : item))));
+      await load();
+      await reload(); // the work's description shows the library's title
+    }, "已重命名。保存版本后会同步；关联它的作品不受影响");
   const removeLibrary = (id: string) =>
     run(async () => {
       if (
@@ -128,6 +141,7 @@ export function ExperienceView() {
       ...(node.type === "file" ? [{ label: "打开", icon: <FileText size={14} />, onClick: () => openExperience(node.path) }] : []),
       { label: "新建文档", icon: <FilePlus size={14} />, onClick: () => newDocument(folder) },
       ...(isLibrary && library !== linked ? [{ label: "关联到当前作品", icon: <Link2 size={14} />, onClick: () => link(library) }] : []),
+      ...(isLibrary ? [{ label: "重命名", icon: <Pencil size={14} />, onClick: () => renameLibrary(library) }] : []),
       ...(library === linked
         ? [
             ...(node.type === "file"
