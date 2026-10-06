@@ -592,13 +592,12 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
             ))}
           </div>
         )}
-        {readOnly && <div className="chat-locked">作品已发布，AI 不能再修改它。要继续制作，先取消发布，或者创建一个副本。</div>}
+        {readOnly && <div className="chat-locked">作品已发布：AI 只能查看和讨论，不会修改作品；可以复盘、整理经验。</div>}
         <textarea
           ref={input}
           rows={1}
-          disabled={readOnly}
           placeholder={
-            readOnly ? "作品已发布，只能查看" : running ? "AI 正在工作，新消息会排队…" : "描述你想要的修改（Enter 发送，Shift+Enter 换行）"
+            readOnly ? "和 AI 复盘这个作品，或者让它整理经验" : running ? "AI 正在工作，新消息会排队…" : "描述你想要的修改（Enter 发送，Shift+Enter 换行）"
           }
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -661,7 +660,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               <Square size={13} fill="currentColor" />
             </button>
           ) : (
-            <button className="send-btn" title="发送" disabled={readOnly || sending || (!text.trim() && !attachments.length)} onClick={() => send()}>
+            <button className="send-btn" title="发送" disabled={sending || (!text.trim() && !attachments.length)} onClick={() => send()}>
               {sending ? <span className="spinner" /> : <Send size={14} />}
             </button>
           )}
@@ -908,7 +907,7 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
     label = attachment.path;
   } else if (attachment.type === "experience") {
     icon = <BookOpen size={12} />;
-    label = `经验：${attachment.path}`;
+    label = `经验：${attachment.library}/${attachment.path}`;
   } else if (attachment.type === "problem") {
     icon = <AlertCircle size={12} />;
     label = attachment.message.slice(0, 40);

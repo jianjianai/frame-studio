@@ -73,8 +73,8 @@ export interface WorkInfo {
     composition?: { width: number; height: number };
     duration: number;
     fps: number;
-    /** Id of the linked experience library ("" or absent: none). */
-    experience?: string;
+    /** Names of the linked experience libraries (as the work lists them). */
+    experiences?: string[];
     /** When the work was published; a published work is view-only. */
     publishedAt?: string;
     beats: Beat[];
@@ -84,8 +84,8 @@ export interface WorkInfo {
   };
   loads: Record<string, string> | null;
   metaError: string | null;
-  /** The linked experience library (renames followed); null when none. */
-  experience?: { id: string; title: string; missing?: boolean } | null;
+  /** The linked experience libraries (renames followed), and linked names that lead nowhere. */
+  experiences?: { libraries: { id: string; title: string }[]; missing: string[] };
   preview: { module: string; assetBase: string };
 }
 

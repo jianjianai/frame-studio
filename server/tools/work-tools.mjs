@@ -152,14 +152,14 @@ export function registerWorkTools(registry) {
           : null,
         files,
         assets: assets.map(({ url, kind, size, duration, width, height }) => ({ url, kind, size, duration, width, height })),
-        // Built-in agents have the work's notes and its experience library in their session brief.
+        // Built-in agents have the work's notes and its experience libraries in their session brief.
         ...(ctx.scope.session ? {} : { notes: fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8").slice(0, 6000) : "" }),
         unsavedChanges: status.files.map((file) => `${file.status} ${file.path}`),
         lastVersion: status.head,
         userView: view && { time: view.time, playing: view.playing, selection: view.selection, at: view.at },
         lastCheck: services.checks.get(`${work.repo}/${work.id}`) || null,
         // The production know-how to follow; read it in full with experience_read.
-        experience: services.experience ? services.experience.summary(work, { inBrief: Boolean(ctx.scope.session) }) : null,
+        experiences: services.experience ? services.experience.summary(work, { inBrief: Boolean(ctx.scope.session) }) : null,
       };
       return asJson(result);
     },

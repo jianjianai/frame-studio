@@ -52,8 +52,8 @@ export function workRoutes(services) {
       meta: meta.ok ? meta.meta : null,
       loads: meta.ok ? meta.loads : null,
       metaError: meta.ok ? null : meta.error,
-      // The linked experience library, following renames.
-      experience: services.experience?.link(work) ?? null,
+      // The linked experience libraries (renames followed) and names that lead nowhere.
+      experiences: services.experience?.link(work) ?? { libraries: [], missing: [] },
       preview: {
         module: preview.moduleUrl(work.dir + "/project.ts"),
         assetBase: `/files/${work.repo}/${work.id}/`,

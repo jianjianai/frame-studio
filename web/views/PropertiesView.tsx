@@ -453,9 +453,7 @@ export function PropertiesView() {
           </Prop>
           <Prop label="经验库">
             <span className="prop-number">
-              <span className="prop-static">
-                {work.experience ? (work.experience.missing ? `${work.experience.id}（已删除）` : work.experience.title) : "不使用"}
-              </span>
+              <span className="prop-static">{work.experiences?.libraries.map((library) => library.title).join("、") || "不使用"}</span>
               <button className="btn small" onClick={() => showView("experience")}>
                 选择…
               </button>

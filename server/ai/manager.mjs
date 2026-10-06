@@ -292,7 +292,6 @@ export class AiManager {
    */
   async fork(id, { keep, text = "", attachments = [], view = null }) {
     const parent = this.get(id);
-    if (text.trim() || attachments.length) await this.assertWorkEditable(parent);
     const entries = this.transcript(id);
     const starts = entries.flatMap((entry, index) => (entry.kind === "user" && !entry.steered ? [index] : []));
     if (!Number.isInteger(keep) || keep < 0 || keep > starts.length) throw problem(400, "无效的分支位置");
@@ -346,12 +345,6 @@ export class AiManager {
     this.publish(session);
     if (text.trim() || attachments.length) await this.prompt(session.meta.id, { text, attachments: this.resendable(attachments), view });
     return this.publicMeta(session);
-  }
-  /** A published work is view-only: the AI may not change it any more. */
-  async assertWorkEditable(session) {
-    const work = await this.services.openWork(session.meta.work, session.meta.repo);
-    if (this.services.works.published(work))
-      throw problem(423, "这个作品已发布，只能查看，AI 不能再修改它。要继续制作，先取消发布，或者创建一个副本。", "PUBLISHED");
   }
   /** The agent's own fork of the parent context; null when it cannot (the branch then starts fresh). */
   async forkContext(session, process, params) {
@@ -438,8 +431,11 @@ export class AiManager {
     session.attached = true;
     process.sessions.add(session.meta.id);
     // What the brief told the AI; after a compaction that is all it is sure to remember.
-    session.briefSeen = brief.experience ?? null;
-    session.meta.context = { ...session.meta.context, experience: rebaseSeen(session.meta.context?.experience ?? null, session.briefSeen) };
+    session.briefSeen = brief.experience ?? {};
+    session.meta.context = {
+      ...session.meta.context,
+      experience: rebaseSeen(this.services.experience?.follow(work, session.meta.context?.experience) ?? {}, session.briefSeen),
+    };
     session.files ??= this.readFiles(session) ?? snapshotFiles(work.dir);
     if (result?.configOptions) session.meta.configOptions = result.configOptions;
     if (result?.modes) session.meta.modes = result.modes;
@@ -488,7 +484,6 @@ export class AiManager {
   async prompt(id, { text = "", attachments = [], view = null }) {
     const session = this.get(id);
     if (!text.trim() && !attachments.length) throw problem(400, "消息不能为空");
-    if (!isCommand(session, text)) await this.assertWorkEditable(session);
     const message = { id: randomUUID(), text, attachments, view: view && typeof view === "object" ? view : null };
     if (session.meta.status !== "idle") {
       session.meta.queue.push(message);
@@ -676,7 +671,7 @@ export class AiManager {
     if (update.toolCallId && update.toolCallId === session.compacting && update.status === "completed") {
       session.compacting = null;
       // The summary keeps the gist, not documents read along the way: assume only the brief.
-      session.meta.context = { ...session.meta.context, experience: session.briefSeen ?? null };
+      session.meta.context = { ...session.meta.context, experience: session.briefSeen ?? {} };
       this.saveMeta(session);
     }
     this.append(session, { kind: "update", update });
@@ -787,22 +782,25 @@ export class AiManager {
       if (attachment.type === "layer") references.push(`图层 ${attachment.id}${attachment.name ? "「" + attachment.name + "」" : ""}`);
       if (attachment.type === "asset") references.push(`素材 ${attachment.url}`);
       if (attachment.type === "file") references.push(`文件 ${attachment.path}`);
-      if (attachment.type === "experience") references.push(`经验库文档 ${attachment.path}`);
+      if (attachment.type === "experience") references.push(`经验库${attachment.library ? `「${attachment.library}」` : ""}的文档 ${attachment.path}`);
       if (attachment.type === "problem") references.push(`问题：${attachment.message}`);
     }
     const images = message.attachments.filter((item) => item.type === "image").length;
     if (images) references.push(`${images} 张图片（用户直接发给你的，见附图，不是作品里的画面）`);
     if (references.length) lines.push("用户引用：" + references.join("；"));
+    // Published: the files are read-only and FRAME's changing tools refuse; talking it over and the experience library are fine.
+    if (services.works.published(work))
+      lines.push("这个作品已发布，只能查看：不要修改作品文件（文件是只读的，修改会失败）。可以讨论、复盘，把经验整理进经验库；要改作品，请用户先取消发布或创建副本。");
     if (session.meta.branch?.dropped && !session.meta.branch.told) {
       lines.push("这是从之前的对话中间分支出来的对话：分支点之后那些轮次对作品文件做过的修改仍在文件里，没有回退。改文件前先读取最新内容。");
       session.meta.branch = { ...session.meta.branch, told: true };
     }
-    const library = services.experience?.current(work) ?? null;
-    const experience = experienceDelta(session.meta.context?.experience ?? null, library);
+    const libraries = services.experience?.current(work) ?? [];
+    const experience = experienceDelta(services.experience?.follow(work, session.meta.context?.experience) ?? {}, libraries);
     const referenced = referencedExperience(
       experience.seen,
-      library,
-      message.attachments.filter((item) => item.type === "experience").map((item) => item.path),
+      libraries,
+      message.attachments.filter((item) => item.type === "experience").map((item) => ({ library: item.library, path: item.path })),
     );
     session.meta.context = { ...session.meta.context, experience: referenced.seen };
     this.saveMeta(session);

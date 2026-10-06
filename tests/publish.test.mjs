@@ -49,20 +49,26 @@ describe("published works and copies", () => {
     expect((await call("/api/tools/work_context", { method: "POST", body: { work: work.id } })).status).toBe(200);
     await call("/api/repos/local/experience/libraries", { method: "POST", body: { name: "通用" } });
     expect((await call(`${route}/unpublish`, { method: "POST" })).status).toBe(200);
-    expect((await call(route, { method: "PATCH", body: { experience: "通用" } })).status).toBe(200);
+    expect((await call(route, { method: "PATCH", body: { experiences: ["通用"] } })).status).toBe(200);
     expect((await call(`${route}/publish`, { method: "POST" })).status).toBe(200);
     const experience = await call("/api/tools/experience_write", { method: "POST", body: { work: work.id, path: "x.md", content: "# x\n" } });
     expect(experience.status).toBe(200);
 
-    // The AI may not start working on it.
+    // The files are read-only on disk, whatever tool would write them.
+    const scene = path.join(work.dir, "scene.ts");
+    expect(() => fs.writeFileSync(scene, "x")).toThrow(/EACCES|permission/);
+    expect(() => fs.writeFileSync(path.join(work.dir, "new.ts"), "x")).toThrow(/EACCES|permission/);
+    // The AI can still talk about it (review, experience), and is told it may not change it.
     const { ai } = app.services;
     const session = { meta: { id: "s-published", work: work.id, repo: "local", queue: [], status: "idle", commands: [] } };
     ai.sessions.set(session.meta.id, session);
-    await expect(ai.prompt(session.meta.id, { text: "改一下标题" })).rejects.toThrow(/已发布/);
+    const prompt = ai.turnPrompt(session, { text: "复盘一下", attachments: [], view: null }, await app.services.openWork(work.id, "local"));
+    expect(prompt.at(-1).text).toContain("这个作品已发布，只能查看");
     ai.sessions.delete(session.meta.id);
 
     expect((await call(`${route}/unpublish`, { method: "POST" })).status).toBe(200);
     expect((await git(work.root, ["log", "-1", "--format=%s"])).trim()).toBe("取消发布");
+    fs.writeFileSync(scene, fs.readFileSync(scene, "utf8")); // writable again
     expect(fs.readFileSync(path.join(work.dir, "project.ts"), "utf8")).not.toContain("publishedAt");
     expect((await call(route, { method: "PATCH", body: { title: "改名" } })).status).toBe(200);
   });
@@ -88,5 +94,9 @@ describe("published works and copies", () => {
 
     const named = await works.duplicate(source, { title: "第二版" });
     expect(works.meta(named).meta.title).toBe("第二版");
+    fs.writeFileSync(path.join(copy.dir, "draft.md"), "副本可以改"); // the source was published (read-only), the copy is not
+    // A published work can still go to the recycle bin (its read-only checkout is removed).
+    await works.trash(source.id, "local");
+    expect(fs.existsSync(source.root)).toBe(false);
   });
 });

@@ -1651,3 +1651,14 @@
 .props-fieldset:disabled {
   opacity: 0.85;
 }
+.check-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+.check-row input {
+  flex: none;
+  margin: 0;
+}

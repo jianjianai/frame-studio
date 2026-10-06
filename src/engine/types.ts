@@ -57,6 +57,8 @@ export const projectSchema = z
     status: z.enum(["demo", "draft", "film"]).default("demo"),
     /** Set by FRAME Studio when the work is published: it is then view-only. */
     publishedAt: z.string().optional(),
+    /** The experience libraries the work follows (names), managed by FRAME Studio. */
+    experiences: z.array(z.string()).optional(),
     beats: z.array(
       z.object({
         at: z.number().nonnegative(),

@@ -124,7 +124,7 @@ export type ChatAttachment =
   | { type: "layer"; id: string; name?: string }
   | { type: "asset"; url: string; path?: string }
   | { type: "file"; path: string }
-  | { type: "experience"; path: string }
+  | { type: "experience"; library: string; path: string }
   | { type: "problem"; message: string };
 
 export interface Selection {

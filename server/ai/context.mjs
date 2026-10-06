@@ -90,25 +90,26 @@ export function readLibrary(root) {
 const indexLine = (doc) => `- \`${doc.path}\` ${doc.title}${doc.summary && doc.summary !== doc.title ? "：" + doc.summary : ""}（约 ${doc.chars} 字）`;
 
 /**
- * The library as the brief shows it, and what the AI knows afterwards (`seen`):
- * per document its hash and whether the AI has its content or only its index line.
+ * One library as a brief shows it: in full when it fits `inline` bytes, else its README plus
+ * an index of the other documents. `docs` is what the AI knows afterwards: per document its
+ * hash and whether it has the content or only the index line.
  */
-export function libraryBrief(library, documents) {
+export function libraryBrief(library, documents, { inline = LIMITS.inlineLibrary, readme: readmeBudget = LIMITS.readme, index: indexBudget = LIMITS.index } = {}) {
   const total = documents.reduce((sum, doc) => sum + doc.bytes, 0);
-  const full = total <= LIMITS.inlineLibrary;
-  const seen = { library: library.id, title: library.title, docs: {} };
+  const full = total <= inline;
+  const docs = {};
   const parts = [];
   if (full) {
     for (const doc of documents) {
       parts.push(`### ${doc.path}\n\n${quote(doc.content)}`);
-      seen.docs[doc.path] = { hash: doc.hash, level: "content" };
+      docs[doc.path] = { hash: doc.hash, level: "content" };
     }
   } else {
     const readme = documents.find((doc) => doc.path === "README.md");
     if (readme) {
-      const { text, cut } = clip(readme.content, LIMITS.readme);
+      const { text, cut } = clip(readme.content, readmeBudget);
       parts.push(`### README.md${cut ? "（开头部分，完整内容用 experience_read 阅读）" : ""}\n\n${quote(text)}`);
-      seen.docs[readme.path] = { hash: readme.hash, level: cut ? "index" : "content" };
+      docs[readme.path] = { hash: readme.hash, level: cut ? "index" : "content" };
     }
     const others = documents.filter((doc) => doc.path !== "README.md");
     if (others.length) {
@@ -116,7 +117,7 @@ export function libraryBrief(library, documents) {
       let used = 0;
       for (const doc of others) {
         const line = indexLine(doc);
-        if (used + bytes(line) > LIMITS.index) {
+        if (used + bytes(line) > indexBudget) {
           lines.push(`- ……还有 ${others.length - lines.length} 篇，用 experience_read 查看完整目录`);
           break;
         }
@@ -125,36 +126,74 @@ export function libraryBrief(library, documents) {
       }
       parts.push(`### 其他文档（与当前任务相关时用 experience_read 阅读全文）\n\n${lines.join("\n")}`);
     }
-    for (const doc of others) seen.docs[doc.path] = { hash: doc.hash, level: "index" };
+    for (const doc of others) docs[doc.path] = { hash: doc.hash, level: "index" };
   }
-  return { text: parts.join("\n\n"), seen, full };
+  return { library, text: parts.join("\n\n"), docs, full, bytes: total };
 }
 
 /**
- * What to tell the AI about the experience library before a message: nothing when it
- * already knows the current state; the whole library when it is new to the session;
- * otherwise the documents others added, changed or deleted (small ones in full).
- * `current` is { library: {id, title}, documents } or null when no library is linked.
+ * The libraries a work links, for a brief: in the work's order, each in full while the
+ * inline budget lasts, the others as README plus index (those budgets shared, so the
+ * whole brief stays under Codex's 32 KiB). `seen` maps library id → { title, docs }.
+ * `libraries`: [{ library: {id, title}, documents }].
+ */
+export function experienceBrief(libraries) {
+  let inline = LIMITS.inlineLibrary;
+  const share = Math.max(1, libraries.length);
+  const seen = {};
+  const sections = [];
+  for (const { library, documents } of libraries) {
+    const brief = libraryBrief(library, documents, { inline, readme: Math.floor(LIMITS.readme / share), index: Math.floor(LIMITS.index / share) });
+    if (brief.full) inline -= brief.bytes;
+    seen[library.id] = { title: library.title, docs: brief.docs };
+    sections.push(brief);
+  }
+  return { sections, seen };
+}
+
+/** Brief sections as text, one "## 经验库「标题」" per library. */
+export function briefText(sections) {
+  return sections
+    .map(({ library, text, full }) => `## 经验库「${library.title}」\n\n${full ? "全部文档如下。" : "首页和其他文档的目录如下。"}\n\n${text}`)
+    .join("\n\n");
+}
+
+/**
+ * What to tell the AI about its experience libraries before a message: nothing when it
+ * already knows the current state; a library new to the session in full (or README and
+ * index); a library no longer linked; otherwise the documents others added, changed or
+ * deleted (small ones in full). `seen`: { [library id]: { title, docs } };
+ * `current`: [{ library: {id, title}, documents }] in the work's order.
  */
 export function experienceDelta(seen, current) {
-  if (!current) {
-    if (!seen?.library) return { text: "", seen: null };
-    return { text: `作品已不再关联经验库「${seen.title}」，之前读到的那些经验不再适用于这个作品。`, seen: null };
+  const before = seen ?? {};
+  const next = {};
+  const parts = [];
+  for (const [id, entry] of Object.entries(before))
+    if (!current.some((item) => item.library.id === id)) parts.push(`作品不再关联经验库「${entry.title}」，之前读到的那些经验不再适用于这个作品。`);
+  const added = current.filter((item) => !before[item.library.id]);
+  if (added.length) {
+    const brief = experienceBrief(added);
+    Object.assign(next, brief.seen);
+    parts.push(`作品现在关联了${added.map((item) => `经验库「${item.library.title}」`).join("、")}，动手前对照，照着做：\n\n${briefText(brief.sections)}`);
   }
-  if (!seen?.library || seen.library !== current.library.id) {
-    const brief = libraryBrief(current.library, current.documents);
-    const replaced = seen?.library ? `（替换了「${seen.title}」）` : "";
-    return {
-      text: `作品现在关联经验库「${current.library.title}」${replaced}，动手前对照它，照着做：\n\n${brief.text}`,
-      seen: brief.seen,
-    };
+  for (const item of current) {
+    if (!before[item.library.id]) continue;
+    const delta = libraryDelta(before[item.library.id], item);
+    next[item.library.id] = delta.seen;
+    if (delta.text) parts.push(delta.text);
   }
+  return { text: parts.join("\n\n"), seen: next };
+}
+
+/** Documents of one known library that others added, changed or deleted. */
+function libraryDelta(known, { library, documents }) {
   const items = [];
   const sections = [];
   const docs = {};
   let budget = LIMITS.changedTotal;
-  for (const doc of current.documents) {
-    const before = seen.docs[doc.path];
+  for (const doc of documents) {
+    const before = known.docs[doc.path];
     if (before && before.hash === doc.hash) {
       docs[doc.path] = before;
       continue;
@@ -171,23 +210,24 @@ export function experienceDelta(seen, current) {
     else items.push(`- \`${doc.path}\` 已修改（${doc.title}${doc.summary ? "：" + doc.summary : ""}）`);
     docs[doc.path] = { hash: doc.hash, level: "index" };
   }
-  for (const file of Object.keys(seen.docs)) if (!current.documents.some((doc) => doc.path === file)) items.push(`- \`${file}\` 已删除`);
-  const next = { library: current.library.id, title: current.library.title, docs };
-  if (!items.length && !sections.length) return { text: "", seen: next };
-  return {
-    text: [`经验库「${current.library.title}」有变化（来自用户或其他对话，不是你改的）：`, ...items, ...sections].join("\n"),
-    seen: next,
-  };
+  for (const file of Object.keys(known.docs)) if (!documents.some((doc) => doc.path === file)) items.push(`- \`${file}\` 已删除`);
+  const seen = { title: library.title, docs };
+  if (!items.length && !sections.length) return { text: "", seen };
+  return { text: [`经验库「${library.title}」有变化（来自用户或其他对话，不是你改的）：`, ...items, ...sections].join("\n"), seen };
 }
 
-/** Experience documents the user referenced that the AI only knows by title, in full when small. */
-export function referencedExperience(seen, current, files) {
+/**
+ * Experience documents the user referenced ({ library, path }; library may be left out when
+ * the work links one) that the AI only knows by title, in full when small.
+ */
+export function referencedExperience(seen, current, refs) {
   const sections = [];
-  for (const file of new Set(files)) {
-    const doc = current?.documents.find((item) => item.path === file);
-    if (!doc || !seen || seen.docs[file]?.level === "content" || doc.bytes > LIMITS.changedDocument) continue;
-    sections.push(`### ${doc.path}（用户引用的经验库文档）\n\n${quote(doc.content)}`);
-    seen = noteSeen(seen, current.library.id, doc.path, doc.hash, "content");
+  for (const ref of refs) {
+    const item = ref.library ? current.find((entry) => entry.library.id === ref.library) : current.length === 1 ? current[0] : null;
+    const doc = item?.documents.find((entry) => entry.path === ref.path);
+    if (!doc || !seen?.[item.library.id] || seen[item.library.id].docs[doc.path]?.level === "content" || doc.bytes > LIMITS.changedDocument) continue;
+    sections.push(`### ${doc.path}（用户引用的经验库「${item.library.title}」文档）\n\n${quote(doc.content)}`);
+    seen = noteSeen(seen, item.library.id, doc.path, doc.hash, "content");
   }
   return { text: sections.join("\n\n"), seen };
 }
@@ -197,21 +237,25 @@ export function referencedExperience(seen, current, files) {
  * read before: keep content it read unless the brief now carries that document anyway.
  */
 export function rebaseSeen(previous, baseline) {
-  if (!baseline) return null;
-  if (!previous?.library || previous.library !== baseline.library) return baseline;
-  const docs = { ...baseline.docs };
-  for (const [file, entry] of Object.entries(previous.docs))
-    if (entry.level === "content" && docs[file] && docs[file].level !== "content") docs[file] = entry;
-  return { ...baseline, docs };
+  const next = {};
+  for (const [id, entry] of Object.entries(baseline ?? {})) {
+    const old = previous?.[id];
+    const docs = { ...entry.docs };
+    if (old?.docs)
+      for (const [file, doc] of Object.entries(old.docs)) if (doc.level === "content" && docs[file] && docs[file].level !== "content") docs[file] = doc;
+    next[id] = { ...entry, docs };
+  }
+  return next;
 }
 
 /** Record what the AI read or wrote itself, so it is not told about it again. */
 export function noteSeen(seen, library, file, hash, level = "content") {
-  if (!seen || seen.library !== library) return seen;
-  const docs = { ...seen.docs };
+  const entry = seen?.[library];
+  if (!entry) return seen;
+  const docs = { ...entry.docs };
   if (hash === null) delete docs[file];
   else if (!(level === "index" && docs[file]?.level === "content" && docs[file].hash === hash)) docs[file] = { hash, level };
-  return { ...seen, docs };
+  return { ...seen, [library]: { ...entry, docs } };
 }
 
 // ---- the work's files ------------------------------------------------------------------

@@ -18,7 +18,7 @@ const validWorkId = (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-
  * the single place where the editor, preview, AI agents, CLI and MCP all read and write.
  */
 export class Works {
-  /** Sections added to every work's session brief, e.g. the linked experience library: (work) => { text, state } | null. */
+  /** Sections added to every work's session brief, e.g. the linked experience libraries: (work) => { text, state } | null. */
   briefProviders = [];
 
   constructor({ config, settings, repos, events }) {
@@ -28,6 +28,7 @@ export class Works {
     this.events = events;
     this.locks = new Locks();
     this.metaCache = new Map();
+    this.lockChecked = new Set();
   }
 
   root(repo, id) {
@@ -158,6 +159,11 @@ export class Works {
         const env = this.repos.env(info);
         if (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/" + branch])) await git(dir, ["worktree", "add", "--", root, branch], { env });
         else await git(dir, ["worktree", "add", "--track", "-b", branch, "--", root, "origin/" + branch], { env });
+      }
+      // Once per process: a published work is read-only on disk (also when published elsewhere or before).
+      if (!this.lockChecked.has(`${repo}/${id}`)) {
+        this.lockChecked.add(`${repo}/${id}`);
+        if (this.published(this.describe(repo, id))) lockFiles(root, true);
       }
       this.linkRuntime(root);
     });
@@ -298,8 +304,9 @@ export class Works {
   async update(work, changes) {
     this.assertEditable(work);
     const file = path.join(work.dir, "project.ts");
-    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats", "experience"];
-    if ("experience" in changes && typeof changes.experience !== "string") throw problem(400, "experience 必须是经验库名称（空字符串表示不关联）");
+    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats", "experiences"];
+    if ("experiences" in changes && !(Array.isArray(changes.experiences) && changes.experiences.every((name) => typeof name === "string")))
+      throw problem(400, "experiences 必须是经验库名称的列表（空列表表示不关联）");
     const picked = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.includes(key)));
     writeFileAtomic(file, setProjectFields(fs.readFileSync(file, "utf8"), picked));
     this.events.emit({ type: "works", repo: work.repo });
@@ -323,11 +330,14 @@ export class Works {
   async setPublished(work, published) {
     return this.locks.run(`${work.repo}/${work.id}`, async () => {
       const file = path.join(work.dir, "project.ts");
-      const code = fs.readFileSync(file, "utf8");
       if (Boolean(this.published(work)) === published) return null;
+      if (!published) lockFiles(work.root, false);
+      const code = fs.readFileSync(file, "utf8");
       writeFileAtomic(file, published ? setProjectFields(code, { publishedAt: new Date().toISOString() }) : removeProjectProperty(code, "publishedAt"));
       const title = readProjectSource(fs.readFileSync(file, "utf8")).meta.title;
       const commit = await this.commitAll(work.root, published ? `发布：${title}` : "取消发布");
+      // Read-only on disk: whatever tool an AI uses, it can read the work but not change it.
+      if (published) lockFiles(work.root, true);
       this.events.emit({ type: "works", repo: work.repo });
       this.events.emit({ type: "work-versions", work: work.id });
       return commit;
@@ -355,6 +365,7 @@ export class Works {
           recursive: true,
           filter: (file) => !/[\\/](exports|\.cache|node_modules)([\\/]|$)/.test(path.relative(source.root, file)),
         });
+        lockFiles(root, false); // copied from a published (read-only) work
         const project = path.join(root, "projects", source.slug, "project.ts");
         writeFileAtomic(project, removeProjectProperty(setProjectFields(fs.readFileSync(project, "utf8"), { title: name }), "publishedAt"));
         this.linkRuntime(root);
@@ -403,6 +414,7 @@ export class Works {
       if (fs.existsSync(root)) {
         const status = parseStatus(await git(root, ["status", "--porcelain=v2", "--branch"]));
         if (status.files.length) await this.commitAll(root, "删除前自动保存");
+        lockFiles(root, false);
         await git(info.dir, ["worktree", "remove", "--force", "--", root]);
       }
       if (await this.tip(info.dir, "refs/heads/works/" + id)) {
@@ -486,7 +498,10 @@ export class Works {
       if (local !== remote && !(await gitOk(info.dir, ["merge-base", "--is-ancestor", local, remote])))
         throw conflict("有还没同步到 GitHub 的版本，先同步再释放本地空间");
       checkout = diskUsage(root);
-      if (fs.existsSync(root)) await git(info.dir, ["worktree", "remove", "--force", "--", root]);
+      if (fs.existsSync(root)) {
+        lockFiles(root, false);
+        await git(info.dir, ["worktree", "remove", "--force", "--", root]);
+      }
       await git(info.dir, ["branch", "-D", WORK_PREFIX + id]);
     });
     this.events.emit({ type: "works", repo });
@@ -623,22 +638,30 @@ export class Works {
   /** Resolve a diverged work: merge both sides (fails on conflicts) or adopt the remote, keeping a backup ref. */
   async resolve(work, strategy) {
     return this.locks.run(`${work.repo}/${work.id}`, async () => {
-      await this.commitAll(work.root, "合并前自动保存");
-      if (strategy === "merge") {
-        try {
-          await git(work.root, ["merge", "--no-edit", "-m", "合并 GitHub 上的修改", "origin/" + work.branch], { env: this.repos.env(this.repos.get(work.repo)) });
-        } catch (error) {
-          await git(work.root, ["merge", "--abort"]).catch(() => {});
-          throw conflict("双方修改了同一处内容，无法自动合并。可以采用 GitHub 的版本（本地版本保留为备份），或手动修改后再推送。", { git: error.message });
-        }
-      } else if (strategy === "remote") {
-        const backup = `refs/frame-backup/${work.id}/${new Date().toISOString().replace(/[:.]/g, "-")}`;
-        await git(work.root, ["update-ref", backup, "HEAD"]);
-        await git(work.root, ["reset", "--hard", "origin/" + work.branch], { env: this.repos.env(this.repos.get(work.repo)) });
-      } else throw problem(400, "未知的处理方式");
-      this.events.emit({ type: "work-versions", work: work.id });
-      return this.status(work);
+      lockFiles(work.root, false);
+      try {
+        return await this.resolveUnlocked(work, strategy);
+      } finally {
+        if (this.published(work)) lockFiles(work.root, true);
+      }
     });
+  }
+  async resolveUnlocked(work, strategy) {
+    await this.commitAll(work.root, "合并前自动保存");
+    if (strategy === "merge") {
+      try {
+        await git(work.root, ["merge", "--no-edit", "-m", "合并 GitHub 上的修改", "origin/" + work.branch], { env: this.repos.env(this.repos.get(work.repo)) });
+      } catch (error) {
+        await git(work.root, ["merge", "--abort"]).catch(() => {});
+        throw conflict("双方修改了同一处内容，无法自动合并。可以采用 GitHub 的版本（本地版本保留为备份），或手动修改后再推送。", { git: error.message });
+      }
+    } else if (strategy === "remote") {
+      const backup = `refs/frame-backup/${work.id}/${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      await git(work.root, ["update-ref", backup, "HEAD"]);
+      await git(work.root, ["reset", "--hard", "origin/" + work.branch], { env: this.repos.env(this.repos.get(work.repo)) });
+    } else throw problem(400, "未知的处理方式");
+    this.events.emit({ type: "work-versions", work: work.id });
+    return this.status(work);
   }
 
   async pull(work) {
@@ -648,6 +671,7 @@ export class Works {
       await git(repo.dir, ["fetch", "--prune", "origin"], { env: this.repos.env(repo) });
       const status = parseStatus(await git(work.root, ["status", "--porcelain=v2", "--branch"]));
       if (status.files.length) throw conflict("作品有未保存的修改，请先保存版本再拉取");
+      lockFiles(work.root, false);
       try {
         await git(work.root, ["merge", "--ff-only", "origin/" + work.branch], { env: this.repos.env(repo) });
       } catch (error) {
@@ -655,11 +679,36 @@ export class Works {
           diverged: true,
           git: error.message,
         });
+      } finally {
+        if (this.published(work)) lockFiles(work.root, true);
       }
       this.events.emit({ type: "work-versions", work: work.id });
       return this.status(work);
     });
   }
+}
+
+/**
+ * Take write permission away from a work's files (published: view-only) or give it back:
+ * projects/ and the tracked files at the root. The root itself stays writable for the
+ * generated AGENTS.md, CLAUDE.md and engine links.
+ */
+function lockFiles(root, locked) {
+  const set = (target, recursive) => {
+    let stat;
+    try {
+      stat = fs.lstatSync(target);
+    } catch {
+      return;
+    }
+    if (stat.isSymbolicLink()) return;
+    const mode = locked ? stat.mode & ~0o222 : stat.mode | 0o200;
+    if (mode !== stat.mode) fs.chmodSync(target, mode & 0o7777);
+    if (recursive && stat.isDirectory())
+      for (const name of fs.readdirSync(target)) if (!["exports", ".cache", "node_modules"].includes(name)) set(path.join(target, name), true);
+  };
+  set(path.join(root, "projects"), true);
+  for (const file of ["README.md", ".gitignore", ".gitattributes"]) set(path.join(root, file), false);
 }
 
 /** The work a backup ref belongs to: refs/frame-backup/<id>/… or refs/frame-backup/pre-lfs/…/(works|trash)/<id>. */

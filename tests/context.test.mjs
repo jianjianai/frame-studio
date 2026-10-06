@@ -7,6 +7,8 @@ import {
   clip,
   quote,
   describeDocument,
+  experienceBrief,
+  briefText,
   experienceDelta,
   filesNotice,
   libraryBrief,
@@ -28,7 +30,8 @@ function makeLibrary(files) {
   }
   return root;
 }
-const current = (root) => ({ library, documents: readLibrary(root) });
+const now = (root) => [{ library, documents: readLibrary(root) }];
+const known = (root) => experienceBrief(now(root)).seen;
 
 describe("session brief and per-message context", () => {
   it("describes documents by their heading and first line", () => {
@@ -49,7 +52,7 @@ describe("session brief and per-message context", () => {
     expect(brief.text.indexOf("### README.md")).toBeLessThan(brief.text.indexOf("### 开场.md"));
     // Byte-identical to the file, so the AI can copy text into an exact-match edit.
     expect(brief.text).toContain("```markdown\n# 开场\n\n前 2 秒抛出问题\n```");
-    expect(Object.values(brief.seen.docs).every((entry) => entry.level === "content")).toBe(true);
+    expect(Object.values(brief.docs).every((entry) => entry.level === "content")).toBe(true);
   });
 
   it("gives a large library as README plus an index", () => {
@@ -59,79 +62,97 @@ describe("session brief and per-message context", () => {
     expect(brief.full).toBe(false);
     expect(brief.text).toContain("`长文.md` 长文：讲转场节奏");
     expect(brief.text).not.toContain(big.slice(0, 50));
-    expect(brief.seen.docs["README.md"].level).toBe("content");
-    expect(brief.seen.docs["长文.md"].level).toBe("index");
+    expect(brief.docs["README.md"].level).toBe("content");
+    expect(brief.docs["长文.md"].level).toBe("index");
+  });
+
+  it("shares the brief's budget between several libraries", () => {
+    const small = makeLibrary({ "README.md": "# 通用\n\n短" });
+    const big = makeLibrary({ "README.md": "# 音乐视频\n\n" + "偏好。".repeat(1500), "长文.md": "# 长文\n\n" + "很长。".repeat(3000) });
+    const other = { id: "音乐视频", title: "音乐视频" };
+    const { sections, seen } = experienceBrief([
+      { library, documents: readLibrary(small) },
+      { library: other, documents: readLibrary(big) },
+    ]);
+    expect(sections.map((section) => section.full)).toEqual([true, false]);
+    expect(Object.keys(seen)).toEqual(["知识类视频", "音乐视频"]);
+    // Two libraries in README-and-index form share the README budget.
+    expect(Buffer.byteLength(sections[1].text)).toBeLessThan(LIMITS.readme / 2 + LIMITS.index);
+    expect(briefText(sections)).toMatch(/## 经验库「知识类视频」[\s\S]*## 经验库「音乐视频」/);
   });
 
   it("says nothing when nothing changed, and only what others changed otherwise", () => {
     const root = makeLibrary({ "README.md": "# 知识类视频\n\n偏好：暖色", "开场.md": "# 开场\n\n前 2 秒抛出问题" });
-    const { seen } = libraryBrief(library, readLibrary(root));
-    expect(experienceDelta(seen, current(root)).text).toBe("");
+    const seen = known(root);
+    expect(experienceDelta(seen, now(root)).text).toBe("");
 
     fs.writeFileSync(path.join(root, "开场.md"), "# 开场\n\n前 1 秒抛出问题");
     fs.writeFileSync(path.join(root, "配色.md"), "# 配色\n\n深蓝渐变");
-    let delta = experienceDelta(seen, current(root));
+    let delta = experienceDelta(seen, now(root));
     expect(delta.text).toContain("### 开场.md（已更新，最新内容）");
     expect(delta.text).toContain("前 1 秒抛出问题");
     expect(delta.text).toContain("### 配色.md（新增，最新内容）");
-    expect(experienceDelta(delta.seen, current(root)).text).toBe("");
+    expect(experienceDelta(delta.seen, now(root)).text).toBe("");
 
     fs.rmSync(path.join(root, "配色.md"));
-    delta = experienceDelta(delta.seen, current(root));
+    delta = experienceDelta(delta.seen, now(root));
     expect(delta.text).toContain("`配色.md` 已删除");
   });
 
   it("does not report what the AI read or wrote itself", () => {
     const root = makeLibrary({ "README.md": "# 知识类视频", "开场.md": "# 开场\n\n前 2 秒" });
-    let { seen } = libraryBrief(library, readLibrary(root));
+    let seen = known(root);
     fs.writeFileSync(path.join(root, "开场.md"), "# 开场\n\n前 1 秒");
     const written = readLibrary(root).find((doc) => doc.path === "开场.md");
     seen = noteSeen(seen, library.id, "开场.md", written.hash);
-    expect(experienceDelta(seen, current(root)).text).toBe("");
-    seen = noteSeen(seen, "别的库", "开场.md", "x");
-    expect(experienceDelta(seen, current(root)).text).toBe("");
+    expect(experienceDelta(seen, now(root)).text).toBe("");
+    expect(noteSeen(seen, "别的库", "开场.md", "x")).toBe(seen);
   });
 
   it("reports a stale large document the AI had read, without repeating its content", () => {
     const big = "很长的内容。".repeat(1500);
     const root = makeLibrary({ "README.md": "# 知识类视频", "长文.md": `# 长文\n\n${big}` });
-    let { seen } = libraryBrief(library, readLibrary(root));
+    let seen = known(root);
     const doc = readLibrary(root).find((item) => item.path === "长文.md");
     seen = noteSeen(seen, library.id, "长文.md", doc.hash, "content");
     fs.writeFileSync(path.join(root, "长文.md"), `# 长文\n\n${big}改`);
-    const delta = experienceDelta(seen, current(root));
+    const delta = experienceDelta(seen, now(root));
     expect(delta.text).toContain("`长文.md` 已修改，你之前读到的内容已过时");
     expect(delta.text.length).toBeLessThan(500);
   });
 
   it("introduces a newly linked library and forgets an unlinked one", () => {
     const root = makeLibrary({ "README.md": "# 知识类视频\n\n偏好" });
-    const linked = experienceDelta(null, current(root));
-    expect(linked.text).toContain("作品现在关联经验库「知识类视频」");
+    const linked = experienceDelta({}, now(root));
+    expect(linked.text).toContain("作品现在关联了经验库「知识类视频」");
     expect(linked.text).toContain("偏好");
-    const switched = experienceDelta({ library: "音乐视频", title: "音乐视频", docs: {} }, current(root));
-    expect(switched.text).toContain("替换了「音乐视频」");
-    expect(experienceDelta(linked.seen, null)).toEqual({ text: "作品已不再关联经验库「知识类视频」，之前读到的那些经验不再适用于这个作品。", seen: null });
-    expect(experienceDelta(null, null)).toEqual({ text: "", seen: null });
+    const second = makeLibrary({ "README.md": "# 通用\n\n规范" });
+    const both = experienceDelta(linked.seen, [...now(root), { library: { id: "通用", title: "通用" }, documents: readLibrary(second) }]);
+    expect(both.text).toContain("作品现在关联了经验库「通用」");
+    expect(both.text).not.toContain("偏好"); // the first library is known already
+    expect(experienceDelta(linked.seen, [])).toEqual({ text: "作品不再关联经验库「知识类视频」，之前读到的那些经验不再适用于这个作品。", seen: {} });
+    expect(experienceDelta({}, [])).toEqual({ text: "", seen: {} });
   });
 
   it("gives a referenced document the AI only knows by title", () => {
     const big = "一段很长的经验。".repeat(600);
     const root = makeLibrary({ "README.md": "# 知识类视频", "开场.md": "# 开场\n\n前 2 秒", "长文.md": `# 长文\n\n${big}` });
-    const { seen } = libraryBrief(library, readLibrary(root));
-    expect(seen.docs["开场.md"].level).toBe("index");
-    const referenced = referencedExperience(seen, current(root), ["开场.md", "长文.md", "README.md", "不存在.md"]);
-    expect(referenced.text).toBe("### 开场.md（用户引用的经验库文档）\n\n```markdown\n# 开场\n\n前 2 秒\n```");
-    expect(referenced.seen.docs["开场.md"].level).toBe("content");
-    expect(referencedExperience(referenced.seen, current(root), ["开场.md"]).text).toBe("");
+    const seen = known(root);
+    expect(seen[library.id].docs["开场.md"].level).toBe("index");
+    const refs = ["开场.md", "长文.md", "README.md", "不存在.md"].map((file) => ({ library: library.id, path: file }));
+    const referenced = referencedExperience(seen, now(root), refs);
+    expect(referenced.text).toBe("### 开场.md（用户引用的经验库「知识类视频」文档）\n\n```markdown\n# 开场\n\n前 2 秒\n```");
+    expect(referenced.seen[library.id].docs["开场.md"].level).toBe("content");
+    expect(referencedExperience(referenced.seen, now(root), [{ path: "开场.md" }]).text).toBe("");
   });
 
   it("keeps what a resumed conversation already read", () => {
-    const baseline = { library: "a", title: "A", docs: { "README.md": { hash: "r2", level: "content" }, "x.md": { hash: "x2", level: "index" } } };
-    const previous = { library: "a", title: "A", docs: { "x.md": { hash: "x1", level: "content" } } };
-    expect(rebaseSeen(previous, baseline).docs["x.md"]).toEqual({ hash: "x1", level: "content" });
-    expect(rebaseSeen({ ...previous, library: "b" }, baseline)).toBe(baseline);
-    expect(rebaseSeen(previous, null)).toBeNull();
+    const baseline = { a: { title: "A", docs: { "README.md": { hash: "r2", level: "content" }, "x.md": { hash: "x2", level: "index" } } } };
+    const previous = { a: { title: "A", docs: { "x.md": { hash: "x1", level: "content" } } }, gone: { title: "旧", docs: {} } };
+    const rebased = rebaseSeen(previous, baseline);
+    expect(rebased.a.docs["x.md"]).toEqual({ hash: "x1", level: "content" });
+    expect(Object.keys(rebased)).toEqual(["a"]);
+    expect(rebaseSeen(previous, {})).toEqual({});
   });
 
   it("notices files changed between turns", () => {
