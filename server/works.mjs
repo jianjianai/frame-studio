@@ -251,7 +251,8 @@ export class Works {
 
   async update(work, changes) {
     const file = path.join(work.dir, "project.ts");
-    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats"];
+    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats", "experience"];
+    if ("experience" in changes && typeof changes.experience !== "string") throw problem(400, "experience 必须是经验库名称（空字符串表示不关联）");
     const picked = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.includes(key)));
     writeFileAtomic(file, setProjectFields(fs.readFileSync(file, "utf8"), picked));
     this.events.emit({ type: "works", repo: work.repo });
@@ -344,7 +345,14 @@ export class Works {
 
   async diff(work, { commit, file } = {}) {
     const args = commit ? ["show", "--format=", commit] : ["diff", "HEAD"];
-    return git(work.root, [...args, "--", ...(file ? [file] : [])], { maxBytes: 4 * 1024 * 1024 });
+    const tracked = await git(work.root, [...args, "--", ...(file ? [file] : [])], { maxBytes: 4 * 1024 * 1024 });
+    if (commit) return tracked;
+    // New files are not in `git diff HEAD`; show them as added in full.
+    const untracked = (await git(work.root, ["ls-files", "--others", "--exclude-standard", "-z", "--", ...(file ? [file] : [])])).split("\0").filter(Boolean);
+    const added = [];
+    for (const path of untracked.slice(0, 50))
+      added.push(await git(work.root, ["diff", "--no-index", "--", "/dev/null", path], { allowCodes: [0, 1], maxBytes: 1024 * 1024 }));
+    return tracked + added.join("");
   }
 
   async fileAt(work, commit, file) {

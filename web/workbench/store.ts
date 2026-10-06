@@ -123,6 +123,7 @@ export type ChatAttachment =
   | { type: "layer"; id: string; name?: string }
   | { type: "asset"; url: string; path?: string }
   | { type: "file"; path: string }
+  | { type: "experience"; path: string }
   | { type: "problem"; message: string };
 
 export interface Selection {
@@ -139,8 +140,10 @@ export interface WorkbenchContextValue {
   runCheck: () => Promise<void>;
   /** `preview`: a VS Code preview tab, replaced by the next preview until it is kept (double-click or edit). */
   openFile: (path: string, options?: { line?: number; preview?: boolean }) => void;
+  /** Open a document of the repository's experience libraries (path relative to the experience branch). */
+  openExperience: (path: string, options?: { preview?: boolean }) => void;
   /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. */
-  openDiff: (title: string, query: string, options?: { preview?: boolean }) => void;
+  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" }) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
   selection: Selection | null;

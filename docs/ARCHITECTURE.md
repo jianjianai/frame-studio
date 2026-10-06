@@ -23,6 +23,7 @@ works/<库>/<作品>/                   作品工作目录 = works/<作品> 分�
    src → 引擎, node_modules → 依赖, docs → 文档     （链接，不提交）
    AGENTS.md, CLAUDE.md, tsconfig.json             （平台生成，不提交）
 libraries/<库>/                      frame/materials 分支的 worktree：共享素材库
+experience/<库>/                     frame/experience 分支的 worktree：经验库（每个文件夹一个库，作品在 project.ts 的 experience 中关联）
 exports/<库>/<作品>/                  导出的视频
 models/speech/                       下载的语音模型
 ai/sessions/                         AI 对话记录（JSONL）与图片

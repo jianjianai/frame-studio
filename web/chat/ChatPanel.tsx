@@ -19,6 +19,7 @@ import {
   Check,
   LogIn,
   CornerDownRight,
+  BookOpen,
 } from "lucide-react";
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
@@ -624,6 +625,9 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
   } else if (attachment.type === "file") {
     icon = <FileText size={12} />;
     label = attachment.path;
+  } else if (attachment.type === "experience") {
+    icon = <BookOpen size={12} />;
+    label = `经验：${attachment.path}`;
   } else if (attachment.type === "problem") {
     icon = <AlertCircle size={12} />;
     label = attachment.message.slice(0, 40);

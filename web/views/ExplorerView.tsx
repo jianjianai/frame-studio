@@ -8,14 +8,14 @@ import { fileIcon } from "../workbench/EditorArea";
 import { ViewHeader } from "./ViewHeader";
 import { uploadFiles } from "./upload";
 
-interface Node {
+export interface Node {
   name: string;
   path: string;
   type: "file" | "dir";
   children: Node[];
 }
 
-function buildTree(entries: FileEntry[]) {
+export function buildTree(entries: FileEntry[]) {
   const root: Node = { name: "", path: "", type: "dir", children: [] };
   const dirs = new Map<string, Node>([["", root]]);
   for (const entry of entries) {

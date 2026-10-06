@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useImperativeHandle, useState, type Ref } from "react";
-import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff } from "lucide-react";
-import { api, formatTime, workPath, useServerEvent } from "../lib/api";
+import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye } from "lucide-react";
+import { api, formatTime, workPath, experiencePath, useServerEvent } from "../lib/api";
+import { Markdown } from "../chat/Markdown";
 import { useToast, useConfirm } from "../lib/ui";
 import { useWorkbench } from "./store";
 import { PreviewPane } from "./PreviewPane";
@@ -9,12 +10,18 @@ import { DiffEditor } from "./DiffEditor";
 
 export interface EditorHandle {
   openFile(path: string, options?: { line?: number; preview?: boolean }): void;
+  /** A document of the work's experience libraries (path relative to the experience branch). */
+  openExperience(path: string, options?: { preview?: boolean }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
-  openDiff(title: string, query: string, options?: { preview?: boolean }): void;
+  openDiff(title: string, query: string, options?: { preview?: boolean; source?: Source }): void;
 }
+type Source = "work" | "experience";
 interface Tab {
-  /** File path, or `diff:<query>` for a diff tab. */
+  /** Unique key: the work file path, `exp:<path>` for experience documents, `diff:…` for diffs. */
   path: string;
+  /** Path inside its source (sent to the source's file API). */
+  file: string;
+  source: Source;
   kind: "text" | "image" | "audio" | "video" | "file" | "diff";
   title?: string;
   diff?: string;
@@ -25,6 +32,8 @@ interface Tab {
   line?: number;
   /** VS Code preview tab: the next preview replaces it until it is kept. */
   preview?: boolean;
+  /** Markdown shown rendered instead of as source. */
+  rendered?: boolean;
 }
 
 const kindOf = (path: string): Tab["kind"] =>
@@ -57,6 +66,7 @@ export const fileIcon = (path: string, size = 14) => {
  * One editor group like VS Code: the preview is the first (fixed) tab and opened files
  * are tabs next to it. `active === null` shows the preview. The preview stays mounted
  * while another tab is shown, so playback, the timeline and AI captures keep working.
+ * Tabs come from the work or from the repository's experience libraries.
  */
 export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
   const { work } = useWorkbench();
@@ -64,14 +74,15 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
   const confirm = useConfirm();
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
-  const base = workPath(work.repo, work.id);
+  const apis: Record<Source, string> = { work: workPath(work.repo, work.id), experience: experiencePath(work.repo) };
 
   const load = useCallback(
-    async (path: string) => {
-      const file = await api<{ content: string; hash: string }>(`${base}/file?path=${encodeURIComponent(path)}`);
+    async (tab: Pick<Tab, "file" | "source">) => {
+      const file = await api<{ content: string; hash: string }>(`${apis[tab.source]}/file?path=${encodeURIComponent(tab.file)}`);
       return { content: file.content, saved: file.content, hash: file.hash };
     },
-    [base],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [apis.work, apis.experience],
   );
 
   /** Show a tab: an open one is activated (and kept unless opened as preview); a new preview replaces the old one. */
@@ -93,60 +104,84 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
     [tabs],
   );
 
-  const openFile = useCallback(
-    async (path: string, options: { line?: number; preview?: boolean } = {}) => {
-      const kind = kindOf(path);
-      if (!place({ path, kind, line: options.line, preview: Boolean(options.preview) }, options)) return;
-      if (kind === "text") {
-        try {
-          const loaded = await load(path);
-          setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...loaded } : item)));
-        } catch (error) {
-          toast((error as Error).message, "error");
-          setTabs((list) => list.filter((item) => item.path !== path));
-        }
+  const openTab = useCallback(
+    async (tab: Tab, options: { line?: number; preview?: boolean }) => {
+      if (!place(tab, options)) return;
+      if (tab.kind !== "text") return;
+      try {
+        const loaded = await load(tab);
+        setTabs((list) => list.map((item) => (item.path === tab.path ? { ...item, ...loaded } : item)));
+      } catch (error) {
+        toast((error as Error).message, "error");
+        setTabs((list) => list.filter((item) => item.path !== tab.path));
       }
     },
     [place, load, toast],
   );
+  const openFile = useCallback(
+    (path: string, options: { line?: number; preview?: boolean } = {}) =>
+      openTab({ path, file: path, source: "work", kind: kindOf(path), line: options.line, preview: Boolean(options.preview) }, options),
+    [openTab],
+  );
+  const openExperience = useCallback(
+    (path: string, options: { preview?: boolean } = {}) =>
+      // Experience documents open rendered: they are read more often than edited.
+      openTab(
+        { path: `exp:${path}`, file: path, source: "experience", kind: kindOf(path), preview: Boolean(options.preview), rendered: /\.md$/i.test(path) },
+        options,
+      ),
+    [openTab],
+  );
   const openDiff = useCallback(
-    (title: string, query: string, options: { preview?: boolean } = {}) => {
+    (title: string, query: string, options: { preview?: boolean; source?: Source } = {}) => {
       const preview = options.preview ?? true;
-      place({ path: `diff:${query}`, kind: "diff", title, diff: query, preview }, { preview });
+      const source = options.source ?? "work";
+      place({ path: `diff:${source}:${query}`, file: "", source, kind: "diff", title, diff: query, preview }, { preview });
     },
     [place],
   );
-  useImperativeHandle(ref, () => ({ openFile: (path, options) => void openFile(path, options), openDiff }), [openFile, openDiff]);
+  useImperativeHandle(
+    ref,
+    () => ({ openFile: (path, options) => void openFile(path, options), openExperience: (path, options) => void openExperience(path, options), openDiff }),
+    [openFile, openExperience, openDiff],
+  );
 
-  // Files changed by AI or other tools: refresh clean tabs, flag dirty ones.
+  // Files changed by the AI or other tools: refresh clean tabs, flag dirty ones.
+  const refresh = (matches: (tab: Tab) => boolean) => {
+    for (const tab of tabs) {
+      if (tab.kind !== "text" || !matches(tab)) continue;
+      void load(tab).then(
+        (loaded) =>
+          setTabs((list) =>
+            list.map((item) => {
+              if (item.path !== tab.path || loaded.hash === item.hash) return item;
+              return item.content === item.saved ? { ...item, ...loaded, external: false } : { ...item, external: true };
+            }),
+          ),
+        () => {},
+      );
+    }
+  };
   useServerEvent(
     (event) => {
-      if (event.type !== "work-files" || event.work !== work.id) return;
-      const changed = new Set((event.files as string[]).map((file) => file.replace(/^projects\/[^/]+\//, "")));
-      for (const tab of tabs) {
-        if (tab.kind !== "text" || !changed.has(tab.path)) continue;
-        void load(tab.path).then(
-          (loaded) =>
-            setTabs((list) =>
-              list.map((item) => {
-                if (item.path !== tab.path || loaded.hash === item.hash) return item;
-                return item.content === item.saved ? { ...item, ...loaded, external: false } : { ...item, external: true };
-              }),
-            ),
-          () => {},
-        );
+      if (event.type === "work-files" && event.work === work.id) {
+        const changed = new Set((event.files as string[]).map((file) => file.replace(/^projects\/[^/]+\//, "")));
+        refresh((tab) => tab.source === "work" && changed.has(tab.file));
+      } else if (event.type === "experience-files" && event.repo === work.repo) {
+        const changed = event.files as string[];
+        refresh((tab) => tab.source === "experience" && (!changed.length || changed.some((file) => tab.file === file || tab.file.startsWith(file + "/"))));
       }
     },
-    [tabs, work.id],
+    [tabs, work.id, work.repo],
   );
 
   const save = async (path: string) => {
     const tab = tabs.find((item) => item.path === path);
     if (!tab || tab.content === undefined) return;
     try {
-      const result = await api<{ hash: string }>(`${base}/file`, {
+      const result = await api<{ hash: string }>(`${apis[tab.source]}/file`, {
         method: "PUT",
-        body: { path, content: tab.content, expectedHash: tab.external ? undefined : tab.hash },
+        body: { path: tab.file, content: tab.content, expectedHash: tab.external ? undefined : tab.hash },
       });
       setTabs((list) => list.map((item) => (item.path === path ? { ...item, saved: tab.content, hash: result.hash, external: false } : item)));
     } catch (error) {
@@ -155,15 +190,16 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
   };
   const close = async (path: string) => {
     const tab = tabs.find((item) => item.path === path);
-    if (tab && tab.content !== tab.saved && !(await confirm(`${path} 有未保存的修改，确定关闭？`, { confirm: "不保存并关闭", danger: true }))) return;
+    if (tab && tab.content !== tab.saved && !(await confirm(`${tab.file} 有未保存的修改，确定关闭？`, { confirm: "不保存并关闭", danger: true }))) return;
     const index = tabs.findIndex((item) => item.path === path);
     const next = tabs.filter((item) => item.path !== path);
     setTabs(next);
     if (active === path) setActive(next[Math.min(index, next.length - 1)]?.path ?? null);
   };
   const current = tabs.find((tab) => tab.path === active) ?? null;
-
-  const keep = (path: string) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, preview: false } : item)));
+  const update = (path: string, change: Partial<Tab>) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...change } : item)));
+  const tooltip = (tab: Tab) =>
+    `${tab.kind === "diff" ? `改动：${tab.title}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
 
   return (
     <div className="editor-area">
@@ -176,13 +212,13 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
             <div
               key={tab.path}
               className={`editor-tab ${tab.path === active ? "active" : ""} ${tab.preview ? "is-preview" : ""}`}
-              title={`${tab.kind === "diff" ? `改动：${tab.title}` : tab.path}${tab.preview ? "（预览，双击保持打开）" : ""}`}
+              title={tooltip(tab)}
               onClick={() => setActive(tab.path)}
-              onDoubleClick={() => keep(tab.path)}
+              onDoubleClick={() => update(tab.path, { preview: false })}
               onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
             >
-              {tab.kind === "diff" ? <FileDiff size={14} /> : fileIcon(tab.path)}
-              <span className="ellipsis">{tab.title ?? tab.path.split("/").pop()}</span>
+              {tab.kind === "diff" ? <FileDiff size={14} /> : tab.source === "experience" ? <BookOpen size={14} /> : fileIcon(tab.file)}
+              <span className="ellipsis">{tab.title ?? tab.file.split("/").pop()}</span>
               <button
                 className="tab-close"
                 aria-label="关闭"
@@ -205,14 +241,7 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
               {current.external && (
                 <div className="editor-banner">
                   这个文件已被 AI 或其他程序修改。
-                  <button
-                    className="btn small"
-                    onClick={() =>
-                      load(current.path).then((loaded) =>
-                        setTabs((list) => list.map((item) => (item.path === current.path ? { ...item, ...loaded, external: false } : item))),
-                      )
-                    }
-                  >
+                  <button className="btn small" onClick={() => load(current).then((loaded) => update(current.path, { ...loaded, external: false }))}>
                     载入新版本（丢弃我的修改）
                   </button>
                   <button className="btn small" onClick={() => save(current.path)}>
@@ -220,23 +249,40 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
                   </button>
                 </div>
               )}
+              {current.kind === "text" && /\.md$/i.test(current.file) && current.content !== undefined && (
+                <div className="editor-toolbar">
+                  <span className="faint small-text ellipsis grow">{current.source === "experience" ? `经验库 · ${current.file}` : current.file}</span>
+                  <div className="segmented">
+                    <button className={current.rendered ? "" : "active"} onClick={() => update(current.path, { rendered: false })}>
+                      <Pencil size={12} /> 编辑
+                    </button>
+                    <button className={current.rendered ? "active" : ""} onClick={() => update(current.path, { rendered: true })}>
+                      <Eye size={12} /> 预览
+                    </button>
+                  </div>
+                </div>
+              )}
               {current.kind === "diff" ? (
-                <DiffEditor query={current.diff!} />
+                <DiffEditor query={current.diff!} source={current.source} />
               ) : current.kind === "text" ? (
                 current.content === undefined ? (
                   <div className="empty">正在读取…</div>
+                ) : current.rendered ? (
+                  <div className="markdown-page" onDoubleClick={() => update(current.path, { rendered: false })} title="双击编辑">
+                    <Markdown text={current.content} />
+                  </div>
                 ) : (
                   <CodeEditor
                     key={current.path}
-                    path={current.path}
+                    path={current.file}
                     value={current.content}
                     line={current.line}
-                    onChange={(content) => setTabs((list) => list.map((item) => (item.path === current.path ? { ...item, content, preview: false } : item)))}
+                    onChange={(content) => update(current.path, { content, preview: false })}
                     onSave={() => save(current.path)}
                   />
                 )
               ) : (
-                <MediaViewer path={current.path} kind={current.kind} />
+                <MediaViewer path={current.file} kind={current.kind} />
               )}
             </div>
           )}

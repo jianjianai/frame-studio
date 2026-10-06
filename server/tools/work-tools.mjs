@@ -17,7 +17,10 @@ const cueSchema = z
 function nearMiss(content, oldText) {
   const squash = (text) => text.replace(/\s+/g, " ").trim();
   if (squash(content).includes(squash(oldText))) return "忽略空白后能找到：请按文件中的缩进和换行逐字复制。";
-  const first = oldText.split("\n").find((line) => line.trim())?.trim();
+  const first = oldText
+    .split("\n")
+    .find((line) => line.trim())
+    ?.trim();
   const lines = content.split("\n");
   const at = first ? lines.findIndex((line) => line.includes(first)) : -1;
   if (at >= 0) return `第一行出现在第 ${at + 1} 行，但后面的内容不同；先用 file_read 读取最新内容。`;
@@ -154,6 +157,8 @@ export function registerWorkTools(registry) {
         lastVersion: status.head,
         userView: view && { time: view.time, playing: view.playing, selection: view.selection, at: view.at },
         lastCheck: services.checks.get(`${work.repo}/${work.id}`) || null,
+        // The production know-how to follow; read it in full with experience_read.
+        experience: services.experience ? await services.experience.summary(work) : null,
       };
       return asJson(result);
     },

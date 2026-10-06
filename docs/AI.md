@@ -92,6 +92,7 @@ frame export ab12cd34 --width 1920
 | `layers_get` / `layers_edit` | visual.json 图层 |
 | `audio_get` / `audio_edit` / `audio_place` | audio.json 混音 |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
+| `experience_read` / `experience_write` / `experience_edit` / `experience_delete` | 作品关联的经验库：开始前阅读，过程中整理经验（未保存状态，用户在「经验」中保存版本） |
 | `subtitles_edit` | 字幕：整体替换、追加（替换重叠的旧字幕）、按时间段删除 |
 | `versions_list` / `version_save` / `version_diff` / `version_restore` | 版本 |
 | `export_video` / `task_status` / `exports_list` | 导出 MP4 |

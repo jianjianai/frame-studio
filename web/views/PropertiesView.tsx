@@ -32,7 +32,7 @@ const BLENDS = [
  * and is one step of the timeline's undo history.
  */
 export function PropertiesView() {
-  const { work, selection, history, stage, addToChat } = useWorkbench();
+  const { work, selection, history, stage, addToChat, showView } = useWorkbench();
   const [run] = useAction();
   const meta = work.meta;
   const base = workPath(work.repo, work.id);
@@ -450,6 +450,14 @@ export function PropertiesView() {
           </Prop>
           <Prop label="帧率">
             <NumberField value={meta.fps} unit="fps" min={12} max={60} step={1} onCommit={(fps) => projectPatch("修改帧率", { fps: Math.round(fps) })} />
+          </Prop>
+          <Prop label="经验库">
+            <span className="prop-number">
+              <span className="prop-static">{meta.experience || "不使用"}</span>
+              <button className="btn small" onClick={() => showView("experience")}>
+                选择…
+              </button>
+            </span>
           </Prop>
           <Prop label="画幅">
             <span className="prop-static">{meta.composition ? `${meta.composition.width}×${meta.composition.height}` : "1920×1080"}（让 AI 修改）</span>

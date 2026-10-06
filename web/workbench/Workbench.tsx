@@ -14,14 +14,16 @@ import {
   Sun,
   Moon,
   SlidersHorizontal,
+  BookOpen,
 } from "lucide-react";
-import { api, workPath, useServerEvent, sendEvent } from "../lib/api";
+import { api, workPath, experiencePath, useServerEvent, sendEvent } from "../lib/api";
 import { Sash, usePersistent, useToast, Dialog } from "../lib/ui";
 import type { CheckResult, WorkInfo, WorkStatus } from "../lib/types";
 import { navigate } from "../App";
 import { StageController, WorkbenchContext, useWorkbench, type ChatAttachment, type Selection, type WorkbenchContextValue } from "./store";
 import { useTimelineHistory } from "./timelineHistory";
 import { PropertiesView } from "../views/PropertiesView";
+import { ExperienceView } from "../views/ExperienceView";
 import { EditorArea, type EditorHandle } from "./EditorArea";
 import { PrecacheBar } from "./PrecacheBar";
 import { BottomPanel } from "./BottomPanel";
@@ -39,6 +41,7 @@ const VIEWS = [
   { id: "explorer", label: "资源管理器", icon: Files, component: ExplorerView },
   { id: "assets", label: "素材", icon: ImageIcon, component: AssetsView },
   { id: "properties", label: "属性", icon: SlidersHorizontal, component: PropertiesView },
+  { id: "experience", label: "经验", icon: BookOpen, component: ExperienceView },
   { id: "audio", label: "音频与配音", icon: AudioLines, component: AudioView },
   { id: "versions", label: "版本与同步", icon: GitBranch, component: VersionsView },
   { id: "export", label: "导出", icon: Clapperboard, component: ExportView },
@@ -81,6 +84,24 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   }, [base, id]);
   const history = useTimelineHistory(base, reload);
   const reloadStatus = useCallback(() => api<WorkStatus>(base + "/status").then(setStatus, () => {}), [base]);
+  // Unsaved changes of the experience libraries, for the badge on the 经验 icon.
+  const [experienceChanges, setExperienceChanges] = useState(0);
+  const reloadExperience = useCallback(
+    () =>
+      api<WorkStatus>(experiencePath(repo) + "/status").then(
+        (next) => setExperienceChanges(next.files.length),
+        () => {},
+      ),
+    [repo],
+  );
+  useEffect(() => void reloadExperience(), [reloadExperience]);
+  useServerEvent(
+    (event) => {
+      if ((event.type === "experience-files" && event.repo === repo) || (event.type === "work-versions" && event.work === `experience-${repo}`))
+        void reloadExperience();
+    },
+    [repo],
+  );
   useEffect(() => {
     void reload();
     void reloadStatus();
@@ -132,6 +153,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     check,
     runCheck,
     openFile: (path, options) => editor.current?.openFile(path, options),
+    openExperience: (path, options) => editor.current?.openExperience(path, options),
     openDiff: (title, query, options) => editor.current?.openDiff(title, query, options),
     addToChat: (attachment: ChatAttachment, prompt?: string) => {
       setChat((value) => ({ ...value, visible: true }));
@@ -248,7 +270,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
           <nav className="wb-activity" aria-label="视图">
             {VIEWS.map((item) => {
               // Like VS Code's Source Control: the number of unsaved changes on the versions icon.
-              const changes = item.id === "versions" ? (status?.files.length ?? 0) : 0;
+              const changes = item.id === "versions" ? (status?.files.length ?? 0) : item.id === "experience" ? experienceChanges : 0;
               return (
                 <button
                   key={item.id}

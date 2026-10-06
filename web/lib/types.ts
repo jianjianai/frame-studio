@@ -68,6 +68,8 @@ export interface WorkInfo {
     composition?: { width: number; height: number };
     duration: number;
     fps: number;
+    /** Id of the linked experience library ("" or absent: none). */
+    experience?: string;
     beats: Beat[];
     subtitles: Subtitle[];
     visual?: { background: string; clips: VisualClip[] };

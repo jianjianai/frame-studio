@@ -579,11 +579,14 @@ function buildPrompt(message, work, services) {
     if (attachment.type === "layer") context.push(`图层 ${attachment.id}${attachment.name ? "「" + attachment.name + "」" : ""}`);
     if (attachment.type === "asset") context.push(`素材 ${attachment.url}`);
     if (attachment.type === "file") context.push(`文件 ${attachment.path}`);
+    if (attachment.type === "experience") context.push(`经验库文档 ${attachment.path}`);
     if (attachment.type === "problem") context.push(`问题：${attachment.message}`);
   }
   const view = services.viewState.get(`${work.repo}/${work.id}`);
   const header = [`[FRAME] 作品 ${work.id}，作品文件在 projects/${work.slug}/`];
   if (view) header.push(`用户播放器位置 ${formatTime(view.time ?? 0)}${view.playing ? "（播放中）" : ""}`);
+  const library = services.experience?.linkedTitleSync(work);
+  if (library) header.push(`关联经验库「${library}」：开始制作前先用 experience_read 阅读并照着做；有值得记住的经验时整理进去`);
   if (context.length) header.push("用户引用：" + context.join("；"));
   if (message.text.trim()) blocks.push({ type: "text", text: message.text });
   blocks.push({ type: "text", text: header.join("\n") });

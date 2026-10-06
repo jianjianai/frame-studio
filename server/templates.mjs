@@ -195,8 +195,14 @@ export function platformInstructions() {
 - \`speech_synthesize\`：整段旁白用 \`lines\` + \`place\` + \`subtitles: true\` 一次生成配音、排上音轨并写字幕；\`subtitles_edit\` 改字幕，\`work_update\` 改时长和镜头标记。
 - \`assets_list\`、\`asset_import\`、\`version_save\`、\`export_video\` 等：素材、版本和导出。
 
+## 经验库
+作品可以关联一个经验库（同类作品共用的制作经验、用户偏好、避坑记录，Markdown 文档）。work_context 的 experience 字段显示是否关联。
+- 开始制作前用 \`experience_read\` 阅读 README 和相关文档，照着已有经验做；经验和用户这次的要求冲突时以用户为准，并更新经验。
+- 用户纠正你、确认喜欢某种做法、你解决了一个难题时，把它整理进经验库（\`experience_edit\` / \`experience_write\`）：先读再改，按主题合并到已有文档，不要重复，新文档登记到 README.md。
+- 用户要求“整理经验”时，回顾本次对话和作品改动，把可复用的做法写清楚“什么时候用、怎么做、要避免什么”。格式见 \`frame_guide experience\`。
+
 ## 工作方式
-1. 读用户需求和作品 AGENTS.md，必要时用 work_context 看用户正在看的位置。
+1. 读用户需求和作品 AGENTS.md，必要时用 work_context 看用户正在看的位置；关联了经验库时先阅读经验库。
 2. 修改源码。保存后预览自动更新。
 3. 运行 work_check；有错误先修复。
 4. 用 preview_frames 或 storyboard 看关键时间点的画面，确认符合要求后再结束。

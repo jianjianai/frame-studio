@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, Save, Undo2, ArrowUp, ArrowDown, CloudUpload, History, FileDiff, RotateCcw } from "lucide-react";
-import { api, timeAgo, workPath, useServerEvent, type ApiError } from "../lib/api";
+import { api, timeAgo, workPath, experiencePath, useServerEvent, type ApiError } from "../lib/api";
 import { useAction, useConfirm, useContextMenu } from "../lib/ui";
 import type { Version, WorkStatus } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
@@ -10,7 +10,33 @@ import { ViewHeader } from "./ViewHeader";
 const statusLabel: Record<string, string> = { M: "修改", A: "新增", D: "删除", "?": "新增", R: "重命名", U: "冲突" };
 
 export function VersionsView() {
-  const { work, reload, openDiff } = useWorkbench();
+  const { work } = useWorkbench();
+  const [refresh, setRefresh] = useState(0);
+  return (
+    <div className="view">
+      <ViewHeader title="版本与同步">
+        <button
+          className="icon-btn"
+          title="刷新"
+          onClick={() => api(`${workPath(work.repo, work.id)}/sync`, { method: "POST" }).then(() => setRefresh(Date.now()))}
+        >
+          <RefreshCw size={15} />
+        </button>
+      </ViewHeader>
+      <VersionsPanel source="work" refresh={refresh} />
+    </div>
+  );
+}
+
+/**
+ * Save versions, unsaved changes, history and GitHub sync of the work or of the
+ * repository's experience libraries (same API on a different branch).
+ */
+export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "experience"; refresh?: number }) {
+  const { work, reload: reloadWork, openDiff } = useWorkbench();
+  const experience = source === "experience";
+  const scope = experience ? `experience-${work.repo}` : work.id;
+  const reload = experience ? async () => {} : reloadWork;
   const [status, setStatus] = useState<WorkStatus | null>(null);
   const [history, setHistory] = useState<Version[]>([]);
   const [message, setMessage] = useState("");
@@ -18,8 +44,8 @@ export function VersionsView() {
   const [run, busy] = useAction();
   const confirm = useConfirm();
   const [openMenu, menu] = useContextMenu();
-  const base = workPath(work.repo, work.id);
-  const prefix = `projects/${work.slug}/`;
+  const base = experience ? experiencePath(work.repo) : workPath(work.repo, work.id);
+  const prefix = experience ? "" : `projects/${work.slug}/`;
   const load = async () => {
     const [nextStatus, nextHistory] = await Promise.all([api<WorkStatus>(`${base}/status`), api<Version[]>(`${base}/history?limit=100`)]);
     setStatus(nextStatus);
@@ -28,9 +54,10 @@ export function VersionsView() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base]);
+  }, [base, refresh]);
   useServerEvent((event) => {
-    if ((event.type === "work-files" || event.type === "work-versions") && event.work === work.id) void load();
+    if ((event.type === "work-files" || event.type === "work-versions") && event.work === scope) void load();
+    if (experience && event.type === "experience-files" && event.repo === work.repo) void load();
   });
 
   const commit = () =>
@@ -41,12 +68,15 @@ export function VersionsView() {
       return result;
     }, "已保存版本");
   // Like VS Code: a click previews the changes in a tab, a double-click keeps the tab.
-  const showDiff = (title: string, query: string, preview = true) => openDiff(title, query, { preview });
+  const showDiff = (title: string, query: string, preview = true) => openDiff(title, query, { preview, source });
   const revert = async (version: Version) => {
     if (
-      !(await confirm(`把作品恢复成「${version.message}」时的样子？\n当前内容会先自动保存，恢复本身也会成为一个新版本，随时可以再恢复回来。`, {
-        confirm: "恢复",
-      }))
+      !(await confirm(
+        `把${experience ? "经验库" : "作品"}恢复成「${version.message}」时的样子？\n当前内容会先自动保存，恢复本身也会成为一个新版本，随时可以再恢复回来。`,
+        {
+          confirm: "恢复",
+        },
+      ))
     )
       return;
     await run(async () => {
@@ -92,12 +122,7 @@ export function VersionsView() {
     );
 
   return (
-    <div className="view">
-      <ViewHeader title="版本与同步">
-        <button className="icon-btn" title="刷新" onClick={() => run(() => api(`${base}/sync`, { method: "POST" }).then(load))}>
-          <RefreshCw size={15} />
-        </button>
-      </ViewHeader>
+    <>
       {busy && <div className="view-progress" />}
       <section className="view-section">
         <textarea
@@ -229,6 +254,6 @@ export function VersionsView() {
       </section>
       {publish && <RepoDialog mode="publish" onClose={() => setPublish(false)} onDone={load} />}
       {menu}
-    </div>
+    </>
   );
 }

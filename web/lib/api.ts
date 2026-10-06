@@ -97,6 +97,8 @@ export function useServerEvent(handler: Listener, deps: unknown[] = []) {
 }
 
 export const workPath = (repo: string, id: string) => `/api/works/${encodeURIComponent(repo)}/${encodeURIComponent(id)}`;
+/** API base of a repository's experience libraries (same file/version endpoints as a work). */
+export const experiencePath = (repo: string) => `/api/repos/${encodeURIComponent(repo)}/experience`;
 
 export function formatTime(seconds: number, precise = true) {
   if (!Number.isFinite(seconds)) return "0:00";
