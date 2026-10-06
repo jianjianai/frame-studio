@@ -148,6 +148,8 @@ export interface WorkbenchContextValue {
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
   selection: Selection | null;
   select: (selection: Selection | null) => void;
+  /** Exactly what the user is looking at now; sent with each chat message for the AI. */
+  viewNow: () => { time: number; playing: boolean; selection: Selection | null; editing: string | null };
   showPanel: (tab: string) => void;
   showView: (view: string) => void;
   openSettings: (section?: string) => void;

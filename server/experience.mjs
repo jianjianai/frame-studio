@@ -7,6 +7,8 @@ import { readJson } from "./http.mjs";
 import { problem, notFound, confined, Locks } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
+import { readLibrary, libraryBrief } from "./ai/context.mjs";
+import { nearMiss } from "./tools/work-tools.mjs";
 
 /**
  * Experience libraries: Markdown documents of production know-how, shared by the works
@@ -23,15 +25,15 @@ const ROOT_README = `# FRAME 经验库
 `;
 const libraryReadme = (title) => `# ${title}
 
-这里记录「${title}」类作品的制作经验。关联了这个经验库的作品，AI 开始制作前会先阅读这里。
-
-## 文档
-
-- （按主题分文件记录，例如“开场.md”“配色与字体.md”“节奏与转场.md”，并在这里列出）
+「${title}」类作品的制作经验。关联了这个经验库的作品，AI 开始制作时会先看这里。
 
 ## 用户偏好
 
 - （用户明确提出过的喜好和要求）
+
+## 通用做法
+
+- （这类作品都适用的结构、节奏、风格。按主题展开的经验另建文档，例如“开场.md”“配色与字体.md”）
 `;
 
 const validId = (id) => typeof id === "string" && /^[^\\/:*?"<>|#%\x00-\x1f.][^\\/:*?"<>|#%\x00-\x1f]{0,59}$/.test(id);
@@ -129,33 +131,53 @@ export class Experience {
     return { id, title: this.title(dir, id), root, dir };
   }
 
-  /** What the AI sees first: the library's README and its documents. */
-  async summary(work) {
-    const library = await this.linked(work).catch(() => null);
-    if (!library) return { library: null, hint: "这个作品没有关联经验库。用户可以在左侧「经验」中选择一个。" };
-    if (library.missing) return { library: library.id, hint: "关联的经验库已被删除。" };
-    const files = tree(library.root)
-      .filter((item) => item.type === "file")
-      .map((item) => item.path);
-    let readme = "";
-    try {
-      readme = fs.readFileSync(path.join(library.root, "README.md"), "utf8").slice(0, 6000);
-    } catch {}
-    return { library: library.id, title: library.title, files, readme };
-  }
-
-  /** Title of a work's library for the chat context, without touching git (sync). */
-  linkedTitleSync(work) {
+  /**
+   * The linked library as it is now, read synchronously (for the session brief and the
+   * per-message changes): { library: {id, title}, documents } or null.
+   */
+  current(work) {
     const id = this.services.works.meta(work).meta?.experience;
     if (!validId(id)) return null;
     const dir = path.join(this.services.config.dirs.experience, work.repo);
-    return fs.existsSync(path.join(dir, id)) ? this.title(dir, id) : null;
+    const root = path.join(dir, id);
+    if (!fs.existsSync(root)) return null;
+    return { library: { id, title: this.title(dir, id) }, documents: readLibrary(root) };
+  }
+
+  /** The library's section of the session brief, and what it tells the AI. */
+  brief(work) {
+    const id = this.services.works.meta(work).meta?.experience;
+    const current = this.current(work);
+    if (!current) {
+      const text = validId(id)
+        ? `## 经验库\n\n作品关联的经验库「${id}」已被删除。需要记录经验时，请用户在「经验」面板中重新选择。`
+        : "## 经验库\n\n本作品没有关联经验库。需要记录经验时，建议用户在左侧「经验」面板中选择或新建一个。";
+      return { text, state: { experience: null } };
+    }
+    const brief = libraryBrief(current.library, current.documents);
+    return {
+      text: `## 经验库「${current.library.title}」\n\n${brief.full ? "全部文档如下。" : "首页和其他文档的目录如下。"}动手前对照它，照着做；和用户这次的要求冲突时以用户为准，并更新经验库。\n\n${brief.text}`,
+      state: { experience: brief.seen },
+    };
+  }
+
+  /** For work_context: built-in agents already have the library in their brief, others get it here. */
+  summary(work, { inBrief = false } = {}) {
+    const current = this.current(work);
+    if (!current) return { library: null, hint: "这个作品没有关联经验库。用户可以在左侧「经验」中选择一个。" };
+    const documents = current.documents.map(({ path: file, title, summary, chars }) => ({ path: file, title, summary, chars }));
+    if (inBrief) return { library: current.library.id, title: current.library.title, documents, note: "内容在会话说明的「经验库」一节" };
+    const readme = current.documents.find((doc) => doc.path === "README.md")?.content.slice(0, 6000) ?? "";
+    return { library: current.library.id, title: current.library.title, readme, documents };
   }
 }
 
 export function experiencePlugin(services) {
   const { router, tools, works } = services;
   const experience = (services.experience = new Experience(services));
+  works.briefProviders.push((work) => experience.brief(work));
+  /** Tell the chat session (if any) what its AI just read or wrote, so it is not told again. */
+  const noteSeen = (ctx, library, file, hash, level) => ctx.scope.session && services.ai?.noteExperience(ctx.scope.session, library.id, file, hash, level);
   const base = "/api/repos/:repo/experience";
   const scope = (params) => experience.scope(params.repo);
 
@@ -227,20 +249,22 @@ export function experiencePlugin(services) {
     name: "experience_read",
     title: "阅读经验库",
     description:
-      "阅读作品关联的经验库（这类作品积累的制作经验、用户偏好和避坑记录）。不传 path 返回经验库的 README 和全部文档列表；传 path 返回该文档。开始制作前先阅读，照着已有经验做。",
+      "阅读作品关联的经验库（同类作品积累的制作经验、用户偏好和避坑记录）。传 path 返回该文档全文；不传 path 返回首页和文档目录（内置 AI 的会话说明里已经有，通常不需要）。与当前任务相关的文档读全文，照着做。",
     readOnly: true,
     input: { work: workArg, path: docPath.optional() },
     async run({ path: file }, ctx) {
       const { library } = await libraryOf(ctx);
       if (file) {
         const result = readText(library.root, file);
+        noteSeen(ctx, library, file, result.hash, "content");
         return { data: { path: file, sha256: result.hash }, meta: { library: library.id, path: file, sha256: result.hash }, text: result.content };
       }
-      const files = tree(library.root).filter((item) => item.type === "file");
-      const readme = fs.existsSync(path.join(library.root, "README.md")) ? fs.readFileSync(path.join(library.root, "README.md"), "utf8") : "（没有 README.md）";
+      const documents = readLibrary(library.root);
+      const brief = libraryBrief({ id: library.id, title: library.title }, documents);
+      for (const [doc, entry] of Object.entries(brief.seen.docs)) noteSeen(ctx, library, doc, entry.hash, entry.level);
       return {
-        data: { library: library.id, title: library.title, files: files.map((item) => item.path) },
-        text: `经验库「${library.title}」\n文档：${files.map((item) => item.path).join("、") || "无"}\n\n--- README.md ---\n${readme}`,
+        data: { library: library.id, title: library.title, documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary })) },
+        text: `经验库「${library.title}」\n\n${brief.text}`,
       };
     },
   });
@@ -249,13 +273,14 @@ export function experiencePlugin(services) {
     name: "experience_write",
     title: "写入经验",
     description:
-      "创建或整体替换经验库中的一篇 Markdown 文档。整理经验时：先 experience_read 阅读，按主题合并到已有文档，不要重复记录；新文档要在 README.md 的文档列表中登记。只改几处时用 experience_edit。修改是未保存状态，用户在「经验」面板中查看并保存版本。",
+      "创建或整体替换经验库中的一篇 Markdown 文档。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在文档目录里）。只改几处时用 experience_edit。修改是未保存状态，用户在「经验」面板中查看并保存版本。",
     destructive: true,
     input: { work: workArg, path: docPath, content: z.string().max(512 * 1024), expectedSha256: z.string().optional() },
     async run({ path: file, content, expectedSha256 }, ctx) {
       const { work, library } = await libraryOf(ctx);
       if (!/\.(md|txt)$/i.test(file)) throw problem(400, "经验库只存放 .md 或 .txt 文档");
       const result = writeText(library.root, file, content, { expectedHash: expectedSha256 });
+      noteSeen(ctx, library, file, result.hash, "content");
       notify(work, library, file);
       return { data: { path: file, sha256: result.hash }, meta: { sha256: result.hash }, text: `已写入经验库「${library.title}」的 ${file}` };
     },
@@ -279,11 +304,12 @@ export function experiencePlugin(services) {
       let content = current.content;
       for (const [index, edit] of edits.entries()) {
         const count = content.split(edit.oldText).length - 1;
-        if (count === 0) throw problem(400, `第 ${index + 1} 处替换：找不到 oldText，先用 experience_read 读取最新内容`);
+        if (count === 0) throw problem(400, `第 ${index + 1} 处替换：找不到 oldText。${nearMiss(content, edit.oldText, "experience_read")}`);
         if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${index + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
         content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
       }
       const result = writeText(library.root, file, content, { expectedHash: current.hash });
+      noteSeen(ctx, library, file, result.hash, "content");
       notify(work, library, file);
       return {
         data: { path: file, sha256: result.hash },
@@ -304,6 +330,7 @@ export function experiencePlugin(services) {
       if (file === "README.md") throw problem(400, "README.md 是经验库的入口，不能删除");
       confined(library.root, file);
       removePath(library.root, file);
+      noteSeen(ctx, library, file, null);
       notify(work, library, file);
       return asJson({ deleted: file }, `已删除经验库「${library.title}」的 ${file}`);
     },

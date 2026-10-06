@@ -9,6 +9,7 @@ import { Profiles } from "./profiles.mjs";
 import { appVersion } from "../config.mjs";
 import { problem, notFound, writeFileAtomic } from "../util.mjs";
 import { formatTime } from "../render.mjs";
+import { experienceDelta, filesNotice, noteSeen, rebaseSeen, referencedExperience, selectionText, snapshotFiles } from "./context.mjs";
 
 const IDLE_MS = 15 * 60 * 1000;
 /** FRAME permission levels mapped to each agent's own session modes. */
@@ -18,6 +19,13 @@ export const PERMISSION_MODES = {
   auto: { claude: "auto", codex: "agent" },
   full: { claude: "bypassPermissions", codex: "agent-full-access" },
 };
+/** Agent modes in which changes wait for the user: FRAME's "ask" level, and planning. */
+const CONFIRMING_MODES = new Set(["default", "plan", "read-only"]);
+/** Whether the session's current mode has the user confirm each change. */
+export function confirmsChanges(meta) {
+  const option = (id) => meta.configOptions?.find((item) => item.id === id);
+  return CONFIRMING_MODES.has(option("mode")?.currentValue ?? meta.modes?.currentModeId) || option("collaboration_mode")?.currentValue === "plan";
+}
 const CLAUDE_ALLOWED_TOOLS = [
   "mcp__frame",
   "Read",
@@ -150,7 +158,9 @@ export class AiManager {
     this.services.events.emit({ type: "ai-session", session: this.publicMeta(session) });
   }
   publicMeta(session) {
-    return { ...session.meta };
+    // What the AI has seen (for per-message changes) is the server's business.
+    const { context: _context, ...meta } = session.meta;
+    return meta;
   }
   transcript(id) {
     const file = path.join(this.sessionsDir, id + ".jsonl");
@@ -273,10 +283,12 @@ export class AiManager {
     if (session.attached && session.process) return;
     work ||= await this.services.openWork(session.meta.work, session.meta.repo);
     const process = await this.process(session.meta.profile, session.meta.model);
+    // The agent loads the brief (AGENTS.md) as the session starts or resumes: it is the baseline.
+    const brief = this.services.works.writeBrief(work);
     let result;
     // The work root holds the platform AGENTS.md/CLAUDE.md and the engine links; the work itself is projects/<name>/.
     const common = { cwd: work.root, mcpServers: this.mcpServers(session) };
-    // FRAME tools and read-only inspection never need a confirmation; edits follow the session mode.
+    // Claude never asks about FRAME tools (confirmTool does, following the session mode) or read-only inspection.
     const meta = process.agent === "claude" ? { _meta: { claudeCode: { options: { allowedTools: CLAUDE_ALLOWED_TOOLS } } } } : {};
     try {
       if (!session.meta.acpSessionId) {
@@ -309,6 +321,8 @@ export class AiManager {
     session.process = process;
     session.attached = true;
     process.sessions.add(session.meta.id);
+    session.meta.context = { ...session.meta.context, experience: rebaseSeen(session.meta.context?.experience ?? null, brief.experience ?? null) };
+    session.files ??= this.readFiles(session) ?? snapshotFiles(work.dir);
     if (result?.configOptions) session.meta.configOptions = result.configOptions;
     if (result?.modes) session.meta.modes = result.modes;
     if (result?.models) session.meta.models = result.models;
@@ -352,11 +366,11 @@ export class AiManager {
     return null;
   }
 
-  /** Send a prompt; queued if a turn is running. */
-  async prompt(id, { text = "", attachments = [] }) {
+  /** Send a prompt; queued if a turn is running. `view` is what the user was looking at when sending. */
+  async prompt(id, { text = "", attachments = [], view = null }) {
     const session = this.get(id);
     if (!text.trim() && !attachments.length) throw problem(400, "消息不能为空");
-    const message = { id: randomUUID(), text, attachments };
+    const message = { id: randomUUID(), text, attachments, view: view && typeof view === "object" ? view : null };
     if (session.meta.status !== "idle") {
       session.meta.queue.push(message);
       this.publish(session);
@@ -373,7 +387,7 @@ export class AiManager {
     this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message) });
     try {
       await this.attach(session, work);
-      const prompt = buildPrompt(message, work, this.services);
+      const prompt = this.turnPrompt(session, message, work);
       const response = await session.process.connection.prompt({ sessionId: session.meta.acpSessionId, prompt });
       this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null });
     } catch (error) {
@@ -385,6 +399,8 @@ export class AiManager {
           this.permissions.delete(requestId);
         }
       session.meta.status = "idle";
+      // The AI's own changes are part of what it knows; later changes are someone else's.
+      this.saveFiles(session, work);
       this.compactFile(session.meta.id);
       this.publish(session);
       const next = session.meta.queue.shift();
@@ -433,7 +449,7 @@ export class AiManager {
     try {
       result = await session.process.connection.request("_session/steering", {
         sessionId: session.meta.acpSessionId,
-        prompt: buildPrompt(message, work, this.services),
+        prompt: this.turnPrompt(session, message, work, { steering: true }),
         _meta: { steering: { idleBehavior: "promptRequired" } },
       });
     } catch (error) {
@@ -490,6 +506,7 @@ export class AiManager {
     if (session.token) this.services.auth.revokeInternal(session.token);
     fs.rmSync(path.join(this.sessionsDir, id + ".json"), { force: true });
     fs.rmSync(path.join(this.sessionsDir, id + ".jsonl"), { force: true });
+    fs.rmSync(path.join(this.sessionsDir, id + ".files.json"), { force: true });
     fs.rmSync(path.join(this.sessionsDir, id + ".images"), { recursive: true, force: true });
     this.services.events.emit({ type: "ai-session-removed", session: id, work: session.meta.work });
   }
@@ -526,12 +543,16 @@ export class AiManager {
   onPermission(params) {
     const session = this.sessionByAcp(params.sessionId);
     if (!session) return { outcome: { outcome: "cancelled" } };
+    return this.askUser(session, params.toolCall, params.options);
+  }
+  /** A permission card in the chat; resolves with the ACP response once the user picks an option. */
+  askUser(session, toolCall, options, signal) {
     const id = randomUUID();
     session.meta.status = "waiting";
     this.publish(session);
-    this.append(session, { kind: "permission", id, toolCall: params.toolCall, options: params.options });
+    this.append(session, { kind: "permission", id, toolCall, options });
     return new Promise((resolve) => {
-      this.permissions.set(id, {
+      const pending = {
         session: session.meta.id,
         resolve: (outcome) => {
           this.append(session, { kind: "permission_result", id, outcome });
@@ -541,8 +562,42 @@ export class AiManager {
           }
           resolve(outcome);
         },
-      });
+      };
+      this.permissions.set(id, pending);
+      signal?.addEventListener(
+        "abort",
+        () => {
+          if (this.permissions.delete(id)) pending.resolve({ outcome: { outcome: "cancelled" } });
+        },
+        { once: true },
+      );
     });
+  }
+  /**
+   * FRAME tools run in our MCP server, where the agents' own confirmations do not reach
+   * (Claude allows them up front, Codex never asks). When the user's mode confirms changes,
+   * a FRAME tool that changes the work waits here for the user's answer.
+   */
+  async confirmTool(sessionId, tool, args, signal) {
+    const session = this.sessions.get(sessionId);
+    if (!session || tool.readOnly || !confirmsChanges(session.meta)) return true;
+    const input = JSON.stringify(args ?? {}, null, 2);
+    const response = await this.askUser(
+      session,
+      {
+        toolCallId: randomUUID(),
+        title: `mcp__frame__${tool.name}`,
+        kind: "edit",
+        rawInput: args,
+        content: [{ type: "content", content: { type: "text", text: input.length > 1500 ? input.slice(0, 1500) + "\n…" : input } }],
+      },
+      [
+        { optionId: "allow", name: "允许", kind: "allow_once" },
+        { optionId: "reject", name: "拒绝", kind: "reject_once" },
+      ],
+      signal,
+    );
+    return response.outcome.outcome === "selected" && response.outcome.optionId === "allow";
   }
   respondPermission(requestId, optionId) {
     const pending = this.permissions.get(requestId);
@@ -557,6 +612,90 @@ export class AiManager {
     throw problem(400, "fs capability not offered");
   }
 
+  // ---- what the AI knows ---------------------------------------------------------------------
+
+  /**
+   * The content blocks of a user message: the text, then a [FRAME] block with the current
+   * situation and only what changed since the AI last knew it (files others changed,
+   * experience documents others edited). Updates what the session has seen. A message
+   * steered into a running turn skips the file changes: they are mostly the AI's own so far.
+   */
+  turnPrompt(session, message, work, { steering = false } = {}) {
+    const { services } = this;
+    const lines = [`[FRAME] 作品 ${work.id}，作品文件在 projects/${work.slug}/`];
+    const view = message.view ?? services.viewState.get(`${work.repo}/${work.id}`);
+    const meta = services.works.meta(work).meta;
+    if (view) {
+      lines.push(`用户播放器位置 ${formatTime(view.time ?? 0)}${view.playing ? "（播放中）" : ""}`);
+      const selected = selectionText(view.selection, meta);
+      if (selected) lines.push(`用户在时间轴上选中了：${selected}`);
+      if (view.editing) lines.push(`用户在编辑器中打开着：${view.editing}`);
+    }
+    if (!steering) {
+      const files = snapshotFiles(work.dir);
+      const changedFiles = filesNotice(session.files, files);
+      session.files = files;
+      if (changedFiles) lines.push(changedFiles);
+    }
+    const references = [];
+    for (const attachment of message.attachments) {
+      if (attachment.type === "frame") references.push(`画面 ${formatTime(attachment.time)}${attachment.note ? "（" + attachment.note + "）" : ""}`);
+      if (attachment.type === "range") references.push(`片段 ${formatTime(attachment.start)}–${formatTime(attachment.end)}`);
+      if (attachment.type === "layer") references.push(`图层 ${attachment.id}${attachment.name ? "「" + attachment.name + "」" : ""}`);
+      if (attachment.type === "asset") references.push(`素材 ${attachment.url}`);
+      if (attachment.type === "file") references.push(`文件 ${attachment.path}`);
+      if (attachment.type === "experience") references.push(`经验库文档 ${attachment.path}`);
+      if (attachment.type === "problem") references.push(`问题：${attachment.message}`);
+    }
+    if (references.length) lines.push("用户引用：" + references.join("；"));
+    const library = services.experience?.current(work) ?? null;
+    const experience = experienceDelta(session.meta.context?.experience ?? null, library);
+    const referenced = referencedExperience(
+      experience.seen,
+      library,
+      message.attachments.filter((item) => item.type === "experience").map((item) => item.path),
+    );
+    session.meta.context = { ...session.meta.context, experience: referenced.seen };
+    this.saveMeta(session);
+    if (experience.text) lines.push("", experience.text);
+    if (referenced.text) lines.push("", referenced.text);
+
+    const blocks = [];
+    if (message.text.trim()) blocks.push({ type: "text", text: message.text });
+    blocks.push({ type: "text", text: lines.join("\n") });
+    for (const attachment of message.attachments) {
+      if (attachment.data && attachment.mimeType?.startsWith("image/")) blocks.push({ type: "image", data: attachment.data, mimeType: attachment.mimeType });
+      if (attachment.type === "file" || attachment.type === "asset") {
+        const relative = attachment.path || attachment.url?.replace(/^films\/[^/]+\//, "public/");
+        if (relative) blocks.push({ type: "resource_link", uri: "file://" + path.join(work.dir, relative), name: path.basename(relative) });
+      }
+    }
+    return blocks;
+  }
+
+  /** An experience tool tells us what this session's AI just read or wrote (hash null: deleted). */
+  noteExperience(sessionId, library, file, hash, level = "content") {
+    const session = this.sessions.get(sessionId);
+    if (!session?.meta.context?.experience) return;
+    session.meta.context = { ...session.meta.context, experience: noteSeen(session.meta.context.experience, library, file, hash, level) };
+    this.saveMeta(session);
+  }
+
+  /** The work's file fingerprint after a turn survives restarts, so the next turn still sees others' changes. */
+  saveFiles(session, work) {
+    try {
+      session.files = snapshotFiles(work.dir);
+      writeFileAtomic(path.join(this.sessionsDir, session.meta.id + ".files.json"), JSON.stringify(session.files));
+    } catch {}
+  }
+  readFiles(session) {
+    try {
+      return JSON.parse(fs.readFileSync(path.join(this.sessionsDir, session.meta.id + ".files.json"), "utf8"));
+    } catch {
+      return null;
+    }
+  }
+
   close() {
     clearInterval(this.timer);
     for (const entry of this.processes.values()) entry.process.kill();
@@ -568,37 +707,6 @@ const isModel = (options, id) => options.some((option) => option.id === id && (o
 
 /** Attachments as stored in the transcript: image data becomes an image entry (saved to a file by storeImages). */
 const userAttachments = (message) => message.attachments.map((item) => (item.data ? { ...item, type: "image", kind: item.type } : item));
-
-/** Build ACP content blocks: user text, the player context, frame images and asset links. */
-function buildPrompt(message, work, services) {
-  const blocks = [];
-  const context = [];
-  for (const attachment of message.attachments) {
-    if (attachment.type === "frame") context.push(`画面 ${formatTime(attachment.time)}${attachment.note ? "（" + attachment.note + "）" : ""}`);
-    if (attachment.type === "range") context.push(`片段 ${formatTime(attachment.start)}–${formatTime(attachment.end)}`);
-    if (attachment.type === "layer") context.push(`图层 ${attachment.id}${attachment.name ? "「" + attachment.name + "」" : ""}`);
-    if (attachment.type === "asset") context.push(`素材 ${attachment.url}`);
-    if (attachment.type === "file") context.push(`文件 ${attachment.path}`);
-    if (attachment.type === "experience") context.push(`经验库文档 ${attachment.path}`);
-    if (attachment.type === "problem") context.push(`问题：${attachment.message}`);
-  }
-  const view = services.viewState.get(`${work.repo}/${work.id}`);
-  const header = [`[FRAME] 作品 ${work.id}，作品文件在 projects/${work.slug}/`];
-  if (view) header.push(`用户播放器位置 ${formatTime(view.time ?? 0)}${view.playing ? "（播放中）" : ""}`);
-  const library = services.experience?.linkedTitleSync(work);
-  if (library) header.push(`关联经验库「${library}」：开始制作前先用 experience_read 阅读并照着做；有值得记住的经验时整理进去`);
-  if (context.length) header.push("用户引用：" + context.join("；"));
-  if (message.text.trim()) blocks.push({ type: "text", text: message.text });
-  blocks.push({ type: "text", text: header.join("\n") });
-  for (const attachment of message.attachments) {
-    if (attachment.data && attachment.mimeType?.startsWith("image/")) blocks.push({ type: "image", data: attachment.data, mimeType: attachment.mimeType });
-    if (attachment.type === "file" || attachment.type === "asset") {
-      const relative = attachment.path || attachment.url?.replace(/^films\/[^/]+\//, "public/");
-      if (relative) blocks.push({ type: "resource_link", uri: "file://" + path.join(work.dir, relative), name: path.basename(relative) });
-    }
-  }
-  return blocks;
-}
 
 function authHint(error, process) {
   const message = error?.message || String(error);

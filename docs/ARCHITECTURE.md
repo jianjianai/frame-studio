@@ -21,12 +21,12 @@ repos/<库>/                          作品库：裸 Git 仓库（local = 本�
 works/<库>/<作品>/                   作品工作目录 = works/<作品> 分支的 worktree
    projects/<名称>/                  作品文件（这才是作品内容）
    src → 引擎, node_modules → 依赖, docs → 文档     （链接，不提交）
-   AGENTS.md, CLAUDE.md, tsconfig.json             （平台生成，不提交）
+   AGENTS.md, CLAUDE.md, tsconfig.json             （平台生成，不提交；AGENTS.md 是 AI 的会话说明）
 libraries/<库>/                      frame/materials 分支的 worktree：共享素材库
 experience/<库>/                     frame/experience 分支的 worktree：经验库（每个文件夹一个库，作品在 project.ts 的 experience 中关联）
 exports/<库>/<作品>/                  导出的视频
 models/speech/                       下载的语音模型
-ai/sessions/                         AI 对话记录（JSONL）与图片
+ai/sessions/                         AI 对话记录（JSONL）、图片、AI 上一轮结束时的作品文件快照
 tmp/                                 导出快照、Vite 缓存
 ```
 
@@ -62,9 +62,10 @@ tmp/                                 导出快照、Vite 缓存
 内置 AI 不自己实现代理，而是通过 ACP（Agent Client Protocol）驱动官方适配器：`@agentclientprotocol/claude-agent-acp`（Claude Agent SDK）和 `@agentclientprotocol/codex-acp`（Codex app-server）。
 
 - 每个“AI 配置 + 模型”一个代理进程，多个会话共用；空闲 15 分钟退出，会话下次发送时通过 `session/resume` 恢复。
-- 新会话的工作目录是作品目录，并注入 FRAME MCP（`/mcp`，带只对该作品有效的内部令牌）。Claude 默认“接受编辑”模式并自动允许 FRAME 工具；Codex 使用“自动审查”模式。
+- 新会话的工作目录是作品目录，并注入 FRAME MCP（`/mcp`，带只对该作品有效的内部令牌）。代理自己的确认不经过 FRAME 工具（Claude 预先允许，Codex 不询问），由 FRAME 按会话当前模式决定：手动确认和计划模式下，会修改作品的工具先在聊天中请求用户确认（`confirmTool`）。
 - 账号登录调用随依赖安装的 `claude` / `codex` 程序（`auth login`、`login --device-auth`），凭据在它们自己的目录（`~/.claude`、`~/.codex`；容器中为 `/data/home`）。
 - 自定义 API：Anthropic 兼容接口通过 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL` 交给 Claude Code；OpenAI 兼容接口通过 `CODEX_CONFIG` 中的自定义 model provider 交给 Codex。
+- 上下文（`ai/context.mjs`）：开始或恢复会话时重新生成作品根目录的 `AGENTS.md`（平台规则、作品需求、关联的经验库，`works.briefProviders` 提供）；每条消息附加 `[FRAME]`，只写 AI 还不知道的：播放位置与选中对象、上一轮之后被改动的作品文件、别人对经验库的修改。会话元数据中的 `context` 记录 AI 已知的经验库文档哈希；MCP 内部令牌带会话 id，工具读写经验库时据此更新。
 - 对话记录保存为原始 ACP 更新的 JSONL，界面把它还原为消息、工具卡片、差异和计划。版本只由用户手动保存（活动栏的版本图标显示未保存的改动数）。
 
 ## 导出

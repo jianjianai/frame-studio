@@ -68,7 +68,7 @@ export const fileIcon = (path: string, size = 14) => {
  * while another tab is shown, so playback, the timeline and AI captures keep working.
  * Tabs come from the work or from the repository's experience libraries.
  */
-export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
+export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; onActiveChange?: (label: string | null) => void }) {
   const { work } = useWorkbench();
   const toast = useToast();
   const confirm = useConfirm();
@@ -197,6 +197,15 @@ export function EditorArea({ ref }: { ref?: Ref<EditorHandle> }) {
     if (active === path) setActive(next[Math.min(index, next.length - 1)]?.path ?? null);
   };
   const current = tabs.find((tab) => tab.path === active) ?? null;
+  // The AI is told which file the user has open ("这个文件").
+  const activeLabel = !current
+    ? null
+    : current.kind === "diff"
+      ? `改动「${current.title}」`
+      : current.source === "experience"
+        ? `经验库文档 ${current.file.split("/").slice(1).join("/")}`
+        : current.file;
+  useEffect(() => onActiveChange?.(activeLabel), [activeLabel, onActiveChange]);
   const update = (path: string, change: Partial<Tab>) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...change } : item)));
   const tooltip = (tab: Tab) =>
     `${tab.kind === "diff" ? `改动：${tab.title}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;

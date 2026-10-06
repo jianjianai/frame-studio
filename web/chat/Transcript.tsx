@@ -84,6 +84,11 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   work_update: "修改作品信息",
   library_list: "素材库",
   exports_list: "导出列表",
+  subtitles_edit: "编辑字幕",
+  experience_read: "阅读经验库",
+  experience_write: "写入经验",
+  experience_edit: "修改经验",
+  experience_delete: "删除经验文档",
 };
 export function toolTitle(title: string) {
   const match = /(?:mcp__frame__|mcp\.frame\.|frame[.:])([a-z_]+)/.exec(title);

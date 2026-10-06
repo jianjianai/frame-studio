@@ -121,19 +121,21 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     [id],
   );
 
-  // Tell the server (and so the AI) where the user is looking.
+  // Tell the server (and so the AI) where the user is looking: at once on a change, then every second.
+  const [editing, setEditing] = useState<string | null>(null);
   useEffect(() => {
     let last = "";
     const publish = () => {
       const snapshot = stage.playback.get();
-      const key = `${snapshot.time.toFixed(1)}:${snapshot.playing}:${JSON.stringify(selection)}`;
+      const key = `${snapshot.time.toFixed(1)}:${snapshot.playing}:${JSON.stringify(selection)}:${editing}`;
       if (key === last) return;
       last = key;
-      sendEvent({ type: "preview-state", work: id, repo, time: snapshot.time, playing: snapshot.playing, selection });
+      sendEvent({ type: "preview-state", work: id, repo, time: snapshot.time, playing: snapshot.playing, selection, editing });
     };
+    publish();
     const timer = setInterval(publish, 1000);
     return () => clearInterval(timer);
-  }, [stage, id, repo, selection]);
+  }, [stage, id, repo, selection, editing]);
 
   const runCheck = useCallback(async () => {
     try {
@@ -165,6 +167,10 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     },
     selection,
     select: setSelection,
+    viewNow: () => {
+      const snapshot = stage.playback.get();
+      return { time: snapshot.time, playing: snapshot.playing, selection, editing };
+    },
     showPanel: (tab) => setPanel((value) => ({ ...value, visible: true, tab })),
     showView: (next) => {
       setView(next);
@@ -311,7 +317,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
           )}
           <main className="wb-center">
             <div className="wb-editor">
-              <EditorArea ref={editor} />
+              <EditorArea ref={editor} onActiveChange={setEditing} />
             </div>
             {panel.visible && (
               <>

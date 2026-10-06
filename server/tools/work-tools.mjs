@@ -14,7 +14,7 @@ const cueSchema = z
   .refine((cue) => cue.end > cue.start, "end 必须大于 start");
 
 /** Explain why an exact replacement missed: usually indentation or a stale copy of the file. */
-function nearMiss(content, oldText) {
+export function nearMiss(content, oldText, reader = "file_read") {
   const squash = (text) => text.replace(/\s+/g, " ").trim();
   if (squash(content).includes(squash(oldText))) return "忽略空白后能找到：请按文件中的缩进和换行逐字复制。";
   const first = oldText
@@ -23,8 +23,8 @@ function nearMiss(content, oldText) {
     ?.trim();
   const lines = content.split("\n");
   const at = first ? lines.findIndex((line) => line.includes(first)) : -1;
-  if (at >= 0) return `第一行出现在第 ${at + 1} 行，但后面的内容不同；先用 file_read 读取最新内容。`;
-  return "文件可能已经改变，先用 file_read 读取最新内容。";
+  if (at >= 0) return `第一行出现在第 ${at + 1} 行，但后面的内容不同；先用 ${reader} 读取最新内容。`;
+  return `文件可能已经改变，先用 ${reader} 读取最新内容。`;
 }
 
 const relativePath = z.string().min(1).max(400).describe("相对作品目录 projects/<名称>/ 的路径，例如 scene.ts 或 public/bg.png");
@@ -110,7 +110,7 @@ export function registerWorkTools(registry) {
   registry.add({
     name: "work_context",
     title: "作品现状",
-    description: "读取作品的元数据、文件、素材、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区，以及最近一次检查结果。开始工作前先调用。",
+    description: "读取作品的元数据、文件、素材、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果，以及作品需求和关联的经验库。外部 AI 开始工作前先调用。",
     readOnly: true,
     input: { work: workArg },
     async run(_, ctx) {
@@ -152,13 +152,14 @@ export function registerWorkTools(registry) {
           : null,
         files,
         assets: assets.map(({ url, kind, size, duration, width, height }) => ({ url, kind, size, duration, width, height })),
-        notes: fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8").slice(0, 6000) : "",
+        // Built-in agents have the work's notes and its experience library in their session brief.
+        ...(ctx.scope.session ? {} : { notes: fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8").slice(0, 6000) : "" }),
         unsavedChanges: status.files.map((file) => `${file.status} ${file.path}`),
         lastVersion: status.head,
         userView: view && { time: view.time, playing: view.playing, selection: view.selection, at: view.at },
         lastCheck: services.checks.get(`${work.repo}/${work.id}`) || null,
         // The production know-how to follow; read it in full with experience_read.
-        experience: services.experience ? await services.experience.summary(work) : null,
+        experience: services.experience ? services.experience.summary(work, { inBrief: Boolean(ctx.scope.session) }) : null,
       };
       return asJson(result);
     },

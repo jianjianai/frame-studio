@@ -31,6 +31,7 @@ export class ToolRegistry {
       description: tool.description,
       readOnly: Boolean(tool.readOnly),
       destructive: Boolean(tool.destructive),
+      alwaysLoad: CORE_TOOLS.has(tool.name),
       inputSchema: z.toJSONSchema(tool.publicSchema, { unrepresentable: "any" }),
     }));
   }
@@ -83,6 +84,34 @@ export function describeIssues(issues) {
   walk(issues, []);
   return [...new Set(lines)].slice(0, 12).join("；");
 }
+
+/**
+ * Tools used in almost every production task. MCP clients that defer tools behind a
+ * search (Claude Code) load these up front (`_meta["anthropic/alwaysLoad"]`), saving a
+ * search round trip per tool; the rest (file tools that duplicate the agent's own,
+ * versions, exports, listings) stay discoverable on demand.
+ */
+export const CORE_TOOLS = new Set([
+  "frame_guide",
+  "work_context",
+  "work_check",
+  "work_update",
+  "preview_frames",
+  "storyboard",
+  "preview_audio",
+  "layers_get",
+  "layers_edit",
+  "audio_get",
+  "audio_edit",
+  "audio_place",
+  "assets_list",
+  "asset_import",
+  "speech_synthesize",
+  "subtitles_edit",
+  "experience_read",
+  "experience_write",
+  "experience_edit",
+]);
 
 /** Optional `work` argument: "<id>" or "<repo>/<id>"; defaults to the agent's current work. */
 export const workArg = z

@@ -107,12 +107,20 @@ try {
           for (const tool of tools) {
             if (scope.readOnly && !tool.readOnly) continue;
             if (scope.work && ["work_create", "works_list"].includes(tool.name)) continue;
+            // Bound to one work (--work): the work parameter is hidden, like the studio's own bound sessions.
+            const schema = scope.work
+              ? {
+                  ...tool.inputSchema,
+                  properties: Object.fromEntries(Object.entries(tool.inputSchema.properties ?? {}).filter(([key]) => key !== "work")),
+                  required: (tool.inputSchema.required ?? []).filter((key) => key !== "work"),
+                }
+              : tool.inputSchema;
             const passthrough = {
               "~standard": {
                 version: 1,
                 vendor: "frame",
                 validate: (value) => ({ value }),
-                jsonSchema: { input: () => tool.inputSchema, output: () => tool.inputSchema },
+                jsonSchema: { input: () => schema, output: () => schema },
               },
             };
             server.registerTool(
@@ -122,12 +130,13 @@ try {
                 description: tool.description,
                 inputSchema: passthrough,
                 annotations: { title: tool.title, readOnlyHint: tool.readOnly, destructiveHint: tool.destructive, openWorldHint: false },
+                ...(tool.alwaysLoad ? { _meta: { "anthropic/alwaysLoad": true } } : {}),
               },
               async (args) => {
                 try {
                   // Same binding as an in-process scoped server: only the --work work is reachable.
-                  if (scope.work && args.work && ![values.work, scope.work].includes(args.work)) throw new Error("这个 MCP 服务只能操作作品 " + values.work);
-                  const result = await request(`/api/tools/${tool.name}`, scope.work && tool.inputSchema.properties?.work ? { ...args, work: values.work } : args);
+                  const { work: _named, ...rest } = args ?? {};
+                  const result = await request(`/api/tools/${tool.name}`, scope.work ? (tool.inputSchema.properties?.work ? { ...rest, work: values.work } : rest) : args);
                   const content = [];
                   if (result.text) content.push({ type: "text", text: result.text });
                   for (const image of result.images || []) content.push({ type: "image", data: image.data, mimeType: image.mimeType });

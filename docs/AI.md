@@ -30,12 +30,34 @@ FRAME 通过 [Agent Client Protocol](https://agentclientprotocol.com) 运行两�
 
 ### AI 能做什么
 
-AI 在作品目录中工作，拥有读写文件和运行命令的能力（与在终端中使用 Claude Code / Codex 相同），另外连接了 FRAME 工具（见下表）。作品根目录的 `AGENTS.md` / `CLAUDE.md` 告诉 AI 作品结构与工作流程；作品自己的 `projects/<名称>/AGENTS.md` 记录需求。
+AI 在作品目录中工作，拥有读写文件和运行命令的能力（与在终端中使用 Claude Code / Codex 相同），另外连接了 FRAME 工具（见下表）。
 
 权限模式（聊天底部选择）：
 
 - Claude：接受编辑（默认）、手动确认、计划、自动、跳过权限。
 - Codex：自动审查（默认）、工作区读写、只读、完全访问。
+
+手动确认（Claude 的“手动确认”、Codex 的“只读”）和计划模式下，AI 用 FRAME 工具修改作品（图层、混音、字幕、配音、素材、经验库等）之前，也会在聊天中请求确认；读取和预览类工具不需要确认。用户拒绝后 AI 会停下来询问，而不是换个方式继续改。
+
+### AI 知道什么
+
+**会话说明**：每次开始或恢复对话时，FRAME 重新生成作品根目录的 `AGENTS.md`（Claude Code 通过 `CLAUDE.md` 导入，Codex 直接读取）：
+
+- 平台规则：作品结构、工作流程、工具用法。
+- 作品自己的需求与约定：`projects/<名称>/AGENTS.md` 的原文（超过 6 KB 时只放开头）。
+- 关联的经验库：全部文档不超过 12 KB 时全部放入；否则放 README 和其他文档的目录（标题 + 第一句），AI 按需用 `experience_read` 阅读全文。
+
+文档逐字放在代码块里，AI 可以直接复制原文做精确修改。整份说明不超过 Codex 读取 `AGENTS.md` 的 32 KiB 上限，代理压缩上下文后仍然保留。
+
+**每条消息**：消息后面附一段 `[FRAME]`，只写 AI 还不知道的，没有变化就不写：
+
+- 播放位置；时间轴上选中的对象（图层、音频片段、音轨、字幕、镜头标记，带名称和时间）；编辑器中打开的文件。
+- 上一轮之后用户或其他对话改动过的作品文件，提醒 AI 先读最新内容再改，不要覆盖用户的修改。
+- 经验库的变化：用户或其他对话新增、修改、删除的文档（小文档附最新全文）；作品改为关联另一个经验库时附上新库。AI 自己读过、写过的不再重复。
+
+服务端按对话记录 AI 已经知道的经验库内容（每篇文档的哈希，以及读过全文还是只看过目录），恢复对话后继续沿用。
+
+**工具**：Claude Code 直接加载常用的 FRAME 工具（`CORE_TOOLS`），其余在需要时通过工具搜索加载。内置 AI 的会话只能操作当前作品，工具没有 `work` 参数。
 
 ## 外部 AI 通过 MCP 使用 FRAME
 
@@ -66,7 +88,7 @@ claude mcp add --transport http frame http://127.0.0.1:4310/mcp --header "Author
 { "mcpServers": { "frame": { "command": "node", "args": ["/path/to/frame-studio/bin/frame.mjs", "mcp"] } } }
 ```
 
-`frame mcp` 会连接正在运行的 Studio（`FRAME_URL`，默认 `http://127.0.0.1:4310`，需要时设置 `FRAME_TOKEN`）；没有运行时在进程内启动一个。`--work <id>` 限定只操作一个作品，`--read-only` 只提供只读工具。
+`frame mcp` 会连接正在运行的 Studio（`FRAME_URL`，默认 `http://127.0.0.1:4310`，需要时设置 `FRAME_TOKEN`）；没有运行时在进程内启动一个。`--work <id>` 限定只操作一个作品（工具不再有 `work` 参数，限定作品的令牌和 OAuth 授权也一样），`--read-only` 只提供只读工具。
 
 ### 命令行
 
@@ -83,7 +105,7 @@ frame export ab12cd34 --width 1920
 |---|---|
 | `frame_guide` | 制作指南（接口与示例），按主题读取 |
 | `works_list` / `work_create` / `work_update` | 列出、新建作品，修改标题、时长、镜头标记等 |
-| `work_context` | 作品现状：元数据、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查 |
+| `work_context` | 作品现状：元数据、需求、关联的经验库、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查（内置 AI 的会话说明里已有需求和经验库，这里只给经验库目录） |
 | `work_check` | 类型、素材引用、真实浏览器加载并渲染几帧和一段音频 |
 | `preview_frames` / `storyboard` | 渲染指定时间的画面 / 带时间标注的分镜总览图 |
 | `preview_audio` | 一段混音的响度、静音段、削波 |
@@ -92,7 +114,7 @@ frame export ab12cd34 --width 1920
 | `layers_get` / `layers_edit` | visual.json 图层 |
 | `audio_get` / `audio_edit` / `audio_place` | audio.json 混音 |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
-| `experience_read` / `experience_write` / `experience_edit` / `experience_delete` | 作品关联的经验库：开始前阅读，过程中整理经验（未保存状态，用户在「经验」中保存版本） |
+| `experience_read` / `experience_write` / `experience_edit` / `experience_delete` | 作品关联的经验库：照着做，过程中随时整理经验（未保存状态，用户在「经验」中保存版本） |
 | `subtitles_edit` | 字幕：整体替换、追加（替换重叠的旧字幕）、按时间段删除 |
 | `versions_list` / `version_save` / `version_diff` / `version_restore` | 版本 |
 | `export_video` / `task_status` / `exports_list` | 导出 MP4 |
@@ -103,3 +125,6 @@ frame export ab12cd34 --width 1920
 - 自定义文字之外 AI 还需要的小数据（如 `sha256`）放在 `meta`，所有客户端都会收到。
 - 参数结构很大时（`layers_edit`、`audio_edit` 的文档操作）用 `publicInput` 向客户端公布精简结构，详细格式写进 `docs/guide`，并用 `guide` 指向该主题；服务端仍按完整结构校验。
 - 会覆盖或删除内容的工具标记 `destructive`。
+- 制作作品时几乎每次都用到的工具加入 `CORE_TOOLS`（`server/tools/registry.mjs`），Claude Code 不用先搜索就能调用。
+- 作品从 `ctx.scope.work` 或 `work` 参数得到（`workArg`）；限定作品的会话里 `work` 参数对 AI 隐藏，描述中不要要求传它。
+- 内置 AI 自己读写了哪些需要跟踪的内容（目前是经验库文档），通过 `ctx.scope.session` 告诉 `services.ai`，下一条消息就不会再当作变化提醒它。

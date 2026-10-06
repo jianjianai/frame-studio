@@ -69,7 +69,7 @@ interface Profile {
 const SUGGESTIONS = ["检查作品，发现问题就修复", "做一段 3 秒的开场标题动画", "给作品配一段轻快的背景音乐", "让现在这个画面的配色更有电影感"];
 
 export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: () => void }) {
-  const { work, stage, openSettings } = useWorkbench();
+  const { work, stage, openSettings, viewNow } = useWorkbench();
   const toast = useToast();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [current, setCurrent] = usePersistent<string | null>(`chat:${work.repo}/${work.id}`, null);
@@ -186,7 +186,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     setPending({ text: prompt, attachments: extra });
     try {
       const id = current && sessions.some((item) => item.id === current) ? current : await createSession();
-      const result = await api<{ queued: boolean }>(`/api/ai/sessions/${id}/prompt`, { body: { text: prompt, attachments: extra } });
+      const result = await api<{ queued: boolean }>(`/api/ai/sessions/${id}/prompt`, { body: { text: prompt, attachments: extra, view: viewNow() } });
       if (result.queued) setPending(null); // the queue list shows it instead
     } catch (error) {
       toast((error as Error).message, "error");

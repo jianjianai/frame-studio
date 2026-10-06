@@ -5,6 +5,7 @@ import { readProjectSource, readProjectDir, setProjectFields, validSlug } from "
 import { appRoot } from "./config.mjs";
 import { problem, notFound, conflict, Locks, shortId, writeFileAtomic } from "./util.mjs";
 import { createWorkFiles, platformInstructions, workTsconfig, GIT_ATTRIBUTES } from "./templates.mjs";
+import { clip, quote, LIMITS } from "./ai/context.mjs";
 import { LOCAL_REPO } from "./repos.mjs";
 
 const WORK_PREFIX = "works/";
@@ -17,6 +18,9 @@ const validWorkId = (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-
  * the single place where the editor, preview, AI agents, CLI and MCP all read and write.
  */
 export class Works {
+  /** Sections added to every work's session brief, e.g. the linked experience library: (work) => { text, state } | null. */
+  briefProviders = [];
+
   constructor({ config, settings, repos, events }) {
     this.config = config;
     this.settings = settings;
@@ -144,7 +148,9 @@ export class Works {
       }
       this.linkRuntime(root);
     });
-    return this.describe(repo, id);
+    const work = this.describe(repo, id);
+    this.writeBrief(work);
+    return work;
   }
 
   describe(repo, id) {
@@ -185,8 +191,35 @@ export class Works {
     link("node_modules", path.join(appRoot, "node_modules"));
     link("docs", path.join(appRoot, "docs"));
     writeIfChanged(path.join(root, "tsconfig.json"), workTsconfig());
-    writeIfChanged(path.join(root, "AGENTS.md"), platformInstructions());
-    writeIfChanged(path.join(root, "CLAUDE.md"), "@AGENTS.md\n");
+  }
+
+  /**
+   * The session brief at the work root: AGENTS.md (read by Codex; Claude Code imports it
+   * through CLAUDE.md). Platform rules, the work's own notes, and sections from
+   * `briefProviders` (the linked experience library). Agents load it when a session starts
+   * or resumes and keep it through context compaction. Returns what the brief told the AI
+   * (`{ experience: seen }`), the baseline for later per-message changes.
+   */
+  writeBrief(work) {
+    const parts = [platformInstructions()];
+    let notes = "";
+    try {
+      notes = fs.readFileSync(path.join(work.dir, "AGENTS.md"), "utf8").trim();
+    } catch {}
+    const { text, cut } = clip(notes, LIMITS.notes);
+    parts.push(
+      `## 本作品的需求与约定（projects/${work.slug}/AGENTS.md${cut ? "，以下是开头部分" : ""}）\n\n${notes ? quote(text) : "（还没有记录）"}\n\n用户确认的新需求和这个作品专属的约定，写回这个文件。`,
+    );
+    const state = {};
+    for (const provider of this.briefProviders) {
+      const section = provider(work);
+      if (!section) continue;
+      if (section.text) parts.push(section.text);
+      Object.assign(state, section.state);
+    }
+    writeIfChanged(path.join(work.root, "AGENTS.md"), parts.join("\n\n") + "\n");
+    writeIfChanged(path.join(work.root, "CLAUDE.md"), "@AGENTS.md\n");
+    return state;
   }
 
   async create({ repo = LOCAL_REPO, title, width = 1920, height = 1080, duration = 10, fps = 30, description = "" }) {
