@@ -1729,9 +1729,21 @@
   background: var(--warn-soft);
   font-size: 12px;
 }
+/* material file viewer (editor tab) */
+.material-toolbar {
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.material-state {
+  flex: none;
+  padding: 3px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+}
+/* Bottom left: the video mark sits top left, the length bottom right. */
 .material-lock {
   position: absolute;
-  top: 4px;
+  bottom: 4px;
   left: 4px;
   display: grid;
   place-items: center;

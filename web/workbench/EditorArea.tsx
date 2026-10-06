@@ -12,12 +12,14 @@ export interface EditorHandle {
   openFile(path: string, options?: { line?: number; preview?: boolean }): void;
   /** A document of the work's experience libraries (path relative to the experience branch). */
   openExperience(path: string, options?: { preview?: boolean }): void;
+  /** A file of the repository's material libraries (`<library>/<path>`): viewed, not edited here. */
+  openMaterial(ref: string, options?: { preview?: boolean }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
   openDiff(title: string, query: string, options?: { preview?: boolean; source?: Source }): void;
 }
 type Source = "work" | "experience" | "materials";
 interface Tab {
-  /** Unique key: the work file path, `exp:<path>` for experience documents, `diff:…` for diffs. */
+  /** Unique key: the work file path, `exp:<path>` for experience documents, `mat:<ref>` for material files, `diff:…` for diffs. */
   path: string;
   /** Path inside its source (sent to the source's file API). */
   file: string;
@@ -107,7 +109,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   const openTab = useCallback(
     async (tab: Tab, options: { line?: number; preview?: boolean }) => {
       if (!place(tab, options)) return;
-      if (tab.kind !== "text") return;
+      // Material files are read by their viewer (raw, current or locked version).
+      if (tab.kind !== "text" || tab.source === "materials") return;
       try {
         const loaded = await load(tab);
         setTabs((list) => list.map((item) => (item.path === tab.path ? { ...item, ...loaded } : item)));
@@ -132,6 +135,11 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       ),
     [openTab],
   );
+  const openMaterial = useCallback(
+    (ref: string, options: { preview?: boolean } = {}) =>
+      openTab({ path: `mat:${ref}`, file: ref, source: "materials", kind: kindOf(ref), preview: Boolean(options.preview) }, options),
+    [openTab],
+  );
   const openDiff = useCallback(
     (title: string, query: string, options: { preview?: boolean; source?: Source } = {}) => {
       const preview = options.preview ?? true;
@@ -142,8 +150,13 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   );
   useImperativeHandle(
     ref,
-    () => ({ openFile: (path, options) => void openFile(path, options), openExperience: (path, options) => void openExperience(path, options), openDiff }),
-    [openFile, openExperience, openDiff],
+    () => ({
+      openFile: (path, options) => void openFile(path, options),
+      openExperience: (path, options) => void openExperience(path, options),
+      openMaterial: (ref, options) => void openMaterial(ref, options),
+      openDiff,
+    }),
+    [openFile, openExperience, openMaterial, openDiff],
   );
 
   // Files changed by the AI or other tools: refresh clean tabs, flag dirty ones.
@@ -219,11 +232,13 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       ? `改动「${current.title}」`
       : current.source === "experience"
         ? `经验库文档 ${current.file.split("/").slice(1).join("/")}`
-        : current.file;
+        : current.source === "materials"
+          ? `素材库文件 materials/${current.file}`
+          : current.file;
   useEffect(() => onActiveChange?.(activeLabel), [activeLabel, onActiveChange]);
   const update = (path: string, change: Partial<Tab>) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...change } : item)));
   const tooltip = (tab: Tab) =>
-    `${tab.kind === "diff" ? `改动：${tab.title}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
+    `${tab.kind === "diff" ? `改动：${tab.title}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
 
   return (
     <div className="editor-area">
@@ -288,6 +303,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               )}
               {current.kind === "diff" ? (
                 <DiffEditor query={current.diff!} source={current.source} />
+              ) : current.source === "materials" ? (
+                <MaterialViewer key={current.file} fileRef={current.file} kind={current.kind} />
               ) : current.kind === "text" ? (
                 current.content === undefined ? (
                   <div className="empty">正在读取…</div>
@@ -347,5 +364,133 @@ function MediaViewer({ path, kind }: { path: string; kind: Tab["kind"] }) {
       </div>
       {reference && kind !== "file" && <div className="faint small-text">拖动左侧「素材」中的这个文件到时间轴即可使用</div>}
     </div>
+  );
+}
+
+interface MaterialUse {
+  ref: string;
+  used: boolean;
+  locked: string | null;
+  outdated: boolean;
+}
+
+/**
+ * A file of the material libraries: as the library has it now, or, when the library has a
+ * newer version than the one this work locked, the version the work uses.
+ */
+function MaterialViewer({ fileRef, kind }: { fileRef: string; kind: Tab["kind"] }) {
+  const { work, addToChat, readOnly } = useWorkbench();
+  const toast = useToast();
+  const [use, setUse] = useState<MaterialUse | null>(null);
+  const [lockedVersion, setLockedVersion] = useState(false);
+  const [version, setVersion] = useState(() => Date.now());
+  const [info, setInfo] = useState("");
+  const [text, setText] = useState<string | null>(null);
+  const [failed, setFailed] = useState("");
+  const status = useCallback(
+    () =>
+      api<{ files: MaterialUse[] }>(`${workPath(work.repo, work.id)}/materials`).then(
+        (result) => setUse(result.files.find((item) => item.ref === fileRef) ?? null),
+        () => {},
+      ),
+    [work.repo, work.id, fileRef],
+  );
+  useEffect(() => void status(), [status]);
+  useServerEvent(
+    (event) => {
+      if (event.type === "materials" && event.repo === work.repo) {
+        // A change of its library (or a sync of all of them): show the file anew.
+        const paths = (event.paths as string[] | undefined) ?? [];
+        if (!paths.length || paths.some((item) => fileRef === item || fileRef.startsWith(item + "/"))) setVersion(Date.now());
+        void status();
+      }
+      if (event.type === "work-materials" && event.work === work.id) void status();
+    },
+    [work.repo, work.id, fileRef, status],
+  );
+  const showLocked = lockedVersion && Boolean(use?.outdated);
+  const url = showLocked
+    ? `${work.preview.assetBase}materials/${fileRef.split("/").map(encodeURIComponent).join("/")}?v=${use?.locked}`
+    : `${materialsPath(work.repo)}/file?path=${encodeURIComponent(fileRef)}&v=${version}`;
+  const missing = "文件不存在（可能已在素材库中移动或删除）";
+  useEffect(() => {
+    setInfo("");
+    setFailed("");
+    if (kind !== "text") return;
+    setText(null);
+    let current = true;
+    fetch(url)
+      .then(async (response) => {
+        if (!response.ok) throw new Error(response.status === 404 ? missing : `读取失败（${response.status}）`);
+        const content = await response.text();
+        if (current) setText(content);
+      })
+      .catch((error: Error) => current && setFailed(error.message));
+    return () => {
+      current = false;
+    };
+  }, [url, kind]);
+  const media = (element: HTMLVideoElement | HTMLAudioElement) =>
+    setInfo([element instanceof HTMLVideoElement && element.videoWidth && `${element.videoWidth}×${element.videoHeight}`, formatTime(element.duration)].filter(Boolean).join(" · "));
+  const update = () =>
+    api(`${workPath(work.repo, work.id)}/materials/lock`, { body: { refs: [fileRef], update: true } }).then(
+      () => (setLockedVersion(false), toast("本作品已改用素材库里的最新版本", "ok")),
+      (error: Error) => toast(error.message, "error"),
+    );
+  const state = !use?.locked
+    ? use?.used
+      ? "本作品用到了它，保存版本时会锁定这个版本"
+      : ""
+    : use.outdated
+      ? showLocked
+        ? "本作品使用的版本（素材库里已有新版本）"
+        : "素材库里的最新版本，本作品仍使用锁定的旧版本"
+      : "本作品已锁定这个版本";
+  return (
+    <>
+      <div className="editor-toolbar material-toolbar">
+        <span className="faint small-text ellipsis grow" title={`materials/${fileRef}`}>
+          素材库 · materials/{fileRef}
+          {info && ` · ${info}`}
+        </span>
+        {use?.outdated && (
+          <div className="segmented">
+            <button className={showLocked ? "" : "active"} onClick={() => setLockedVersion(false)}>
+              最新版本
+            </button>
+            <button className={showLocked ? "active" : ""} onClick={() => setLockedVersion(true)}>
+              本作品的版本
+            </button>
+          </div>
+        )}
+        {use?.outdated && !readOnly && (
+          <button className="btn small" onClick={update}>
+            更新到最新版本
+          </button>
+        )}
+        <button className="btn small" onClick={() => addToChat({ type: "asset", url: `materials/${fileRef}` })}>
+          <Sparkles size={13} /> 引用到 AI 聊天
+        </button>
+      </div>
+      {state && <div className={`material-state ${use?.outdated ? "warn-text" : "faint"}`}>{state}</div>}
+      {kind === "text" ? (
+        text === null ? (
+          <div className="empty">{failed || "正在读取…"}</div>
+        ) : (
+          <CodeEditor key={url} path={fileRef} value={text} onChange={() => {}} onSave={() => {}} readOnly />
+        )
+      ) : (
+        <div className="media-viewer">
+          {kind === "image" && (
+            <img key={url} src={url} alt={fileRef} onLoad={(event) => setInfo(`${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`)} onError={() => setFailed(missing)} />
+          )}
+          {kind === "audio" && <audio key={url} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} onError={() => setFailed(missing)} />}
+          {kind === "video" && <video key={url} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} onError={() => setFailed(missing)} />}
+          {kind === "file" && <div className="empty">无法在这里预览这种文件</div>}
+          {failed && <div className="danger-text small-text">{failed}</div>}
+          {kind !== "file" && !failed && <div className="faint small-text">引用了这个素材库的作品，可以把左侧「素材 → 素材库」中的这个文件拖到时间轴使用</div>}
+        </div>
+      )}
+    </>
   );
 }

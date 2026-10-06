@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
@@ -44,6 +45,34 @@ describe("material libraries", () => {
     expect((await call(`${lib}/history`)).body.map((version) => version.message).slice(0, 2)).toEqual(["素材库「品牌」：添加 logo.svg", "新建素材库：品牌"]);
     expect((await call(`${lib}/status`)).body.files).toEqual([]);
     expect((await call(`${lib}/libraries`)).body).toEqual([{ id: "品牌", title: "品牌", files: 1, size: 13 }]);
+  });
+
+  it("lists library files with their size and length for previews", async () => {
+    // One second of silence: 8 kHz, 16-bit mono PCM.
+    const samples = 8000;
+    const wav = Buffer.alloc(44 + samples * 2);
+    wav.write("RIFF", 0);
+    wav.writeUInt32LE(36 + samples * 2, 4);
+    wav.write("WAVEfmt ", 8);
+    wav.writeUInt32LE(16, 16);
+    wav.writeUInt16LE(1, 20);
+    wav.writeUInt16LE(1, 22);
+    wav.writeUInt32LE(8000, 24);
+    wav.writeUInt32LE(16000, 28);
+    wav.writeUInt16LE(2, 32);
+    wav.writeUInt16LE(16, 34);
+    wav.write("data", 36);
+    wav.writeUInt32LE(samples * 2, 40);
+    const png = await sharp({ create: { width: 32, height: 18, channels: 3, background: "#000" } }).png().toBuffer();
+    await call(`${lib}/libraries`, { method: "POST", body: { name: "预览" } });
+    await call(`${lib}/libraries/${encodeURIComponent("预览")}/upload?path=silence.wav`, { method: "POST", raw: wav });
+    await call(`${lib}/libraries/${encodeURIComponent("预览")}/upload?path=dot.png`, { method: "POST", raw: png });
+    const files = (await call(`${lib}/libraries/${encodeURIComponent("预览")}/files`)).body;
+    expect(files).toMatchObject([
+      { path: "dot.png", kind: "image", width: 32, height: 18 },
+      { path: "silence.wav", kind: "audio", duration: 1 },
+    ]);
+    await call(`${lib}/libraries/${encodeURIComponent("预览")}`, { method: "DELETE" });
   });
 
   it("serves a work the version it locked, and the current one until it locks", async () => {

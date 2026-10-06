@@ -885,7 +885,7 @@ function UserMessage({
 }
 
 function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; onRemove?: () => void }) {
-  const { stage } = useWorkbench();
+  const { stage, openFile, openMaterial } = useWorkbench();
   let icon = <Paperclip size={12} />,
     label = "";
   if (attachment.type === "frame") {
@@ -915,7 +915,17 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
   return (
     <span
       className="chip"
-      onClick={() => (attachment.type === "frame" ? stage.seek(attachment.time) : attachment.type === "range" ? stage.seek(attachment.start) : undefined)}
+      onClick={() => {
+        if (attachment.type === "frame") void stage.seek(attachment.time);
+        else if (attachment.type === "range") void stage.seek(attachment.start);
+        else if (attachment.type === "asset") {
+          // A material library file, or one of the work's own (films/<slug>/x is public/x).
+          const material = /^materials\/(.+)$/.exec(attachment.url)?.[1];
+          if (material) openMaterial(material, { preview: true });
+          else openFile(attachment.path ?? attachment.url.replace(/^films\/[^/]+\//, "public/"), { preview: true });
+        }
+      }}
+      title={attachment.type === "asset" ? `${attachment.url}（点击查看）` : undefined}
     >
       {(attachment.type === "frame" || attachment.type === "image") && attachment.data ? (
         <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="" />

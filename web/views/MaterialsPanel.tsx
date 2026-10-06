@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { AudioLines, ChevronDown, ChevronRight, Copy, FileQuestion, Film, FolderPlus, Lock, Music, Pencil, PlusSquare, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
-import { api, del, formatBytes, materialsPath, workPath, useServerEvent } from "../lib/api";
+import { AudioLines, ChevronDown, ChevronRight, Copy, Eye, FileQuestion, FileText, Film, FolderPlus, Lock, Music, Pencil, PlusSquare, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
+import { api, del, formatBytes, formatTime, materialsPath, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast } from "../lib/ui";
 import type { Asset } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
@@ -21,6 +21,9 @@ interface MaterialFile {
   size: number;
   /** The file's current version (a new one gets a new thumbnail). */
   blob: string | null;
+  width?: number;
+  height?: number;
+  duration?: number;
 }
 interface Used {
   ref: string;
@@ -42,7 +45,7 @@ interface Status {
  * materials/<library>/<path>), the versions the work locked, and the libraries' history.
  */
 export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "layer" | "audio") => void }) {
-  const { work, reload, addToChat, readOnly } = useWorkbench();
+  const { work, reload, addToChat, readOnly, openMaterial } = useWorkbench();
   const [libraries, setLibraries] = useState<Library[]>([]);
   const [status, setStatus] = useState<Status>({ libraries: [], missing: [], files: [] });
   const [files, setFiles] = useState<Record<string, MaterialFile[]>>({});
@@ -115,7 +118,16 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
   const lock = (refs: string[], update: boolean) =>
     run(() => api(`${workPath(work.repo, work.id)}/materials/lock`, { body: { refs, update } }), update ? "已更新到素材库里的最新版本" : "已锁定");
 
-  const asAsset = (file: MaterialFile): Asset => ({ path: file.ref, url: file.url, kind: file.kind, mime: "", size: file.size });
+  const asAsset = (file: MaterialFile): Asset => ({
+    path: file.ref,
+    url: file.url,
+    kind: file.kind,
+    mime: "",
+    size: file.size,
+    width: file.width,
+    height: file.height,
+    duration: file.duration,
+  });
   const fileMenu = (event: React.MouseEvent, library: string, file: MaterialFile) => {
     const used = locks.get(file.ref);
     openMenu(event, [
@@ -126,6 +138,7 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
         ? [{ label: "放到音轨（播放头处）", icon: <Music size={14} />, onClick: () => onPlace(asAsset(file), "audio") }]
         : []),
       ...(used?.outdated && !readOnly ? [{ label: "更新到最新版本", icon: <RefreshCw size={14} />, onClick: () => lock([file.ref], true) }] : []),
+      { label: "打开", icon: <Eye size={14} />, onClick: () => openMaterial(file.ref) },
       { label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => addToChat({ type: "asset", url: file.url }) },
       {
         label: "复制引用地址",
@@ -246,7 +259,10 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
                     onDragStart={(event) => assetDrag.start(event, asAsset(file))}
                     onDragEnd={() => assetDrag.end()}
                     onContextMenu={(event) => fileMenu(event, library.id, file)}
-                    title={`${file.url}\n${formatBytes(file.size)}${used?.locked ? (used.outdated ? "\n作品锁定的是旧版本，素材库里有新版本" : "\n作品已锁定这个版本") : ""}${linked.has(library.id) ? "\n拖到时间轴使用，右键更多操作" : "\n引用这个素材库后才能用在作品里"}`}
+                    // Like the work's own assets: a click opens a preview tab, a double-click keeps it open.
+                    onClick={() => openMaterial(file.ref, { preview: true })}
+                    onDoubleClick={() => openMaterial(file.ref)}
+                    title={`${file.url}\n${formatBytes(file.size)}${file.width ? ` · ${file.width}×${file.height}` : ""}${file.duration ? ` · ${formatTime(file.duration, false)}` : ""}${used?.locked ? (used.outdated ? "\n作品锁定的是旧版本，素材库里有新版本" : "\n作品已锁定这个版本") : ""}${linked.has(library.id) ? "\n单击查看，拖到时间轴使用，右键更多操作" : "\n单击查看；引用这个素材库后才能用在作品里"}`}
                   >
                     <div className="asset-thumb">
                       {file.kind === "image" ? (
@@ -255,9 +271,12 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
                         <video src={src + "#t=0.5"} preload="metadata" muted />
                       ) : file.kind === "audio" ? (
                         <AudioLines size={26} />
+                      ) : file.kind === "data" ? (
+                        <FileText size={26} />
                       ) : (
                         <FileQuestion size={26} />
                       )}
+                      {file.duration ? <span className="asset-duration">{formatTime(file.duration, false)}</span> : null}
                       {file.kind === "video" && <Film size={12} className="asset-kind" />}
                       {used?.locked && (
                         <span className={`material-lock ${used.outdated ? "outdated" : ""}`} title={used.outdated ? "有新版本" : "已锁定版本"}>

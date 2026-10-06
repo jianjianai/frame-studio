@@ -143,6 +143,8 @@ export interface WorkbenchContextValue {
   openFile: (path: string, options?: { line?: number; preview?: boolean }) => void;
   /** Open a document of the repository's experience libraries (path relative to the experience branch). */
   openExperience: (path: string, options?: { preview?: boolean }) => void;
+  /** Open a file of the material libraries (`<library>/<path>`) in a viewer tab. */
+  openMaterial: (ref: string, options?: { preview?: boolean }) => void;
   /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. */
   openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" | "materials" }) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;

@@ -129,16 +129,23 @@ export class Materials {
     const dir = await this.dir(repo);
     if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound("素材库不存在");
     const blobs = await this.head(dir);
-    return tree(path.join(dir, id))
-      .filter((item) => item.type === "file" && item.path !== "README.md")
-      .map((item) => ({
+    const result = [];
+    for (const item of tree(path.join(dir, id)).filter((entry) => entry.type === "file" && entry.path !== "README.md")) {
+      const kind = kindOf(item.path);
+      // Size and length for the thumbnails (cached until the file changes); a .webm may hold only sound.
+      const info = ["image", "video", "audio"].includes(kind) ? await probe(path.join(dir, id, item.path)).catch(() => ({})) : {};
+      result.push({
         path: item.path,
         ref: `${id}/${item.path}`,
         url: `materials/${id}/${item.path}`,
-        kind: kindOf(item.path),
+        kind: info.kind === "audio" && kind === "video" ? "audio" : kind,
         size: item.size,
         blob: blobs.get(`${id}/${item.path}`) ?? null,
-      }));
+        ...(info.width ? { width: info.width, height: info.height } : {}),
+        ...(info.duration ? { duration: info.duration } : {}),
+      });
+    }
+    return result;
   }
   libraryOf(dir, id) {
     if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound(`素材库「${id}」不存在`);
