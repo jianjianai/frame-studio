@@ -1,5 +1,6 @@
 import http from "node:http";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
 import { WebSocketServer } from "ws";
 import { loadConfig, ensureDirs, appRoot, appVersion } from "./config.mjs";
@@ -49,10 +50,14 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     return work;
   };
 
+  // Which build of the studio UI is served: open pages compare it after a reconnect to offer a reload.
+  const builtIndex = path.join(appRoot, "web", "dist", "web", "index.html");
+  const build = fs.existsSync(builtIndex) ? createHash("sha256").update(fs.readFileSync(builtIndex)).digest("hex").slice(0, 12) : "dev";
   router.get(
     "/api/state",
     ({ principal }) => ({
       version: appVersion,
+      build,
       authRequired: auth.required,
       authenticated: Boolean(principal),
       home: principal ? config.home : undefined,

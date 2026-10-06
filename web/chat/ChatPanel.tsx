@@ -94,6 +94,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const [current, setCurrent] = usePersistent<string | null>(`chat:${work.repo}/${work.id}`, null);
   const [entries, setEntries] = useState<Entry[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [defaultModes, setDefaultModes] = useState<Record<string, string>>({});
   const [profileId, setProfileId] = usePersistent<string>("ai-profile", "");
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
@@ -124,12 +125,32 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
 
   const session = sessions.find((item) => item.id === current) ?? null;
   const profile = profiles.find((item) => item.id === (session?.profile ?? profileId)) ?? profiles[0];
+  // Picker choices of a conversation not started yet live in localStorage: re-render when they change.
+  const [, setPrefsVersion] = useState(0);
+  const notePref = (key: string, value: string) => {
+    writePref(profile?.id, key, value);
+    setPrefsVersion((version) => version + 1);
+  };
+  // What a profile offers (model, mode, effort), from the server's last session of it: the
+  // pickers of a new conversation, also in a browser that never showed that AI before.
+  const [profileOptions, setProfileOptions] = useState<Record<string, ConfigOption[]>>({});
+  useEffect(() => {
+    if (session || !profile || profileOptions[profile.id]) return;
+    void api<ConfigOption[]>(`/api/ai/profiles/${encodeURIComponent(profile.id)}/options`).then(
+      (options) => setProfileOptions((map) => ({ ...map, [profile.id]: options })),
+      () => {},
+    );
+  }, [session, profile, profileOptions]);
+  const newChatOptions = profile ? (profileOptions[profile.id]?.length ? profileOptions[profile.id] : cachedOptions(profile.id)) : [];
+  /** The server's answer to a session change is authoritative (also when live updates are slow). */
+  const applyMeta = (meta: SessionMeta) => setSessions((list) => list.map((item) => (item.id === meta.id ? meta : item)));
 
   const loadSessions = useCallback(() => api<SessionMeta[]>(`/api/ai/sessions?work=${encodeURIComponent(work.id)}`).then(setSessions), [work.id]);
   useEffect(() => {
     void loadSessions();
-    void api<{ profiles: Profile[]; defaultProfile: string }>("/api/ai/profiles").then((data) => {
+    void api<{ profiles: Profile[]; defaultProfile: string; defaultModes: Record<string, string> }>("/api/ai/profiles").then((data) => {
       setProfiles(data.profiles);
+      setDefaultModes(data.defaultModes ?? {});
       setProfileId((value) => (data.profiles.some((item) => item.id === value) ? value : data.defaultProfile));
     });
     for (const agent of ["claude", "codex"])
@@ -157,7 +178,10 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         if ((event.entry as Entry).kind === "user") setPending(null);
       } else if (event.type === "ai-session-removed") setSessions((list) => list.filter((item) => item.id !== event.session));
       else if (event.type === "settings" && event.key === "ai")
-        void api<{ profiles: Profile[] }>("/api/ai/profiles").then((data) => setProfiles(data.profiles));
+        void api<{ profiles: Profile[]; defaultModes: Record<string, string> }>("/api/ai/profiles").then((data) => {
+          setProfiles(data.profiles);
+          setDefaultModes(data.defaultModes ?? {});
+        });
       else if (event.type === "ai-login") setAccounts((map) => ({ ...map, [event.agent as string]: (event.status as { loggedIn: boolean }).loggedIn }));
     },
     [current, work.id],
@@ -660,12 +684,12 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               value={session?.model || readPrefs(profile.id).customModel || profile.defaultModel || ""}
               options={(profile.models ?? []).map((model) => ({ value: model, name: model }))}
               onChange={(model) => {
-                writePref(profile.id, "customModel", model);
+                notePref("customModel", model);
                 if (session && model !== session.model) startOver(`已新建对话，使用 ${model}`);
               }}
             />
           )}
-          {(session?.configOptions ?? cachedOptions(profile?.id))
+          {(session?.configOptions ?? newChatOptions)
             .filter((option) => option.type === undefined || option.type === "select")
             .filter((option) => !(profile?.kind !== "account" && option.category === "model"))
             .filter(
@@ -676,11 +700,18 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               <OptionPicker
                 key={option.id}
                 label={option.name}
-                value={session ? option.currentValue : readPrefs(profile?.id)[option.category || option.id] || option.currentValue}
+                value={
+                  session
+                    ? option.currentValue
+                    : readPrefs(profile?.id)[option.category || option.id] ||
+                      // What a new conversation really starts with: the default permission from settings.
+                      ((option.id === "mode" || option.category === "mode") && profile ? defaultModes[profile.agent] : undefined) ||
+                      option.currentValue
+                }
                 options={option.options}
                 onChange={async (value) => {
-                  writePref(profile?.id, option.category || option.id, value);
-                  if (!session) return setText((current) => current);
+                  notePref(option.category || option.id, value);
+                  if (!session) return;
                   // Shown at once; the server confirms (or the list reloads to undo it).
                   setSessions((list) =>
                     list.map((item) =>
@@ -689,7 +720,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
                         : item,
                     ),
                   );
-                  await patch(`/api/ai/sessions/${session.id}`, { configId: option.id, value }).catch((error) => {
+                  await patch<SessionMeta>(`/api/ai/sessions/${session.id}`, { configId: option.id, value }).then(applyMeta, (error) => {
                     toast((error as Error).message, "error");
                     void loadSessions();
                   });

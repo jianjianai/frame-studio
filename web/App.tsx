@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from "react";
-import { api } from "./lib/api";
+import { api, onConnection } from "./lib/api";
 import { ToastProvider, ConfirmProvider, PromptProvider } from "./lib/ui";
 import { Login } from "./pages/Login";
 import { Welcome } from "./pages/Welcome";
@@ -39,15 +39,31 @@ class Boundary extends Component<{ children: ReactNode }, { error: string }> {
   }
 }
 
+type State = { authRequired: boolean; authenticated: boolean; version: string; build?: string };
+
 export function App() {
   const path = useRoute();
-  const [state, setState] = useState<{ authRequired: boolean; authenticated: boolean; version: string } | null>(null);
+  const [state, setState] = useState<State | null>(null);
   useEffect(() => {
-    const load = () => api<{ authRequired: boolean; authenticated: boolean; version: string }>("/api/state").then(setState);
+    const load = () => api<State>("/api/state").then(setState);
     void load();
     window.addEventListener("frame:unauthorized", load);
     return () => window.removeEventListener("frame:unauthorized", load);
   }, []);
+  // A deploy restarts the server: when the page reconnects to a newer build, offer a reload
+  // (an open page keeps running the code it was loaded with).
+  const [outdated, setOutdated] = useState(false);
+  const build = state?.build;
+  useEffect(() => {
+    if (!build) return;
+    return onConnection((connected) => {
+      if (connected)
+        void api<State>("/api/state").then(
+          (next) => setOutdated(Boolean(next.build && next.build !== build)),
+          () => {},
+        );
+    });
+  }, [build]);
   if (!state) return null;
   const work = /^\/work\/([^/]+)\/([^/]+)/.exec(path);
   return (
@@ -61,6 +77,17 @@ export function App() {
               <Workbench key={work[1] + "/" + work[2]} repo={decodeURIComponent(work[1])} id={decodeURIComponent(work[2])} version={state.version} />
             ) : (
               <Welcome version={state.version} />
+            )}
+            {outdated && (
+              <div className="update-bar" role="status">
+                FRAME 已更新到新版本，刷新页面后生效。
+                <button className="btn small primary" onClick={() => location.reload()}>
+                  刷新
+                </button>
+                <button className="btn small ghost" onClick={() => setOutdated(false)}>
+                  稍后
+                </button>
+              </div>
             )}
           </PromptProvider>
         </ConfirmProvider>

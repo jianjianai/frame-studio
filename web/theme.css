@@ -297,3 +297,22 @@ a {
   border-radius: 4px;
   color: var(--fg-muted);
 }
+
+/* A newer studio build is running: offer a reload. */
+.update-bar {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  transform: translateX(-50%);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--bg-elev);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  white-space: nowrap;
+}

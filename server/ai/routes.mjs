@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { AiManager } from "./manager.mjs";
+import { AiManager, PERMISSION_MODES } from "./manager.mjs";
 import { accountStatus, agentEnv, logout, startLogin } from "./agents.mjs";
 import { PROVIDER_PRESETS } from "./profiles.mjs";
 import { readJson, sendFile } from "../http.mjs";
@@ -17,9 +17,12 @@ export function aiPlugin(services) {
     presets: PROVIDER_PRESETS,
     defaultProfile: settings.get("ai").defaultProfile,
     permission: settings.get("ai").permission || "edits",
+    // The mode a new conversation starts in (per agent) when the user has not picked one.
+    defaultModes: PERMISSION_MODES[settings.get("ai").permission || "edits"],
   }));
   router.post("/api/ai/profiles", async ({ req }) => ai.profiles.save(await readJson(req)));
   router.delete("/api/ai/profiles/:id", ({ params }) => ai.profiles.remove(params.id));
+  router.get("/api/ai/profiles/:id/options", ({ params }) => ai.optionsOf(ai.profiles.get(params.id).id));
   router.patch("/api/ai/settings", async ({ req }) => {
     const body = await readJson(req);
     return settings.update("ai", (current) => ({

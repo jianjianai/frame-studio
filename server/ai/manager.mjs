@@ -235,6 +235,13 @@ export class AiManager {
     if (!session) throw notFound("对话不存在");
     return session;
   }
+  /** The options (model, mode, effort) a profile offered last, for the pickers of a new conversation. */
+  optionsOf(profileId) {
+    const latest = [...this.sessions.values()]
+      .filter((session) => session.meta.profile === profileId && session.meta.configOptions?.length)
+      .sort((a, b) => b.meta.updatedAt.localeCompare(a.meta.updatedAt))[0];
+    return latest?.meta.configOptions ?? [];
+  }
   mcpServers(session) {
     const token = (session.token ||= this.services.auth.issueInternal({ work: session.meta.work, repo: session.meta.repo, session: session.meta.id }));
     return [{ type: "http", name: "frame", url: `${this.services.baseUrl}/mcp`, headers: [{ name: "Authorization", value: "Bearer " + token }] }];
@@ -381,9 +388,13 @@ export class AiManager {
       .filter(Boolean);
   }
 
-  /** Make sure the session has a live ACP session (new, resumed or reloaded). */
-  async attach(session, work) {
-    if (session.attached && session.process) return;
+  /** Make sure the session has a live ACP session (new, resumed or reloaded); one attach at a time. */
+  attach(session, work) {
+    if (session.attached && session.process) return Promise.resolve();
+    session.attaching ??= this.connect(session, work).finally(() => (session.attaching = null));
+    return session.attaching;
+  }
+  async connect(session, work) {
     work ||= await this.services.openWork(session.meta.work, session.meta.repo);
     const process = await this.process(session.meta.profile, session.meta.model);
     // The agent loads the brief (AGENTS.md) as the session starts or resumes: it is the baseline.
@@ -540,7 +551,16 @@ export class AiManager {
     if (session.meta.configOptions)
       session.meta.configOptions = session.meta.configOptions.map((item) => (item.id === configId ? { ...item, currentValue: value } : item));
     this.publish(session);
-    if (!session.attached || !session.process) return this.publicMeta(session);
+    if (!session.attached || !session.process) {
+      // Another model may offer other options (effort): start the agent in the background to
+      // learn them; the choice above is applied as it attaches.
+      if (option?.category === "model" || configId === "model")
+        void this.attach(session).then(
+          () => this.publish(session),
+          () => {},
+        );
+      return this.publicMeta(session);
+    }
     try {
       const result = await session.process.connection.setSessionConfigOption({ sessionId: session.meta.acpSessionId, configId, value });
       // The agent's answer is authoritative (another model may offer other efforts).
