@@ -132,7 +132,7 @@ export class AiManager {
     if (!value || typeof value !== "object") return value;
     if (value.type === "image" && typeof value.data === "string" && value.data.length > 256) {
       const bytes = Buffer.from(value.data, "base64");
-      const ext = value.mimeType === "image/png" ? "png" : value.mimeType === "image/webp" ? "webp" : "jpg";
+      const ext = { "image/png": "png", "image/webp": "webp", "image/gif": "gif" }[value.mimeType] ?? "jpg";
       const name = createHash("sha256").update(bytes).digest("hex").slice(0, 24) + "." + ext;
       const dir = path.join(this.sessionsDir, session.meta.id + ".images");
       fs.mkdirSync(dir, { recursive: true });
@@ -144,7 +144,7 @@ export class AiManager {
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.storeImages(session, item)]));
   }
   imageFile(id, name) {
-    if (!/^[a-f0-9]{24}\.(png|jpg|webp)$/.test(name)) throw notFound("图片不存在");
+    if (!/^[a-f0-9]{24}\.(png|jpg|webp|gif)$/.test(name)) throw notFound("图片不存在");
     return path.join(this.sessionsDir, id + ".images", name);
   }
   append(session, entry) {
@@ -639,7 +639,7 @@ export class AiManager {
     }
     const references = [];
     for (const attachment of message.attachments) {
-      if (attachment.type === "frame") references.push(`画面 ${formatTime(attachment.time)}${attachment.note ? "（" + attachment.note + "）" : ""}`);
+      if (attachment.type === "frame") references.push(`画面 ${formatTime(attachment.time)}（截图见附图）`);
       if (attachment.type === "range") references.push(`片段 ${formatTime(attachment.start)}–${formatTime(attachment.end)}`);
       if (attachment.type === "layer") references.push(`图层 ${attachment.id}${attachment.name ? "「" + attachment.name + "」" : ""}`);
       if (attachment.type === "asset") references.push(`素材 ${attachment.url}`);
@@ -647,6 +647,8 @@ export class AiManager {
       if (attachment.type === "experience") references.push(`经验库文档 ${attachment.path}`);
       if (attachment.type === "problem") references.push(`问题：${attachment.message}`);
     }
+    const images = message.attachments.filter((item) => item.type === "image").length;
+    if (images) references.push(`${images} 张图片（用户直接发给你的，见附图，不是作品里的画面）`);
     if (references.length) lines.push("用户引用：" + references.join("；"));
     const library = services.experience?.current(work) ?? null;
     const experience = experienceDelta(session.meta.context?.experience ?? null, library);

@@ -20,6 +20,7 @@ import {
   LogIn,
   CornerDownRight,
   BookOpen,
+  Image as ImageIcon,
 } from "lucide-react";
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
@@ -27,6 +28,7 @@ import { useWorkbench, type ChatAttachment } from "../workbench/store";
 import { reduceTranscript, groupTurns, type Entry } from "./reduce";
 import { TurnBlocks } from "./Transcript";
 import { uploadBlobs } from "../views/upload";
+import { readImage } from "./images";
 import "./chat.css";
 
 export interface ChatHandle {
@@ -341,7 +343,9 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               text={pending.text}
               attachments={
                 pending.attachments.map((item) =>
-                  item.type === "frame" ? { type: "image", uri: `data:${item.mimeType};base64,${item.data}`, time: item.time } : item,
+                  item.type === "frame" || item.type === "image"
+                    ? { type: "image", uri: `data:${item.mimeType};base64,${item.data}`, time: item.type === "frame" ? item.time : undefined }
+                    : item,
                 ) as never
               }
             />
@@ -435,16 +439,15 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               event.preventDefault();
               void dropFiles(others);
             }
-            const file = files.find((item) => item.type.startsWith("image/"));
-            if (!file) return;
+            // Pasted images go to the AI as images, not as frames of the work.
+            const images = files.filter((item) => item.type.startsWith("image/"));
+            if (!images.length) return;
             event.preventDefault();
-            const reader = new FileReader();
-            reader.onload = () =>
-              setAttachments((list) => [
-                ...list,
-                { type: "frame", time: stage.playback.get().time, data: String(reader.result).split(",")[1], mimeType: file.type, note: "粘贴的图片" },
-              ]);
-            reader.readAsDataURL(file);
+            for (const file of images)
+              readImage(file).then(
+                (image) => setAttachments((list) => [...list, { type: "image", ...image }]),
+                (error) => toast(`无法读取图片：${(error as Error).message}`, "error"),
+              );
           }}
         />
         <div className="chat-toolbar">
@@ -593,7 +596,8 @@ function UserMessage({ text, attachments, steered }: { text: string; attachments
                 className="user-image"
                 src={attachment.uri as string}
                 alt=""
-                title={attachment.time != null ? formatTime(attachment.time as number) : ""}
+                title={attachment.time != null ? `画面 ${formatTime(attachment.time as number)}` : "图片"}
+                style={attachment.time != null ? undefined : { cursor: "default" }}
                 onClick={() => attachment.time != null && stage.seek(attachment.time as number)}
               />
             ) : (
@@ -614,6 +618,9 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
   if (attachment.type === "frame") {
     icon = <Camera size={12} />;
     label = `画面 ${formatTime(attachment.time)}`;
+  } else if (attachment.type === "image") {
+    icon = <ImageIcon size={12} />;
+    label = "图片";
   } else if (attachment.type === "range") {
     icon = <Film size={12} />;
     label = attachment.start === attachment.end ? formatTime(attachment.start) : `${formatTime(attachment.start)}–${formatTime(attachment.end)}`;
@@ -637,7 +644,11 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
       className="chip"
       onClick={() => (attachment.type === "frame" ? stage.seek(attachment.time) : attachment.type === "range" ? stage.seek(attachment.start) : undefined)}
     >
-      {attachment.type === "frame" && attachment.data ? <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="" /> : icon}
+      {(attachment.type === "frame" || attachment.type === "image") && attachment.data ? (
+        <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="" />
+      ) : (
+        icon
+      )}
       <span className="ellipsis">{label}</span>
       {onRemove && (
         <button

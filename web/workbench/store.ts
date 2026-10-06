@@ -118,7 +118,8 @@ export class StageController {
 }
 
 export type ChatAttachment =
-  | { type: "frame"; time: number; data: string; mimeType: string; note?: string }
+  | { type: "frame"; time: number; data: string; mimeType: string }
+  | { type: "image"; data: string; mimeType: string }
   | { type: "range"; start: number; end: number }
   | { type: "layer"; id: string; name?: string }
   | { type: "asset"; url: string; path?: string }

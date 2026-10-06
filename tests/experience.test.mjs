@@ -87,6 +87,11 @@ describe("experience libraries", () => {
     expect(text).toContain("用户在编辑器中打开着：scene.ts");
     expect(text).not.toContain("经验库");
     expect(text).not.toContain("改动了作品文件");
+    // A pasted image goes to the AI as an image, not as a frame of the work.
+    const pasted = ai.turnPrompt(session, { text: "参考这张图", attachments: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }], view: null }, work);
+    expect(pasted.find((block) => block.type === "image")).toEqual({ type: "image", data: "aGVsbG8=", mimeType: "image/png" });
+    expect(pasted.at(-2).text).toContain("1 张图片（用户直接发给你的");
+    expect(pasted.at(-2).text).not.toContain("画面 0:");
 
     // The user edits an experience document and a work file between turns.
     const doc = (await call(`${lib}/file?path=${encodeURIComponent("知识类视频/开场.md")}`)).body;
