@@ -141,6 +141,31 @@ export function insertProjectProperty(code, key, valueSource) {
   return code.slice(0, at) + insertion + code.slice(at);
 }
 
+/** Remove a top-level field (with its comma and line) from the exported object. */
+export function removeProjectProperty(code, key) {
+  const program = parseSource(code).program;
+  const bindings = new Map();
+  for (const statement of program.body)
+    if (statement.type === "VariableDeclaration")
+      for (const declaration of statement.declarations) if (declaration.id.type === "Identifier") bindings.set(declaration.id.name, declaration.init);
+  let node = program.body.find((item) => item.type === "ExportDefaultDeclaration")?.declaration;
+  while (node && ["TSAsExpression", "TSSatisfiesExpression", "ParenthesizedExpression"].includes(node.type)) node = node.expression;
+  if (node?.type === "Identifier") node = bindings.get(node.name);
+  while (node && ["TSAsExpression", "TSSatisfiesExpression", "ParenthesizedExpression"].includes(node.type)) node = node.expression;
+  const property = node?.properties?.find((item) => (item.key?.name ?? item.key?.value) === key);
+  if (!property) return code;
+  let start = property.start;
+  let end = property.end;
+  const comma = code.slice(end).match(/^\s*,/);
+  if (comma) end += comma[0].length;
+  // The whole line when the property sits on its own.
+  const lineStart = code.lastIndexOf("\n", start - 1) + 1;
+  if (!code.slice(lineStart, start).trim()) start = lineStart;
+  const rest = code.slice(end).match(/^[ \t]*\r?\n/);
+  if (rest && start === lineStart) end += rest[0].length;
+  return code.slice(0, start) + code.slice(end);
+}
+
 /** Update existing literal fields and add missing ones. */
 export function setProjectFields(code, changes) {
   const { ranges } = readProjectSource(code);

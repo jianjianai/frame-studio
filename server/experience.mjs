@@ -271,6 +271,7 @@ export function experiencePlugin(services) {
 
   tools.add({
     name: "experience_write",
+    published: true, // writes outside the work: allowed on a published (view-only) work
     title: "写入经验",
     description:
       "创建或整体替换经验库中的一篇 Markdown 文档。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在文档目录里）。只改几处时用 experience_edit。修改是未保存状态，用户在「经验」面板中查看并保存版本。",
@@ -288,6 +289,7 @@ export function experiencePlugin(services) {
 
   tools.add({
     name: "experience_edit",
+    published: true, // writes outside the work: allowed on a published (view-only) work
     title: "修改经验",
     description: "在经验库文档中做精确替换（按顺序执行，全部成功才写入）。每个 oldText 必须与文档内容逐字一致且恰好出现一次，否则设置 replaceAll。",
     input: {
@@ -321,6 +323,7 @@ export function experiencePlugin(services) {
 
   tools.add({
     name: "experience_delete",
+    published: true, // writes outside the work: allowed on a published (view-only) work
     title: "删除经验文档",
     description: "删除经验库中的一篇文档（合并到其他文档后清理旧文档时用）。可以从经验库的版本历史恢复。",
     destructive: true,

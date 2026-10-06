@@ -9,6 +9,7 @@ import {
   Clock,
   Sparkles,
   ChevronDown,
+  ChevronRight,
   Trash2,
   Pencil,
   Film,
@@ -21,6 +22,14 @@ import {
   CornerDownRight,
   BookOpen,
   Image as ImageIcon,
+  Minimize2,
+  BookMarked,
+  Folder,
+  MessageSquareText,
+  Settings2,
+  BookmarkPlus,
+  GitBranch,
+  ChevronLeft,
 } from "lucide-react";
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
@@ -29,10 +38,13 @@ import { reduceTranscript, groupTurns, type Entry } from "./reduce";
 import { TurnBlocks } from "./Transcript";
 import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
+import { insertPrompt, newPromptId, usePrompts, type PromptNode } from "../lib/prompts";
 import "./chat.css";
 
 export interface ChatHandle {
   attach(attachment: ChatAttachment, prompt?: string): void;
+  /** Put text into the input box (after what is there), e.g. from the prompt library. */
+  insert(text: string): void;
   send(prompt: string, attachments?: ChatAttachment[]): void;
   focus(): void;
 }
@@ -54,10 +66,15 @@ interface SessionMeta {
   model: string;
   title: string;
   status: "idle" | "running" | "waiting";
+  createdAt: string;
   updatedAt: string;
+  /** A branch holds the first `keep` turns of conversation `from`. */
+  branch?: { from: string; title: string; keep: number } | null;
   queue: { id: string; text: string }[];
   configOptions?: ConfigOption[];
   commands?: { name: string; description: string; hint?: string }[];
+  /** Context window occupancy, from the agent's last usage report. */
+  usage?: { used?: number; size?: number } | null;
 }
 interface Profile {
   id: string;
@@ -71,7 +88,7 @@ interface Profile {
 const SUGGESTIONS = ["检查作品，发现问题就修复", "做一段 3 秒的开场标题动画", "给作品配一段轻快的背景音乐", "让现在这个画面的配色更有电影感"];
 
 export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: () => void }) {
-  const { work, stage, openSettings, viewNow } = useWorkbench();
+  const { work, stage, openSettings, viewNow, showView, readOnly } = useWorkbench();
   const toast = useToast();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [current, setCurrent] = usePersistent<string | null>(`chat:${work.repo}/${work.id}`, null);
@@ -83,10 +100,12 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const [showHistory, setShowHistory] = useState(false);
   const [accounts, setAccounts] = useState<Record<string, boolean | undefined>>({});
   const [sending, setSending] = useState(false);
+  const [branching, setBranching] = useState(false);
   // Shown until the server echoes the message (session start can take a few seconds).
   const [pending, setPending] = useState<{ text: string; attachments: ChatAttachment[] } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
+  const historyList = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
   const [openMenu, menu] = useContextMenu();
   const prompt = usePrompt();
@@ -144,6 +163,38 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     [current, work.id],
   );
 
+  // The history list closes like a dropdown: on a click elsewhere or Escape.
+  useEffect(() => {
+    if (!showHistory) return;
+    const close = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (!historyList.current?.contains(target) && !target.closest("[data-history-toggle]")) setShowHistory(false);
+    };
+    const escape = (event: KeyboardEvent) => event.key === "Escape" && setShowHistory(false);
+    window.addEventListener("mousedown", close);
+    window.addEventListener("keydown", escape);
+    return () => {
+      window.removeEventListener("mousedown", close);
+      window.removeEventListener("keydown", escape);
+    };
+  }, [showHistory]);
+
+  // The input grows with its text, also when text is put in by code.
+  useLayoutEffect(() => {
+    const element = input.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = Math.min(220, element.scrollHeight) + "px";
+  }, [text]);
+  const insertText = (value: string) => {
+    setText((current) => (current.trim() ? current.replace(/\s*$/, "\n") + value : value));
+    setTimeout(() => {
+      const element = input.current;
+      element?.focus();
+      element?.setSelectionRange(element.value.length, element.value.length);
+    }, 0);
+  };
+
   const blocks = useMemo(() => reduceTranscript(entries), [entries]);
   const turns = useMemo(() => groupTurns(blocks), [blocks]);
   const running = session?.status === "running" || session?.status === "waiting";
@@ -200,17 +251,6 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     }
   };
 
-  // Initial prompt handed over by the "new work → AI" dialog.
-  useEffect(() => {
-    const key = `frame:initial-prompt:${work.repo}/${work.id}`;
-    const initial = sessionStorage.getItem(key);
-    if (!initial || !profiles.length) return;
-    sessionStorage.removeItem(key);
-    setCurrent(null);
-    setTimeout(() => void send(initial, []), 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profiles.length]);
-
   useImperativeHandle(ref, () => ({
     attach(attachment, prompt) {
       setAttachments((list) => [...list.filter((item) => JSON.stringify(item) !== JSON.stringify(attachment)), attachment]);
@@ -220,6 +260,9 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     send(prompt, extra = []) {
       void send(prompt, [...attachments, ...extra]);
     },
+    insert(value) {
+      insertText(value);
+    },
     focus() {
       input.current?.focus();
     },
@@ -228,6 +271,39 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const respond = (id: string, optionId?: string) =>
     api(`/api/ai/permissions/${id}`, { body: { optionId } }).catch((error) => toast((error as Error).message, "error"));
   const stop = () => current && api(`/api/ai/sessions/${current}/cancel`, { method: "POST" });
+  /**
+   * A new conversation with the first `keep` turns of this one (the AI's context forked
+   * there); with text it continues with that message — editing an earlier message.
+   */
+  const branch = async (keep: number, text = "", messageAttachments: Record<string, unknown>[] = []) => {
+    if (!session || branching) return;
+    setBranching(true);
+    stick.current = true;
+    try {
+      const meta = await api<SessionMeta>(`/api/ai/sessions/${session.id}/fork`, {
+        body: { keep, text, attachments: messageAttachments, view: text ? viewNow() : null },
+      });
+      setSessions((list) => [meta, ...list.filter((item) => item.id !== meta.id)]);
+      setCurrent(meta.id);
+      if (!text) setTimeout(() => input.current?.focus(), 0);
+    } catch (error) {
+      toast((error as Error).message, "error");
+    } finally {
+      setBranching(false);
+    }
+  };
+  /** The versions of the conversation at its k-th message: the one it branched from and its branches there. */
+  const versionsAt = (k: number): SessionMeta[] => {
+    if (!session) return [];
+    const base = session.branch?.keep === k && sessions.some((item) => item.id === session.branch?.from) ? session.branch.from : session.id;
+    const list = sessions.filter((item) => item.id === base || (item.branch?.from === base && item.branch.keep === k));
+    return list.length > 1 ? list.sort((a, b) => (a.id === base ? -1 : b.id === base ? 1 : a.createdAt.localeCompare(b.createdAt))) : [];
+  };
+  const compact = () => {
+    if (!current) return;
+    stick.current = true;
+    api(`/api/ai/sessions/${current}/compact`, { method: "POST" }).catch((error) => toast((error as Error).message, "error"));
+  };
   const newChat = () => {
     setCurrent(null);
     setEntries([]);
@@ -247,7 +323,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   return (
     <div className="chat">
       <div className="chat-head">
-        <button className="chat-title" onClick={() => setShowHistory(!showHistory)} title="对话记录">
+        <button className="chat-title" data-history-toggle onClick={() => setShowHistory(!showHistory)} title="对话记录">
           <span className="ellipsis">{session?.title ?? "新对话"}</span>
           <ChevronDown size={13} />
         </button>
@@ -255,7 +331,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         <button className="icon-btn" title="新对话" onClick={newChat}>
           <Plus size={16} />
         </button>
-        <button className={`icon-btn ${showHistory ? "active" : ""}`} title="对话记录" onClick={() => setShowHistory(!showHistory)}>
+        <button className={`icon-btn ${showHistory ? "active" : ""}`} data-history-toggle title="对话记录" onClick={() => setShowHistory(!showHistory)}>
           <History size={15} />
         </button>
         <button className="icon-btn" title="关闭" onClick={onClose}>
@@ -263,7 +339,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         </button>
       </div>
       {showHistory && (
-        <div className="chat-history">
+        <div className="chat-history" ref={historyList}>
           {!sessions.length && <div className="empty small-text">还没有对话</div>}
           {sessions.map((item) => (
             <div
@@ -292,7 +368,13 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
                 ])
               }
             >
-              {item.status !== "idle" ? <span className="spinner" /> : <Sparkles size={13} className="faint" />}
+              {item.status !== "idle" ? (
+                <span className="spinner" />
+              ) : item.branch ? (
+                <GitBranch size={13} className="faint" />
+              ) : (
+                <Sparkles size={13} className="faint" />
+              )}
               <span className="ellipsis grow">{item.title}</span>
               <span className="faint small-text">{timeAgo(item.updatedAt)}</span>
             </div>
@@ -328,14 +410,80 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
             )}
           </div>
         ) : (
-          turns.map((turn, index) => (
-            <div className="turn" key={turn.user?.id ?? index}>
-              {turn.user && <UserMessage text={turn.user.text} attachments={turn.user.attachments} steered={turn.user.steered} />}
-              {(turn.items.length > 0 || (running && index === turns.length - 1)) && (
-                <TurnBlocks items={turn.items} running={running && index === turns.length - 1} onRespond={respond} />
-              )}
-            </div>
-          ))
+          (() => {
+            // k counts the user's own messages (not ones steered into a running turn): the server's turn index.
+            let k = -1;
+            return turns.map((turn, index) => {
+              if (turn.branch) {
+                const parent = sessions.find((item) => item.id === turn.branch!.from);
+                return (
+                  <div className="branch-divider" key={"branch" + index}>
+                    <GitBranch size={12} />
+                    <span>
+                      以上来自
+                      {parent ? (
+                        <button className="link-btn" onClick={() => setCurrent(parent.id)}>
+                          「{parent.title}」
+                        </button>
+                      ) : (
+                        `「${turn.branch.title}」`
+                      )}
+                      ，从这里开始是分支
+                    </span>
+                  </div>
+                );
+              }
+              if (turn.user && !turn.user.steered) k += 1;
+              const turnIndex = k;
+              const live = running && index === turns.length - 1;
+              const next = turns[index + 1];
+              // The branch point is after a whole turn, so only its last part offers it.
+              const endOfTurn = turnIndex >= 0 && !live && (!next || Boolean(next.branch) || Boolean(next.user && !next.user.steered));
+              const versions = turn.user && !turn.user.steered ? versionsAt(turnIndex) : [];
+              const position = versions.findIndex((item) => item.id === session?.id);
+              return (
+                <div className="turn" key={turn.user?.id ?? index}>
+                  {turn.user && (
+                    <UserMessage
+                      text={turn.user.text}
+                      attachments={turn.user.attachments}
+                      steered={turn.user.steered}
+                      busy={branching}
+                      onEdit={
+                        turn.user.steered || turn.user.text.trim().startsWith("/")
+                          ? undefined
+                          : (text) => branch(turnIndex, text, turn.user!.attachments)
+                      }
+                      versions={
+                        versions.length > 1
+                          ? { index: Math.max(0, position), count: versions.length, go: (to) => setCurrent(versions[to].id) }
+                          : undefined
+                      }
+                    />
+                  )}
+                  {(turn.items.length > 0 || live) && (
+                    <TurnBlocks
+                      items={turn.items}
+                      running={live}
+                      onRespond={respond}
+                      footer={
+                        endOfTurn && turn.items.some((item) => item.kind === "text") ? (
+                          <button className="turn-action" disabled={branching} title="新建一个对话，包含到这里为止的内容，从这里换个方向继续" onClick={() => branch(turnIndex + 1)}>
+                            <GitBranch size={12} /> 从这里分支
+                          </button>
+                        ) : null
+                      }
+                    />
+                  )}
+                </div>
+              );
+            });
+          })()
+        )}
+        {branching && (
+          <div className="chat-notice branching">
+            <span className="spinner" /> 正在创建分支…
+          </div>
         )}
         {pending && (
           <div className="turn">
@@ -415,17 +563,16 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
             ))}
           </div>
         )}
+        {readOnly && <div className="chat-locked">作品已发布，AI 不能再修改它。要继续制作，先取消发布，或者创建一个副本。</div>}
         <textarea
           ref={input}
           rows={1}
-          placeholder={running ? "AI 正在工作，新消息会排队…" : "描述你想要的修改（Enter 发送，Shift+Enter 换行）"}
+          disabled={readOnly}
+          placeholder={
+            readOnly ? "作品已发布，只能查看" : running ? "AI 正在工作，新消息会排队…" : "描述你想要的修改（Enter 发送，Shift+Enter 换行）"
+          }
           value={text}
           onChange={(event) => setText(event.target.value)}
-          onInput={(event) => {
-            const element = event.currentTarget;
-            element.style.height = "auto";
-            element.style.height = Math.min(220, element.scrollHeight) + "px";
-          }}
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -477,43 +624,29 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           >
             <Paperclip size={15} />
           </button>
+          <PromptPicker draft={text} onPick={insertText} onManage={() => showView("prompts")} />
           <span className="grow" />
+          <ContextRing usage={session?.usage} busy={running} onCompact={compact} />
           {running ? (
             <button className="send-btn stop" title="停止" onClick={stop}>
               <Square size={13} fill="currentColor" />
             </button>
           ) : (
-            <button className="send-btn" title="发送" disabled={sending || (!text.trim() && !attachments.length)} onClick={() => send()}>
+            <button className="send-btn" title="发送" disabled={readOnly || sending || (!text.trim() && !attachments.length)} onClick={() => send()}>
               {sending ? <span className="spinner" /> : <Send size={14} />}
             </button>
           )}
         </div>
         <div className="chat-pickers">
-          <ProfilePicker
-            profiles={profiles}
-            accounts={accounts}
-            value={profile?.id}
-            disabled={running}
-            onChange={async (id) => {
-              setProfileId(id);
-              if (session) {
-                const target = profiles.find((item) => item.id === id);
-                await patch(`/api/ai/sessions/${session.id}`, { profile: id, model: target?.kind === "account" ? "" : target?.defaultModel || "" }).catch(
-                  (error) => toast((error as Error).message, "error"),
-                );
-              }
-            }}
-          />
+          {/* An AI (or a custom API's model) is chosen when a conversation starts: another one is another conversation. */}
+          <ProfilePicker profiles={profiles} accounts={accounts} value={profile?.id} locked={Boolean(session)} onChange={setProfileId} />
           {profile && profile.kind !== "account" && (profile.models?.length ?? 0) > 0 && (
             <OptionPicker
               label="模型"
               value={session?.model || readPrefs(profile.id).customModel || profile.defaultModel || ""}
               options={(profile.models ?? []).map((model) => ({ value: model, name: model }))}
-              onChange={async (model) => {
-                writePref(profile.id, "customModel", model);
-                if (session)
-                  await patch(`/api/ai/sessions/${session.id}`, { profile: profile.id, model }).catch((error) => toast((error as Error).message, "error"));
-              }}
+              locked={session ? "对话开始后不能切换这个 API 的模型，请新建对话" : undefined}
+              onChange={(model) => writePref(profile.id, "customModel", model)}
             />
           )}
           {(session?.configOptions ?? cachedOptions(profile?.id))
@@ -578,8 +711,31 @@ function CacheOptions({ session }: { session: SessionMeta | null }) {
 }
 
 // ---- small components -----------------------------------------------------------
-function UserMessage({ text, attachments, steered }: { text: string; attachments: Record<string, unknown>[]; steered?: boolean }) {
+function UserMessage({
+  text,
+  attachments,
+  steered,
+  onEdit,
+  versions,
+  busy,
+}: {
+  text: string;
+  attachments: Record<string, unknown>[];
+  steered?: boolean;
+  /** Resend an edited version of this message, as a branch of the conversation. */
+  onEdit?: (text: string) => void;
+  /** This message's place among the versions of the conversation that differ from here. */
+  versions?: { index: number; count: number; go: (index: number) => void };
+  busy?: boolean;
+}) {
   const { stage } = useWorkbench();
+  const [draft, setDraft] = useState<string | null>(null);
+  if (text.trim() === "/compact")
+    return (
+      <div className="command-msg">
+        <Minimize2 size={12} /> 压缩上下文
+      </div>
+    );
   return (
     <div className="user-msg">
       {steered && (
@@ -606,7 +762,68 @@ function UserMessage({ text, attachments, steered }: { text: string; attachments
           )}
         </div>
       )}
-      <div className="user-text">{text}</div>
+      {draft === null ? (
+        <div className="user-text">{text}</div>
+      ) : (
+        <div className="user-edit">
+          <textarea
+            className="textarea"
+            autoFocus
+            rows={Math.min(10, Math.max(2, draft.split("\n").length))}
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") setDraft(null);
+              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing && draft.trim()) {
+                event.preventDefault();
+                onEdit?.(draft);
+                setDraft(null);
+              }
+            }}
+          />
+          <div className="row">
+            <span className="faint small-text grow">发送后会新建一个分支对话，原来的对话保留。</span>
+            <button className="btn small" onClick={() => setDraft(null)}>
+              取消
+            </button>
+            <button
+              className="btn small primary"
+              disabled={!draft.trim() || busy}
+              onClick={() => {
+                onEdit?.(draft);
+                setDraft(null);
+              }}
+            >
+              发送
+            </button>
+          </div>
+        </div>
+      )}
+      {draft === null && (onEdit || versions) && (
+        <div className="user-actions">
+          {versions && (
+            <span className="versions">
+              <button className="icon-btn tiny" disabled={versions.index === 0} title="上一个版本" onClick={() => versions.go(versions.index - 1)}>
+                <ChevronLeft size={12} />
+              </button>
+              {versions.index + 1}/{versions.count}
+              <button
+                className="icon-btn tiny"
+                disabled={versions.index === versions.count - 1}
+                title="下一个版本"
+                onClick={() => versions.go(versions.index + 1)}
+              >
+                <ChevronRight size={12} />
+              </button>
+            </span>
+          )}
+          {onEdit && (
+            <button className="icon-btn tiny edit-btn" title="编辑这条消息，从这里重新开始（新建分支）" disabled={busy} onClick={() => setDraft(text)}>
+              <Pencil size={12} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -665,7 +882,23 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
   );
 }
 
-function Popover({ button, children, disabled }: { button: React.ReactNode; children: (close: () => void) => React.ReactNode; disabled?: boolean }) {
+function Popover({
+  button,
+  children,
+  disabled,
+  className = "picker",
+  chevron = true,
+  title,
+  align = "left",
+}: {
+  button: React.ReactNode;
+  children: (close: () => void) => React.ReactNode;
+  disabled?: boolean;
+  className?: string;
+  chevron?: boolean;
+  title?: string;
+  align?: "left" | "right";
+}) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -675,13 +908,152 @@ function Popover({ button, children, disabled }: { button: React.ReactNode; chil
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
   return (
-    <div className="popover-anchor" ref={ref}>
-      <button className="picker" disabled={disabled} onClick={() => setOpen(!open)}>
+    <div className="popover-anchor" ref={ref} title={disabled ? title : undefined}>
+      <button className={className} disabled={disabled} title={disabled ? undefined : title} onClick={() => setOpen(!open)}>
         {button}
-        <ChevronDown size={11} />
+        {chevron && <ChevronDown size={11} />}
       </button>
-      {open && <div className="popover">{children(() => setOpen(false))}</div>}
+      {open && <div className={`popover ${align === "right" ? "align-right" : ""}`}>{children(() => setOpen(false))}</div>}
     </div>
+  );
+}
+
+/** The prompt library at hand: click a prompt to put it into the input box. */
+function PromptPicker({ draft, onPick, onManage }: { draft: string; onPick: (text: string) => void; onManage: () => void }) {
+  const [items, save] = usePrompts();
+  const [open, setOpen] = useState<Set<string>>(new Set());
+  const prompt = usePrompt();
+  const toast = useToast();
+  const rows = (nodes: PromptNode[], depth: number, close: () => void): React.ReactNode =>
+    nodes.map((node) =>
+      node.type === "folder" ? (
+        <div key={node.id}>
+          <button
+            className="popover-item"
+            style={{ paddingLeft: 8 + depth * 14 }}
+            onClick={() =>
+              setOpen((current) => {
+                const next = new Set(current);
+                if (next.has(node.id)) next.delete(node.id);
+                else next.add(node.id);
+                return next;
+              })
+            }
+          >
+            {open.has(node.id) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            <Folder size={13} className="folder-icon" />
+            <span className="grow ellipsis">{node.name}</span>
+          </button>
+          {open.has(node.id) && rows(node.children, depth + 1, close)}
+        </div>
+      ) : (
+        <button
+          key={node.id}
+          className="popover-item"
+          style={{ paddingLeft: 8 + depth * 14 + 17 }}
+          title={node.text.slice(0, 400)}
+          onClick={() => {
+            close();
+            onPick(node.text);
+          }}
+        >
+          <MessageSquareText size={13} className="faint" />
+          <span className="grow">
+            <span className="ellipsis block">{node.name}</span>
+            <span className="popover-desc ellipsis">{node.text.trim().split("\n")[0]}</span>
+          </span>
+        </button>
+      ),
+    );
+  return (
+    <Popover className="icon-btn" chevron={false} title="提示词库" button={<BookMarked size={15} />}>
+      {(close) => (
+        <div className="prompt-picker">
+          <div className="popover-label">提示词（点击放进输入框）</div>
+          {items && !items.length && <div className="empty small-text">还没有提示词</div>}
+          {rows(items ?? [], 0, close)}
+          <div className="menu-separator" />
+          <button
+            className="popover-item"
+            disabled={!draft.trim()}
+            title={draft.trim() ? undefined : "先在输入框里写好内容"}
+            onClick={async () => {
+              close();
+              const name = (await prompt("保存为提示词", draft.trim().split("\n")[0].slice(0, 30)))?.trim();
+              if (!name || !items) return;
+              await save(insertPrompt(items, { id: newPromptId(), type: "prompt", name, text: draft.trim() }, null)).then(
+                () => toast(`已保存提示词「${name}」`, "ok"),
+                (error) => toast((error as Error).message, "error"),
+              );
+            }}
+          >
+            <BookmarkPlus size={13} /> 把输入内容存为提示词…
+          </button>
+          <button
+            className="popover-item"
+            onClick={() => {
+              close();
+              onManage();
+            }}
+          >
+            <Settings2 size={13} /> 管理提示词…
+          </button>
+        </div>
+      )}
+    </Popover>
+  );
+}
+
+const tokens = (value: number) => (value >= 1000 ? `${(value / 1000).toFixed(value >= 100_000 ? 0 : 1)}k` : String(value));
+
+/** How full the AI's context is, as a ring; the popover offers a manual compaction. */
+function ContextRing({ usage, busy, onCompact }: { usage?: SessionMeta["usage"]; busy: boolean; onCompact: () => void }) {
+  if (!usage?.size || usage.used == null) return null;
+  const used = Math.min(1, Math.max(0, usage.used / usage.size));
+  const left = Math.round((1 - used) * 100);
+  const level = used >= 0.9 ? "danger" : used >= 0.75 ? "warn" : "";
+  const radius = 6.5;
+  const length = 2 * Math.PI * radius;
+  return (
+    <Popover
+      className={`context-ring ${level}`}
+      chevron={false}
+      align="right"
+      title={`上下文剩余 ${left}%`}
+      button={
+        <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
+          <circle className="ring-track" cx="9" cy="9" r={radius} />
+          <circle className="ring-fill" cx="9" cy="9" r={radius} strokeDasharray={`${used * length} ${length}`} transform="rotate(-90 9 9)" />
+        </svg>
+      }
+    >
+      {(close) => (
+        <div className="context-info">
+          <div className="row">
+            <strong className="grow">上下文</strong>
+            <span className={level ? `${level}-text` : "muted"}>剩余 {left}%</span>
+          </div>
+          <div className="context-bar">
+            <i className={level} style={{ width: `${used * 100}%` }} />
+          </div>
+          <div className="muted small-text">
+            已用 {tokens(usage.used!)} / {tokens(usage.size!)} tokens
+          </div>
+          <p className="faint small-text">快满时 AI 会自动压缩。也可以现在手动压缩：AI 把之前的对话总结成摘要，在摘要的基础上继续。</p>
+          <button
+            className="btn small"
+            disabled={busy}
+            title={busy ? "AI 正在工作，等这一轮结束" : undefined}
+            onClick={() => {
+              close();
+              onCompact();
+            }}
+          >
+            <Minimize2 size={13} /> 压缩上下文
+          </button>
+        </div>
+      )}
+    </Popover>
   );
 }
 
@@ -690,18 +1062,22 @@ function ProfilePicker({
   accounts,
   value,
   onChange,
-  disabled,
+  locked,
 }: {
   profiles: Profile[];
   accounts: Record<string, boolean | undefined>;
   value?: string;
   onChange: (id: string) => void;
-  disabled?: boolean;
+  locked?: boolean;
 }) {
   const { openSettings } = useWorkbench();
   const current = profiles.find((item) => item.id === value);
   return (
-    <Popover disabled={disabled} button={<span className="ellipsis">{current?.name ?? "选择 AI"}</span>}>
+    <Popover
+      disabled={locked}
+      title={locked ? "对话开始后不能切换 AI。要换 AI，请点右上角 + 新建对话" : "选择 AI"}
+      button={<span className="ellipsis">{current?.name ?? "选择 AI"}</span>}
+    >
       {(close) => (
         <>
           {profiles.map((item) => (
@@ -741,15 +1117,20 @@ function OptionPicker({
   value,
   options,
   onChange,
+  locked,
 }: {
   label: string;
   value: string;
   options: { value: string; name: string; description?: string }[];
   onChange: (value: string) => void;
+  /** Why it cannot be changed now. */
+  locked?: string;
 }) {
   const current = options.find((item) => item.value === value);
   return (
     <Popover
+      disabled={Boolean(locked)}
+      title={locked}
       button={
         <span className="ellipsis" title={label}>
           {current?.name ?? value ?? label}

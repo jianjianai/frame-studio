@@ -42,6 +42,12 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     watcher.watch(work);
     return work;
   };
+  /** The same, for a change: refused while the work is published (view-only). */
+  services.openEditable = async (id, repo) => {
+    const work = await services.openWork(id, repo);
+    works.assertEditable(work);
+    return work;
+  };
 
   router.get(
     "/api/state",

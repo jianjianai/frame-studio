@@ -91,6 +91,7 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   experience_delete: "删除经验文档",
 };
 export function toolTitle(title: string) {
+  if (title === "Compact conversation") return "压缩上下文";
   const match = /(?:mcp__frame__|mcp\.frame\.|frame[.:])([a-z_]+)/.exec(title);
   if (match) return FRAME_TOOL_NAMES[match[1]] ?? match[1];
   return title;
@@ -260,7 +261,18 @@ function Plan({ entries }: { entries: { content: string; status: string }[] }) {
   );
 }
 
-export function TurnBlocks({ items, running, onRespond }: { items: Block[]; running: boolean; onRespond: (id: string, optionId?: string) => void }) {
+export function TurnBlocks({
+  items,
+  running,
+  onRespond,
+  footer,
+}: {
+  items: Block[];
+  running: boolean;
+  onRespond: (id: string, optionId?: string) => void;
+  /** Actions shown under a finished reply. */
+  footer?: React.ReactNode;
+}) {
   return (
     <div className="assistant">
       <div className="msg-head">
@@ -316,6 +328,7 @@ export function TurnBlocks({ items, running, onRespond }: { items: Block[]; runn
           </span>
         </div>
       )}
+      {!running && footer && <div className="turn-footer">{footer}</div>}
     </div>
   );
 }

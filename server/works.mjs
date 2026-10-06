@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { git, gitOk, parseStatus, addOrphanWorktree } from "./git.mjs";
-import { readProjectSource, readProjectDir, setProjectFields, validSlug } from "./project-meta.mjs";
+import { readProjectSource, readProjectDir, setProjectFields, removeProjectProperty, validSlug } from "./project-meta.mjs";
 import { appRoot } from "./config.mjs";
 import { problem, notFound, conflict, Locks, shortId, writeFileAtomic } from "./util.mjs";
 import { createWorkFiles, platformInstructions, workTsconfig, GIT_ATTRIBUTES } from "./templates.mjs";
@@ -41,15 +41,19 @@ export class Works {
       "refs/heads/works",
       "refs/remotes/origin/works",
       "refs/heads/trash",
+      "refs/remotes/origin/trash",
     ]);
+    const scopes = [
+      ["refs/heads/works/", "local"],
+      ["refs/remotes/origin/works/", "remote"],
+      ["refs/heads/trash/", "trash"],
+      ["refs/remotes/origin/trash/", "remoteTrash"],
+    ];
     const works = new Map();
     for (const line of out.split("\n").filter(Boolean)) {
       const [ref, oid, date] = line.split("\t");
-      const [scope, id] = ref.startsWith("refs/heads/works/")
-        ? ["local", ref.slice("refs/heads/works/".length)]
-        : ref.startsWith("refs/heads/trash/")
-          ? ["trash", ref.slice("refs/heads/trash/".length)]
-          : ["remote", ref.slice("refs/remotes/origin/works/".length)];
+      const [prefix, scope] = scopes.find(([prefix]) => ref.startsWith(prefix));
+      const id = ref.slice(prefix.length);
       if (!validWorkId(id)) continue;
       const entry = works.get(id) || { id, repo };
       entry[scope] = { ref, oid, date };
@@ -77,14 +81,19 @@ export class Works {
     return summary;
   }
 
-  /** List works of one or all repositories. Checked-out works report live metadata. */
+  /**
+   * List works (or the recycle bin) of one or all repositories. `location` says where the
+   * branch is: on this machine, on GitHub or both; `synced` whether GitHub has everything
+   * of the local copy. Checked-out works report live metadata.
+   */
   async list({ repo, trash = false } = {}) {
     const repos = repo ? [this.repos.get(repo)] : this.repos.list().filter((item) => item.ready);
     const result = [];
-    for (const { id: repoId } of repos) {
+    for (const { id: repoId, dir } of repos.map((item) => this.repos.get(item.id))) {
       for (const entry of await this.refs(repoId)) {
-        if (trash ? !entry.trash : !entry.local && !entry.remote) continue;
-        const head = trash ? entry.trash : entry.local || entry.remote;
+        const [local, remote] = trash ? [entry.trash, entry.remoteTrash] : [entry.local, entry.remote];
+        if (!local && !remote) continue;
+        const head = local && remote ? (local.date >= remote.date ? local : remote) : local || remote;
         const root = this.root(repoId, entry.id);
         const checkedOut = !trash && fs.existsSync(path.join(root, ".git"));
         let summary = await this.metaAt(repoId, head.ref, head.oid);
@@ -98,7 +107,8 @@ export class Works {
           repo: repoId,
           ...summary,
           updatedAt: head.date,
-          location: trash ? "trash" : entry.local && entry.remote ? "both" : entry.local ? "local" : "remote",
+          location: local && remote ? "both" : local ? "local" : "remote",
+          synced: Boolean(local && remote && (local.oid === remote.oid || (await gitOk(dir, ["merge-base", "--is-ancestor", local.oid, remote.oid])))),
           checkedOut,
         });
       }
@@ -139,12 +149,15 @@ export class Works {
     const root = this.root(repo, id);
     await this.locks.run(`${repo}/${id}`, async () => {
       if (!fs.existsSync(path.join(root, ".git"))) {
-        const dir = this.repos.get(repo).dir;
+        const info = this.repos.get(repo);
+        const { dir } = info;
         await git(dir, ["worktree", "prune"]);
         fs.mkdirSync(path.dirname(root), { recursive: true });
         const branch = WORK_PREFIX + id;
-        if (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/" + branch])) await git(dir, ["worktree", "add", "--", root, branch]);
-        else await git(dir, ["worktree", "add", "--track", "-b", branch, "--", root, "origin/" + branch]);
+        // Media not stored here yet (a work kept only on GitHub) are downloaded from Git LFS.
+        const env = this.repos.env(info);
+        if (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/" + branch])) await git(dir, ["worktree", "add", "--", root, branch], { env });
+        else await git(dir, ["worktree", "add", "--track", "-b", branch, "--", root, "origin/" + branch], { env });
       }
       this.linkRuntime(root);
     });
@@ -283,6 +296,7 @@ export class Works {
   }
 
   async update(work, changes) {
+    this.assertEditable(work);
     const file = path.join(work.dir, "project.ts");
     const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats", "experience"];
     if ("experience" in changes && typeof changes.experience !== "string") throw problem(400, "experience 必须是经验库名称（空字符串表示不关联）");
@@ -291,37 +305,209 @@ export class Works {
     this.events.emit({ type: "works", repo: work.repo });
   }
 
+  // ---- publishing, copies --------------------------------------------------------
+
+  /** When the work was published ("" when it is not): a published work is view-only. */
+  published(work) {
+    try {
+      return String(readProjectSource(fs.readFileSync(path.join(work.dir, "project.ts"), "utf8")).meta.publishedAt || "");
+    } catch {
+      return "";
+    }
+  }
+  assertEditable(work) {
+    if (this.published(work)) throw problem(423, "这个作品已发布，只能查看。要修改，先取消发布，或者创建一个副本。", "PUBLISHED");
+  }
+
+  /** Publish (or take back) a work: the mark lives in project.ts and is saved as a version with everything else. */
+  async setPublished(work, published) {
+    return this.locks.run(`${work.repo}/${work.id}`, async () => {
+      const file = path.join(work.dir, "project.ts");
+      const code = fs.readFileSync(file, "utf8");
+      if (Boolean(this.published(work)) === published) return null;
+      writeFileAtomic(file, published ? setProjectFields(code, { publishedAt: new Date().toISOString() }) : removeProjectProperty(code, "publishedAt"));
+      const title = readProjectSource(fs.readFileSync(file, "utf8")).meta.title;
+      const commit = await this.commitAll(work.root, published ? `发布：${title}` : "取消发布");
+      this.events.emit({ type: "works", repo: work.repo });
+      this.events.emit({ type: "work-versions", work: work.id });
+      return commit;
+    });
+  }
+
+  /**
+   * A new work with the same files as this one has now (unsaved changes included) and a
+   * history of its own. The copy is not published, and keeps the folder name, so asset
+   * paths in the code stay valid.
+   */
+  async duplicate(source, { title } = {}) {
+    const meta = readProjectSource(fs.readFileSync(path.join(source.dir, "project.ts"), "utf8")).meta;
+    const name = String(title || "").trim() || `${meta.title || source.slug}（副本）`;
+    const dir = this.repos.get(source.repo).dir;
+    const id = shortId();
+    const root = this.root(source.repo, id);
+    await this.locks.run(`${source.repo}/${id}`, async () => {
+      fs.mkdirSync(path.dirname(root), { recursive: true });
+      await addOrphanWorktree(dir, WORK_PREFIX + id, root);
+      try {
+        for (const file of [".gitattributes", ".gitignore", "README.md"])
+          if (fs.existsSync(path.join(source.root, file))) fs.copyFileSync(path.join(source.root, file), path.join(root, file));
+        fs.cpSync(path.join(source.root, "projects"), path.join(root, "projects"), {
+          recursive: true,
+          filter: (file) => !/[\\/](exports|\.cache|node_modules)([\\/]|$)/.test(path.relative(source.root, file)),
+        });
+        const project = path.join(root, "projects", source.slug, "project.ts");
+        writeFileAtomic(project, removeProjectProperty(setProjectFields(fs.readFileSync(project, "utf8"), { title: name }), "publishedAt"));
+        this.linkRuntime(root);
+        await git(root, ["add", "-A", "--", "."]);
+        await git(root, ["commit", "-q", "-m", `复制自「${meta.title || source.slug}」`]);
+      } catch (error) {
+        await git(dir, ["worktree", "remove", "--force", "--", root]).catch(() => {});
+        await git(dir, ["branch", "-D", WORK_PREFIX + id]).catch(() => {});
+        throw error;
+      }
+    });
+    this.events.emit({ type: "works", repo: source.repo });
+    return this.describe(source.repo, id);
+  }
+
+  // ---- recycle bin and local space ------------------------------------------
+  //
+  // The recycle bin is a branch name: moving a work there renames works/<id> to
+  // trash/<id>, here and on GitHub. Remote renames are one atomic push that only goes
+  // through if the branch is still where we last fetched it, so a push from another
+  // device in between is never lost.
+
+  /** The commit a ref points to, or "" when it does not exist. */
+  async tip(dir, ref) {
+    return (await git(dir, ["rev-parse", "--verify", "--quiet", ref + "^{commit}"], { allowCodes: [0, 1] })).trim();
+  }
+
+  async renameRemote(info, from, to, sha) {
+    await git(info.dir, ["push", "--atomic", `--force-with-lease=refs/heads/${from}:${sha}`, "origin", `${sha}:refs/heads/${to}`, `:refs/heads/${from}`], {
+      env: this.repos.env(info),
+    });
+    await git(info.dir, ["update-ref", `refs/remotes/origin/${to}`, sha]);
+    await git(info.dir, ["update-ref", "-d", `refs/remotes/origin/${from}`]);
+  }
+
+  /** Move a work to the recycle bin (unsaved changes are saved as a version first). */
   async trash(id, repo) {
     repo = await this.locate(id, repo);
-    const dir = this.repos.get(repo).dir;
+    const info = this.repos.get(repo);
     const root = this.root(repo, id);
+    if (info.remote) await this.repos.fetch(repo);
     await this.locks.run(`${repo}/${id}`, async () => {
+      // GitHub first: if that fails, nothing has changed here.
+      const remote = info.remote ? await this.tip(info.dir, "refs/remotes/origin/works/" + id) : "";
+      if (remote) await this.renameRemote(info, WORK_PREFIX + id, TRASH_PREFIX + id, remote);
       if (fs.existsSync(root)) {
         const status = parseStatus(await git(root, ["status", "--porcelain=v2", "--branch"]));
         if (status.files.length) await this.commitAll(root, "删除前自动保存");
-        await git(dir, ["worktree", "remove", "--force", "--", root]);
+        await git(info.dir, ["worktree", "remove", "--force", "--", root]);
       }
-      if (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/works/" + id]))
-        await git(dir, ["branch", "-M", WORK_PREFIX + id, TRASH_PREFIX + id]);
-      else await git(dir, ["branch", TRASH_PREFIX + id, "origin/" + WORK_PREFIX + id]);
+      if (await this.tip(info.dir, "refs/heads/works/" + id)) {
+        await git(info.dir, ["branch", "-M", WORK_PREFIX + id, TRASH_PREFIX + id]);
+        await git(info.dir, ["branch", "--unset-upstream", TRASH_PREFIX + id]).catch(() => {});
+      }
     });
     this.settings.update("recent", (recent) => recent.filter((item) => !(item.id === id && item.repo === repo)));
     this.events.emit({ type: "works", repo });
   }
 
   async restore(id, repo) {
-    const dir = this.repos.get(repo).dir;
-    if (await gitOk(dir, ["show-ref", "--verify", "--quiet", "refs/heads/works/" + id])) throw conflict("同名作品已存在");
-    await git(dir, ["branch", "-M", TRASH_PREFIX + id, WORK_PREFIX + id]);
+    const info = this.repos.get(repo);
+    if (info.remote) await this.repos.fetch(repo);
+    await this.locks.run(`${repo}/${id}`, async () => {
+      if ((await this.tip(info.dir, "refs/heads/works/" + id)) || (await this.tip(info.dir, "refs/remotes/origin/works/" + id)))
+        throw conflict("已经有同名的作品，无法恢复");
+      const remote = info.remote ? await this.tip(info.dir, "refs/remotes/origin/trash/" + id) : "";
+      const local = await this.tip(info.dir, "refs/heads/trash/" + id);
+      if (!remote && !local) throw notFound("回收站里没有这个作品");
+      if (remote) await this.renameRemote(info, TRASH_PREFIX + id, WORK_PREFIX + id, remote);
+      if (local) {
+        await git(info.dir, ["branch", "-M", TRASH_PREFIX + id, WORK_PREFIX + id]);
+        if (remote) await git(info.dir, ["branch", `--set-upstream-to=origin/${WORK_PREFIX}${id}`, WORK_PREFIX + id]).catch(() => {});
+      }
+    });
     this.events.emit({ type: "works", repo });
   }
 
-  /** Permanently delete a trashed work locally; optionally also delete the remote branch. */
-  async purge(id, repo, { remote = false } = {}) {
+  /**
+   * Delete a work from the recycle bin for good: its branch here and on GitHub, and the
+   * backups FRAME kept of it. Returns the local space this freed.
+   */
+  async purge(id, repo, { batch = false } = {}) {
     const info = this.repos.get(repo);
-    await git(info.dir, ["branch", "-D", TRASH_PREFIX + id]);
-    if (remote && info.remote) await git(info.dir, ["push", "origin", "--delete", WORK_PREFIX + id], { env: this.repos.env(info) });
+    if (info.remote && !batch) await this.repos.fetch(repo);
+    await this.locks.run(`${repo}/${id}`, async () => {
+      const remote = info.remote ? await this.tip(info.dir, "refs/remotes/origin/trash/" + id) : "";
+      if (remote) {
+        await git(info.dir, ["push", `--force-with-lease=refs/heads/trash/${id}:${remote}`, "origin", `:refs/heads/trash/${id}`], { env: this.repos.env(info) });
+        await git(info.dir, ["update-ref", "-d", "refs/remotes/origin/trash/" + id]);
+      }
+      if (await this.tip(info.dir, "refs/heads/trash/" + id)) await git(info.dir, ["branch", "-D", TRASH_PREFIX + id]);
+      const backups = (await git(info.dir, ["for-each-ref", "--format=%(refname)", "refs/frame-backup/"])).split("\n").filter((ref) => backupOf(ref) === id);
+      for (const ref of backups) await git(info.dir, ["update-ref", "-d", ref]);
+    });
+    if (batch) return null;
     this.events.emit({ type: "works", repo });
+    return this.reclaim(repo);
+  }
+
+  /** Empty a repository's recycle bin. */
+  async purgeAll(repo) {
+    if (this.repos.get(repo).remote) await this.repos.fetch(repo);
+    const trashed = (await this.refs(repo)).filter((entry) => entry.trash || entry.remoteTrash);
+    for (const entry of trashed) await this.purge(entry.id, repo, { batch: true });
+    this.events.emit({ type: "works", repo });
+    return { purged: trashed.length, ...(await this.reclaim(repo)) };
+  }
+
+  /**
+   * Keep a work only on GitHub: remove its checkout and local branch, then the local data
+   * nothing else needs. Only when GitHub has everything (no unsaved changes, no unpushed
+   * versions); opening the work later downloads it again.
+   */
+  async freeLocal(id, repo) {
+    const info = this.repos.get(repo);
+    if (!info.remote) throw problem(400, "这个作品库没有连接 GitHub，作品只在本机，不能只保留云端");
+    await this.repos.fetch(repo);
+    const root = this.root(repo, id);
+    let checkout = 0;
+    await this.locks.run(`${repo}/${id}`, async () => {
+      const local = await this.tip(info.dir, "refs/heads/works/" + id);
+      const remote = await this.tip(info.dir, "refs/remotes/origin/works/" + id);
+      if (!local) throw conflict("这个作品已经只在 GitHub 上了");
+      if (!remote) throw conflict("GitHub 上还没有这个作品，先同步到 GitHub 再释放本地空间");
+      if (fs.existsSync(path.join(root, ".git"))) {
+        const status = parseStatus(await git(root, ["status", "--porcelain=v2", "--untracked-files=all"]));
+        if (status.files.length) throw conflict("作品有未保存的修改，先保存版本并同步到 GitHub 再释放本地空间");
+      }
+      if (local !== remote && !(await gitOk(info.dir, ["merge-base", "--is-ancestor", local, remote])))
+        throw conflict("有还没同步到 GitHub 的版本，先同步再释放本地空间");
+      checkout = diskUsage(root);
+      if (fs.existsSync(root)) await git(info.dir, ["worktree", "remove", "--force", "--", root]);
+      await git(info.dir, ["branch", "-D", WORK_PREFIX + id]);
+    });
+    this.events.emit({ type: "works", repo });
+    const { freed } = await this.reclaim(repo);
+    return { freed: freed + checkout };
+  }
+
+  /**
+   * Delete local data that no local branch needs any more: LFS files (most of the space)
+   * and unreachable Git objects. Data on GitHub is untouched. Returns the bytes freed.
+   */
+  async reclaim(repo) {
+    const { dir } = this.repos.get(repo);
+    return this.locks.run(`reclaim:${repo}`, async () => {
+      const before = diskUsage(dir);
+      await git(dir, ["worktree", "prune"]);
+      await pruneLfs(dir);
+      // Objects of deleted branches; an hour of grace for objects of commits being made.
+      await git(dir, ["gc", "--quiet", "--prune=1.hour.ago"]).catch((error) => console.warn("git gc:", error.message));
+      return { freed: Math.max(0, before - diskUsage(dir)) };
+    });
   }
 
   touch(repo, id) {
@@ -397,7 +583,7 @@ export class Works {
     return this.locks.run(`${work.repo}/${work.id}`, async () => {
       await this.commitAll(work.root, "恢复前自动保存");
       await git(work.root, ["rev-parse", "--verify", commit + "^{commit}"]);
-      await git(work.root, ["read-tree", "-u", "--reset", commit]);
+      await git(work.root, ["read-tree", "-u", "--reset", commit], { env: this.repos.env(this.repos.get(work.repo)) });
       const short = commit.slice(0, 7);
       const result = await this.commitAll(work.root, `恢复到版本 ${short}`);
       this.events.emit({ type: "work-versions", work: work.id });
@@ -440,7 +626,7 @@ export class Works {
       await this.commitAll(work.root, "合并前自动保存");
       if (strategy === "merge") {
         try {
-          await git(work.root, ["merge", "--no-edit", "-m", "合并 GitHub 上的修改", "origin/" + work.branch]);
+          await git(work.root, ["merge", "--no-edit", "-m", "合并 GitHub 上的修改", "origin/" + work.branch], { env: this.repos.env(this.repos.get(work.repo)) });
         } catch (error) {
           await git(work.root, ["merge", "--abort"]).catch(() => {});
           throw conflict("双方修改了同一处内容，无法自动合并。可以采用 GitHub 的版本（本地版本保留为备份），或手动修改后再推送。", { git: error.message });
@@ -448,7 +634,7 @@ export class Works {
       } else if (strategy === "remote") {
         const backup = `refs/frame-backup/${work.id}/${new Date().toISOString().replace(/[:.]/g, "-")}`;
         await git(work.root, ["update-ref", backup, "HEAD"]);
-        await git(work.root, ["reset", "--hard", "origin/" + work.branch]);
+        await git(work.root, ["reset", "--hard", "origin/" + work.branch], { env: this.repos.env(this.repos.get(work.repo)) });
       } else throw problem(400, "未知的处理方式");
       this.events.emit({ type: "work-versions", work: work.id });
       return this.status(work);
@@ -463,7 +649,7 @@ export class Works {
       const status = parseStatus(await git(work.root, ["status", "--porcelain=v2", "--branch"]));
       if (status.files.length) throw conflict("作品有未保存的修改，请先保存版本再拉取");
       try {
-        await git(work.root, ["merge", "--ff-only", "origin/" + work.branch]);
+        await git(work.root, ["merge", "--ff-only", "origin/" + work.branch], { env: this.repos.env(repo) });
       } catch (error) {
         throw conflict("本地和 GitHub 上都有新的修改。可以选择合并双方，或采用 GitHub 的版本（本地版本会保留为备份）。", {
           diverged: true,
@@ -474,6 +660,68 @@ export class Works {
       return this.status(work);
     });
   }
+}
+
+/** The work a backup ref belongs to: refs/frame-backup/<id>/… or refs/frame-backup/pre-lfs/…/(works|trash)/<id>. */
+function backupOf(ref) {
+  const migrated = /^refs\/frame-backup\/pre-lfs\/(?:heads|remotes\/origin)\/(?:works|trash)\/([^/]+)$/.exec(ref);
+  if (migrated) return migrated[1];
+  const own = /^refs\/frame-backup\/([^/]+)\//.exec(ref);
+  return own && own[1] !== "pre-lfs" ? own[1] : null;
+}
+
+/** Bytes used by a directory tree (symbolic links are not followed). */
+function diskUsage(dir) {
+  let total = 0;
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const file = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile()) total += fs.statSync(file).size;
+    }
+  };
+  try {
+    walk(dir);
+  } catch {}
+  return total;
+}
+
+/**
+ * Remove LFS files (lfs/objects/xx/yy/<oid>) that no local branch, backup ref or worktree
+ * index points to. Files changed within the hour are kept: they may belong to a commit
+ * being made right now.
+ */
+async function pruneLfs(dir) {
+  const store = path.join(dir, "lfs", "objects");
+  if (!fs.existsSync(store)) return;
+  const reachable = (await git(dir, ["rev-list", "--objects", "--no-object-names", "--branches", "--glob=refs/frame-backup/*"], { maxBytes: 512 * 1024 * 1024 }))
+    .split("\n")
+    .filter(Boolean);
+  // Staged but not yet committed files of every checkout.
+  const worktrees = (await git(dir, ["worktree", "list", "--porcelain"])).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9));
+  for (const tree of worktrees) {
+    if (!fs.existsSync(path.join(tree, ".git"))) continue;
+    for (const line of (await git(tree, ["ls-files", "-s"]).catch(() => "")).split("\n")) if (line) reachable.push(line.split(" ")[1]);
+  }
+  // Pointer files are small blobs; read those and collect their oids.
+  const checked = await git(dir, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], { input: reachable.join("\n") + "\n", maxBytes: 512 * 1024 * 1024 });
+  const small = checked
+    .split("\n")
+    .map((line) => line.split(" "))
+    .filter(([, type, size]) => type === "blob" && Number(size) < 1024)
+    .map(([oid]) => oid);
+  const keep = new Set();
+  if (small.length) {
+    const contents = await git(dir, ["cat-file", "--batch"], { input: [...new Set(small)].join("\n") + "\n", maxBytes: 512 * 1024 * 1024 });
+    for (const match of contents.matchAll(/^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})$/gm)) keep.add(match[1]);
+  }
+  const recent = Date.now() - 60 * 60 * 1000;
+  for (const a of fs.readdirSync(store))
+    for (const b of fs.readdirSync(path.join(store, a)))
+      for (const oid of fs.readdirSync(path.join(store, a, b))) {
+        const file = path.join(store, a, b, oid);
+        if (!keep.has(oid) && fs.statSync(file).mtimeMs < recent) fs.rmSync(file, { force: true });
+      }
 }
 
 function metaSummary(slug, meta) {
@@ -489,6 +737,7 @@ function metaSummary(slug, meta) {
     height: composition.height,
     accent: meta.accent || "",
     status: meta.status || "draft",
+    publishedAt: meta.publishedAt || "",
     poster: meta.poster || "",
   };
 }

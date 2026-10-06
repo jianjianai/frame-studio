@@ -239,6 +239,11 @@
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
 }
+.trash-info {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
 
 /* ---- shared dialog bits ---- */
 .mode-switch {

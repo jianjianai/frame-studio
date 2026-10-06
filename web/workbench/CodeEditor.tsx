@@ -47,18 +47,22 @@ export function CodeEditor({
   line,
   onChange,
   onSave,
+  readOnly = false,
 }: {
   path: string;
   value: string;
   line?: number;
   onChange: (value: string) => void;
   onSave: () => void;
+  readOnly?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const callbacks = useRef({ onChange, onSave });
   callbacks.current = { onChange, onSave };
   const languageSlot = useRef(new Compartment());
+  const lockSlot = useRef(new Compartment());
+  const locked = (on: boolean) => [EditorState.readOnly.of(on), EditorView.editable.of(!on)];
 
   useEffect(() => {
     const editor = new EditorView({
@@ -68,6 +72,7 @@ export function CodeEditor({
         extensions: [
           basicSetup,
           languageSlot.current.of(language(path)),
+          lockSlot.current.of(locked(readOnly)),
           syntaxHighlighting(highlight),
           theme,
           EditorView.lineWrapping,
@@ -91,6 +96,11 @@ export function CodeEditor({
     return () => editor.destroy();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: lockSlot.current.reconfigure(locked(readOnly)) });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readOnly]);
 
   // External content (reloaded from disk) replaces the document.
   useEffect(() => {

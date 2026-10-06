@@ -83,7 +83,7 @@ export const formatDb = (gain: number) => (gain <= 0 ? "-∞ dB" : `${gainToDb(g
  * Ctrl/Alt + wheel zooms around the pointer, wheel scrolls, the view follows playback.
  */
 export function Timeline() {
-  const { work, stage, select, selection, addToChat, history, showView } = useWorkbench();
+  const { work, stage, select, selection, addToChat, history, showView, readOnly } = useWorkbench();
   const [run] = useAction();
   const toast = useToast();
   const confirm = useConfirm();
@@ -468,6 +468,7 @@ export function Timeline() {
     event.preventDefault();
     event.stopPropagation();
     select({ kind: item.kind, id: item.id, index: item.index });
+    if (readOnly) return; // a published work: look, don't move
     const origin = event.clientX;
     let moved = false;
     let state = { item, start: item.start, duration: item.duration };
@@ -515,7 +516,7 @@ export function Timeline() {
   /** The film cannot end before its last layer, clip, subtitle or marker. */
   const contentEnd = useMemo(() => Math.max(0.1, ...rows.flatMap((row) => row.items.map((item) => item.start + item.duration))), [rows]);
   const dragEnd = (event: React.PointerEvent) => {
-    if (event.button !== 0) return;
+    if (event.button !== 0 || readOnly) return;
     event.preventDefault();
     event.stopPropagation();
     // Keep the scale while the length changes (a fitted view would rescale under the pointer).
@@ -562,6 +563,7 @@ export function Timeline() {
     return row?.kind === "layer" ? row.id : "new-layer";
   };
   const dragOver = (event: React.DragEvent) => {
+    if (readOnly) return;
     const asset = assetDrag.of(event);
     if (!asset || (!visualAsset(asset) && asset.kind !== "audio")) return;
     event.preventDefault();
@@ -643,7 +645,7 @@ export function Timeline() {
         const label = await history.redo();
         if (label) toast(`已重做：${label}`);
       });
-    } else if (!mod && (event.key === "Delete" || event.key === "Backspace") && selected) {
+    } else if (!mod && (event.key === "Delete" || event.key === "Backspace") && selected && !readOnly) {
       event.preventDefault();
       void removeItem(selected);
     } else if (!mod && (event.key === "=" || event.key === "+")) zoom(1.5);
@@ -698,10 +700,11 @@ export function Timeline() {
             ),
     });
     items.push("separator", { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => removeItem(item) });
-    openMenu(event, items);
+    openMenu(event, readOnly ? items.slice(0, 1) : items);
   };
   const trackMenu = (event: React.MouseEvent, track: AudioTrack) => {
     select({ kind: "track", id: track.id });
+    if (readOnly) return openMenu(event, [{ label: "属性", icon: <SlidersHorizontal size={14} />, onClick: () => showView("properties") }]);
     openMenu(event, [
       { label: "属性", icon: <SlidersHorizontal size={14} />, onClick: () => showView("properties") },
       { label: "重命名", icon: <Pencil size={14} />, onClick: () => renameTrack(track) },
@@ -761,7 +764,7 @@ export function Timeline() {
         <button
           className="icon-btn"
           title={history.undoLabel ? `撤销：${history.undoLabel} (Ctrl+Z)` : "撤销 (Ctrl+Z)"}
-          disabled={!history.undoLabel}
+          disabled={!history.undoLabel || readOnly}
           onClick={() => run(history.undo)}
         >
           <Undo2 size={15} />
@@ -769,28 +772,32 @@ export function Timeline() {
         <button
           className="icon-btn"
           title={history.redoLabel ? `重做：${history.redoLabel} (Ctrl+Shift+Z)` : "重做 (Ctrl+Shift+Z)"}
-          disabled={!history.redoLabel}
+          disabled={!history.redoLabel || readOnly}
           onClick={() => run(history.redo)}
         >
           <Redo2 size={15} />
         </button>
         <span className="toolbar-sep" />
-        <button className="btn small" onClick={addTrack} title="新建一条空音轨">
-          <Plus size={13} /> 音轨
-        </button>
-        <button className="btn small" onClick={addSubtitle}>
-          <Plus size={13} /> 字幕
-        </button>
-        <button className="btn small" onClick={addBeat}>
-          <Flag size={13} /> 标记
-        </button>
+        {!readOnly && (
+          <>
+            <button className="btn small" onClick={addTrack} title="新建一条空音轨">
+              <Plus size={13} /> 音轨
+            </button>
+            <button className="btn small" onClick={addSubtitle}>
+              <Plus size={13} /> 字幕
+            </button>
+            <button className="btn small" onClick={addBeat}>
+              <Flag size={13} /> 标记
+            </button>
+          </>
+        )}
         {selected && (
           <span className="tl-inspector">
             <strong className="ellipsis">{selected.label}</strong>
             <span className="faint mono">
               {formatTime(selected.start)} – {formatTime(selected.start + selected.duration)}
             </span>
-            {inspectorVolume && (
+            {inspectorVolume && !readOnly && (
               <InlineVolume
                 gain={gainOf(inspectorVolume)}
                 onPreview={(gain) => previewVolume(inspectorVolume, gain)}
@@ -925,7 +932,7 @@ export function Timeline() {
               </div>
             </>
           )}
-          {!assetOver && (
+          {!assetOver && !readOnly && (
             <div className="tl-hint" style={{ left: LABEL_WIDTH + 8 }}>
               把素材从左侧「素材」拖到这里 · Ctrl + 滚轮缩放 · 中键拖动平移 · Alt 关闭吸附
             </div>

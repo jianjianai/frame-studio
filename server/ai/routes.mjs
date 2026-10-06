@@ -84,7 +84,8 @@ export function aiPlugin(services) {
   router.patch("/api/ai/sessions/:id", async ({ params, req }) => {
     const body = await readJson(req);
     if (body.title) ai.rename(params.id, body.title);
-    if (body.profile) return ai.switchProfile(params.id, body);
+    // Another AI (or a custom API's other model) would mean another context: that is a new conversation.
+    if (body.profile || body.model) throw problem(409, "对话开始后不能切换 AI，请新建对话");
     if (body.configId) return ai.setConfig(params.id, body.configId, body.value);
     return ai.publicMeta(ai.get(params.id));
   });
@@ -94,6 +95,8 @@ export function aiPlugin(services) {
   );
   router.post("/api/ai/sessions/:id/prompt", async ({ params, req }) => ai.prompt(params.id, await readJson(req)));
   router.post("/api/ai/sessions/:id/cancel", ({ params }) => ai.cancel(params.id));
+  router.post("/api/ai/sessions/:id/compact", ({ params }) => ai.compact(params.id));
+  router.post("/api/ai/sessions/:id/fork", async ({ params, req }) => ai.fork(params.id, await readJson(req)));
   router.post("/api/ai/sessions/:id/queue/:message/steer", ({ params }) => ai.steer(params.id, params.message));
   router.delete("/api/ai/sessions/:id/queue/:message", ({ params }) => ai.removeQueued(params.id, params.message));
   router.post("/api/ai/permissions/:id", async ({ params, req }) => {

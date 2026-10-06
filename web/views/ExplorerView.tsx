@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ChevronRight, ChevronDown, Folder, FolderOpen, FilePlus, Upload, RefreshCw, Sparkles, Trash2, Pencil, ChevronsDownUp } from "lucide-react";
 import { api, del, workPath, useServerEvent } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, usePrompt } from "../lib/ui";
+import { useAction, useConfirm, useContextMenu, usePrompt, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { fileIcon } from "../workbench/EditorArea";
@@ -28,7 +28,7 @@ export function buildTree(entries: FileEntry[]) {
 }
 
 export function ExplorerView() {
-  const { work, openFile, addToChat } = useWorkbench();
+  const { work, openFile, addToChat, readOnly } = useWorkbench();
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [open, setOpen] = useState<Set<string>>(new Set(["scenes"]));
   const [run] = useAction();
@@ -68,11 +68,17 @@ export function ExplorerView() {
     openMenu(event, [
       ...(node.type === "file"
         ? [{ label: "打开", onClick: () => openFile(node.path) }]
-        : [{ label: "新建文件", icon: <FilePlus size={14} />, onClick: () => newFile(node.path) }]),
-      { label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => addToChat({ type: "file", path: node.path }) },
-      "separator",
-      { label: "重命名 / 移动", icon: <Pencil size={14} />, onClick: () => rename(node), disabled: node.path === "project.ts" },
-      { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(node), disabled: node.path === "project.ts" },
+        : readOnly
+          ? []
+          : [{ label: "新建文件", icon: <FilePlus size={14} />, onClick: () => newFile(node.path) }]),
+      ...(readOnly
+        ? []
+        : ([
+            { label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => addToChat({ type: "file", path: node.path }) },
+            "separator",
+            { label: "重命名 / 移动", icon: <Pencil size={14} />, onClick: () => rename(node), disabled: node.path === "project.ts" },
+            { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(node), disabled: node.path === "project.ts" },
+          ] as MenuItem[])),
     ]);
 
   const renderNodes = (nodes: Node[], depth: number): React.ReactNode =>
@@ -116,12 +122,16 @@ export function ExplorerView() {
   return (
     <div className="view">
       <ViewHeader title="资源管理器">
-        <button className="icon-btn" title="新建文件" onClick={() => newFile()}>
-          <FilePlus size={15} />
-        </button>
-        <button className="icon-btn" title="上传素材到 public/" onClick={() => uploadFiles(work, "public").then(load)}>
-          <Upload size={15} />
-        </button>
+        {!readOnly && (
+          <>
+            <button className="icon-btn" title="新建文件" onClick={() => newFile()}>
+              <FilePlus size={15} />
+            </button>
+            <button className="icon-btn" title="上传素材到 public/" onClick={() => uploadFiles(work, "public").then(load)}>
+              <Upload size={15} />
+            </button>
+          </>
+        )}
         <button className="icon-btn" title="刷新" onClick={load}>
           <RefreshCw size={15} />
         </button>

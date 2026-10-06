@@ -12,6 +12,7 @@ import { registerGuideTools } from "./tools/guide-tools.mjs";
 import { mcpPlugin } from "./mcp.mjs";
 import { oauthPlugin } from "./oauth.mjs";
 import { experiencePlugin } from "./experience.mjs";
+import { promptsPlugin } from "./prompts.mjs";
 import { studioRoutes } from "./routes/studio.mjs";
 import { aiPlugin } from "./ai/routes.mjs";
 import { speechPlugin } from "./speech/plugin.mjs";
@@ -38,4 +39,4 @@ function corePlugin(services) {
   registerExportTools(tools);
 }
 
-export const plugins = [corePlugin, speechPlugin, experiencePlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];
+export const plugins = [corePlugin, speechPlugin, experiencePlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];

@@ -33,9 +33,11 @@ interface LibraryItem {
 }
 
 export function AssetsView() {
-  const { work, stage, addToChat, reload, openFile } = useWorkbench();
+  const { work, stage, addToChat, reload, openFile, readOnly } = useWorkbench();
   const toast = useToast();
   const [tab, setTab] = useState<"work" | "library">("work");
+  // A published work's own files are view-only; the shared materials library is not part of it.
+  const locked = readOnly && tab === "work";
   const [assets, setAssets] = useState<Asset[]>([]);
   const [library, setLibrary] = useState<LibraryItem[]>([]);
   const [dragging, setDragging] = useState(false);
@@ -107,7 +109,11 @@ export function AssetsView() {
       await run(() => del(`${base}/file?path=${encodeURIComponent(asset.path)}`).then(load));
   };
   const assetMenu = (event: React.MouseEvent, asset: Asset) =>
-    openMenu(event, [
+    openMenu(event, readOnly ? [
+      { label: "打开", icon: <Eye size={14} />, onClick: () => openFile(asset.path) },
+      { label: "复制引用地址", icon: <Copy size={14} />, onClick: () => navigator.clipboard.writeText(`assetUrl("${asset.url}")`).then(() => toast("已复制")) },
+      { label: "存入素材库", icon: <Library size={14} />, onClick: () => toLibrary(asset) },
+    ] : [
       ...(asset.kind === "image" || asset.kind === "video"
         ? [{ label: "添加到画面（播放头处）", icon: <PlusSquare size={14} />, onClick: () => addLayer(asset) }]
         : []),
@@ -126,7 +132,7 @@ export function AssetsView() {
     event.preventDefault();
     setDragging(false);
     const files = [...event.dataTransfer.files];
-    if (!files.length) return;
+    if (!files.length || locked) return;
     await run(async () => {
       if (tab === "library") for (const file of files) await api(`/api/repos/${work.repo}/library?name=${encodeURIComponent(file.name)}`, { raw: file });
       else await uploadBlobs(work, files, "public");
@@ -136,19 +142,21 @@ export function AssetsView() {
   return (
     <div
       className={`view ${dragging ? "drop-active" : ""}`}
-      onDragOver={(event) => (event.preventDefault(), setDragging(true))}
+      onDragOver={(event) => !locked && (event.preventDefault(), setDragging(true))}
       onDragLeave={() => setDragging(false)}
       onDrop={drop}
     >
       <ViewHeader title="素材">
-        <button
-          className="icon-btn"
-          title="上传文件"
-          onClick={() => run(() => (tab === "work" ? uploadFiles(work, "public").then(load) : uploadToLibrary(work.repo).then(loadLibrary)))}
-        >
-          <Upload size={15} />
-        </button>
-        {tab === "work" && (
+        {!locked && (
+          <button
+            className="icon-btn"
+            title="上传文件"
+            onClick={() => run(() => (tab === "work" ? uploadFiles(work, "public").then(load) : uploadToLibrary(work.repo).then(loadLibrary)))}
+          >
+            <Upload size={15} />
+          </button>
+        )}
+        {tab === "work" && !readOnly && (
           <button className="icon-btn" title="从网址导入" onClick={() => setUrlDialog(true)}>
             <Link2 size={15} />
           </button>
@@ -212,7 +220,8 @@ export function AssetsView() {
               <span className="faint small-text">{formatBytes(item.size)}</span>
               <button
                 className="icon-btn"
-                title="复制到本作品"
+                disabled={readOnly}
+                title={readOnly ? "作品已发布，不能再添加素材" : "复制到本作品"}
                 onClick={() => run(() => api(`${base}/assets/import`, { body: { libraryId: item.id } }).then(load), "已复制到本作品 public/library/")}
               >
                 <ArrowDownToLine size={14} />

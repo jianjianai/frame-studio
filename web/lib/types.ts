@@ -14,7 +14,12 @@ export interface WorkSummary {
   poster: string;
   updatedAt: string;
   openedAt?: string;
-  location: "local" | "remote" | "both" | "trash";
+  /** Where the branch is (for the recycle bin: where the trash/<id> branch is). */
+  location: "local" | "remote" | "both";
+  /** GitHub has every version of the local copy. */
+  synced?: boolean;
+  /** When the work was published ("" when it is not). */
+  publishedAt?: string;
   checkedOut: boolean;
   error?: string;
 }
@@ -70,6 +75,8 @@ export interface WorkInfo {
     fps: number;
     /** Id of the linked experience library ("" or absent: none). */
     experience?: string;
+    /** When the work was published; a published work is view-only. */
+    publishedAt?: string;
     beats: Beat[];
     subtitles: Subtitle[];
     visual?: { background: string; clips: VisualClip[] };

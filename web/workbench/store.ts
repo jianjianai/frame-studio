@@ -147,6 +147,10 @@ export interface WorkbenchContextValue {
   openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" }) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
+  /** Put a prompt into the chat's input box (opening the chat). */
+  insertPrompt: (text: string) => void;
+  /** The work is published: view-only (exports and the experience library still work). */
+  readOnly: boolean;
   selection: Selection | null;
   select: (selection: Selection | null) => void;
   /** Exactly what the user is looking at now; sent with each chat message for the AI. */

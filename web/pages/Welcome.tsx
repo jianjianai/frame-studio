@@ -13,9 +13,13 @@ import {
   Moon,
   Undo2,
   FolderInput,
+  HardDriveDownload,
+  Copy,
+  Send,
+  Lock,
 } from "lucide-react";
-import { api, del, timeAgo, useServerEvent } from "../lib/api";
-import { Dialog, useAction, useConfirm, useContextMenu, usePrompt } from "../lib/ui";
+import { api, del, formatBytes, timeAgo, useServerEvent } from "../lib/api";
+import { Dialog, useAction, useConfirm, useContextMenu, usePrompt, useToast } from "../lib/ui";
 import type { Repo, WorkSummary } from "../lib/types";
 import { navigate } from "../App";
 import { GithubIcon } from "../components/icons";
@@ -26,7 +30,7 @@ import "./pages.css";
 
 const openWork = (work: Pick<WorkSummary, "repo" | "id">) => navigate(`/work/${encodeURIComponent(work.repo)}/${encodeURIComponent(work.id)}`);
 
-export function WorkCard({ work, onMenu }: { work: WorkSummary; onMenu?: (event: React.MouseEvent) => void }) {
+export function WorkCard({ work, onMenu, remote }: { work: WorkSummary; onMenu?: (event: React.MouseEvent) => void; remote?: boolean }) {
   const poster = work.checkedOut && work.poster?.startsWith("films/") ? `/files/${work.repo}/${work.id}/${work.poster}` : "";
   const ratio = work.width && work.height ? `${work.width} / ${work.height}` : "16 / 9";
   return (
@@ -68,7 +72,20 @@ export function WorkCard({ work, onMenu }: { work: WorkSummary; onMenu?: (event:
         <div className="muted small-text">
           {work.duration ? `${Math.round(work.duration)} 秒 · ` : ""}
           {work.width}×{work.height} · {timeAgo(work.openedAt || work.updatedAt)}
+          {work.publishedAt && (
+            <span className="badge accent" title={`发布于 ${new Date(work.publishedAt).toLocaleString()}，只能查看`}>
+              {" "}
+              <Lock size={9} /> 已发布
+            </span>
+          )}
           {work.location === "remote" && <span className="badge"> 仅 GitHub</span>}
+          {remote && work.location === "local" && <span className="badge"> 仅本机</span>}
+          {remote && work.location === "both" && !work.synced && (
+            <span className="badge warn" title="本机有还没同步到 GitHub 的版本">
+              {" "}
+              未同步
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -85,6 +102,7 @@ export function Welcome({ version }: { version: string }) {
   const [run] = useAction();
   const confirm = useConfirm();
   const prompt = usePrompt();
+  const toast = useToast();
   const [openMenu, menu] = useContextMenu();
   const [theme, setTheme] = useState(document.documentElement.dataset.theme || "");
 
@@ -106,15 +124,70 @@ export function Welcome({ version }: { version: string }) {
   const filtered = useMemo(() => works.filter((work) => !query || work.title.toLowerCase().includes(query.toLowerCase())), [works, query]);
   const byRepo = useMemo(() => repos.map((repo) => ({ repo, works: filtered.filter((work) => work.repo === repo.id) })), [repos, filtered]);
 
+  const remoteOf = (work: WorkSummary) => Boolean(repos.find((repo) => repo.id === work.repo)?.remote);
   const workMenu = (work: WorkSummary) => (event: React.MouseEvent) =>
     openMenu(event, [
       { label: "打开", onClick: () => openWork(work) },
+      {
+        label: "创建副本",
+        icon: <Copy size={14} />,
+        onClick: async () => {
+          const title = await prompt("副本名称", `${work.title}（副本）`);
+          if (title?.trim())
+            await run(() => api(`/api/works/${work.repo}/${work.id}/duplicate`, { body: { title: title.trim() } }), `已创建副本「${title.trim()}」`);
+        },
+      },
+      work.publishedAt
+        ? {
+            label: "取消发布",
+            icon: <Send size={14} />,
+            onClick: () => run(() => api(`/api/works/${work.repo}/${work.id}/unpublish`, { method: "POST" }), "已取消发布，可以继续修改"),
+          }
+        : {
+            label: "发布",
+            icon: <Send size={14} />,
+            onClick: async () => {
+              if (await confirm(`发布「${work.title}」？发布后只能查看，不能再修改（随时可以取消发布）。当前所有修改会保存为一个版本。`, { confirm: "发布" }))
+                await run(() => api(`/api/works/${work.repo}/${work.id}/publish`, { method: "POST" }), "已发布");
+            },
+          },
+      ...(work.location === "both"
+        ? [
+            {
+              label: "释放本地空间",
+              icon: <HardDriveDownload size={14} />,
+              disabled: !work.synced,
+              onClick: async () => {
+                if (
+                  await confirm(
+                    <>
+                      删除本机上的「{work.title}」，只保留 GitHub 上的。
+                      <br />
+                      以后打开时会从 GitHub 重新下载。
+                    </>,
+                    { confirm: "释放空间" },
+                  )
+                ) {
+                  const result = await run(() => api<{ freed: number }>(`/api/works/${work.repo}/${work.id}/free`, { method: "POST" }));
+                  if (result) toast(`已释放 ${formatBytes(result.freed)}，作品保留在 GitHub 上`, "ok");
+                }
+              },
+            },
+          ]
+        : []),
+      "separator",
       {
         label: "移到回收站",
         icon: <Trash2 size={14} />,
         danger: true,
         onClick: async () => {
-          if (await confirm(`把「${work.title}」移到回收站？可以在回收站中恢复。`, { confirm: "移到回收站", danger: true }))
+          const where = work.location === "local" ? "" : "本机和 GitHub 上";
+          if (
+            await confirm(`把「${work.title}」移到回收站？${where}的分支会改名为 trash/${work.id}，可以在回收站中恢复。`, {
+              confirm: "移到回收站",
+              danger: true,
+            })
+          )
             await run(() => del(`/api/works/${work.repo}/${work.id}`), "已移到回收站");
         },
       },
@@ -161,7 +234,7 @@ export function Welcome({ version }: { version: string }) {
                 <Plus size={20} />
                 <span>
                   <strong>新建作品</strong>
-                  <small>描述需求交给 AI，或从空白开始</small>
+                  <small>设置画幅和时长，然后和 AI 一起制作</small>
                 </span>
               </button>
               <button className="hero-card" onClick={() => setDialog("repo")}>
@@ -188,7 +261,7 @@ export function Welcome({ version }: { version: string }) {
               </h2>
               <div className="work-grid">
                 {recent.map((work) => (
-                  <WorkCard key={work.repo + work.id} work={work} onMenu={workMenu(work)} />
+                  <WorkCard key={work.repo + work.id} work={work} onMenu={workMenu(work)} remote={remoteOf(work)} />
                 ))}
               </div>
             </section>
@@ -242,7 +315,7 @@ export function Welcome({ version }: { version: string }) {
                 {list.length ? (
                   <div className="work-grid">
                     {list.map((work) => (
-                      <WorkCard key={work.id} work={work} onMenu={workMenu(work)} />
+                      <WorkCard key={work.id} work={work} onMenu={workMenu(work)} remote={Boolean(repo.remote)} />
                     ))}
                   </div>
                 ) : (
@@ -263,36 +336,79 @@ export function Welcome({ version }: { version: string }) {
   );
 }
 
+const WHERE = { both: "本机和 GitHub", remote: "仅 GitHub", local: "仅本机" } as const;
+
+/**
+ * The recycle bin: works whose branch was renamed to trash/<id> (here and on GitHub).
+ * Restoring renames it back; deleting removes it here and on GitHub.
+ */
 function TrashDialog({ repos, onClose }: { repos: Repo[]; onClose: () => void }) {
-  const [items, setItems] = useState<WorkSummary[]>([]);
-  const [run] = useAction();
+  const [items, setItems] = useState<WorkSummary[] | null>(null);
+  const [run, busy] = useAction();
   const confirm = useConfirm();
+  const toast = useToast();
   const load = () => Promise.all(repos.map((repo) => api<WorkSummary[]>(`/api/repos/${repo.id}/trash`))).then((lists) => setItems(lists.flat()));
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  useServerEvent((event) => {
+    if (event.type === "works") void load();
+  });
+  const freed = (bytes: number) => (bytes > 0 ? `，释放了 ${formatBytes(bytes)}` : "");
+  const purge = async (work: WorkSummary) => {
+    const where = work.location === "local" ? "本机上的分支" : work.location === "remote" ? "GitHub 上的分支" : "本机和 GitHub 上的分支";
+    if (!(await confirm(`永久删除「${work.title}」？${where}、导出的视频和 AI 对话都会删除，无法恢复。`, { confirm: "永久删除", danger: true }))) return;
+    const result = await run(() => del<{ freed: number }>(`/api/trash/${work.repo}/${work.id}`));
+    if (result) toast(`已永久删除「${work.title}」${freed(result.freed)}`, "ok");
+  };
+  const empty = async () => {
+    if (!items?.length) return;
+    if (!(await confirm(`永久删除回收站里的 ${items.length} 个作品？本机和 GitHub 上的分支都会删除，无法恢复。`, { confirm: "清空回收站", danger: true }))) return;
+    let total = 0;
+    for (const repo of repos.filter((repo) => items.some((item) => item.repo === repo.id))) {
+      const result = await run(() => del<{ freed: number }>(`/api/trash/${repo.id}`));
+      if (!result) return;
+      total += result.freed;
+    }
+    toast(`回收站已清空${freed(total)}`, "ok");
+  };
+  const repoName = (id: string) => repos.find((repo) => repo.id === id)?.name ?? id;
   return (
-    <Dialog onClose={onClose} title="回收站" width={600}>
-      {!items.length && <div className="empty">回收站是空的</div>}
-      {items.map((work) => (
+    <Dialog
+      onClose={onClose}
+      title="回收站"
+      width={640}
+      footer={
+        <>
+          <span className="faint small-text grow">移到回收站的作品分支改名为 trash/&lt;id&gt;，本机和 GitHub 上一起改。</span>
+          <button className="btn danger" disabled={busy || !items?.length} onClick={empty}>
+            <Trash2 size={13} /> 清空回收站
+          </button>
+        </>
+      }
+    >
+      {items === null && <div className="empty">正在读取…</div>}
+      {items?.length === 0 && <div className="empty">回收站是空的</div>}
+      {items?.map((work) => (
         <div className="trash-row" key={work.repo + work.id}>
-          <span className="grow ellipsis">{work.title}</span>
-          <span className="faint">{timeAgo(work.updatedAt)}</span>
-          <button className="btn small" onClick={() => run(() => api(`/api/works/${work.repo}/${work.id}/restore`, { method: "POST" }).then(load), "已恢复")}>
+          <div className="grow trash-info">
+            <strong className="ellipsis" title={work.title}>
+              {work.title}
+            </strong>
+            <span className="faint small-text">
+              {repos.length > 1 ? repoName(work.repo) + " · " : ""}
+              {WHERE[work.location]} · {timeAgo(work.updatedAt)}修改 · trash/{work.id}
+            </span>
+          </div>
+          <button
+            className="btn small"
+            disabled={busy}
+            onClick={() => run(() => api(`/api/works/${work.repo}/${work.id}/restore`, { method: "POST" }), `已恢复「${work.title}」`)}
+          >
             <Undo2 size={13} /> 恢复
           </button>
-          <button
-            className="btn small danger"
-            onClick={async () => {
-              if (
-                await confirm(`永久删除「${work.title}」？本机的这个作品分支会被删除，无法恢复（GitHub 上的分支不受影响）。`, {
-                  confirm: "永久删除",
-                  danger: true,
-                })
-              )
-                await run(() => del(`/api/trash/${work.repo}/${work.id}`).then(load), "已永久删除");
-            }}
-          >
+          <button className="btn small danger" disabled={busy} onClick={() => purge(work)}>
             永久删除
           </button>
         </div>

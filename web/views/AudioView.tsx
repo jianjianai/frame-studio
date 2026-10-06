@@ -21,7 +21,7 @@ interface Provider {
 }
 
 export function AudioView() {
-  const { work, reload } = useWorkbench();
+  const { work, reload, readOnly } = useWorkbench();
   const doc = work.meta?.audioDocument as AudioDocument | undefined;
   const [run] = useAction();
   const base = workPath(work.repo, work.id);
@@ -33,6 +33,9 @@ export function AudioView() {
   return (
     <div className="view">
       <ViewHeader title="音频与配音" />
+      {readOnly && <p className="view-hint">作品已发布，不能再录音、配音或修改音轨。</p>}
+      {/* A published work: every control below is disabled at once. */}
+      <fieldset className="props-fieldset" disabled={readOnly}>
       <section className="view-section">
         <h3>
           <Mic size={14} /> 录音
@@ -77,6 +80,7 @@ export function AudioView() {
           </div>
         ))}
       </section>
+      </fieldset>
     </div>
   );
 }

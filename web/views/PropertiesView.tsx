@@ -32,7 +32,7 @@ const BLENDS = [
  * and is one step of the timeline's undo history.
  */
 export function PropertiesView() {
-  const { work, selection, history, stage, addToChat, showView } = useWorkbench();
+  const { work, selection, history, stage, addToChat, showView, readOnly } = useWorkbench();
   const [run] = useAction();
   const meta = work.meta;
   const base = workPath(work.repo, work.id);
@@ -471,7 +471,10 @@ export function PropertiesView() {
   return (
     <div className="view">
       <ViewHeader title="属性" />
-      <div className="props">{body}</div>
+      {readOnly && <p className="view-hint">作品已发布，属性只能查看。</p>}
+      <fieldset className="props props-fieldset" disabled={readOnly}>
+        {body}
+      </fieldset>
     </div>
   );
 }

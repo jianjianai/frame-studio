@@ -6,6 +6,7 @@ export function registerExportTools(registry) {
 
   registry.add({
     name: "export_video",
+    published: true, // writes outside the work: allowed on a published (view-only) work
     title: "导出视频",
     description: "在后台把作品导出为 MP4（H.264 + AAC）。导出使用调用时的作品快照，之后的修改不影响本次导出。返回任务 id，用 task_status 查看进度。",
     input: {

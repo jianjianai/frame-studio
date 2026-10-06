@@ -278,6 +278,109 @@ export class AiManager {
     this.publish(session);
     return this.publicMeta(session);
   }
+  /**
+   * Branch a conversation: a new conversation holding the first `keep` turns of this one,
+   * with the agent's context forked right after its last reply in them. With `text` it
+   * continues with that message, which is how an earlier message is edited and resent.
+   */
+  async fork(id, { keep, text = "", attachments = [], view = null }) {
+    const parent = this.get(id);
+    if (text.trim() || attachments.length) await this.assertWorkEditable(parent);
+    const entries = this.transcript(id);
+    const starts = entries.flatMap((entry, index) => (entry.kind === "user" && !entry.steered ? [index] : []));
+    if (!Number.isInteger(keep) || keep < 0 || keep > starts.length) throw problem(400, "无效的分支位置");
+    if (keep === starts.length && parent.meta.status !== "idle") throw problem(409, "AI 还在回复这一轮，等它完成再分支");
+    const kept = entries.slice(0, keep < starts.length ? starts[keep] : entries.length);
+    const messageId = kept.findLast((entry) => entry.kind === "update" && entry.update?.sessionUpdate === "agent_message_chunk" && entry.update.messageId)
+      ?.update.messageId;
+    const now = new Date().toISOString();
+    const session = {
+      meta: {
+        id: randomUUID(),
+        work: parent.meta.work,
+        repo: parent.meta.repo,
+        profile: parent.meta.profile,
+        profileName: parent.meta.profileName,
+        agent: parent.meta.agent,
+        model: parent.meta.model,
+        title: parent.meta.title,
+        createdAt: now,
+        updatedAt: now,
+        status: "idle",
+        queue: [],
+        choices: { ...parent.meta.choices },
+        usage: keep === starts.length ? (parent.meta.usage ?? null) : null,
+        // Turns dropped from the branch may have changed files: said once in the first message.
+        branch: { from: parent.meta.id, title: parent.meta.title, keep, dropped: starts.length - keep },
+      },
+      process: null,
+      attached: false,
+      forkFrom: messageId && parent.meta.acpSessionId && parent.meta.agent ? { sessionId: parent.meta.acpSessionId, messageId } : null,
+    };
+    // The transcript so far, with its images, then a divider.
+    const from = `/api/ai/sessions/${parent.meta.id}/images/`;
+    const to = `/api/ai/sessions/${session.meta.id}/images/`;
+    const lines = kept.map((entry) => JSON.stringify(entry));
+    for (const [, name] of lines.join("\n").matchAll(/\/api\/ai\/sessions\/[^/]+\/images\/([a-f0-9]{24}\.[a-z]+)/g)) {
+      const source = path.join(this.sessionsDir, parent.meta.id + ".images", name);
+      if (!fs.existsSync(source)) continue;
+      fs.mkdirSync(path.join(this.sessionsDir, session.meta.id + ".images"), { recursive: true });
+      fs.copyFileSync(source, path.join(this.sessionsDir, session.meta.id + ".images", name));
+    }
+    lines.push(JSON.stringify({ at: Date.now(), kind: "branch", from: parent.meta.id, title: parent.meta.title, keep }));
+    fs.writeFileSync(path.join(this.sessionsDir, session.meta.id + ".jsonl"), lines.map((line) => line.replaceAll(from, to)).join("\n") + "\n");
+    this.sessions.set(session.meta.id, session);
+    try {
+      await this.attach(session);
+    } catch (error) {
+      await this.remove(session.meta.id).catch(() => {});
+      throw error;
+    }
+    this.publish(session);
+    if (text.trim() || attachments.length) await this.prompt(session.meta.id, { text, attachments: this.resendable(attachments), view });
+    return this.publicMeta(session);
+  }
+  /** A published work is view-only: the AI may not change it any more. */
+  async assertWorkEditable(session) {
+    const work = await this.services.openWork(session.meta.work, session.meta.repo);
+    if (this.services.works.published(work))
+      throw problem(423, "这个作品已发布，只能查看，AI 不能再修改它。要继续制作，先取消发布，或者创建一个副本。", "PUBLISHED");
+  }
+  /** The agent's own fork of the parent context; null when it cannot (the branch then starts fresh). */
+  async forkContext(session, process, params) {
+    const { sessionId, messageId } = session.forkFrom;
+    session.forkFrom = null;
+    try {
+      const forked = await process.connection.unstable_forkSession({
+        ...params,
+        sessionId,
+        _meta: { ...params._meta, jetbrains: { air: { fork: { version: 1, messageId } } } },
+      });
+      session.meta.acpSessionId = forked.sessionId;
+      // Codex hands back a live session; Claude writes the forked conversation, which is then resumed.
+      return forked.configOptions || forked.modes ? forked : null;
+    } catch (error) {
+      console.warn("fork failed:", error.message);
+      this.append(session, { kind: "notice", message: "AI 的上下文无法从这里分支，分支会在新的上下文中继续（对话记录仍保留在这里）" });
+      return null;
+    }
+  }
+  /** Attachments of a stored message, ready to send again: images are read back from the store. */
+  resendable(attachments) {
+    return attachments
+      .map((item) => {
+        if (item?.type !== "image" || !item.uri) return item;
+        const [, sessionId, name] = /^\/api\/ai\/sessions\/([^/]+)\/images\/([^/]+)$/.exec(item.uri) ?? [];
+        try {
+          const { uri: _uri, kind, ...rest } = item;
+          return { ...rest, type: kind || "image", data: fs.readFileSync(this.imageFile(sessionId, name)).toString("base64") };
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+  }
+
   /** Make sure the session has a live ACP session (new, resumed or reloaded). */
   async attach(session, work) {
     if (session.attached && session.process) return;
@@ -291,10 +394,11 @@ export class AiManager {
     // Claude never asks about FRAME tools (confirmTool does, following the session mode) or read-only inspection.
     const meta = process.agent === "claude" ? { _meta: { claudeCode: { options: { allowedTools: CLAUDE_ALLOWED_TOOLS } } } } : {};
     try {
+      if (!session.meta.acpSessionId && session.forkFrom) result = await this.forkContext(session, process, { ...common, ...meta });
       if (!session.meta.acpSessionId) {
         result = await process.connection.newSession({ ...common, ...meta });
         session.meta.acpSessionId = result.sessionId;
-      } else {
+      } else if (!result) {
         try {
           if (process.capabilities.sessionCapabilities?.resume)
             result = await process.connection.resumeSession({ sessionId: session.meta.acpSessionId, ...common, ...meta });
@@ -321,7 +425,9 @@ export class AiManager {
     session.process = process;
     session.attached = true;
     process.sessions.add(session.meta.id);
-    session.meta.context = { ...session.meta.context, experience: rebaseSeen(session.meta.context?.experience ?? null, brief.experience ?? null) };
+    // What the brief told the AI; after a compaction that is all it is sure to remember.
+    session.briefSeen = brief.experience ?? null;
+    session.meta.context = { ...session.meta.context, experience: rebaseSeen(session.meta.context?.experience ?? null, session.briefSeen) };
     session.files ??= this.readFiles(session) ?? snapshotFiles(work.dir);
     if (result?.configOptions) session.meta.configOptions = result.configOptions;
     if (result?.modes) session.meta.modes = result.modes;
@@ -370,6 +476,7 @@ export class AiManager {
   async prompt(id, { text = "", attachments = [], view = null }) {
     const session = this.get(id);
     if (!text.trim() && !attachments.length) throw problem(400, "消息不能为空");
+    if (!isCommand(session, text)) await this.assertWorkEditable(session);
     const message = { id: randomUUID(), text, attachments, view: view && typeof view === "object" ? view : null };
     if (session.meta.status !== "idle") {
       session.meta.queue.push(message);
@@ -381,7 +488,8 @@ export class AiManager {
   }
   async runTurn(session, message) {
     session.meta.status = "running";
-    if (session.meta.title === "新对话" && message.text.trim()) session.meta.title = message.text.trim().replace(/\s+/g, " ").slice(0, 40);
+    if (session.meta.title === "新对话" && message.text.trim() && !isCommand(session, message.text))
+      session.meta.title = message.text.trim().replace(/\s+/g, " ").slice(0, 40);
     this.publish(session);
     const work = await this.services.openWork(session.meta.work, session.meta.repo);
     this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message) });
@@ -406,6 +514,10 @@ export class AiManager {
       const next = session.meta.queue.shift();
       if (next) void this.runTurn(session, next);
     }
+  }
+  /** Summarize the conversation so far to free context (the agents' own /compact). */
+  compact(id) {
+    return this.prompt(id, { text: "/compact" });
   }
   async cancel(id) {
     const session = this.get(id);
@@ -474,26 +586,6 @@ export class AiManager {
     session.meta.queue = session.meta.queue.filter((item) => item.id !== messageId);
     this.publish(session);
   }
-  /** Switch the profile/model of a conversation: continues in a new agent session. */
-  async switchProfile(id, { profile, model = "" }) {
-    const session = this.get(id);
-    if (session.meta.status !== "idle") throw problem(409, "AI 正在工作，先停止再切换");
-    const target = this.profiles.get(profile);
-    Object.assign(session.meta, {
-      profile: target.id,
-      profileName: target.name,
-      agent: target.agent,
-      model,
-      acpSessionId: null,
-      configOptions: null,
-    });
-    session.attached = false;
-    session.process = null;
-    this.append(session, { kind: "notice", message: `已切换到 ${target.name}${model ? " · " + model : ""}，新消息将在新的上下文中继续` });
-    await this.attach(session);
-    this.publish(session);
-    return this.publicMeta(session);
-  }
   rename(id, title) {
     const session = this.get(id);
     session.meta.title = String(title || "").slice(0, 80) || session.meta.title;
@@ -528,8 +620,10 @@ export class AiManager {
       return this.publish(session);
     }
     if (update.sessionUpdate === "session_info_update") {
+      // Claude marks forked conversations "(fork)"; branches have their own icon instead.
       const title = String(update.title || "")
         .split("[FRAME]")[0]
+        .replace(/\s*\(fork\)\s*$/i, "")
         .trim();
       if (title) session.meta.title = title.slice(0, 80);
       return this.publish(session);
@@ -537,6 +631,14 @@ export class AiManager {
     if (update.sessionUpdate === "usage_update") {
       session.meta.usage = update;
       return this.publish(session);
+    }
+    // Both agents report a compaction (manual or automatic) as a "Compact conversation" tool call.
+    if (update.sessionUpdate === "tool_call" && update.title === "Compact conversation") session.compacting = update.toolCallId;
+    if (update.toolCallId && update.toolCallId === session.compacting && update.status === "completed") {
+      session.compacting = null;
+      // The summary keeps the gist, not documents read along the way: assume only the brief.
+      session.meta.context = { ...session.meta.context, experience: session.briefSeen ?? null };
+      this.saveMeta(session);
     }
     this.append(session, { kind: "update", update });
   }
@@ -621,6 +723,8 @@ export class AiManager {
    * steered into a running turn skips the file changes: they are mostly the AI's own so far.
    */
   turnPrompt(session, message, work, { steering = false } = {}) {
+    // A slash command goes as typed: anything appended would become its arguments.
+    if (isCommand(session, message.text) && !message.attachments.length) return [{ type: "text", text: message.text.trim() }];
     const { services } = this;
     const lines = [`[FRAME] 作品 ${work.id}，作品文件在 projects/${work.slug}/`];
     const view = message.view ?? services.viewState.get(`${work.repo}/${work.id}`);
@@ -650,6 +754,10 @@ export class AiManager {
     const images = message.attachments.filter((item) => item.type === "image").length;
     if (images) references.push(`${images} 张图片（用户直接发给你的，见附图，不是作品里的画面）`);
     if (references.length) lines.push("用户引用：" + references.join("；"));
+    if (session.meta.branch?.dropped && !session.meta.branch.told) {
+      lines.push("这是从之前的对话中间分支出来的对话：分支点之后那些轮次对作品文件做过的修改仍在文件里，没有回退。改文件前先读取最新内容。");
+      session.meta.branch = { ...session.meta.branch, told: true };
+    }
     const library = services.experience?.current(work) ?? null;
     const experience = experienceDelta(session.meta.context?.experience ?? null, library);
     const referenced = referencedExperience(
@@ -708,6 +816,12 @@ export class AiManager {
 const isModel = (options, id) => options.some((option) => option.id === id && (option.category === "model" || option.id === "model"));
 
 /** Attachments as stored in the transcript: image data becomes an image entry (saved to a file by storeImages). */
+/** "/compact", "/review …": a command the agent offers (both offer compact). */
+function isCommand(session, text) {
+  const name = /^\/([a-z][\w-]*)(\s|$)/i.exec(text.trim())?.[1];
+  return Boolean(name) && (name === "compact" || Boolean(session.meta.commands?.some((command) => command.name === name)));
+}
+
 const userAttachments = (message) => message.attachments.map((item) => (item.data ? { ...item, type: "image", kind: item.type } : item));
 
 function authHint(error, process) {

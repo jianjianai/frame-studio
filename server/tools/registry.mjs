@@ -55,7 +55,8 @@ export class ToolRegistry {
         if (!ref) throw problem(400, "需要指定作品：先调用 works_list，再在 work 参数中传入作品 id", "WORK_REQUIRED");
         const [repo, id] = ref.includes("/") ? ref.split("/") : [undefined, ref];
         if (scope.work && (id !== scope.work || (repo && scope.repo && repo !== scope.repo))) throw problem(403, "这个会话只能操作当前作品", "FORBIDDEN");
-        return this.services.openWork(id, repo);
+        // Changing tools may not touch a published (view-only) work, unless they write elsewhere (exports, experience).
+        return tool.readOnly || tool.published ? this.services.openWork(id, repo) : this.services.openEditable(id, repo);
       },
     };
     try {

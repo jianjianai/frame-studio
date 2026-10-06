@@ -33,7 +33,9 @@ const canonical = (value: unknown): string =>
  */
 export type TimelineHistory = ReturnType<typeof useTimelineHistory>;
 
-export function useTimelineHistory(base: string, reload: () => Promise<void>) {
+export const PUBLISHED_MESSAGE = "这个作品已发布，只能查看。要修改，先取消发布，或者创建一个副本。";
+
+export function useTimelineHistory(base: string, reload: () => Promise<void>, locked: () => boolean = () => false) {
   const past = useRef<Step[]>([]);
   const future = useRef<Step[]>([]);
   const [, setVersion] = useState(0);
@@ -73,6 +75,7 @@ export function useTimelineHistory(base: string, reload: () => Promise<void>) {
   /** Run an edit of one document and record it. */
   const run = useCallback(
     async (doc: TimelineDoc, label: string, mutate: () => Promise<unknown>) => {
+      if (locked()) throw new Error(PUBLISHED_MESSAGE);
       const before = (await read(doc)).value;
       await mutate();
       const after = (await read(doc)).value;
@@ -83,11 +86,12 @@ export function useTimelineHistory(base: string, reload: () => Promise<void>) {
       }
       await reload();
     },
-    [read, reload],
+    [read, reload, locked],
   );
 
   const move = useCallback(
     async (direction: "undo" | "redo") => {
+      if (locked()) throw new Error(PUBLISHED_MESSAGE);
       const from = direction === "undo" ? past : future;
       const to = direction === "undo" ? future : past;
       const step = from.current.at(-1);
@@ -107,7 +111,7 @@ export function useTimelineHistory(base: string, reload: () => Promise<void>) {
       await reload();
       return step.label;
     },
-    [read, write, reload],
+    [read, write, reload, locked],
   );
 
   return {

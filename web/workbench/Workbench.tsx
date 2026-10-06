@@ -15,15 +15,20 @@ import {
   Moon,
   SlidersHorizontal,
   BookOpen,
+  BookMarked,
+  Lock,
+  Send,
+  Copy,
 } from "lucide-react";
 import { api, workPath, experiencePath, useServerEvent, sendEvent } from "../lib/api";
-import { Sash, usePersistent, useToast, Dialog } from "../lib/ui";
+import { Sash, usePersistent, useToast, Dialog, useConfirm, usePrompt } from "../lib/ui";
 import type { CheckResult, WorkInfo, WorkStatus } from "../lib/types";
 import { navigate } from "../App";
 import { StageController, WorkbenchContext, useWorkbench, type ChatAttachment, type Selection, type WorkbenchContextValue } from "./store";
 import { useTimelineHistory } from "./timelineHistory";
 import { PropertiesView } from "../views/PropertiesView";
 import { ExperienceView } from "../views/ExperienceView";
+import { PromptsView } from "../views/PromptsView";
 import { EditorArea, type EditorHandle } from "./EditorArea";
 import { PrecacheBar } from "./PrecacheBar";
 import { BottomPanel } from "./BottomPanel";
@@ -42,6 +47,7 @@ const VIEWS = [
   { id: "assets", label: "素材", icon: ImageIcon, component: AssetsView },
   { id: "properties", label: "属性", icon: SlidersHorizontal, component: PropertiesView },
   { id: "experience", label: "经验", icon: BookOpen, component: ExperienceView },
+  { id: "prompts", label: "提示词", icon: BookMarked, component: PromptsView },
   { id: "audio", label: "音频与配音", icon: AudioLines, component: AudioView },
   { id: "versions", label: "版本与同步", icon: GitBranch, component: VersionsView },
   { id: "export", label: "导出", icon: Clapperboard, component: ExportView },
@@ -82,7 +88,9 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
       setError((failure as Error).message);
     }
   }, [base, id]);
-  const history = useTimelineHistory(base, reload);
+  // Published works are view-only: timeline edits and their undo are refused too.
+  const readOnlyRef = useRef(false);
+  const history = useTimelineHistory(base, reload, () => readOnlyRef.current);
   const reloadStatus = useCallback(() => api<WorkStatus>(base + "/status").then(setStatus, () => {}), [base]);
   // Unsaved changes of the experience libraries, for the badge on the 经验 icon.
   const [experienceChanges, setExperienceChanges] = useState(0);
@@ -148,8 +156,11 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     }
   }, [base, setPanel, toast]);
 
+  const readOnly = Boolean(work?.meta?.publishedAt);
+  readOnlyRef.current = readOnly;
   const context: WorkbenchContextValue | null = work && {
     work,
+    readOnly,
     reload,
     stage,
     check,
@@ -160,6 +171,10 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     addToChat: (attachment: ChatAttachment, prompt?: string) => {
       setChat((value) => ({ ...value, visible: true }));
       setTimeout(() => chatRef.current?.attach(attachment, prompt), 0);
+    },
+    insertPrompt: (text) => {
+      setChat((value) => ({ ...value, visible: true }));
+      setTimeout(() => chatRef.current?.insert(text), 0);
     },
     askAi: (prompt, attachments = []) => {
       setChat((value) => ({ ...value, visible: true }));
@@ -233,7 +248,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
 
   return (
     <WorkbenchContext.Provider value={context}>
-      <div className="wb">
+      <div className={`wb ${readOnly ? "read-only" : ""}`}>
         <PrecacheBar />
         <header className="wb-title">
           <button className="icon-btn" title="返回首页" onClick={() => navigate("/")}>
@@ -241,6 +256,11 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
           </button>
           <div className="wb-title-name">
             <TitleEditor />
+            {readOnly && (
+              <span className="badge accent" title={`发布于 ${new Date(work.meta!.publishedAt!).toLocaleString()}`}>
+                <Lock size={10} /> 已发布
+              </span>
+            )}
             <span className="faint ellipsis">
               {work.repo === "local" ? "本地" : work.repo} · {work.branch}
             </span>
@@ -267,6 +287,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
             >
               <PanelRight size={16} />
             </button>
+            {!readOnly && <PublishButton />}
             <button className="btn small primary" onClick={() => context.showView("export")}>
               <Clapperboard size={14} /> 导出
             </button>
@@ -316,6 +337,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
             </>
           )}
           <main className="wb-center">
+            {readOnly && <PublishedBar />}
             <div className="wb-editor">
               <EditorArea ref={editor} onActiveChange={setEditing} />
             </div>
@@ -367,8 +389,78 @@ function useMediaQuery(query: string) {
   return matches;
 }
 
-function TitleEditor() {
+/** Publish the work: everything is saved as a version, and the work becomes view-only. */
+function PublishButton() {
   const { work, reload } = useWorkbench();
+  const confirm = useConfirm();
+  const toast = useToast();
+  return (
+    <button
+      className="btn small"
+      title="发布这个作品：保存当前所有修改为一个版本，之后只能查看，不能再修改"
+      onClick={async () => {
+        if (!(await confirm("发布后作品只能查看，不能再修改（随时可以取消发布，或者创建副本继续做）。当前所有修改会保存为一个版本。", { confirm: "发布" }))) return;
+        try {
+          await api(`${workPath(work.repo, work.id)}/publish`, { method: "POST" });
+          await reload();
+          toast("已发布，作品现在只能查看", "ok");
+        } catch (error) {
+          toast((error as Error).message, "error");
+        }
+      }}
+    >
+      <Send size={13} /> 发布
+    </button>
+  );
+}
+
+/** Shown on a published work: view-only, with the ways to change it again. */
+function PublishedBar() {
+  const { work, reload } = useWorkbench();
+  const confirm = useConfirm();
+  const prompt = usePrompt();
+  const toast = useToast();
+  const base = workPath(work.repo, work.id);
+  const title = work.meta?.title ?? work.id;
+  return (
+    <div className="published-bar" title="这个作品已发布，只能查看和导出。要修改，先取消发布，或者创建一个副本接着做。">
+      <Lock size={14} />
+      <span className="grow ellipsis">已发布，只能查看和导出</span>
+      <button
+        className="btn small"
+        onClick={async () => {
+          const name = await prompt("副本名称", `${title}（副本）`);
+          if (!name?.trim()) return;
+          try {
+            const copy = await api<{ id: string; repo: string }>(`${base}/duplicate`, { body: { title: name.trim() } });
+            navigate(`/work/${encodeURIComponent(copy.repo)}/${encodeURIComponent(copy.id)}`);
+          } catch (error) {
+            toast((error as Error).message, "error");
+          }
+        }}
+      >
+        <Copy size={13} /> 创建副本
+      </button>
+      <button
+        className="btn small"
+        onClick={async () => {
+          if (!(await confirm("取消发布后作品可以重新修改。", { confirm: "取消发布" }))) return;
+          try {
+            await api(`${base}/unpublish`, { method: "POST" });
+            await reload();
+          } catch (error) {
+            toast((error as Error).message, "error");
+          }
+        }}
+      >
+        取消发布
+      </button>
+    </div>
+  );
+}
+
+function TitleEditor() {
+  const { work, reload, readOnly } = useWorkbench();
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState("");
   const toast = useToast();
@@ -395,8 +487,9 @@ function TitleEditor() {
   ) : (
     <strong
       className="ellipsis"
-      title="双击重命名"
+      title={readOnly ? title : "双击重命名"}
       onDoubleClick={() => {
+        if (readOnly) return;
         setValue(title);
         setEditing(true);
       }}

@@ -87,7 +87,7 @@ export function studioRoutes(services) {
 
   router.get("/api/works/:repo/:id/assets", async ({ params }) => listAssets(await open(params)));
   router.post("/api/works/:repo/:id/assets/import", async ({ params, req }) => {
-    const work = await open(params);
+    const work = await services.openEditable(params.id, params.repo);
     const body = await readJson(req);
     let relative;
     if (body.url) relative = await importFromUrl(work, body.url, { name: body.name });
@@ -100,7 +100,7 @@ export function studioRoutes(services) {
   router.post(
     "/api/works/:repo/:id/recordings",
     async ({ params, req, query }) => {
-      const work = await open(params);
+      const work = await services.openEditable(params.id, params.repo);
       const ext =
         { "audio/webm": "webm", "audio/ogg": "ogg", "audio/mp4": "m4a", "audio/wav": "wav", "audio/mpeg": "mp3" }[
           String(req.headers["content-type"]).split(";")[0]
@@ -120,12 +120,18 @@ export function studioRoutes(services) {
 
   // ---- documents ------------------------------------------------------------
   router.get("/api/works/:repo/:id/layers", async ({ params }) => readVisual(await open(params)));
-  router.post("/api/works/:repo/:id/layers", async ({ params, req }) => editVisual(await open(params), await readJson(req)));
+  router.post("/api/works/:repo/:id/layers", async ({ params, req }) => editVisual(await services.openEditable(params.id, params.repo), await readJson(req)));
   router.get("/api/works/:repo/:id/audio", async ({ params }) => readAudio(await open(params)));
-  router.post("/api/works/:repo/:id/audio", async ({ params, req }) => editAudio(await open(params), await readJson(req)));
+  router.post("/api/works/:repo/:id/audio", async ({ params, req }) => editAudio(await services.openEditable(params.id, params.repo), await readJson(req)));
   router.post("/api/works/:repo/:id/audio/place", async ({ params, req }) => {
     const body = await readJson(req);
-    return placeAudio(await open(params), { src: body.src, start: body.start, duration: body.duration, trackName: body.track, name: body.name });
+    return placeAudio(await services.openEditable(params.id, params.repo), {
+      src: body.src,
+      start: body.start,
+      duration: body.duration,
+      trackName: body.track,
+      name: body.name,
+    });
   });
 
   // ---- exports --------------------------------------------------------------

@@ -42,7 +42,9 @@ export type Block =
     }
   | { kind: "turn_end"; stopReason: string; usage?: { totalTokens?: number; inputTokens?: number; outputTokens?: number } | null }
   | { kind: "error"; message: string }
-  | { kind: "notice"; message: string };
+  | { kind: "notice"; message: string }
+  /** Where a branch starts: what came before is the parent conversation's first `keep` turns. */
+  | { kind: "branch"; from: string; title: string; keep: number };
 
 export interface Entry {
   at: number;
@@ -129,16 +131,20 @@ export function reduceTranscript(entries: Entry[]): Block[] {
       case "notice":
         blocks.push({ kind: "notice", message: entry.message as string });
         break;
+      case "branch":
+        blocks.push({ kind: "branch", from: entry.from as string, title: entry.title as string, keep: entry.keep as number });
+        break;
     }
   }
   return blocks;
 }
 
-/** Group blocks into turns: a user message followed by the agent's response. */
+/** Group blocks into turns: a user message followed by the agent's response. A branch divider stands alone. */
 export function groupTurns(blocks: Block[]) {
-  const turns: { user?: Extract<Block, { kind: "user" }>; items: Block[] }[] = [];
+  const turns: { user?: Extract<Block, { kind: "user" }>; branch?: Extract<Block, { kind: "branch" }>; items: Block[] }[] = [];
   for (const block of blocks) {
     if (block.kind === "user") turns.push({ user: block, items: [] });
+    else if (block.kind === "branch") turns.push({ branch: block, items: [] });
     else {
       if (!turns.length) turns.push({ items: [] });
       turns.at(-1)!.items.push(block);

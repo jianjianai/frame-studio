@@ -687,3 +687,190 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+
+/* ---- context ring ---- */
+.context-ring {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.context-ring:hover {
+  background: var(--bg-hover);
+}
+.context-ring .ring-track {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 2.5;
+}
+.context-ring .ring-fill {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: stroke-dasharray 0.3s ease;
+}
+.context-ring.warn .ring-fill {
+  stroke: var(--warn);
+}
+.context-ring.danger .ring-fill {
+  stroke: var(--danger);
+}
+.popover.align-right {
+  left: auto;
+  right: 0;
+}
+.context-info {
+  display: grid;
+  gap: 6px;
+  width: 260px;
+  padding: 8px;
+}
+.context-info p {
+  margin: 0;
+  line-height: 1.5;
+}
+.context-info .btn {
+  justify-self: start;
+}
+.context-bar {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--bg-sunken);
+}
+.context-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+  background: var(--accent);
+}
+.context-bar i.warn {
+  background: var(--warn);
+}
+.context-bar i.danger {
+  background: var(--danger);
+}
+.command-msg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin: 10px 12px 4px;
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+.command-msg::before,
+.command-msg::after {
+  content: "";
+  flex: 1;
+  border-top: 1px dashed var(--border-strong);
+}
+
+.prompt-picker {
+  width: 300px;
+}
+.prompt-picker .folder-icon {
+  color: #d9a441;
+}
+.prompt-picker .block {
+  display: block;
+}
+.prompt-picker .popover-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ---- branches ---- */
+.user-msg {
+  position: relative;
+}
+.user-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 2px;
+  margin: 2px -6px -4px 0;
+  color: var(--fg-faint);
+  font-size: 11px;
+}
+.user-actions .edit-btn {
+  opacity: 0;
+}
+.user-msg:hover .user-actions .edit-btn,
+.user-actions .edit-btn:focus-visible {
+  opacity: 1;
+}
+.user-actions .versions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin-right: auto;
+  font-variant-numeric: tabular-nums;
+}
+.user-edit {
+  display: grid;
+  gap: 6px;
+}
+.user-edit .textarea {
+  width: 100%;
+  resize: vertical;
+}
+.turn-footer {
+  display: flex;
+  gap: 4px;
+  margin-top: 2px;
+}
+.turn-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg-faint);
+  font-size: 12px;
+  cursor: pointer;
+  opacity: 0;
+}
+.turn:hover .turn-action,
+.turn-action:focus-visible {
+  opacity: 1;
+}
+.turn-action:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.branch-divider {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 10px 14px;
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+.branch-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px dashed var(--border-strong);
+}
+.branch-divider .link-btn {
+  padding: 0;
+  font-size: 12px;
+}
+.chat-notice.branching {
+  margin: 6px 14px;
+}
+.chat-locked {
+  padding: 8px 12px 0;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}

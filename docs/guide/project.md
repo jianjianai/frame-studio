@@ -34,4 +34,5 @@ export default project;
 - `beats` 是镜头标记，显示在时间轴上，方便用户和 AI 指代片段；可加唯一 `id`。
 - `subtitles` 由播放器绘制在画面底部（导出时可选择烧录）。用户也会在时间轴上编辑字幕。用 `subtitles_edit` 修改（见 `subtitles`）。
 - 修改时长、标题、镜头标记等字段用 `work_update` 工具；它只替换字段值，保留文件其余格式。
+- `publishedAt` 由 FRAME Studio 在用户发布作品时写入。有这个字段的作品已发布、只能查看，工具会拒绝修改；不要自己添加或删除它。
 - 改变 `duration` 后检查 `visual.json` 和 `audio.json` 中超出时长的片段（`work_check` 会报错）。

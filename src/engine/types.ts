@@ -55,6 +55,8 @@ export const projectSchema = z
     posterTime: z.number().nonnegative().optional(),
     tags: z.array(z.string()),
     status: z.enum(["demo", "draft", "film"]).default("demo"),
+    /** Set by FRAME Studio when the work is published: it is then view-only. */
+    publishedAt: z.string().optional(),
     beats: z.array(
       z.object({
         at: z.number().nonnegative(),

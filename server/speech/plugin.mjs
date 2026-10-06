@@ -42,7 +42,7 @@ export function speechPlugin(services) {
   router.post("/api/speech/models/:id/install", ({ params }) => speech.install(params.id));
   router.delete("/api/speech/models/:id", ({ params }) => speech.remove(params.id));
   router.post("/api/works/:repo/:id/speech", async ({ params, req }) =>
-    synthesizeInto(services, await services.openWork(params.id, params.repo), await readJson(req)),
+    synthesizeInto(services, await services.openEditable(params.id, params.repo), await readJson(req)),
   );
 
   tools.add({

@@ -69,7 +69,7 @@ export const fileIcon = (path: string, size = 14) => {
  * Tabs come from the work or from the repository's experience libraries.
  */
 export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; onActiveChange?: (label: string | null) => void }) {
-  const { work } = useWorkbench();
+  const { work, readOnly } = useWorkbench();
   const toast = useToast();
   const confirm = useConfirm();
   const [tabs, setTabs] = useState<Tab[]>([]);
@@ -288,6 +288,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
                     line={current.line}
                     onChange={(content) => update(current.path, { content, preview: false })}
                     onSave={() => save(current.path)}
+                    readOnly={readOnly && current.source !== "experience"}
                   />
                 )
               ) : (

@@ -33,8 +33,10 @@ export function VersionsView() {
  * repository's experience libraries (same API on a different branch).
  */
 export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "experience"; refresh?: number }) {
-  const { work, reload: reloadWork, openDiff } = useWorkbench();
+  const { work, reload: reloadWork, openDiff, readOnly } = useWorkbench();
   const experience = source === "experience";
+  // A published work keeps its history viewable and syncs, but takes no new versions.
+  const locked = !experience && readOnly;
   const scope = experience ? `experience-${work.repo}` : work.id;
   const reload = experience ? async () => {} : reloadWork;
   const [status, setStatus] = useState<WorkStatus | null>(null);
@@ -125,18 +127,24 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
     <>
       {busy && <div className="view-progress" />}
       <section className="view-section">
-        <textarea
-          className="textarea"
-          rows={2}
-          placeholder="这个版本改了什么（Ctrl+Enter 保存）"
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={(event) => event.key === "Enter" && (event.ctrlKey || event.metaKey) && commit()}
-        />
+        {!locked && (
+          <textarea
+            className="textarea"
+            rows={2}
+            placeholder="这个版本改了什么（Ctrl+Enter 保存）"
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            onKeyDown={(event) => event.key === "Enter" && (event.ctrlKey || event.metaKey) && commit()}
+          />
+        )}
         <div className="row">
-          <button className="btn primary grow" disabled={!status?.files.length} onClick={commit}>
-            <Save size={14} /> 保存版本
-          </button>
+          {locked ? (
+            <span className="grow faint small-text">作品已发布，不再保存新版本。</span>
+          ) : (
+            <button className="btn primary grow" disabled={!status?.files.length} onClick={commit}>
+              <Save size={14} /> 保存版本
+            </button>
+          )}
           {status?.remote ? (
             <>
               <button className="btn" title="推送到 GitHub" onClick={() => sync("push")}>
@@ -170,7 +178,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
         <h3>
           未保存的修改 <span className="badge">{status?.files.length ?? 0}</span>
           <span className="grow" />
-          {!!status?.files.length && (
+          {!!status?.files.length && !locked && (
             <button className="icon-btn" title="全部放弃" onClick={() => discard()}>
               <Undo2 size={14} />
             </button>
@@ -188,16 +196,18 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
             <span className="ellipsis grow" title={statusLabel[file.status] || file.status}>
               {file.path.replace(prefix, "")}
             </span>
-            <button
-              className="icon-btn"
-              title="放弃修改"
-              onClick={(event) => {
-                event.stopPropagation();
-                void discard(file.path);
-              }}
-            >
-              <Undo2 size={13} />
-            </button>
+            {!locked && (
+              <button
+                className="icon-btn"
+                title="放弃修改"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  void discard(file.path);
+                }}
+              >
+                <Undo2 size={13} />
+              </button>
+            )}
           </div>
         ))}
       </section>
@@ -218,7 +228,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
                   icon: <FileDiff size={14} />,
                   onClick: () => showDiff(`${version.short} ${version.message}`, `commit=${version.commit}`, false),
                 },
-                { label: "恢复到这个版本", icon: <RotateCcw size={14} />, onClick: () => revert(version), disabled: index === 0 },
+                { label: "恢复到这个版本", icon: <RotateCcw size={14} />, onClick: () => revert(version), disabled: index === 0 || locked },
               ])
             }
           >
@@ -237,7 +247,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
                   : ""}
               </div>
             </div>
-            {index > 0 && (
+            {index > 0 && !locked && (
               <button
                 className="icon-btn"
                 title="恢复到这个版本"
