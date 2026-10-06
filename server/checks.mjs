@@ -75,6 +75,23 @@ export function assetReferences(work) {
   return problems;
 }
 
+/** materials/<library>/<path> references: the library file (or the version the work locked) must exist. */
+export async function materialReferences(services, work) {
+  if (!services.materials) return [];
+  const status = await services.materials.status(work);
+  const linked = new Set(status.libraries.map((item) => item.id));
+  const problems = [];
+  for (const file of status.files) {
+    if (!file.used) continue;
+    const library = file.ref.split("/")[0];
+    if (!file.locked && !file.current) problems.push({ severity: "error", source: "assets", message: `素材不存在：${file.url}` });
+    else if (!linked.has(library))
+      problems.push({ severity: "warning", source: "assets", message: `用到了没有引用的素材库「${library}」的文件 ${file.url}，用 materials_link 引用它` });
+  }
+  for (const name of status.missing) problems.push({ severity: "warning", source: "assets", message: `引用的素材库「${name}」不存在` });
+  return problems;
+}
+
 /**
  * Full check: metadata, types, asset references and a real browser load that
  * renders a few frames and a little audio. Results are kept for the UI and AI.
@@ -90,8 +107,8 @@ export async function checkWork(services, work, { runtime = true } = {}) {
       for (const issue of parsed.error.issues)
         problems.push({ severity: "error", source: "project", file: "project.ts", message: `${issue.path.join(".") || "(根)"}：${issue.message}` });
   }
-  const [types, assets] = await Promise.all([typeCheck(work), Promise.resolve(assetReferences(work))]);
-  problems.push(...types, ...assets);
+  const [types, assets, materials] = await Promise.all([typeCheck(work), Promise.resolve(assetReferences(work)), materialReferences(services, work)]);
+  problems.push(...types, ...assets, ...materials);
   let runtimeResult = null;
   if (runtime && meta.ok && !problems.some((problem) => problem.source === "project")) {
     runtimeResult = await services.renderer.check(work);

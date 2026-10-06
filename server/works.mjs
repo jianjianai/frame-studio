@@ -20,6 +20,8 @@ const validWorkId = (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-
 export class Works {
   /** Sections added to every work's session brief, e.g. the linked experience libraries: (work) => { text, state } | null. */
   briefProviders = [];
+  /** Run before a version is saved or the work published, e.g. locking the material versions it uses. */
+  beforeSave = [];
 
   constructor({ config, settings, repos, events }) {
     this.config = config;
@@ -304,7 +306,9 @@ export class Works {
   async update(work, changes) {
     this.assertEditable(work);
     const file = path.join(work.dir, "project.ts");
-    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats", "experiences"];
+    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats", "experiences", "materials"];
+    if ("materials" in changes && !(Array.isArray(changes.materials) && changes.materials.every((name) => typeof name === "string")))
+      throw problem(400, "materials 必须是素材库名称的列表");
     if ("experiences" in changes && !(Array.isArray(changes.experiences) && changes.experiences.every((name) => typeof name === "string")))
       throw problem(400, "experiences 必须是经验库名称的列表（空列表表示不关联）");
     const picked = Object.fromEntries(Object.entries(changes).filter(([key]) => allowed.includes(key)));
@@ -328,6 +332,7 @@ export class Works {
 
   /** Publish (or take back) a work: the mark lives in project.ts and is saved as a version with everything else. */
   async setPublished(work, published) {
+    if (published && !this.published(work)) for (const hook of this.beforeSave) await hook(work);
     return this.locks.run(`${work.repo}/${work.id}`, async () => {
       const file = path.join(work.dir, "project.ts");
       if (Boolean(this.published(work)) === published) return null;
@@ -548,6 +553,7 @@ export class Works {
 
   /** Save a version of everything changed in the work. Returns null when nothing changed. */
   async commit(work, message) {
+    for (const hook of this.beforeSave) await hook(work);
     const commit = await this.locks.run(`${work.repo}/${work.id}`, () => this.commitAll(work.root, message || "保存版本"));
     if (commit) this.events.emit({ type: "work-versions", work: work.id });
     return commit;

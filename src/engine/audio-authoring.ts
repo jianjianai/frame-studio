@@ -122,9 +122,9 @@ export function createSamplerAudio(
             let buffer: AudioBuffer;
             if (typeof sample.source !== "string") buffer = sample.source;
             else {
-              if (!sample.source.startsWith("films/"))
+              if (!sample.source.startsWith("films/") && !sample.source.startsWith("materials/"))
                 throw Error(
-                  "Sampler URLs must be project assets under films/<id>/",
+                  "Sampler URLs must be project assets (films/<id>/…) or material library files (materials/<library>/…)",
                 );
               const response = await fetch(assetUrl(sample.source), { signal });
               if (!response.ok)

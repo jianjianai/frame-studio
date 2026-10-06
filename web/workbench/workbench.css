@@ -1662,3 +1662,37 @@
   flex: none;
   margin: 0;
 }
+
+/* ---- material libraries ---- */
+.materials-library {
+  border-bottom: 1px solid var(--border);
+}
+.materials-library > .tree-row {
+  height: 30px;
+  padding-left: 8px;
+}
+.materials-outdated {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--warn-soft);
+  font-size: 12px;
+}
+.material-lock {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 9px;
+  background: rgb(0 0 0 / 0.55);
+  color: #fff;
+}
+.material-lock.outdated {
+  background: var(--warn);
+}

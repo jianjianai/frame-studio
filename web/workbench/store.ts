@@ -144,7 +144,7 @@ export interface WorkbenchContextValue {
   /** Open a document of the repository's experience libraries (path relative to the experience branch). */
   openExperience: (path: string, options?: { preview?: boolean }) => void;
   /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. */
-  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" }) => void;
+  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" | "materials" }) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
   /** Put a prompt into the chat's input box (opening the chat). */

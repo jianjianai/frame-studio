@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { FileCode2 } from "lucide-react";
-import { api, workPath, experiencePath, useServerEvent } from "../lib/api";
+import { api, workPath, experiencePath, materialsPath, useServerEvent } from "../lib/api";
 import { useWorkbench } from "./store";
 import { parseDiff } from "./diff";
 
@@ -10,13 +10,13 @@ import { parseDiff } from "./diff";
  * Uncommitted diffs follow the files as they change. `source` picks the work or the
  * repository's experience libraries.
  */
-export function DiffEditor({ query, source = "work" }: { query: string; source?: "work" | "experience" }) {
+export function DiffEditor({ query, source = "work" }: { query: string; source?: "work" | "experience" | "materials" }) {
   const { work, openFile, openExperience } = useWorkbench();
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
   const experience = source === "experience";
-  const base = experience ? experiencePath(work.repo) : workPath(work.repo, work.id);
-  const scope = experience ? `experience-${work.repo}` : work.id;
+  const base = experience ? experiencePath(work.repo) : source === "materials" ? materialsPath(work.repo) : workPath(work.repo, work.id);
+  const scope = source === "work" ? work.id : `${source}-${work.repo}`;
   const live = !query.startsWith("commit=");
   const load = () =>
     api<{ diff: string }>(`${base}/diff?${query}`).then(
@@ -34,8 +34,9 @@ export function DiffEditor({ query, source = "work" }: { query: string; source?:
     if (experience && event.type === "experience-files" && event.repo === work.repo) void load();
   });
   const files = useMemo(() => parseDiff(text ?? ""), [text]);
-  const prefix = experience ? "" : `projects/${work.slug}/`;
-  const open = (path: string) => (experience ? openExperience(path) : openFile(path));
+  const prefix = source === "work" ? `projects/${work.slug}/` : "";
+  // Material library files are media: their changes show here, they do not open as text.
+  const open = (path: string) => (experience ? openExperience(path) : source === "work" ? openFile(path) : undefined);
 
   if (error) return <div className="empty">{error}</div>;
   if (text === null) return <div className="empty">正在读取改动…</div>;

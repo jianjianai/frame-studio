@@ -812,7 +812,7 @@ export class AiManager {
     blocks.push({ type: "text", text: lines.join("\n") });
     for (const attachment of message.attachments) {
       if (attachment.data && attachment.mimeType?.startsWith("image/")) blocks.push({ type: "image", data: attachment.data, mimeType: attachment.mimeType });
-      if (attachment.type === "file" || attachment.type === "asset") {
+      if ((attachment.type === "file" || attachment.type === "asset") && !String(attachment.url || "").startsWith("materials/")) {
         const relative = attachment.path || attachment.url?.replace(/^films\/[^/]+\//, "public/");
         if (relative) blocks.push({ type: "resource_link", uri: "file://" + path.join(work.dir, relative), name: path.basename(relative) });
       }

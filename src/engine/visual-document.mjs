@@ -11,10 +11,10 @@ export const assetReferenceSchema = z
   .max(512)
   .refine(
     (value) =>
-      /^films\/[a-z][a-z0-9-]*\//.test(value) &&
+      /^(films\/[a-z][a-z0-9-]*|materials\/[^/]+)\//.test(value) &&
       !/[\\\\:%?#\u0000-\u001f]/.test(value) &&
       value.split("/").every((part) => part && part !== "." && part !== ".."),
-    "素材地址应为 films/<作品名称>/<public 下的路径>",
+    "素材地址应为 films/<作品名称>/<public 下的路径>，或素材库文件 materials/<素材库>/<路径>",
   );
 const key = z.strictObject({
   at: number.nonnegative(),
@@ -136,7 +136,7 @@ export function validateVisualDocument(value, { projectId, duration } = {}) {
       throw new Error(`图层 ${clip.id} 超出作品时长：start ${clip.start} + duration ${clip.duration} = ${+(clip.start + clip.duration).toFixed(3)} > ${duration} 秒`);
     for (const src of clip.source.frames ??
       (clip.source.src ? [clip.source.src] : []))
-      if (projectId && !src.startsWith("films/" + projectId + "/"))
+      if (projectId && !src.startsWith("films/" + projectId + "/") && !src.startsWith("materials/"))
         throw new Error(`图层 ${clip.id} 的素材 ${src} 不属于这个作品，应为 films/${projectId}/...`);
   }
   return doc;

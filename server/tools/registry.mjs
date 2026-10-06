@@ -112,6 +112,8 @@ export const CORE_TOOLS = new Set([
   "experience_read",
   "experience_write",
   "experience_edit",
+  "materials_list",
+  "materials_use",
 ]);
 
 /** Optional `work` argument: "<id>" or "<repo>/<id>"; defaults to the agent's current work. */

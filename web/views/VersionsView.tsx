@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { RefreshCw, Save, Undo2, ArrowUp, ArrowDown, CloudUpload, History, FileDiff, RotateCcw } from "lucide-react";
-import { api, timeAgo, workPath, experiencePath, useServerEvent, type ApiError } from "../lib/api";
+import { api, timeAgo, workPath, experiencePath, materialsPath, useServerEvent, type ApiError } from "../lib/api";
 import { useAction, useConfirm, useContextMenu } from "../lib/ui";
 import type { Version, WorkStatus } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
@@ -32,12 +32,13 @@ export function VersionsView() {
  * Save versions, unsaved changes, history and GitHub sync of the work or of the
  * repository's experience libraries (same API on a different branch).
  */
-export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "experience"; refresh?: number }) {
+export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "experience" | "materials"; refresh?: number }) {
   const { work, reload: reloadWork, openDiff, readOnly } = useWorkbench();
-  const experience = source === "experience";
+  // Experience and material libraries share the work's version UI on their own branches.
+  const experience = source !== "work";
   // A published work keeps its history viewable and syncs, but takes no new versions.
   const locked = !experience && readOnly;
-  const scope = experience ? `experience-${work.repo}` : work.id;
+  const scope = source === "work" ? work.id : `${source}-${work.repo}`;
   const reload = experience ? async () => {} : reloadWork;
   const [status, setStatus] = useState<WorkStatus | null>(null);
   const [history, setHistory] = useState<Version[]>([]);
@@ -46,7 +47,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
   const [run, busy] = useAction();
   const confirm = useConfirm();
   const [openMenu, menu] = useContextMenu();
-  const base = experience ? experiencePath(work.repo) : workPath(work.repo, work.id);
+  const base = source === "experience" ? experiencePath(work.repo) : source === "materials" ? materialsPath(work.repo) : workPath(work.repo, work.id);
   const prefix = experience ? "" : `projects/${work.slug}/`;
   const load = async () => {
     const [nextStatus, nextHistory] = await Promise.all([api<WorkStatus>(`${base}/status`), api<Version[]>(`${base}/history?limit=100`)]);
@@ -59,7 +60,8 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
   }, [base, refresh]);
   useServerEvent((event) => {
     if ((event.type === "work-files" || event.type === "work-versions") && event.work === scope) void load();
-    if (experience && event.type === "experience-files" && event.repo === work.repo) void load();
+    if (source === "experience" && event.type === "experience-files" && event.repo === work.repo) void load();
+    if (source === "materials" && event.type === "materials" && event.repo === work.repo) void load();
   });
 
   const commit = () =>
@@ -74,7 +76,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
   const revert = async (version: Version) => {
     if (
       !(await confirm(
-        `把${experience ? "经验库" : "作品"}恢复成「${version.message}」时的样子？\n当前内容会先自动保存，恢复本身也会成为一个新版本，随时可以再恢复回来。`,
+        `把${source === "experience" ? "经验库" : source === "materials" ? "素材库" : "作品"}恢复成「${version.message}」时的样子？\n当前内容会先自动保存，恢复本身也会成为一个新版本，随时可以再恢复回来。`,
         {
           confirm: "恢复",
         },

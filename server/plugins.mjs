@@ -1,6 +1,5 @@
 import { Renderer } from "./render.mjs";
 import { Tasks } from "./tasks.mjs";
-import { Library } from "./library.mjs";
 import { Exports } from "./exports.mjs";
 import { ToolRegistry } from "./tools/registry.mjs";
 import { registerWorkTools } from "./tools/work-tools.mjs";
@@ -13,6 +12,7 @@ import { mcpPlugin } from "./mcp.mjs";
 import { oauthPlugin } from "./oauth.mjs";
 import { experiencePlugin } from "./experience.mjs";
 import { promptsPlugin } from "./prompts.mjs";
+import { materialsPlugin } from "./materials.mjs";
 import { studioRoutes } from "./routes/studio.mjs";
 import { aiPlugin } from "./ai/routes.mjs";
 import { speechPlugin } from "./speech/plugin.mjs";
@@ -21,7 +21,6 @@ import { speechPlugin } from "./speech/plugin.mjs";
 function corePlugin(services) {
   services.tasks = new Tasks(services.events);
   services.renderer = new Renderer(services);
-  services.library = new Library(services);
   services.exports = new Exports(services);
   services.checks = new Map();
   services.viewState = new Map();
@@ -39,4 +38,4 @@ function corePlugin(services) {
   registerExportTools(tools);
 }
 
-export const plugins = [corePlugin, speechPlugin, experiencePlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];
+export const plugins = [corePlugin, speechPlugin, experiencePlugin, materialsPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];

@@ -7,7 +7,6 @@ import { Settings } from "../server/settings.mjs";
 import { GitHub } from "../server/github.mjs";
 import { Repos } from "../server/repos.mjs";
 import { Works } from "../server/works.mjs";
-import { Library } from "../server/library.mjs";
 import { Events } from "../server/util.mjs";
 import { git } from "../server/git.mjs";
 
@@ -21,7 +20,7 @@ async function studio() {
   const settings = new Settings(home, events);
   const repos = new Repos({ config, settings, github: new GitHub(settings), events });
   await repos.ensureLocal();
-  return { repos, works: new Works({ config, settings, repos, events }), library: new Library({ repos, events }) };
+  return { repos, works: new Works({ config, settings, repos, events }) };
 }
 
 let remote, a, b, repoA, repoB;
@@ -70,39 +69,6 @@ describe("content repository sync", () => {
     await expect(a.works.pull(work)).rejects.toThrow(/未保存/);
     await a.works.commit(work, "a");
     await expect(a.works.pull(work)).rejects.toThrow(/都有新的修改/);
-  });
-
-  it("shares the materials library through its own branch", async () => {
-    const file = path.join(os.tmpdir(), `material-${Date.now()}.txt`);
-    fs.writeFileSync(file, "shared material");
-    const item = await a.library.add(repoA.id, file, { name: "note.txt", license: "CC0" });
-    await a.library.push(repoA.id);
-    await b.library.pull(repoB.id);
-    const items = await b.library.list(repoB.id);
-    expect(items.find((entry) => entry.id === item.id)).toMatchObject({ name: "note.txt", license: "CC0" });
-  });
-});
-
-describe("materials library divergence", () => {
-  it("merges libraries that were started independently", async () => {
-    const remote = fs.mkdtempSync(path.join(os.tmpdir(), "frame-remote-")) + "/lib.git";
-    await git(os.tmpdir(), ["init", "--bare", "--initial-branch=main", remote]);
-    const x = await studio();
-    const y = await studio();
-    const rx = await x.repos.clone({ url: "file://" + remote });
-    const ry = await y.repos.clone({ url: "file://" + remote });
-    const one = path.join(os.tmpdir(), `one-${Date.now()}.txt`);
-    const two = path.join(os.tmpdir(), `two-${Date.now()}.txt`);
-    fs.writeFileSync(one, "one");
-    fs.writeFileSync(two, "two");
-    await x.library.add(rx.id, one, { name: "one.txt" });
-    await y.library.add(ry.id, two, { name: "two.txt" });
-    await x.library.push(rx.id);
-    await y.library.pull(ry.id);
-    await y.library.push(ry.id);
-    await x.library.pull(rx.id);
-    expect((await x.library.list(rx.id)).map((item) => item.name).sort()).toEqual(["one.txt", "two.txt"]);
-    expect((await y.library.list(ry.id)).map((item) => item.name).sort()).toEqual(["one.txt", "two.txt"]);
   });
 });
 

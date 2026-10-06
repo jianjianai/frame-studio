@@ -59,6 +59,8 @@ export const projectSchema = z
     publishedAt: z.string().optional(),
     /** The experience libraries the work follows (names), managed by FRAME Studio. */
     experiences: z.array(z.string()).optional(),
+    /** The material libraries the work uses files from (names); see materials.lock.json. */
+    materials: z.array(z.string()).optional(),
     beats: z.array(
       z.object({
         at: z.number().nonnegative(),

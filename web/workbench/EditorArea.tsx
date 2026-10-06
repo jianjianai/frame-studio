@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useState, type Ref } from "react";
 import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye } from "lucide-react";
-import { api, formatTime, workPath, experiencePath, useServerEvent } from "../lib/api";
+import { api, formatTime, workPath, experiencePath, useServerEvent, materialsPath } from "../lib/api";
 import { Markdown } from "../chat/Markdown";
 import { useToast, useConfirm } from "../lib/ui";
 import { useWorkbench } from "./store";
@@ -15,7 +15,7 @@ export interface EditorHandle {
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
   openDiff(title: string, query: string, options?: { preview?: boolean; source?: Source }): void;
 }
-type Source = "work" | "experience";
+type Source = "work" | "experience" | "materials";
 interface Tab {
   /** Unique key: the work file path, `exp:<path>` for experience documents, `diff:…` for diffs. */
   path: string;
@@ -74,7 +74,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   const confirm = useConfirm();
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
-  const apis: Record<Source, string> = { work: workPath(work.repo, work.id), experience: experiencePath(work.repo) };
+  const apis: Record<Source, string> = { work: workPath(work.repo, work.id), experience: experiencePath(work.repo), materials: materialsPath(work.repo) };
 
   const load = useCallback(
     async (tab: Pick<Tab, "file" | "source">) => {
@@ -82,7 +82,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       return { content: file.content, saved: file.content, hash: file.hash };
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [apis.work, apis.experience],
+    [apis.work, apis.experience, apis.materials],
   );
 
   /** Show a tab: an open one is activated (and kept unless opened as preview); a new preview replaces the old one. */

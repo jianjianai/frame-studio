@@ -64,12 +64,11 @@ export function registerAssetTools(registry) {
     name: "asset_import",
     title: "导入素材",
     description:
-      "把素材放进作品的 public/：从网址下载（url）、从服务器本地文件复制（file，仅本机模式）或从作品库素材库复制（libraryId）。返回代码中使用的 films/... 地址。注意素材版权，在 license 中记录来源。",
+      "把素材放进作品自己的 public/：从网址下载（url）或从服务器本地文件复制（file，仅本机模式）。返回代码中使用的 films/... 地址。注意素材版权，在 license 中记录来源。多个作品都要用的素材放进素材库（material_write），作品引用素材库后直接使用。",
     input: {
       work: workArg,
       url: z.string().url().optional(),
       file: z.string().optional().describe("服务器上的绝对路径（仅本机模式）"),
-      libraryId: z.string().optional().describe("library_list 返回的素材 id"),
       name: z.string().max(120).optional().describe("保存的文件名"),
       folder: z
         .string()
@@ -77,9 +76,9 @@ export function registerAssetTools(registry) {
         .default("public/imports"),
       license: z.string().max(500).optional().describe("来源与许可"),
     },
-    async run({ url, file, libraryId, name, folder, license }, ctx) {
+    async run({ url, file, name, folder, license }, ctx) {
       const work = await ctx.work();
-      if ([url, file, libraryId].filter(Boolean).length !== 1) throw problem(400, "url、file、libraryId 必须且只能提供一个");
+      if ([url, file].filter(Boolean).length !== 1) throw problem(400, "url、file 必须且只能提供一个");
       let relative;
       if (url) relative = await importFromUrl(work, url, { name, folder });
       else if (file) {
@@ -88,7 +87,7 @@ export function registerAssetTools(registry) {
         relative = uniquePath(work.dir, `${folder}/${name || path.basename(file)}`);
         fs.mkdirSync(path.dirname(path.join(work.dir, relative)), { recursive: true });
         fs.copyFileSync(file, path.join(work.dir, relative));
-      } else relative = (await services.library.use(work, libraryId, { folder })).path;
+      }
       if (license) {
         const credits = path.join(work.dir, "production", "licenses.md");
         fs.mkdirSync(path.dirname(credits), { recursive: true });
@@ -102,26 +101,12 @@ export function registerAssetTools(registry) {
   });
 
   registry.add({
-    name: "library_list",
-    title: "素材库",
-    description: "列出作品库共享素材库中的素材（可用 asset_import 的 libraryId 复制到作品）。",
-    readOnly: true,
-    input: { work: workArg, query: z.string().optional() },
-    async run({ query }, ctx) {
-      const work = await ctx.work();
-      let items = await services.library.list(work.repo);
-      if (query) items = items.filter((item) => `${item.name} ${item.tags}`.toLowerCase().includes(query.toLowerCase()));
-      return asJson(items.map(({ id, name, mime, size, license, tags }) => ({ id, name, mime, size, license, tags })));
-    },
-  });
-
-  registry.add({
     name: "audio_place",
     title: "放置音频",
     description: "把作品中的音频文件放到音轨上（不存在的音轨会自动创建）。用于配乐、音效、配音和录音。",
     input: {
       work: workArg,
-      src: z.string().describe("films/<名称>/... 地址"),
+      src: z.string().describe("films/<名称>/... 或 materials/<素材库>/... 地址"),
       start: z.number().nonnegative().default(0),
       duration: z.number().positive().optional().describe("默认放到文件结束或作品结束"),
       track: z.string().max(60).default("音效").describe("音轨名称"),
@@ -130,10 +115,14 @@ export function registerAssetTools(registry) {
     },
     async run({ src, start, duration, track, name, gain }, ctx) {
       const work = await ctx.work();
-      const file = path.join(work.dir, "public", src.replace(/^films\/[^/]+\//, ""));
+      const material = /^materials\/(.+)$/.exec(src);
+      const file = material
+        ? await services.materials.file(work.repo, services.materials.readLocks(work.dir), material[1])
+        : path.join(work.dir, "public", src.replace(/^films\/[^/]+\//, ""));
       if (!fs.existsSync(file)) throw problem(404, "音频文件不存在：" + src);
       const info = await probe(file);
       const result = placeAudio(work, { src, start, duration: duration ?? info.duration, trackName: track, name, gain });
+      await services.materials?.lockReferenced(work);
       return asJson(
         { clip: result.clip, track: result.track.name, sha256: result.sha256 },
         `已放到音轨「${result.track.name}」，${start}s 开始，时长 ${result.clip.duration.toFixed(2)}s`,

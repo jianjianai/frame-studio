@@ -54,7 +54,9 @@ export function registerDocumentTools(registry) {
       ...editOptions,
     },
     async run(args, ctx) {
-      const result = editVisual(await ctx.work(), args);
+      const work = await ctx.work();
+      const result = editVisual(work, args);
+      if (!args.dryRun) await registry.services.materials?.lockReferenced(work);
       const summary = result.document.clips.map((clip) => `${clip.id} ${round(clip.start)}–${round(clip.start + clip.duration)}s`).join("，");
       return {
         data: { sha256: result.sha256, clips: result.document.clips.length, dryRun: args.dryRun },
@@ -97,7 +99,9 @@ export function registerDocumentTools(registry) {
       ...editOptions,
     },
     async run(args, ctx) {
-      const result = editAudio(await ctx.work(), args);
+      const work = await ctx.work();
+      const result = editAudio(work, args);
+      if (!args.dryRun) await registry.services.materials?.lockReferenced(work);
       const { tracks, clips } = result.document;
       const summary = tracks
         .map((track) => {

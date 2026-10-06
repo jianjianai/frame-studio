@@ -8,11 +8,12 @@ import { placeAudio, readVisual, editVisual, readAudio, editAudio } from "../doc
 import { probe } from "../media.mjs";
 import { listAssets } from "../tools/work-tools.mjs";
 import { importFromUrl } from "../tools/asset-tools.mjs";
+import { describeIssues } from "../tools/registry.mjs";
 import { problem, sha256, confined, mimeType } from "../util.mjs";
 
 /** Studio-facing routes for exports, assets, documents, checks, tasks and tokens. */
 export function studioRoutes(services) {
-  const { router, exports, tasks, library, events, settings, config } = services;
+  const { router, exports, tasks, events, settings, config } = services;
   const open = (params) => services.openWork(params.id, params.repo);
 
   // ---- checks -------------------------------------------------------------
@@ -89,10 +90,8 @@ export function studioRoutes(services) {
   router.post("/api/works/:repo/:id/assets/import", async ({ params, req }) => {
     const work = await services.openEditable(params.id, params.repo);
     const body = await readJson(req);
-    let relative;
-    if (body.url) relative = await importFromUrl(work, body.url, { name: body.name });
-    else if (body.libraryId) relative = (await library.use(work, body.libraryId)).path;
-    else throw problem(400, "需要 url 或 libraryId");
+    if (!body.url) throw problem(400, "需要 url");
+    const relative = await importFromUrl(work, body.url, { name: body.name });
     events.emit({ type: "assets", work: work.id, repo: work.repo });
     return { path: relative, url: `films/${work.slug}/${relative.replace(/^public\//, "")}`, ...(await probe(path.join(work.dir, relative))) };
   });
@@ -120,18 +119,43 @@ export function studioRoutes(services) {
 
   // ---- documents ------------------------------------------------------------
   router.get("/api/works/:repo/:id/layers", async ({ params }) => readVisual(await open(params)));
-  router.post("/api/works/:repo/:id/layers", async ({ params, req }) => editVisual(await services.openEditable(params.id, params.repo), await readJson(req)));
+  // Materials placed in a document are locked at their current version right away; an
+  // invalid document is the caller's mistake (400 with the rules it broke).
+  const placed = async (work, edit) => {
+    let result;
+    try {
+      result = edit();
+    } catch (error) {
+      if (error.name === "ZodError") throw problem(400, "内容无效：" + describeIssues(error.issues), "INVALID_CONTENT");
+      throw error;
+    }
+    await services.materials?.lockReferenced(work);
+    return result;
+  };
+  router.post("/api/works/:repo/:id/layers", async ({ params, req }) => {
+    const work = await services.openEditable(params.id, params.repo);
+    const body = await readJson(req);
+    return placed(work, () => editVisual(work, body));
+  });
   router.get("/api/works/:repo/:id/audio", async ({ params }) => readAudio(await open(params)));
-  router.post("/api/works/:repo/:id/audio", async ({ params, req }) => editAudio(await services.openEditable(params.id, params.repo), await readJson(req)));
+  router.post("/api/works/:repo/:id/audio", async ({ params, req }) => {
+    const work = await services.openEditable(params.id, params.repo);
+    const body = await readJson(req);
+    return placed(work, () => editAudio(work, body));
+  });
   router.post("/api/works/:repo/:id/audio/place", async ({ params, req }) => {
     const body = await readJson(req);
-    return placeAudio(await services.openEditable(params.id, params.repo), {
-      src: body.src,
-      start: body.start,
-      duration: body.duration,
-      trackName: body.track,
-      name: body.name,
-    });
+    const work = await services.openEditable(params.id, params.repo);
+    let duration = body.duration;
+    if (!duration) {
+      // Dropped without a known length (a material library file): measure it.
+      const material = /^materials\/(.+)$/.exec(String(body.src || ""));
+      const file = material
+        ? await services.materials.file(work.repo, services.materials.readLocks(work.dir), material[1])
+        : path.join(work.dir, "public", String(body.src || "").replace(/^films\/[^/]+\//, ""));
+      duration = (await probe(file).catch(() => ({}))).duration;
+    }
+    return placed(work, () => placeAudio(work, { src: body.src, start: body.start, duration, trackName: body.track, name: body.name }));
   });
 
   // ---- exports --------------------------------------------------------------
@@ -143,32 +167,6 @@ export function studioRoutes(services) {
     sendFile(req, res, file);
   });
   router.delete("/api/works/:repo/:id/exports/:name", async ({ params }) => exports.remove(await open(params), params.name));
-
-  // ---- library --------------------------------------------------------------
-  router.get("/api/repos/:repo/library", ({ params }) => library.list(params.repo));
-  router.post(
-    "/api/repos/:repo/library",
-    async ({ params, req, query }) => {
-      const temp = path.join(config.dirs.tmp, "upload-" + randomUUID());
-      try {
-        await writeStream(path.dirname(temp), path.basename(temp), req, { limit: 2 * 1024 * 1024 * 1024 });
-        return await library.add(params.repo, temp, { name: query.name, license: query.license || "", tags: query.tags || "" });
-      } finally {
-        fs.rmSync(temp, { force: true });
-      }
-    },
-    { raw: true },
-  );
-  router.post("/api/repos/:repo/library/from-work", async ({ params, req }) => {
-    const body = await readJson(req);
-    const work = await services.openWork(body.work, params.repo);
-    const file = path.join(work.dir, body.path);
-    return library.add(params.repo, file, { name: path.basename(body.path), license: body.license || "", tags: body.tags || "" });
-  });
-  router.get("/api/repos/:repo/library/:item", async ({ params, req, res }) => sendFile(req, res, (await library.file(params.repo, params.item)).file));
-  router.delete("/api/repos/:repo/library/:item", ({ params }) => library.remove(params.repo, params.item));
-  router.post("/api/repos/:repo/library/push", ({ params }) => library.push(params.repo));
-  router.post("/api/repos/:repo/library/pull", ({ params }) => library.pull(params.repo));
 
   // ---- tasks ----------------------------------------------------------------
   router.get("/api/tasks", ({ query }) => tasks.list({ work: query.work }));

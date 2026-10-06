@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { spawn } from "node:child_process";
 
 export class GitError extends Error {
@@ -34,6 +35,29 @@ export function git(cwd, args, { input, env, allowCodes = [0], maxBytes = 64 * 1
       if (size > maxBytes) return reject(new Error(`git ${args[0]} output exceeded ${maxBytes} bytes`));
       if (!allowCodes.includes(code)) return reject(new GitError(args, code, stderr));
       resolve(Buffer.concat(out).toString("utf8"));
+    });
+    if (input !== undefined) {
+      child.stdin.on("error", () => {});
+      child.stdin.end(input);
+    }
+  });
+}
+
+/** Run git and write its (binary) output to a file, e.g. a blob of an earlier version. */
+export function gitToFile(cwd, args, file, { input, env } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("git", [...identity, ...args], {
+      cwd,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0", LC_ALL: "C", ...env },
+      stdio: [input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+    const out = fs.createWriteStream(file);
+    let stderr = "";
+    child.stdout.pipe(out);
+    child.stderr.on("data", (chunk) => (stderr += chunk));
+    child.on("error", reject);
+    child.on("close", (code) => {
+      out.end(() => (code === 0 ? resolve() : reject(new GitError(args, code, stderr))));
     });
     if (input !== undefined) {
       child.stdin.on("error", () => {});

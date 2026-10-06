@@ -193,7 +193,8 @@ export function platformInstructions() {
 - \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载。
 - \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改（格式见 frame_guide layers / audio）。
 - \`speech_synthesize\`：整段旁白用 \`lines\` + \`place\` + \`subtitles: true\` 一次生成配音、排上音轨并写字幕；\`subtitles_edit\` 改字幕，\`work_update\` 改时长和镜头标记。
-- \`assets_list\`、\`asset_import\`、\`version_save\`、\`export_video\` 等：素材、版本和导出。
+- \`assets_list\`、\`asset_import\`：作品自己的素材（public/）。素材库是作品共用的素材：\`materials_list\` 查看，\`materials_link\` 引用，\`materials_use\` 锁定版本后用 \`materials/<库>/<文件>\` 地址，\`material_write\` 往素材库里放文件（见 frame_guide assets）。
+- \`version_save\`、\`export_video\` 等：版本和导出。
 
 ## 上下文
 - 这份说明在会话开始时生成，下面两节是当时的「本作品的需求与约定」和关联的「经验库」，不需要再去读取。

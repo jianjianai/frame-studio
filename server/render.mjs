@@ -111,6 +111,8 @@ export class Renderer {
     });
     for (const name of ["src", "node_modules"])
       fs.symlinkSync(path.join(appRoot, name), path.join(root, name), process.platform === "win32" ? "junction" : "dir");
+    // Material libraries are served from the work's repository at the versions its lock file names.
+    fs.writeFileSync(path.join(root, ".frame-snapshot.json"), JSON.stringify({ repo: work.repo, id: work.id, slug: work.slug }));
     return {
       id,
       root,

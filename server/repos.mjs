@@ -6,6 +6,11 @@ import { problem, notFound, Locks } from "./util.mjs";
 
 export const LOCAL_REPO = "local";
 export const MATERIALS_BRANCH = "frame/materials";
+const MATERIALS_README = `# FRAME 素材库
+
+每个文件夹是一个素材库（图片、视频、音频、字体等），各自的 README 记录素材的来源与许可。
+作品在 FRAME Studio 中引用素材库后直接使用其中的文件，并锁定所用文件的版本。
+`;
 const REPO_README = `# FRAME 作品库
 
 本仓库由 FRAME Studio 管理。每个作品是一个独立分支 \`works/<作品 id>\`，作品文件位于 \`projects/<名称>/\`；
@@ -185,11 +190,10 @@ export class Repos {
       else if (remote) await git(repo.dir, ["worktree", "add", "--track", "-b", MATERIALS_BRANCH, "--", dir, "origin/" + MATERIALS_BRANCH]);
       else {
         await addOrphanWorktree(repo.dir, MATERIALS_BRANCH, dir);
-        fs.mkdirSync(path.join(dir, "materials"), { recursive: true });
-        fs.writeFileSync(path.join(dir, "materials", "index.json"), "[]\n");
+        fs.writeFileSync(path.join(dir, "README.md"), MATERIALS_README);
         fs.writeFileSync(path.join(dir, ".gitattributes"), GIT_ATTRIBUTES);
-        await git(dir, ["add", "--", "materials/index.json", ".gitattributes"]);
-        await git(dir, ["commit", "-m", "Create materials library"]);
+        await git(dir, ["add", "--", "README.md", ".gitattributes"]);
+        await git(dir, ["commit", "-q", "-m", "创建素材库分支"]);
       }
       return dir;
     });

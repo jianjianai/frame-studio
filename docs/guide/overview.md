@@ -42,7 +42,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 配乐、音效、混音 | `audio_place`、`audio_get` / `audio_edit`（见 `audio`） |
 | 配音和字幕 | `speech_synthesize`（`lines` + `place` + `subtitles: true` 一次完成整段旁白）、`subtitles_edit`（见 `speech`、`subtitles`） |
 | 标题、时长、镜头标记 | `work_update` |
-| 素材 | `assets_list`、`asset_import`、`library_list`（见 `assets`） |
+| 素材 | `assets_list`、`asset_import`；素材库 `materials_list`、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
 | 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status` |
 
 ## 选择做法

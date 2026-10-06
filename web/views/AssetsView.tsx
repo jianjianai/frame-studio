@@ -11,26 +11,17 @@ import {
   Library,
   PlusSquare,
   Music,
-  ArrowDownToLine,
   FileQuestion,
   Eye,
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, useToast, Dialog } from "../lib/ui";
+import { useAction, useConfirm, useContextMenu, usePrompt, useToast, Dialog } from "../lib/ui";
 import type { Asset } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { assetDrag } from "../workbench/assetDrag";
 import { ViewHeader } from "./ViewHeader";
 import { uploadBlobs, uploadFiles } from "./upload";
-
-interface LibraryItem {
-  id: string;
-  name: string;
-  mime: string;
-  size: number;
-  license: string;
-  tags: string;
-}
+import { MaterialsPanel } from "./MaterialsPanel";
 
 export function AssetsView() {
   const { work, stage, addToChat, reload, openFile, readOnly } = useWorkbench();
@@ -39,23 +30,20 @@ export function AssetsView() {
   // A published work's own files are view-only; the shared materials library is not part of it.
   const locked = readOnly && tab === "work";
   const [assets, setAssets] = useState<Asset[]>([]);
-  const [library, setLibrary] = useState<LibraryItem[]>([]);
   const [dragging, setDragging] = useState(false);
   const [urlDialog, setUrlDialog] = useState(false);
   const [run, busy] = useAction();
   const confirm = useConfirm();
+  const prompt = usePrompt();
   const [openMenu, menu] = useContextMenu();
   const base = workPath(work.repo, work.id);
   const load = () => api<Asset[]>(`${base}/assets`).then(setAssets, () => {});
-  const loadLibrary = () => api<LibraryItem[]>(`/api/repos/${work.repo}/library`).then(setLibrary, () => {});
   useEffect(() => {
     void load();
-    void loadLibrary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base]);
   useServerEvent((event) => {
     if ((event.type === "assets" || event.type === "work-files") && event.work === work.id) void load();
-    if (event.type === "library" && event.repo === work.repo) void loadLibrary();
   });
 
   const fileUrl = (asset: Asset) => `${work.preview.assetBase}${asset.url}`;
@@ -102,8 +90,17 @@ export function AssetsView() {
       });
       await reload();
     }, "已放到「音效」音轨");
+  /** Share one of the work's files with other works: copy it into a material library. */
   const toLibrary = (asset: Asset) =>
-    run(() => api(`/api/repos/${work.repo}/library/from-work`, { body: { work: work.id, path: asset.path } }), "已存入作品库的素材库");
+    run(async () => {
+      const libraries = await api<{ id: string }[]>(`/api/repos/${encodeURIComponent(work.repo)}/materials/libraries`);
+      const name = (
+        await prompt("存入哪个素材库（名称）", work.meta?.materials?.[0] ?? libraries[0]?.id ?? "", libraries.map((item) => item.id).join("、") || "先在「素材库」中新建一个")
+      )?.trim();
+      if (!name) return;
+      await api(`/api/repos/${encodeURIComponent(work.repo)}/materials/libraries/${encodeURIComponent(name)}/import`, { body: { work: work.id, path: asset.path } });
+      toast(`已存入素材库「${name}」`, "ok");
+    });
   const remove = async (asset: Asset) => {
     if (await confirm(`删除素材 ${asset.path}？如果代码还在引用它，预览会报错。`, { confirm: "删除", danger: true }))
       await run(() => del(`${base}/file?path=${encodeURIComponent(asset.path)}`).then(load));
@@ -132,27 +129,21 @@ export function AssetsView() {
     event.preventDefault();
     setDragging(false);
     const files = [...event.dataTransfer.files];
-    if (!files.length || locked) return;
-    await run(async () => {
-      if (tab === "library") for (const file of files) await api(`/api/repos/${work.repo}/library?name=${encodeURIComponent(file.name)}`, { raw: file });
-      else await uploadBlobs(work, files, "public");
-    }, `已上传 ${files.length} 个文件`);
+    // Material libraries take files through their own upload buttons (which library is explicit).
+    if (!files.length || locked || tab !== "work") return;
+    await run(() => uploadBlobs(work, files, "public"), `已上传 ${files.length} 个文件`);
   };
 
   return (
     <div
       className={`view ${dragging ? "drop-active" : ""}`}
-      onDragOver={(event) => !locked && (event.preventDefault(), setDragging(true))}
+      onDragOver={(event) => !locked && tab === "work" && [...event.dataTransfer.types].includes("Files") && (event.preventDefault(), setDragging(true))}
       onDragLeave={() => setDragging(false)}
       onDrop={drop}
     >
       <ViewHeader title="素材">
-        {!locked && (
-          <button
-            className="icon-btn"
-            title="上传文件"
-            onClick={() => run(() => (tab === "work" ? uploadFiles(work, "public").then(load) : uploadToLibrary(work.repo).then(loadLibrary)))}
-          >
+        {!locked && tab === "work" && (
+          <button className="icon-btn" title="上传文件" onClick={() => run(() => uploadFiles(work, "public").then(load))}>
             <Upload size={15} />
           </button>
         )}
@@ -161,7 +152,7 @@ export function AssetsView() {
             <Link2 size={15} />
           </button>
         )}
-        <button className="icon-btn" title="刷新" onClick={() => (tab === "work" ? load() : loadLibrary())}>
+        <button className="icon-btn" title="刷新" onClick={() => load()}>
           <RefreshCw size={15} />
         </button>
       </ViewHeader>
@@ -170,7 +161,7 @@ export function AssetsView() {
           本作品 <span className="faint">{assets.length}</span>
         </button>
         <button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}>
-          素材库 <span className="faint">{library.length}</span>
+          素材库 <span className="faint">{work.meta?.materials?.length || ""}</span>
         </button>
       </div>
       {busy && <div className="view-progress" />}
@@ -211,35 +202,7 @@ export function AssetsView() {
           {!assets.length && <div className="empty">把图片、视频、音频拖到这里，或点上方按钮上传。</div>}
         </div>
       ) : (
-        <div className="library-list">
-          {library.map((item) => (
-            <div key={item.id} className="library-row">
-              <span className="ellipsis grow" title={`${item.name}\n${item.license || ""}`}>
-                {item.name}
-              </span>
-              <span className="faint small-text">{formatBytes(item.size)}</span>
-              <button
-                className="icon-btn"
-                disabled={readOnly}
-                title={readOnly ? "作品已发布，不能再添加素材" : "复制到本作品"}
-                onClick={() => run(() => api(`${base}/assets/import`, { body: { libraryId: item.id } }).then(load), "已复制到本作品 public/library/")}
-              >
-                <ArrowDownToLine size={14} />
-              </button>
-              <button
-                className="icon-btn"
-                title="从素材库移除"
-                onClick={async () =>
-                  (await confirm(`从素材库移除 ${item.name}？已复制到作品里的文件不受影响。`, { danger: true, confirm: "移除" })) &&
-                  run(() => del(`/api/repos/${work.repo}/library/${item.id}`))
-                }
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          ))}
-          {!library.length && <div className="empty">素材库在同一作品库的所有作品间共享，并随 GitHub 同步。把文件拖到这里添加。</div>}
-        </div>
+        <MaterialsPanel onPlace={(asset, how) => (how === "layer" ? addLayer(asset) : placeAudio(asset))} />
       )}
       {urlDialog && (
         <UrlDialog
@@ -250,23 +213,6 @@ export function AssetsView() {
       {menu}
     </div>
   );
-}
-
-function uploadToLibrary(repo: string) {
-  return new Promise<void>((resolve, reject) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.multiple = true;
-    input.onchange = async () => {
-      try {
-        for (const file of input.files ?? []) await api(`/api/repos/${repo}/library?name=${encodeURIComponent(file.name)}`, { raw: file });
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    };
-    input.click();
-  });
 }
 
 function UrlDialog({ onClose, onImport }: { onClose: () => void; onImport: (url: string, name: string) => void }) {

@@ -236,7 +236,11 @@ if (params.get("live") !== "0") {
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
     ws.onmessage = (event) => {
       const message = JSON.parse(event.data);
-      if (message.type === "preview-update" && message.work === work) void hotUpdate(message.timestamp, message.files);
+      if (message.type !== "preview-update" || message.work !== work) return;
+      // Material library files keep their address when the work's lock moves to another
+      // version, but decoded media are cached by address: start over.
+      if ((message.files as string[]).some((file) => file.endsWith("materials.lock.json"))) location.reload();
+      else void hotUpdate(message.timestamp, message.files);
     };
     ws.onclose = () => setTimeout(connect, 1500);
   };

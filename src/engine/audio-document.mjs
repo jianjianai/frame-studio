@@ -216,9 +216,10 @@ export function validateAudioDocument(value, { projectId, duration } = {}) {
     if (
       s.kind === "file" &&
       projectId &&
-      !s.src.startsWith("films/" + projectId + "/")
+      !s.src.startsWith("films/" + projectId + "/") &&
+      !s.src.startsWith("materials/")
     )
-      throw Error(`素材 ${s.src} 不属于这个作品，应为 films/${projectId}/...（来源 ${s.id}）`);
+      throw Error(`素材 ${s.src} 不属于这个作品，应为 films/${projectId}/... 或素材库文件 materials/...（来源 ${s.id}）`);
   for (const c of d.clips) {
     if (!sources.has(c.source))
       throw Error(`片段 ${c.id} 的 source「${c.source}」不存在（现有：${[...sources].join("、") || "无"}）`);

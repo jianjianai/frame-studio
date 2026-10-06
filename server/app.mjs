@@ -149,10 +149,24 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     }
   });
 
-  /** /files/<repo>/<work>/films/<slug>/x → work public file; other paths → engine public/. */
+  /**
+   * /files/<repo>/<work>/films/<slug>/x → work public file; materials/<library>/<path> →
+   * that file at the version the work locked (else as it is now); other paths → engine public/.
+   */
   async function serveWorkFile(req, res, pathname) {
     const [, , repo, id, ...rest] = pathname.split("/");
     const relative = decodeURIComponent(rest.join("/"));
+    const material = /^materials\/(.+)$/.exec(relative);
+    if (material && services.materials) {
+      // A snapshot (export) carries the work's lock file and says which repository it came from.
+      const snapshot = repo === "snapshot" ? path.join(config.dirs.tmp, "snapshots", id) : null;
+      const source = snapshot ? JSON.parse(fs.readFileSync(path.join(snapshot, ".frame-snapshot.json"), "utf8")) : { repo };
+      const dir = snapshot ? path.join(snapshot, "projects", source.slug) : works.describe(repo, id).dir;
+      const locks = services.materials.readLocks(dir);
+      const file = await services.materials.file(source.repo, locks, material[1]);
+      // The address stays when a lock moves to another version: always revalidate.
+      return sendFile(req, res, file, { cache: "no-cache" });
+    }
     if (repo === "snapshot") {
       const base = path.join(config.dirs.tmp, "snapshots", id);
       const match = /^films\/([^/]+)\/(.+)$/.exec(relative);

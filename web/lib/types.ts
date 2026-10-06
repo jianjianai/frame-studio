@@ -75,6 +75,8 @@ export interface WorkInfo {
     fps: number;
     /** Names of the linked experience libraries (as the work lists them). */
     experiences?: string[];
+    /** Names of the material libraries the work references. */
+    materials?: string[];
     /** When the work was published; a published work is view-only. */
     publishedAt?: string;
     beats: Beat[];
