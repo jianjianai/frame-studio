@@ -1557,6 +1557,27 @@
 .diff-line.del .diff-sign {
   color: var(--danger);
 }
+/* Wrapped: continuation lines start under the text, not under the +/− sign. */
+.diff-editor.wrap .diff-line {
+  min-width: 0;
+}
+.diff-editor.wrap .diff-text {
+  min-width: 0;
+  padding-left: 20px;
+  text-indent: -14px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.diff-mark {
+  border-radius: 2px;
+  color: inherit;
+}
+.diff-line.add .diff-mark {
+  background: color-mix(in srgb, var(--ok) 32%, transparent);
+}
+.diff-line.del .diff-mark {
+  background: color-mix(in srgb, var(--danger) 32%, transparent);
+}
 .diff-line.hunk {
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);

@@ -33,4 +33,25 @@ describe("diff tab parser", () => {
       { kind: "same", old: 5, new: 5, text: "tail" },
     ]);
   });
+
+  it("marks the characters that changed between a removed line and the line that replaced it", () => {
+    const [file] = parseDiff(
+      [
+        "diff --git a/经验/开场.md b/经验/开场.md",
+        "@@ -1,3 +1,3 @@",
+        "-- 开场前三秒必须给出问题，画面以明亮的暖色调为主。🎬",
+        "-完全不同的一行",
+        "+- 开场前一秒必须给出问题，画面以柔和的冷色调为主。🎞",
+        "+另外写的内容在这里",
+        " 不变",
+      ].join("\n"),
+    );
+    const [first, second, third, fourth] = file.lines.slice(1);
+    const marked = (line: (typeof file.lines)[number]) => line.marks?.map(([start, end]) => line.text.slice(start, end));
+    expect(marked(first)).toEqual(["三", "明亮的暖", "🎬"]); // one kept character between changes joins them
+    expect(marked(third)).toEqual(["一", "柔和的冷", "🎞"]);
+    // Lines that share almost nothing are shown whole.
+    expect(second.marks).toBeUndefined();
+    expect(fourth.marks).toBeUndefined();
+  });
 });
