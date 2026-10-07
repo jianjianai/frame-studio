@@ -109,7 +109,7 @@ export async function materialReferences(services, work) {
  * Full check: metadata, types, asset references and a real browser load that
  * renders a few frames and a little audio. Results are kept for the UI and AI.
  */
-export async function checkWork(services, work, { runtime = true } = {}) {
+export async function checkWork(services, work, { runtime = true, frames = false } = {}) {
   const started = Date.now();
   const problems = [];
   const meta = services.works.meta(work);
@@ -126,7 +126,7 @@ export async function checkWork(services, work, { runtime = true } = {}) {
   problems.push(...types, ...assets, ...materials);
   let runtimeResult = null;
   if (runtime && meta.ok && !problems.some((problem) => problem.source === "project")) {
-    runtimeResult = await services.renderer.check(work);
+    runtimeResult = await services.renderer.check(work, { frames });
     for (const error of runtimeResult.errors) problems.push({ severity: "error", source: "runtime", message: error });
   }
   const head = await services.works.status(work).then(
@@ -143,5 +143,6 @@ export async function checkWork(services, work, { runtime = true } = {}) {
   };
   services.checks.set(`${work.repo}/${work.id}`, result);
   services.events.emit({ type: "work-check", work: work.id, repo: work.repo, result });
-  return result;
+  // The rendered moments go to the caller only (an AI looking), not into the kept result.
+  return runtimeResult?.sheet ? { ...result, sheet: runtimeResult.sheet, sheetTimes: runtimeResult.checkedTimes } : result;
 }

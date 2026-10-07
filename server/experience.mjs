@@ -385,10 +385,26 @@ export function experiencePlugin(services) {
     name: "experience_read",
     title: "阅读经验库",
     description:
-      "阅读作品关联的经验库（同类作品积累的制作经验、用户偏好和避坑记录）。传 path 返回该文档全文；不传 path 返回首页和文档目录（内置 AI 的会话说明里已经有，通常不需要）。与当前任务相关的文档读全文，照着做。作品关联了多个经验库时，读文档要用 library 指定是哪个。",
+      "阅读作品关联的经验库（同类作品积累的制作经验、用户偏好和避坑记录）。传 path 返回该文档全文，一次读多篇用 paths；不传返回首页和文档目录（内置 AI 的会话说明里已经有，通常不需要）。与当前任务相关的文档读全文，照着做。作品关联了多个经验库时，读文档要用 library 指定是哪个。",
     readOnly: true,
-    input: { work: workArg, library: libraryArg, path: docPath.optional() },
-    async run({ library: name, path: file }, ctx) {
+    input: { work: workArg, library: libraryArg, path: docPath.optional(), paths: z.array(docPath).max(30).optional().describe("一次读同一经验库的多篇文档") },
+    async run({ library: name, path: file, paths }, ctx) {
+      if (paths?.length) {
+        const { library } = await libraryOf(ctx, name);
+        const parts = [];
+        const data = [];
+        for (const doc of paths)
+          try {
+            const result = readText(library.root, doc);
+            noteSeen(ctx, library, doc, result.hash, "content");
+            parts.push(`=== ${doc}\n${result.content}`);
+            data.push({ path: doc, ok: true, sha256: result.hash });
+          } catch (error) {
+            parts.push(`=== ${doc}：${error.message}`);
+            data.push({ path: doc, ok: false, error: error.message });
+          }
+        return { data: { library: library.id, documents: data }, text: parts.join("\n\n") };
+      }
       if (!file && !name) {
         // The overview of every linked library.
         const work = await ctx.work();

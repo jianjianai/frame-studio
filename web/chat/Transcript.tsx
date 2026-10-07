@@ -66,6 +66,8 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   file_edit: "编辑文件",
   file_delete: "删除文件",
   file_move: "移动文件",
+  files_batch: "批量文件操作",
+  upload_link: "上传本机文件",
   assets_list: "素材列表",
   asset_import: "导入素材",
   audio_place: "放置音频",

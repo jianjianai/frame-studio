@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import dns from "node:dns/promises";
+import net from "node:net";
 import { Readable } from "node:stream";
 import { z } from "zod";
 import { workArg, asJson } from "./registry.mjs";
+import { eachSettled, summarize, errorOf } from "./batch.mjs";
 import { listAssets } from "./work-tools.mjs";
 import { writeStream, uniquePath } from "../files.mjs";
 import { problem } from "../util.mjs";
@@ -27,20 +30,63 @@ const extensionFor = (type) =>
     "application/json": ".json",
   })[String(type).split(";")[0].trim()] || "";
 
-/** Download a URL into the work; refuses non-http(s) and oversized files. */
-export async function importFromUrl(work, url, { name, folder = "public/imports", limit = 1024 * 1024 * 1024 } = {}) {
-  const parsed = new URL(url);
-  if (!["http:", "https:"].includes(parsed.protocol)) throw problem(400, "只能从 http/https 地址导入");
-  const response = await fetch(parsed, { redirect: "follow", signal: AbortSignal.timeout(10 * 60 * 1000) });
+/** Loopback, private, link-local, shared (CGNAT), benchmarking, multicast and reserved addresses. */
+export function privateAddress(ip) {
+  if (net.isIPv4(ip)) {
+    const [a, b] = ip.split(".").map(Number);
+    return a === 0 || a === 10 || a === 127 || (a === 100 && b >= 64 && b <= 127) || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 198 && (b === 18 || b === 19)) || a >= 224;
+  }
+  const lower = ip.toLowerCase();
+  if (lower === "::" || lower === "::1") return true;
+  const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(lower);
+  if (mapped) return privateAddress(mapped[1]);
+  return /^(f[cd]|fe[89ab]|ff)/.test(lower);
+}
+
+/** A studio on the network must not fetch its own network for whoever asks (SSRF). */
+async function assertPublicHost(url) {
+  const host = url.hostname.replace(/^\[|\]$/g, "");
+  const addresses = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true }).catch(() => [])).map((item) => item.address);
+  if (!addresses.length) throw problem(400, `找不到这个网址的服务器：${url.host}`);
+  if (addresses.some(privateAddress)) throw problem(400, `不能从内网地址导入：${url.host}`, "PRIVATE_ADDRESS");
+}
+
+/**
+ * Download a URL into a folder of `work.dir`; refuses non-http(s) and oversized files. With
+ * `publicOnly` (a studio reachable from the network), every address on the way, redirects
+ * included, must be a public one.
+ */
+export async function importFromUrl(work, url, { name, folder = "public/imports", limit = 1024 * 1024 * 1024, publicOnly = false } = {}) {
+  let current = new URL(url);
+  let response;
+  for (let hops = 0; ; hops++) {
+    if (!["http:", "https:"].includes(current.protocol)) throw problem(400, "只能从 http/https 地址导入");
+    if (publicOnly) await assertPublicHost(current);
+    response = await fetch(current, { redirect: "manual", signal: AbortSignal.timeout(10 * 60 * 1000) });
+    const location = response.status >= 300 && response.status < 400 && response.headers.get("location");
+    if (!location) break;
+    if (hops >= 5) throw problem(502, "下载失败：重定向次数过多");
+    current = new URL(location, current);
+  }
   if (!response.ok || !response.body) throw problem(502, `下载失败：HTTP ${response.status}`);
   const length = Number(response.headers.get("content-length") || 0);
   if (length > limit) throw problem(413, "文件过大");
-  let base = name || decodeURIComponent(path.basename(parsed.pathname)) || "download";
+  let base = name || decodeURIComponent(path.basename(current.pathname)) || "download";
   if (!path.extname(base)) base += extensionFor(response.headers.get("content-type"));
   base = base.replace(/[\\/\x00-\x1f?#%*:|"<>]/g, "_");
   const relative = uniquePath(work.dir, `${folder.replace(/\/$/, "")}/${base}`);
   await writeStream(work.dir, relative, Readable.fromWeb(response.body), { limit });
   return relative;
+}
+
+/** base64 file content sent with a tool call (clients without a shell); small files only. */
+export const DATA_LIMIT = 8 * 1024 * 1024;
+export function decodeData(data, name) {
+  if (!name || !path.extname(name)) throw problem(400, "用 data 传文件时，name 要写带扩展名的文件名");
+  const buffer = Buffer.from(String(data).replace(/^data:[^,]*,/, ""), "base64");
+  if (!buffer.length) throw problem(400, "data 不是有效的 base64 内容");
+  if (buffer.length > DATA_LIMIT) throw problem(413, `data 最多 ${DATA_LIMIT / 1048576} MB；更大的文件用 upload_link 上传`);
+  return buffer;
 }
 
 export function registerAssetTools(registry) {
@@ -60,43 +106,69 @@ export function registerAssetTools(registry) {
     },
   });
 
+  const source = {
+    url: z.string().url().optional(),
+    data: z.string().max(12 * 1024 * 1024).optional().describe("文件内容的 base64（≤8 MB，要同时给 name）；没有终端时用，否则用 upload_link"),
+    file: z.string().optional().describe("服务器上的绝对路径（仅本机模式）"),
+    name: z.string().max(120).optional().describe("保存的文件名"),
+    folder: z
+      .string()
+      .regex(/^public(\/[\w.-]+)*$/)
+      .optional()
+      .describe("保存到哪个文件夹，默认 public/imports"),
+    license: z.string().max(500).optional().describe("来源与许可"),
+  };
+  /** One import into the work's public/: from a URL, base64 data or (local studio) a file of this machine. */
+  const importOne = async (work, { url, data, file, name, folder = "public/imports", license }) => {
+    if ([url, data, file].filter(Boolean).length !== 1) throw problem(400, "url、data、file 必须且只能提供一个");
+    let relative;
+    if (url) relative = await importFromUrl(work, url, { name, folder, publicOnly: services.auth.required });
+    else if (data) {
+      const buffer = decodeData(data, name);
+      relative = uniquePath(work.dir, `${folder}/${name.replace(/[\\/\x00-\x1f?#%*:|"<>]/g, "_")}`);
+      await writeStream(work.dir, relative, Readable.from([buffer]));
+    } else {
+      if (services.auth.required) throw problem(403, "服务器模式不能直接读取服务器上的文件：你所在电脑上的文件用 upload_link 上传，网上的用 url");
+      if (!path.isAbsolute(file) || !fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw problem(400, "file 必须是存在的绝对路径");
+      relative = uniquePath(work.dir, `${folder}/${name || path.basename(file)}`);
+      fs.mkdirSync(path.dirname(path.join(work.dir, relative)), { recursive: true });
+      fs.copyFileSync(file, path.join(work.dir, relative));
+    }
+    if (license) {
+      const credits = path.join(work.dir, "production", "licenses.md");
+      fs.mkdirSync(path.dirname(credits), { recursive: true });
+      fs.appendFileSync(credits, `- ${relative}: ${license}\n`);
+    }
+    const info = await probe(path.join(work.dir, relative));
+    return { path: relative, url: `films/${work.slug}/${relative.replace(/^public\//, "")}`, ...info };
+  };
+
   registry.add({
     name: "asset_import",
     title: "导入素材",
     description:
-      "把素材放进作品自己的 public/：从网址下载（url）或从服务器本地文件复制（file，仅本机模式）。返回代码中使用的 films/... 地址。注意素材版权，在 license 中记录来源。多个作品都要用的素材放进素材库（material_write），作品引用素材库后直接使用。",
+      "把素材放进作品自己的 public/：从网址下载（url）、base64 内容（data，小文件）或服务器本地文件（file，仅本机模式）。一次导入多个用 items（同时下载，某项失败不影响其他项，结果逐项列出，只需重试失败的）。你所在电脑上的文件用 upload_link 上传。返回代码中使用的 films/... 地址。注意素材版权，在 license 中记录来源。多个作品都要用的素材放进素材库（material_write）。",
     input: {
       work: workArg,
-      url: z.string().url().optional(),
-      file: z.string().optional().describe("服务器上的绝对路径（仅本机模式）"),
-      name: z.string().max(120).optional().describe("保存的文件名"),
-      folder: z
-        .string()
-        .regex(/^public(\/[\w.-]+)*$/)
-        .default("public/imports"),
-      license: z.string().max(500).optional().describe("来源与许可"),
+      ...source,
+      items: z.array(z.strictObject(source)).max(20).optional().describe("一次导入多个；每项和单个导入的参数相同"),
     },
-    async run({ url, file, name, folder, license }, ctx) {
+    async run({ work: _ignored, items, ...single }, ctx) {
       const work = await ctx.work();
-      if ([url, file].filter(Boolean).length !== 1) throw problem(400, "url、file 必须且只能提供一个");
-      let relative;
-      if (url) relative = await importFromUrl(work, url, { name, folder });
-      else if (file) {
-        if (services.auth.required) throw problem(403, "服务器模式不能直接读取本地文件，请上传或使用 url");
-        if (!path.isAbsolute(file) || !fs.statSync(file, { throwIfNoEntry: false })?.isFile()) throw problem(400, "file 必须是存在的绝对路径");
-        relative = uniquePath(work.dir, `${folder}/${name || path.basename(file)}`);
-        fs.mkdirSync(path.dirname(path.join(work.dir, relative)), { recursive: true });
-        fs.copyFileSync(file, path.join(work.dir, relative));
-      }
-      if (license) {
-        const credits = path.join(work.dir, "production", "licenses.md");
-        fs.mkdirSync(path.dirname(credits), { recursive: true });
-        fs.appendFileSync(credits, `- ${relative}: ${license}\n`);
-      }
-      const info = await probe(path.join(work.dir, relative));
-      const urlRef = `films/${work.slug}/${relative.replace(/^public\//, "")}`;
+      const list = items?.length ? items.map((item) => ({ folder: single.folder, license: single.license, ...item })) : [single];
+      const results = await eachSettled(list, (item) => importOne(work, item));
       services.events.emit({ type: "assets", work: work.id, repo: work.repo });
-      return asJson({ path: relative, url: urlRef, ...info }, `已导入 ${relative}，引用地址 ${urlRef}`);
+      if (!items?.length) {
+        if (!results[0].ok) throw results[0].error;
+        const one = results[0].value;
+        return asJson(one, `已导入 ${one.path}，引用地址 ${one.url}`);
+      }
+      return {
+        data: results.map((result, index) => (result.ok ? { ok: true, ...result.value } : { ok: false, item: index, error: errorOf(result.error) })),
+        text: summarize(results, (result, index) =>
+          result.ok ? `✓ ${index + 1}. ${result.value.path} → ${result.value.url}` : `✗ ${index + 1}. ${list[index].url || list[index].name || list[index].file}：${result.error.message}`,
+        ),
+      };
     },
   });
 

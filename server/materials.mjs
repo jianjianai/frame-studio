@@ -7,7 +7,9 @@ import { readJson, sendFile } from "./http.mjs";
 import { problem, notFound, conflict, confined, inside, sha256, Locks, writeFileAtomic } from "./util.mjs";
 import { MATERIALS_BRANCH } from "./repos.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
-import { importFromUrl } from "./tools/asset-tools.mjs";
+import { importFromUrl, decodeData } from "./tools/asset-tools.mjs";
+import { eachSettled, summarize, errorOf } from "./tools/batch.mjs";
+import { Readable } from "node:stream";
 import { nearMiss } from "./tools/work-tools.mjs";
 import { probe } from "./media.mjs";
 
@@ -202,7 +204,7 @@ export class Materials {
     const saved = await this.save(repo, [id], `素材库「${this.title(dir, id)}」：${existed && replace ? "更新" : "添加"} ${target.slice(id.length + 1)}`, async () => {
       if (from.url) {
         if (existed && replace) fs.rmSync(path.join(dir, target));
-        target = await importFromUrl({ dir }, from.url, { name: path.basename(target), folder: path.dirname(target) });
+        target = await importFromUrl({ dir }, from.url, { name: path.basename(target), folder: path.dirname(target), publicOnly: this.services.auth.required });
       }
       else if (from.stream) await writeStream(dir, target, from.stream, { overwrite: true });
       else if (from.file) {
@@ -766,80 +768,136 @@ export function materialsPlugin(services) {
     name: "materials_use",
     title: "使用素材",
     description:
-      "在作品中使用素材库里的文件前调用：锁定这些文件当前的版本（之后素材库里的改动不会影响作品），返回用法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。",
+      "在作品中使用素材库里的文件前调用：锁定这些文件当前的版本（之后素材库里的改动不会影响作品），作品还没关联的素材库会自动关联。返回用法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。",
     input: { work: workArg, files: z.array(refArg).min(1).max(100), update: z.boolean().default(false) },
     async run({ files, update }, ctx) {
       const work = await ctx.work();
       const { libraries } = await materials.linked(work);
       const linked = new Set(libraries.map((item) => item.id));
-      const outside = files.filter((ref) => !linked.has(ref.split("/")[0]));
-      if (outside.length) throw problem(400, `作品没有引用这些素材库：${[...new Set(outside.map((ref) => ref.split("/")[0]))].join("、")}，先用 materials_link 引用`);
+      // Using a library's files means using the library: link it here instead of a separate call.
+      const existing = new Set((await materials.libraries(work.repo)).map((item) => item.id));
+      const needed = [...new Set(files.map((ref) => ref.split("/")[0]))].filter((id) => !linked.has(id));
+      const unknown = needed.filter((id) => !existing.has(id));
+      if (unknown.length) throw problem(404, `素材库不存在：${unknown.join("、")}`);
+      if (needed.length) await works.update(work, { materials: [...materials.names(work), ...needed] });
       const result = await materials.lock(work, files, { update });
       if (result.missing.length) throw problem(404, `素材不存在：${result.missing.join("、")}`);
       const usage = files.map((ref) =>
         SCRIPT.test(ref) || !/\.[^/]+$/.test(ref) ? { ref, import: `@materials/${ref.replace(/\.(m?[jt]sx?)$/, "")}` } : { ref, url: `materials/${ref}` },
       );
       return asJson(
-        { files: usage, locked: result.locked },
-        `可以使用：${usage.map((item) => (item.import ? `import … from "${item.import}"` : item.url)).join("、")}${result.locked.length ? `（已锁定 ${result.locked.length} 个文件的当前版本：${result.locked.join("、")}）` : ""}`,
+        { files: usage, locked: result.locked, linked: needed },
+        `${needed.length ? `已为作品关联素材库：${needed.join("、")}。` : ""}可以使用：${usage.map((item) => (item.import ? `import … from "${item.import}"` : item.url)).join("、")}${result.locked.length ? `（已锁定 ${result.locked.length} 个文件的当前版本：${result.locked.join("、")}）` : ""}`,
       );
     },
   });
 
+  const writeItem = {
+    library: libraryArg,
+    path: z.string().min(1).max(300).describe("素材库内的路径，例如 logos/brand.svg"),
+    url: z.string().url().optional(),
+    work_file: z.string().optional().describe("本作品中的文件，相对 projects/<名称>/"),
+    content: z.string().max(4 * 1024 * 1024).optional().describe("文本内容（SVG、JSON、代码）"),
+    data: z.string().max(12 * 1024 * 1024).optional().describe("文件内容的 base64（≤8 MB）；没有终端时用，否则用 upload_link"),
+    source: z.string().max(300).optional(),
+    license: z.string().max(300).optional(),
+  };
   tools.add({
     name: "material_write",
     published: true, // the libraries are not the work: allowed on a published one
     title: "写入素材库",
     description:
-      "把文件放进素材库（每次修改都会保存为素材库的一个版本）：从网址下载（url）、从本作品的文件复制（work_file，例如 public/logo.png）或写入文本内容（content，例如 SVG、JSON）。同名文件会被替换为新版本；已锁定旧版本的作品不受影响。第三方素材在 source / license 中写清来源与许可。",
+      "把文件放进素材库（每次修改都会保存为素材库的一个版本）：从网址下载（url）、从本作品的文件复制（work_file，例如 public/logo.png）、文本内容（content，例如 SVG、JSON、代码）或 base64（data，小文件）。一次放多个用 items（某项失败不影响其他项，结果逐项列出）。你所在电脑上的文件用 upload_link 上传。同名文件会被替换为新版本；已锁定旧版本的作品不受影响。第三方素材在 source / license 中写清来源与许可。",
     destructive: true,
     input: {
       work: workArg,
-      library: libraryArg,
-      path: z.string().min(1).max(300).describe("素材库内的路径，例如 logos/brand.svg"),
-      url: z.string().url().optional(),
-      work_file: z.string().optional().describe("本作品中的文件，相对 projects/<名称>/"),
-      content: z.string().max(4 * 1024 * 1024).optional(),
-      source: z.string().max(300).optional(),
-      license: z.string().max(300).optional(),
+      ...Object.fromEntries(Object.entries(writeItem).map(([key, value]) => [key, ["library", "path"].includes(key) ? value.optional() : value])),
+      items: z.array(z.strictObject(writeItem)).max(20).optional().describe("一次放多个；每项和单个的参数相同"),
     },
-    async run({ library, path: relative, url, work_file, content, source, license }, ctx) {
+    async run({ work: _ignored, items, ...single }, ctx) {
       const work = await ctx.work();
-      if ([url, work_file, content].filter((value) => value !== undefined).length !== 1) throw problem(400, "url、work_file、content 必须且只能提供一个");
-      const from = url ? { url } : work_file ? { file: confined(work.dir, work_file) } : { content };
-      const saved = await materials.put(work.repo, library, relative, from, { source: source || url, license });
-      const info = await probe(await materials.file(work.repo, {}, saved.ref)).catch(() => ({}));
-      return asJson({ ...saved, ...info }, `已保存到素材库：materials/${saved.ref}`);
+      const one = async ({ library, path: relative, url, work_file, content, data, source, license }) => {
+        if (!library || !relative) throw problem(400, "需要 library 和 path");
+        if ([url, work_file, content, data].filter((value) => value !== undefined).length !== 1) throw problem(400, "url、work_file、content、data 必须且只能提供一个");
+        const from = url
+          ? { url }
+          : work_file
+            ? { file: confined(work.dir, work_file) }
+            : data !== undefined
+              ? { stream: Readable.from([decodeData(data, relative)]) }
+              : { content };
+        const saved = await materials.put(work.repo, library, relative, from, { source: source || url, license });
+        const info = await probe(await materials.file(work.repo, {}, saved.ref)).catch(() => ({}));
+        return { ...saved, ...info };
+      };
+      if (!items?.length) {
+        const saved = await one(single);
+        return asJson(saved, `已保存到素材库：materials/${saved.ref}`);
+      }
+      const results = await eachSettled(items, one);
+      return {
+        data: results.map((result, index) => (result.ok ? { ok: true, ...result.value } : { ok: false, item: index, error: errorOf(result.error) })),
+        text: summarize(results, (result, index) =>
+          result.ok ? `✓ ${index + 1}. materials/${result.value.ref}` : `✗ ${index + 1}. ${items[index].library}/${items[index].path}：${result.error.message}`,
+        ),
+      };
     },
   });
 
+  /** A library file as text (current version, or the version this work locked). */
+  const readMaterial = async (work, ref, locked) => {
+    if (!validRef(ref)) throw problem(400, "无效的路径");
+    const versions = locked ? materials.readLocks(work.dir) : {};
+    if (locked && !versions[ref]) throw problem(404, `本作品没有锁定 materials/${ref}`);
+    if (!IMPORTABLE.test(ref)) {
+      const info = await probe(await materials.file(work.repo, versions, ref)).catch(() => null);
+      if (!info) throw notFound(`素材不存在：materials/${ref}`);
+      return { ref, info, text: null };
+    }
+    if (versions[ref]) return { ref, text: await materials.text(work.repo, versions[ref]) };
+    const file = confined(await materials.dir(work.repo), ref);
+    if (!fs.existsSync(file)) throw notFound(`素材不存在：materials/${ref}`);
+    if (fs.statSync(file).size > TEXT_LIMIT) throw problem(413, "文件太大，不能作为文本读取");
+    return { ref, text: fs.readFileSync(file, "utf8") };
+  };
   tools.add({
     name: "material_read",
     readOnly: true,
     title: "阅读素材库文件",
     description:
-      "读取素材库里的文本文件（代码、JSON、SVG、说明等）。默认是素材库现在的版本；locked: true 读本作品锁定的版本（作品实际运行的那个）。媒体文件只返回信息。",
-    input: { work: workArg, library: libraryArg, path: z.string().min(1).max(300), locked: z.boolean().default(false) },
-    async run({ library, path: relative, locked }, ctx) {
+      "读取素材库里的文本文件（代码、JSON、SVG、说明等）。默认是素材库现在的版本；locked: true 读本作品锁定的版本（作品实际运行的那个）。一次读多个用 paths（\"<库>/<路径>\"）。媒体文件只返回信息。",
+    input: {
+      work: workArg,
+      library: libraryArg.optional(),
+      path: z.string().min(1).max(300).optional(),
+      paths: z.array(z.string().min(3).max(360)).max(30).optional().describe('一次读多个："<素材库>/<路径>"'),
+      locked: z.boolean().default(false),
+    },
+    async run({ library, path: relative, paths, locked }, ctx) {
       const work = await ctx.work();
-      const ref = `${library}/${relative}`;
-      if (!validRef(ref)) throw problem(400, "无效的路径");
-      const versions = locked ? materials.readLocks(work.dir) : {};
-      if (locked && !versions[ref]) throw problem(404, `本作品没有锁定 materials/${ref}`);
-      if (!IMPORTABLE.test(ref)) {
-        const info = await probe(await materials.file(work.repo, versions, ref)).catch(() => null);
-        if (!info) throw notFound(`素材不存在：materials/${ref}`);
-        return asJson({ ref, ...info }, `materials/${ref} 是媒体文件，不能作为文本读取`);
+      if (!paths?.length) {
+        if (!library || !relative) throw problem(400, "需要 library 和 path，或者 paths");
+        const read = await readMaterial(work, `${library}/${relative}`, locked);
+        if (read.text === null) return asJson({ ref: read.ref, ...read.info }, `materials/${read.ref} 是媒体文件，不能作为文本读取`);
+        return { data: { ref: read.ref, version: locked ? "locked" : "current", sha256: sha256(read.text) }, text: read.text };
       }
-      let text;
-      if (versions[ref]) text = await materials.text(work.repo, versions[ref]);
-      else {
-        const file = confined(await materials.dir(work.repo), ref);
-        if (!fs.existsSync(file)) throw notFound(`素材不存在：materials/${ref}`);
-        if (fs.statSync(file).size > TEXT_LIMIT) throw problem(413, "文件太大，不能作为文本读取");
-        text = fs.readFileSync(file, "utf8");
-      }
-      return { data: { ref, version: locked ? "locked" : "current", sha256: sha256(text) }, text };
+      const results = await eachSettled(paths, (ref) => readMaterial(work, ref, locked));
+      return {
+        data: results.map((result, index) =>
+          result.ok
+            ? { ref: paths[index], ok: true, ...(result.value.text === null ? { media: result.value.info } : { sha256: sha256(result.value.text) }) }
+            : { ref: paths[index], ok: false, error: errorOf(result.error) },
+        ),
+        text: results
+          .map((result, index) =>
+            !result.ok
+              ? `=== materials/${paths[index]}：${result.error.message}`
+              : result.value.text === null
+                ? `=== materials/${paths[index]}（媒体文件，${result.value.info.kind}）`
+                : `=== materials/${paths[index]}\n${result.value.text}`,
+          )
+          .join("\n\n"),
+      };
     },
   });
 

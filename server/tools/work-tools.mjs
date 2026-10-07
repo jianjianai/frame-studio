@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { workArg, asJson } from "./registry.mjs";
-import { tree, readText, writeText, removePath, movePath } from "../files.mjs";
+import { tree, readText, writeText, removePath, movePath, TEXT_LIMIT } from "../files.mjs";
 import { checkWork } from "../checks.mjs";
-import { problem, confined } from "../util.mjs";
+import { problem, confined, sha256 } from "../util.mjs";
 import { probe } from "../media.mjs";
 import { projectAudioTracks } from "../../src/engine/types.ts";
 import { formatTime } from "../render.mjs";
@@ -168,19 +168,25 @@ export function registerWorkTools(registry) {
   registry.add({
     name: "work_check",
     title: "检查作品",
-    description: "检查 project.ts 元数据、TypeScript 类型、素材引用，并在浏览器中实际加载、渲染几帧和一小段音频。返回所有问题。修改代码后调用。",
+    description:
+      "检查 project.ts 元数据、TypeScript 类型、素材引用，并在浏览器中实际加载、渲染几帧（开头、1/4、1/2、3/4、结尾）和一小段音频。返回所有问题。修改代码后调用；frames: true 同时返回这 5 个时刻的分镜图，不用再调 storyboard。",
     readOnly: true,
-    input: { work: workArg, runtime: z.boolean().default(true).describe("是否在浏览器中实际加载（较慢但能发现运行错误）") },
-    async run({ runtime }, ctx) {
+    input: {
+      work: workArg,
+      runtime: z.boolean().default(true).describe("是否在浏览器中实际加载（较慢但能发现运行错误）"),
+      frames: z.boolean().default(false).describe("同时返回检查时渲染的 5 个时刻的分镜图"),
+    },
+    async run({ runtime, frames }, ctx) {
       const work = await ctx.work();
-      const result = await checkWork(services, work, { runtime });
+      const { sheet, sheetTimes, ...result } = await checkWork(services, work, { runtime, frames: frames && runtime });
       const lines = result.problems.map((p) => `- [${p.source}] ${p.file ? p.file + (p.line ? `:${p.line}` : "") + " " : ""}${p.message}`);
-      return asJson(
-        result,
-        result.ok
-          ? `检查通过（${result.ms} ms）。${lines.length ? "\n警告：\n" + lines.join("\n") : ""}`
-          : `发现 ${result.problems.length} 个问题：\n${lines.join("\n")}`,
-      );
+      const text = result.ok
+        ? `检查通过（${result.ms} ms）。${lines.length ? "\n警告：\n" + lines.join("\n") : ""}`
+        : `发现 ${result.problems.length} 个问题：\n${lines.join("\n")}`;
+      return {
+        ...asJson(result, sheet ? `${text}\n分镜（${sheetTimes.map((time, index) => `#${index + 1} ${formatTime(time)}`).join("，")}）见附图。` : text),
+        images: sheet ? [{ data: sheet, mimeType: "image/jpeg" }] : [],
+      };
     },
   });
 
@@ -287,6 +293,164 @@ export function registerWorkTools(registry) {
     async run({ from, to }, ctx) {
       movePath((await ctx.work()).dir, from, to);
       return asJson({ from, to }, `已移动 ${from} → ${to}`);
+    },
+  });
+
+  const editList = z
+    .array(z.strictObject({ oldText: z.string().min(1), newText: z.string(), replaceAll: z.boolean().default(false) }))
+    .min(1)
+    .max(50);
+  const batchOperation = z.discriminatedUnion("op", [
+    z.strictObject({ op: z.literal("read"), path: relativePath, startLine: z.number().int().min(1).optional(), lineCount: z.number().int().min(1).max(5000).optional() }),
+    z.strictObject({ op: z.literal("write"), path: relativePath, content: z.string().max(4 * 1024 * 1024), expectedSha256: z.string().optional() }),
+    z.strictObject({ op: z.literal("edit"), path: relativePath, edits: editList }),
+    z.strictObject({ op: z.literal("delete"), path: relativePath }),
+    z.strictObject({ op: z.literal("move"), from: relativePath, to: relativePath }),
+  ]);
+  const READ_BUDGET = 1024 * 1024; // text of reads returned in one call
+
+  registry.add({
+    name: "files_batch",
+    published: true, // reads are fine on a published work; changes are refused below
+    title: "批量文件操作",
+    description:
+      "一次调用对多个作品文件做读取（read）、写入（write）、精确替换（edit）、删除（delete）、移动（move），按顺序执行，省去逐个调用。默认能做的都做，失败的逐项说明原因（同一文件前面的操作失败时，后面针对它的操作会跳过），只需重试失败的；atomic: true 时任何一项失败就全部不改（一起改名之类必须同时成功的改动）。check: true 在改完后运行 work_check，frames: true 再附 5 个时刻的分镜图。",
+    destructive: true,
+    input: {
+      work: workArg,
+      operations: z.array(batchOperation).min(1).max(100),
+      atomic: z.boolean().default(false),
+      check: z.boolean().default(false),
+      frames: z.boolean().default(false),
+    },
+    async run({ operations, atomic, check, frames }, ctx) {
+      const work = await ctx.work();
+      const changing = operations.some((item) => item.op !== "read");
+      if (changing) works.assertEditable(work);
+
+      // Plan against the files as each operation leaves them, without touching the disk yet.
+      const files = new Map(); // path → { content: string | null (absent), hash, folder }
+      const look = (file) => {
+        if (!files.has(file)) {
+          const full = confined(work.dir, file);
+          const stat = fs.statSync(full, { throwIfNoEntry: false });
+          if (stat?.isDirectory()) files.set(file, { content: null, hash: null, folder: true });
+          else if (stat?.isFile()) {
+            if (stat.size > TEXT_LIMIT) throw problem(413, `${file} 超过 ${TEXT_LIMIT / 1048576} MiB，不能作为文本处理`);
+            const content = fs.readFileSync(full, "utf8");
+            files.set(file, { content, hash: sha256(content) });
+          } else files.set(file, { content: null, hash: null });
+        }
+        return files.get(file);
+      };
+      const exists = (entry) => entry.content !== null || entry.folder;
+      const failed = new Set();
+      const results = [];
+      const steps = []; // { index, apply }
+      let readBytes = 0;
+      for (const [index, item] of operations.entries()) {
+        const paths = item.op === "move" ? [item.from, item.to] : [item.path];
+        const blocked = paths.find((file) => failed.has(file));
+        if (blocked) {
+          results.push({ index, op: item.op, path: paths.join(" → "), status: "skipped", message: `跳过：${blocked} 前面的操作失败` });
+          continue;
+        }
+        try {
+          if (item.op !== "read" && paths.some((file) => file.split("/")[0] === "exports")) throw problem(400, "exports/ 是导出目录");
+          if (item.op === "read") {
+            const entry = look(item.path);
+            if (entry.content === null) throw problem(404, entry.folder ? `${item.path} 是文件夹` : `文件不存在：${item.path}`, "NOT_FOUND");
+            const lines = entry.content.split("\n");
+            const from = Math.min((item.startLine || 1) - 1, lines.length);
+            const shown = item.startLine || item.lineCount ? lines.slice(from, from + (item.lineCount || lines.length)).join("\n") : entry.content;
+            readBytes += Buffer.byteLength(shown);
+            const cut = readBytes > READ_BUDGET;
+            results.push({ index, op: "read", path: item.path, status: "ok", sha256: entry.hash, lines: lines.length, content: cut ? null : shown, ...(cut ? { message: "这次读取的内容太多，这个文件没有返回，单独再读" } : {}) });
+          } else if (item.op === "write" || item.op === "edit") {
+            const entry = look(item.path);
+            if (entry.folder) throw problem(400, `${item.path} 是文件夹`);
+            let content;
+            if (item.op === "write") {
+              if (item.expectedSha256 !== undefined && (entry.hash ?? "") !== item.expectedSha256)
+                throw problem(409, `${item.path} 已被其他人修改，最新 sha256 是 ${entry.hash ?? "（文件不存在）"}`, "CONFLICT", { currentHash: entry.hash });
+              content = item.content;
+            } else {
+              if (entry.content === null) throw problem(404, `文件不存在：${item.path}`, "NOT_FOUND");
+              content = entry.content;
+              for (const [at, edit] of item.edits.entries()) {
+                const count = content.split(edit.oldText).length - 1;
+                if (count === 0) throw problem(400, `第 ${at + 1} 处替换找不到 oldText。${nearMiss(content, edit.oldText)}`);
+                if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${at + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
+                content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
+              }
+            }
+            const before = entry.hash;
+            const hash = sha256(content);
+            files.set(item.path, { content, hash });
+            results.push({ index, op: item.op, path: item.path, status: "ok", sha256: hash, ...(item.op === "edit" ? { edits: item.edits.length } : {}) });
+            steps.push({ index, apply: () => writeText(work.dir, item.path, content, { expectedHash: before ?? null }) });
+          } else if (item.op === "delete") {
+            if (item.path === "project.ts") throw problem(400, "不能删除 project.ts");
+            const entry = look(item.path);
+            if (!exists(entry)) throw problem(404, `文件不存在：${item.path}`, "NOT_FOUND");
+            files.set(item.path, { content: null, hash: null });
+            results.push({ index, op: "delete", path: item.path, status: "ok" });
+            steps.push({ index, apply: () => removePath(work.dir, item.path) });
+          } else {
+            const source = look(item.from);
+            if (!exists(source)) throw problem(404, `文件不存在：${item.from}`, "NOT_FOUND");
+            if (exists(look(item.to))) throw problem(409, `目标已存在：${item.to}`, "CONFLICT");
+            files.set(item.to, source);
+            files.set(item.from, { content: null, hash: null });
+            results.push({ index, op: "move", path: `${item.from} → ${item.to}`, status: "ok" });
+            steps.push({ index, apply: () => movePath(work.dir, item.from, item.to) });
+          }
+        } catch (error) {
+          for (const file of paths) failed.add(file);
+          results.push({ index, op: item.op, path: paths.join(" → "), status: "failed", message: error.message, ...(error.details?.currentHash !== undefined ? { currentSha256: error.details.currentHash } : {}) });
+        }
+      }
+
+      const problems = results.filter((result) => result.status !== "ok");
+      const applied = !(atomic && problems.length);
+      if (applied)
+        for (const step of steps)
+          try {
+            step.apply();
+          } catch (error) {
+            // Changed on disk since it was read a moment ago.
+            Object.assign(results.find((result) => result.index === step.index), { status: "failed", message: error.message });
+          }
+
+      const icon = { ok: "✓", failed: "✗", skipped: "–" };
+      const failedCount = results.filter((result) => result.status !== "ok").length;
+      const head = !applied
+        ? `atomic：${failedCount} 项不能完成，所有改动都没有写入：`
+        : failedCount
+          ? `完成 ${results.length - failedCount} 项，${failedCount} 项没有完成（只需重试这些）：`
+          : `全部完成（${results.length} 项）：`;
+      const lines = results.map(
+        (result) => `${icon[result.status]} ${result.index + 1}. ${result.op} ${result.path}${result.status === "ok" ? (result.op === "edit" ? `（${result.edits} 处）` : "") : `：${result.message}`}`,
+      );
+      const reads = results
+        .filter((result) => result.op === "read" && result.status === "ok")
+        .map((result) => `=== ${result.path}（sha256 ${result.sha256}，共 ${result.lines} 行）${result.content === null ? `\n${result.message}` : `\n${result.content}`}`);
+      let checked = null;
+      if (check && applied && steps.length) checked = await checkWork(services, work, { runtime: true, frames });
+      const checkText = checked
+        ? checked.ok
+          ? `\n检查通过（${checked.ms} ms）。`
+          : `\n检查发现 ${checked.problems.length} 个问题：\n${checked.problems.map((p) => `- [${p.source}] ${p.file ? p.file + (p.line ? `:${p.line}` : "") + " " : ""}${p.message}`).join("\n")}`
+        : "";
+      return {
+        data: {
+          applied,
+          results: results.map(({ content, ...result }) => result),
+          ...(checked ? { check: { ok: checked.ok, problems: checked.problems } } : {}),
+        },
+        text: [head, ...lines].join("\n") + checkText + (reads.length ? "\n\n" + reads.join("\n\n") : ""),
+        images: checked?.sheet ? [{ data: checked.sheet, mimeType: "image/jpeg" }] : [],
+      };
     },
   });
 

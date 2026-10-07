@@ -185,7 +185,7 @@ export function platformInstructions() {
 ## 工具（MCP 服务器 frame）
 - \`frame_guide\`：接口说明与示例。不确定写法时先查，不要猜。
 - \`work_context\`：作品现状：文件、素材、图层与音轨、未保存的修改、最近一次检查结果。
-- \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误（位置是作品源码的 文件:行:列）。
+- \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误（位置是作品源码的 文件:行:列）。加 \`frames: true\` 同时返回开头、1/4、1/2、3/4、结尾的分镜图，不用再调 storyboard。
 - \`preview_frames\` / \`storyboard\`：渲染指定时间的画面给你看。改完画面后务必用它确认效果。
 - \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载。
 - \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改（格式见 frame_guide layers / audio）。
@@ -214,7 +214,7 @@ export function platformInstructions() {
 1. 对照下面的需求与约定、经验库和 [FRAME] 里的最新情况；需要作品现状时用 work_context。
 2. 修改源码。保存后预览自动更新。
 3. 运行 work_check；有错误先修复。
-4. 用 preview_frames 或 storyboard 看关键时间点的画面，确认符合要求后再结束。
+4. 看画面确认（work_check 的 frames: true，或 preview_frames 看指定时刻），符合要求后再结束。
 5. 简短告诉用户做了什么、在哪个时间点可以看到。版本由用户手动保存，除非用户要求，不要调用 version_save。
 
 随机效果用固定种子；不要在模块导入时播放声音或访问网络；dispose 时释放自己创建的资源。

@@ -325,30 +325,7 @@ export class Renderer {
   /** One labelled contact sheet; much cheaper for AI context than many images. */
   async storyboard(work, { times, columns, width = 480 }) {
     const { frames, width: w, height: h, errors } = await this.frames(work, { times, width, subtitles: true });
-    columns = columns || Math.min(4, Math.ceil(Math.sqrt(frames.length)));
-    const rows = Math.ceil(frames.length / columns);
-    const gap = 8,
-      label = 26;
-    const sheetWidth = columns * w + (columns + 1) * gap;
-    const sheetHeight = rows * (h + label) + (rows + 1) * gap;
-    const composites = [];
-    frames.forEach((frame, index) => {
-      const x = gap + (index % columns) * (w + gap);
-      const y = gap + Math.floor(index / columns) * (h + label + gap);
-      composites.push({ input: frame.png, left: x, top: y + label });
-      composites.push({
-        input: Buffer.from(
-          `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${label}"><text x="2" y="19" font-family="sans-serif" font-size="16" fill="#e8edf2">#${index + 1}  ${formatTime(frame.time)}</text></svg>`,
-        ),
-        left: x,
-        top: y,
-      });
-    });
-    const image = await sharp({ create: { width: sheetWidth, height: sheetHeight, channels: 3, background: "#16191d" } })
-      .composite(composites)
-      .jpeg({ quality: 82 })
-      .toBuffer();
-    return { image, times: frames.map((frame) => frame.time), errors };
+    return { image: await contactSheet(frames, w, h, columns), times: frames.map((frame) => frame.time), errors };
   }
 
   /** Loudness summary: RMS/peak per window so an AI can "hear" a segment. */
@@ -409,14 +386,15 @@ export class Renderer {
   }
 
   /** Load the work in a fresh page and render a few times; report every error. */
-  async check(work) {
-    const result = await this.checkOnce(work);
+  /** `frames`: also return the moments it renders as one contact sheet (`sheet`), for the AI to look at. */
+  async check(work, { frames = false } = {}) {
+    const result = await this.checkOnce(work, { frames });
     // A late dependency re-optimization reloads the page mid-check; the second run finds it optimized.
-    if (result.errors.some((error) => /Execution context was destroyed/.test(error))) return this.checkOnce(work);
+    if (result.errors.some((error) => /Execution context was destroyed/.test(error))) return this.checkOnce(work, { frames });
     return result;
   }
 
-  async checkOnce(work) {
+  async checkOnce(work, { frames = false } = {}) {
     const meta = this.services.works.meta(work);
     if (!meta.ok) return { ok: false, errors: ["project.ts：" + meta.error], console: [] };
     let handle;
@@ -424,9 +402,17 @@ export class Renderer {
       handle = await this.openPage(this.sourceOf(work), { width: 640, project: meta.meta, timeoutMs: 60000 });
       const duration = meta.meta.duration;
       const times = [0, duration * 0.25, duration * 0.5, duration * 0.75, Math.max(0, duration - 0.05)];
+      const shots = [];
       for (const time of times) {
         try {
-          await handle.page.evaluate((t) => window.__FRAME_STUDIO__.frame(t, true), time);
+          const data = await handle.page.evaluate(
+            async ({ t, capture }) => {
+              await window.__FRAME_STUDIO__.frame(t, true);
+              return capture ? (await window.__FRAME_STUDIO__.capture()).split(",")[1] : null;
+            },
+            { t: time, capture: frames },
+          );
+          if (data) shots.push({ time, png: Buffer.from(data, "base64") });
         } catch (error) {
           handle.errors.push(`${formatTime(time)} 渲染失败：${error.message}`);
         }
@@ -437,7 +423,12 @@ export class Renderer {
         handle.errors.push("音频生成失败：" + error.message);
       }
       const errors = mergeTimedErrors([...new Set(handle.errors.map((text) => this.clean(work, text)))]);
-      return { ok: !errors.length, errors, console: handle.logs, checkedTimes: times };
+      // Small frames: the sheet is for spotting what is wrong, preview_frames shows details.
+      const w = 360;
+      const h = Math.round((handle.size.height / handle.size.width) * w);
+      const small = await Promise.all(shots.map(async (shot) => ({ time: shot.time, png: await sharp(shot.png).resize(w, h).png().toBuffer() })));
+      const sheet = small.length ? await contactSheet(small, w, h, 3) : null;
+      return { ok: !errors.length, errors, console: handle.logs, checkedTimes: times, sheet };
     } catch (error) {
       return { ok: false, errors: [this.clean(work, error.message)], console: error.details?.console || [] };
     } finally {
@@ -552,3 +543,29 @@ export const formatTime = (seconds) => {
   const s = seconds - m * 60;
   return `${m}:${s.toFixed(2).padStart(5, "0")}`;
 };
+
+
+/** Frames ({ time, png }) of one size as one labelled grid (JPEG): cheap for an AI to look at. */
+export async function contactSheet(frames, w, h, columns) {
+  columns = columns || Math.min(4, Math.ceil(Math.sqrt(frames.length)));
+  const rows = Math.ceil(frames.length / columns);
+  const gap = 8,
+    label = 26;
+  const composites = [];
+  frames.forEach((frame, index) => {
+    const x = gap + (index % columns) * (w + gap);
+    const y = gap + Math.floor(index / columns) * (h + label + gap);
+    composites.push({ input: frame.png, left: x, top: y + label });
+    composites.push({
+      input: Buffer.from(
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${label}"><text x="2" y="19" font-family="sans-serif" font-size="16" fill="#e8edf2">#${index + 1}  ${formatTime(frame.time)}</text></svg>`,
+      ),
+      left: x,
+      top: y,
+    });
+  });
+  return sharp({ create: { width: columns * w + (columns + 1) * gap, height: rows * (h + label) + (rows + 1) * gap, channels: 3, background: "#16191d" } })
+    .composite(composites)
+    .jpeg({ quality: 82 })
+    .toBuffer();
+}

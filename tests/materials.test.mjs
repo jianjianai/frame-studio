@@ -113,7 +113,11 @@ describe("material libraries", () => {
 
   it("lets the AI link libraries, add files and use them", async () => {
     const work = (await call("/api/works", { method: "POST", body: { title: "AI 用素材" } })).body;
-    expect((await tool("materials_use", { work: work.id, files: ["品牌/logo.svg"] })).body.error.message).toContain("没有引用这些素材库");
+    // Using a library's file links the library on the way.
+    const auto = await tool("materials_use", { work: work.id, files: ["品牌/logo.svg"] });
+    expect(auto.body.data.linked).toEqual(["品牌"]);
+    expect(auto.body.text).toContain("已为作品关联素材库：品牌");
+    await tool("materials_link", { work: work.id, remove: ["品牌"] });
     const linked = await tool("materials_link", { work: work.id, add: ["品牌"], create: ["音效"] });
     expect(linked.body.data.materials).toEqual(["品牌", "音效"]);
     const written = await tool("material_write", { work: work.id, library: "音效", path: "notes/readme.txt", content: "说明" });
