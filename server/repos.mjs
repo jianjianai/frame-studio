@@ -70,7 +70,7 @@ export class Repos {
   async prepare(dir) {
     const exclude = path.join(dir, "info", "exclude");
     fs.mkdirSync(path.dirname(exclude), { recursive: true });
-    const lines = ["/src", "/node_modules", "/docs", "/tsconfig.json", "/AGENTS.md", "/CLAUDE.md", "exports/", ".cache/", "node_modules/"];
+    const lines = ["/src", "/node_modules", "/docs", "/tsconfig.json", "/AGENTS.md", "/CLAUDE.md", "/.materials/", "exports/", ".cache/", "node_modules/"];
     const current = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
     const missing = lines.filter((line) => !current.split("\n").includes(line));
     if (missing.length) fs.appendFileSync(exclude, (current.endsWith("\n") || !current ? "" : "\n") + missing.join("\n") + "\n");

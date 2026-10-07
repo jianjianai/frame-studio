@@ -20,11 +20,22 @@ function run(command, args, cwd, timeoutMs = 120000) {
   });
 }
 
-/** TypeScript errors inside the work's projects/ folder (engine files are not the work's problem). */
+/**
+ * TypeScript errors inside the work's projects/ folder and in the material library code it
+ * imports (copied to .materials/); engine files are not the work's problem.
+ */
 export async function typeCheck(work) {
   const { out } = await run(tsc, ["--noEmit", "-p", "tsconfig.json", "--pretty", "false"], work.root);
   const problems = [];
   for (const line of out.split("\n")) {
+    const library = /^\.materials\/([^(]+)\((\d+),(\d+)\): (error|warning) (TS\d+): (.*)$/.exec(line.trim());
+    if (library) {
+      const [, ref, row, column, severity, code, message] = library;
+      const engine = code === "TS2307" && /'([^']*src\/engine\/[^']*)'/.exec(message)?.[1];
+      const hint = engine ? `。素材库第一层的文件写 "../../src/engine/…"，每深一层多一个 "../"` : "";
+      problems.push({ severity, source: "types", message: `素材库代码 materials/${ref}:${row}:${column}：${message} (${code})${hint}` });
+      continue;
+    }
     const match = /^(projects\/[^(]+)\((\d+),(\d+)\): (error|warning) (TS\d+): (.*)$/.exec(line.trim());
     if (match) {
       const file = match[1].replace(/^projects\/[^/]+\//, "");
@@ -89,6 +100,8 @@ export async function materialReferences(services, work) {
       problems.push({ severity: "warning", source: "assets", message: `用到了没有引用的素材库「${library}」的文件 ${file.url}，用 materials_link 引用它` });
   }
   for (const name of status.missing) problems.push({ severity: "warning", source: "assets", message: `引用的素材库「${name}」不存在` });
+  for (const { spec, from } of status.unresolved ?? [])
+    problems.push({ severity: "error", source: "assets", ...(from.startsWith("materials/") ? {} : { file: from }), message: `素材库里没有 ${spec}（${from} 导入）` });
   return problems;
 }
 
@@ -107,6 +120,8 @@ export async function checkWork(services, work, { runtime = true } = {}) {
       for (const issue of parsed.error.issues)
         problems.push({ severity: "error", source: "project", file: "project.ts", message: `${issue.path.join(".") || "(根)"}：${issue.message}` });
   }
+  // The library code the work imports, at its versions, where tsc finds it.
+  await services.materials?.refreshCopies({ root: work.root, repo: work.repo, dir: work.dir }, { all: true }).catch(() => {});
   const [types, assets, materials] = await Promise.all([typeCheck(work), Promise.resolve(assetReferences(work)), materialReferences(services, work)]);
   problems.push(...types, ...assets, ...materials);
   let runtimeResult = null;

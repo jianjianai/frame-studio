@@ -135,6 +135,70 @@ describe("material libraries", () => {
     expect((await call(`/files/local/${work.id}/materials/${encodeURIComponent("音效")}/notes/readme.txt`)).body).toBe("说明");
   });
 
+  it("lets works import library code at the versions they lock", async () => {
+    const enc = encodeURIComponent;
+    const put = (file, content, replace = false) =>
+      call(`${lib}/libraries/${enc("特效")}/upload?path=${enc(file)}${replace ? "&replace=1" : ""}`, { method: "POST", raw: content });
+    await call(`${lib}/libraries`, { method: "POST", body: { name: "特效" } });
+    await put(
+      "particles.ts",
+      'import { noise } from "./noise";\nimport { assetUrl } from "../../src/engine/types";\nexport const sprite = assetUrl("materials/特效/spark.svg");\nexport const particles = (n: number): number => noise(n) * 2;\n',
+    );
+    await put("noise.ts", "export const noise = (n: number): number => n + 1;\n");
+    await put("spark.svg", "<svg/>");
+
+    const work = await works.create({ title: "用代码" });
+    await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { materials: ["特效"] } });
+    const scene = path.join(work.dir, "scene.ts");
+    fs.writeFileSync(scene, 'import { particles } from "@materials/特效/particles";\nexport const amount: number = particles(1);\n' + fs.readFileSync(scene, "utf8"));
+
+    // The work uses the code, what it imports and the material it uses.
+    const status = (await call(`/api/works/local/${work.id}/materials`)).body;
+    expect(status.files.filter((file) => file.used).map((file) => file.ref)).toEqual(["特效/noise.ts", "特效/particles.ts", "特效/spark.svg"]);
+    expect(status.unresolved).toEqual([]);
+
+    // The preview resolves the import to a copy in .materials/, and the copy's own imports next to it.
+    const { pluginContainer } = app.services.preview.vite.environments.client;
+    const copy = path.join(work.root, ".materials", "特效", "particles.ts");
+    expect((await pluginContainer.resolveId("@materials/特效/particles", scene)).id).toBe(copy);
+    expect(fs.readFileSync(copy, "utf8")).toContain("noise(n) * 2");
+    expect((await pluginContainer.resolveId("./noise", copy)).id).toBe(path.join(work.root, ".materials", "特效", "noise.ts"));
+    const engine = (await pluginContainer.resolveId("../../src/engine/types", copy)).id;
+    expect(engine).not.toContain(".materials");
+    expect(fs.existsSync(engine.split("?")[0])).toBe(true);
+    await expect(pluginContainer.resolveId("@materials/特效/nothing", scene)).rejects.toThrow("素材库里没有 @materials/特效/nothing");
+    // Copies are never part of the work's versions.
+    expect((await works.status(work)).files.map((file) => file.path).some((file) => file.includes(".materials"))).toBe(false);
+
+    // Type checks see the library code like the work's own.
+    const { checkWork } = await import("../server/checks.mjs");
+    const checked = await checkWork(app.services, work, { runtime: false });
+    expect(checked.problems.filter((problem) => problem.source === "types")).toEqual([]);
+
+    // Saving a version locks all three; a later change in the library leaves the work as it was.
+    await works.commit(work, "用粒子");
+    expect(Object.keys(materials.readLocks(work.dir))).toEqual(expect.arrayContaining(["特效/noise.ts", "特效/particles.ts", "特效/spark.svg"]));
+    await put("noise.ts", "export const noise = (n: number): number => n + 100;\n", true);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const noiseCopy = path.join(work.root, ".materials", "特效", "noise.ts");
+    expect(fs.readFileSync(noiseCopy, "utf8")).toContain("n + 1;");
+    expect((await tool("material_read", { work: work.id, library: "特效", path: "noise.ts" })).body.text).toContain("n + 100");
+    expect((await tool("material_read", { work: work.id, library: "特效", path: "noise.ts", locked: true })).body.text).toContain("n + 1;");
+    // Updating the code (extension optional) brings its imports' new versions too.
+    const used = await tool("materials_use", { work: work.id, files: ["特效/particles"], update: true });
+    expect(used.body.data.files).toEqual([{ ref: "特效/particles", import: "@materials/特效/particles" }]);
+    expect(used.body.data.locked).toEqual(["特效/noise.ts"]);
+    expect(fs.readFileSync(noiseCopy, "utf8")).toContain("n + 100");
+
+    // The AI edits library code in place; a missing import is a check error.
+    const edited = await tool("material_edit", { work: work.id, library: "特效", path: "noise.ts", edits: [{ oldText: "n + 100", newText: "n * 3" }] });
+    expect(edited.status).toBe(200);
+    expect((await tool("material_read", { work: work.id, library: "特效", path: "noise.ts" })).body.text).toContain("n * 3");
+    fs.appendFileSync(scene, 'import "@materials/特效/missing";\n');
+    const missing = await checkWork(app.services, work, { runtime: false });
+    expect(missing.problems.map((problem) => problem.message)).toContain("素材库里没有 @materials/特效/missing（scene.ts 导入）");
+  });
+
   it("syncs libraries through the repository's materials branch", async () => {
     process.env.FRAME_ALLOW_FILE_REMOTES = "1";
     const remote = fs.mkdtempSync(path.join(os.tmpdir(), "frame-remote-")) + "/works.git";

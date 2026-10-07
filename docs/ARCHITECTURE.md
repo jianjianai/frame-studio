@@ -22,6 +22,7 @@ works/<库>/<作品>/                   作品工作目录 = works/<作品> 分�
    projects/<名称>/                  作品文件（这才是作品内容）
    src → 引擎, node_modules → 依赖, docs → 文档     （链接，不提交）
    AGENTS.md, CLAUDE.md, tsconfig.json             （平台生成，不提交；AGENTS.md 是 AI 的会话说明）
+   .materials/<素材库>/<路径>                        作品导入的素材库代码（@materials/…）在作品所用版本的副本（平台生成，不提交）
 libraries/<库>/                      frame/materials 分支的 worktree：素材库（每个文件夹一个库；作品在 project.ts 的 materials 中引用，用到的文件版本锁定在作品的 materials.lock.json）
 experience/<库>/                     frame/experience 分支的 worktree：经验库（每个文件夹一个库，作品在 project.ts 的 experiences 中关联）
 exports/<库>/<作品>/                  导出的视频
@@ -51,7 +52,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `mcp.mjs` | `/mcp`（Streamable HTTP）与 `/api/tools` |
 | `ai/` | ACP 客户端：代理进程池、会话、权限、登录、自定义 API |
 | `speech/` | 语音引擎与模型下载 |
-| `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件：Git blob，LFS 内容按需下载）、导出文件、后台任务 |
+| `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件：Git blob，LFS 内容按需下载；`@materials/...` 代码导入由 Vite 插件解析到作品根目录 `.materials/` 中的副本，锁定版本或素材库当前版本，锁定时沿导入关系一并锁定）、导出文件、后台任务 |
 
 ## 预览与热更新
 

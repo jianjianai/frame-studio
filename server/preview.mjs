@@ -40,8 +40,17 @@ export async function createPreview({ config, httpServer, events }) {
     entry.timer = setTimeout(() => flush(work.key), 120);
   };
 
+  // Plugins add module resolution for works here (material library code: @materials/…).
+  const importResolvers = [];
   const worksPlugin = {
     name: "frame-works",
+    async resolveId(source, importer) {
+      for (const resolve of importResolvers) {
+        const found = await resolve(source, importer);
+        if (found) return found;
+      }
+      return null;
+    },
     hotUpdate({ file, modules, timestamp }) {
       const work = workOf(file);
       if (!work) return;
@@ -94,6 +103,7 @@ export async function createPreview({ config, httpServer, events }) {
     middleware: vite.middlewares,
     html,
     moduleUrl,
+    importResolvers,
     /** Drop compiled modules of a work now, without waiting for the file watcher (used after batch rewrites). */
     invalidateWork(work) {
       const timestamp = Date.now();

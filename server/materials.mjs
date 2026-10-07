@@ -2,12 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { git, gitOk, gitToFile } from "./git.mjs";
-import { tree, writeText, writeStream, removePath, movePath, uniquePath } from "./files.mjs";
+import { tree, writeText, writeStream, removePath, movePath, uniquePath, TEXT_LIMIT } from "./files.mjs";
 import { readJson, sendFile } from "./http.mjs";
-import { problem, notFound, conflict, confined, Locks, writeFileAtomic } from "./util.mjs";
+import { problem, notFound, conflict, confined, inside, sha256, Locks, writeFileAtomic } from "./util.mjs";
 import { MATERIALS_BRANCH } from "./repos.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
 import { importFromUrl } from "./tools/asset-tools.mjs";
+import { nearMiss } from "./tools/work-tools.mjs";
 import { probe } from "./media.mjs";
 
 /**
@@ -20,6 +21,12 @@ import { probe } from "./media.mjs";
  * directly as `materials/<library>/<path>`. The version of each file it uses is locked in
  * its materials.lock.json ("<library>/<path>" → git blob), so a later change to the file
  * does not change the work until its lock is updated; unlocked files show as they are now.
+ *
+ * Library code is imported as `@materials/<library>/<path>` (extension optional). The
+ * versions a work uses are copied into <work root>/.materials/ (generated, never committed),
+ * where the preview, type checks, exports and the AI's own tsc find them: library code then
+ * runs like the work's own (a library's top folder imports the engine as ../../src/engine/…).
+ * Locking follows imports: the code's own imports and the materials it uses are locked too.
  */
 
 const LOCK_FILE = "materials.lock.json";
@@ -32,7 +39,23 @@ const folderOf = (name) =>
     .slice(0, 60);
 const validRef = (ref) => typeof ref === "string" && /^[^/]+\/.+/.test(ref) && !ref.split("/").some((part) => !part || part === "." || part === "..");
 /** materials/<library>/<path> as code, layers and audio documents write it. */
-const MATERIAL_REF = /materials\/([^/"'`\s)\\]+\/[^"'`\s)\\]+)/g;
+const MATERIAL_REF = /(?<![@\w])materials\/([^/"'`\s)\\]+\/[^"'`\s)\\]+)/g;
+
+// ---- library code: imports and their files -----------------------------------------------
+export const MATERIALIZED = ".materials";
+/** Library files a work may import (text). Scripts are also followed for their own imports. */
+const IMPORTABLE = /\.(m?[jt]sx?|cjs|json|glsl|frag|vert|wgsl|css|txt|svg)$/i;
+const SCRIPT = /\.(m?[jt]sx?|cjs)$/i;
+const IMPORT_SPEC = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g;
+const SPEC_ENDINGS = ["", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".json", "/index.ts", "/index.tsx", "/index.js"];
+/** Module specifiers in code (static, side-effect and dynamic imports, re-exports). */
+export const importSpecs = (code) => [...code.matchAll(IMPORT_SPEC)].map((match) => match[1]).filter((spec) => !spec.includes("${"));
+/** The library file an import means (`<library>/<path>`, extension optional), or null. */
+export function resolveSpec(spec, exists) {
+  const base = spec.split("?")[0].replace(/\/+$/, "");
+  for (const ending of SPEC_ENDINGS) if (validRef(base + ending) && exists(base + ending)) return base + ending;
+  return null;
+}
 
 const KINDS = [
   ["image", /\.(png|jpe?g|webp|gif|svg|avif|bmp)$/i],
@@ -40,6 +63,7 @@ const KINDS = [
   ["audio", /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/i],
   ["font", /\.(ttf|otf|woff2?)$/i],
   ["model", /\.(glb|gltf)$/i],
+  ["code", /\.(m?[jt]sx?|cjs|glsl|frag|vert|wgsl|css)$/i],
   ["data", /\.(json|csv|txt|md)$/i],
 ];
 const kindOf = (file) => KINDS.find(([, pattern]) => pattern.test(file))?.[0] ?? "file";
@@ -56,6 +80,10 @@ export class Materials {
   constructor(services) {
     this.services = services;
     this.locks = new Locks();
+    this.heads = new Map(); // repo → Promise<Map path → blob>, dropped when the branch changes
+    this.blobs = new Map(); // blob → text of library code (blobs never change)
+    this.manifests = new Map(); // root → { ref: blob } of its .materials copies
+    this.excluded = new Set(); // repositories whose worktrees ignore .materials
   }
 
   /** The materials worktree of a repository (checked out on first use). */
@@ -226,38 +254,137 @@ export class Materials {
     const sorted = Object.fromEntries(Object.entries(locks).sort(([a], [b]) => a.localeCompare(b)));
     writeFileAtomic(path.join(work.dir, LOCK_FILE), JSON.stringify(sorted, null, 2) + "\n");
   }
-  /** materials/<library>/<path> references in the work's code and documents. */
-  references(work) {
-    const refs = new Set();
+  /** The work's own source files (not its media, exports or notes). */
+  sourceFiles(work) {
+    const files = [];
     const walk = (dir) => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (entry.name.startsWith(".") || ["node_modules", "exports", "public", "production"].includes(entry.name)) continue;
         const full = path.join(dir, entry.name);
         if (entry.isDirectory()) walk(full);
-        else if (/\.(ts|tsx|js|mjs|json)$/.test(entry.name) && entry.name !== LOCK_FILE)
-          for (const match of fs.readFileSync(full, "utf8").matchAll(MATERIAL_REF)) if (!match[1].includes("${") && validRef(match[1])) refs.add(match[1]);
+        else if (/\.(ts|tsx|js|mjs|json)$/.test(entry.name) && entry.name !== LOCK_FILE) files.push(full);
       }
     };
     walk(work.dir);
-    return refs;
+    return files;
   }
+  /** `@materials/…` imports in a work's code. */
+  imports(work) {
+    const imports = [];
+    for (const file of this.sourceFiles(work))
+      if (/\.(ts|tsx|js|mjs)$/.test(file))
+        for (const spec of importSpecs(fs.readFileSync(file, "utf8")))
+          if (spec.startsWith("@materials/")) imports.push({ spec: spec.slice(11), from: path.relative(work.dir, file).split(path.sep).join("/") });
+    return imports;
+  }
+
+  /**
+   * Every library file the work uses: materials/<ref> in its code and documents, the library
+   * code it imports (@materials/…) with that code's own imports, and the materials that code
+   * uses. `unresolved`: imports that lead to no library file.
+   */
+  async usage(work) {
+    const refs = new Set();
+    for (const file of this.sourceFiles(work))
+      for (const match of fs.readFileSync(file, "utf8").matchAll(MATERIAL_REF)) if (!match[1].includes("${") && validRef(match[1])) refs.add(match[1]);
+    const imports = this.imports(work);
+    if (!imports.length) return { refs, unresolved: [] };
+    const code = await this.follow(work.repo, this.readLocks(work.dir), imports);
+    for (const ref of code.refs) refs.add(ref);
+    return { refs, unresolved: code.unresolved };
+  }
+  async references(work) {
+    return (await this.usage(work)).refs;
+  }
+
+  /**
+   * Library code reached from imports (`{ spec, from }`, spec without "@materials/"), at the
+   * versions in `locks` or else as the library has it now: the files, their relative and
+   * @materials imports, and the materials/<ref> they use.
+   */
+  async follow(repo, locks, imports) {
+    const head = await this.headOf(repo);
+    const exists = (ref) => Boolean(locks[ref] || head.has(ref));
+    const refs = new Set();
+    const unresolved = [];
+    const queue = [];
+    const visit = (spec, from) => {
+      const ref = resolveSpec(spec, exists);
+      if (!ref) unresolved.push({ spec: `@materials/${spec}`, from });
+      else if (!refs.has(ref)) {
+        refs.add(ref);
+        queue.push(ref);
+      }
+    };
+    for (const { spec, from } of imports) visit(spec, from);
+    while (queue.length) {
+      const ref = queue.shift();
+      if (!SCRIPT.test(ref)) continue;
+      const text = await this.text(repo, locks[ref] ?? head.get(ref)).catch(() => "");
+      for (const match of text.matchAll(MATERIAL_REF)) if (!match[1].includes("${") && validRef(match[1])) refs.add(match[1]);
+      for (const spec of importSpecs(text)) {
+        if (spec.startsWith("@materials/")) visit(spec.slice(11), `materials/${ref}`);
+        else if (/^\.\.?\//.test(spec)) {
+          // Relative imports stay in the libraries; ../../src/engine/… leaves them (the engine).
+          const target = path.posix.normalize(path.posix.join(path.posix.dirname(ref), spec.split("?")[0]));
+          if (!target.startsWith("../")) visit(target, `materials/${ref}`);
+        }
+      }
+    }
+    return { refs, unresolved };
+  }
+
+  /** The branch's current files (cached until the libraries change). */
+  headOf(repo) {
+    if (!this.heads.has(repo)) {
+      const pending = this.dir(repo).then((dir) => this.head(dir));
+      pending.catch(() => this.heads.delete(repo));
+      this.heads.set(repo, pending);
+    }
+    return this.heads.get(repo);
+  }
+  /** Text of a library code file by blob. */
+  async text(repo, blob) {
+    if (!blob || !/^[0-9a-f]{40,64}$/.test(blob)) throw notFound("没有这个版本");
+    if (!this.blobs.has(blob)) {
+      const text = await git(await this.dir(repo), ["cat-file", "blob", blob]);
+      this.blobs.set(blob, text);
+      if (this.blobs.size > 2000) this.blobs.delete(this.blobs.keys().next().value);
+    }
+    return this.blobs.get(blob);
+  }
+
   /**
    * Lock files a work uses at their current version (or move existing locks to it with
-   * `update`). Returns what changed and the references that point at nothing.
+   * `update`). Library code (extension optional) brings the files it imports and the
+   * materials it uses. Returns what changed and the references that point at nothing.
    */
   async lock(work, refs, { update = false } = {}) {
     this.services.works.assertEditable(work);
     const dir = await this.dir(work.repo);
     const head = await this.head(dir);
+    this.heads.set(work.repo, Promise.resolve(head));
     const locks = this.readLocks(work.dir);
-    const locked = [];
+    const exists = (ref) => Boolean(locks[ref] || head.has(ref));
+    const wanted = new Set();
     const missing = [];
+    const code = [];
     for (const ref of new Set(refs)) {
-      if (!validRef(ref)) continue;
+      const found = validRef(ref) && exists(ref) ? ref : resolveSpec(ref, exists);
+      if (!found) missing.push(ref);
+      else {
+        wanted.add(found);
+        if (SCRIPT.test(found)) code.push({ spec: found, from: "" });
+      }
+    }
+    // Updated code brings what it imports now; a first lock keeps the versions locked before.
+    for (const ref of (await this.follow(work.repo, update ? {} : locks, code)).refs) wanted.add(ref);
+    const locked = [];
+    for (const ref of wanted) {
       if (locks[ref] && !update) continue;
       const blob = head.get(ref);
       if (!blob) {
-        missing.push(ref);
+        if (!locks[ref]) missing.push(ref);
         continue;
       }
       if (locks[ref] !== blob) {
@@ -267,6 +394,7 @@ export class Materials {
     }
     if (locked.length) {
       this.writeLocks(work, locks);
+      await this.refreshCopies({ root: work.root, repo: work.repo, dir: work.dir });
       this.services.events.emit({ type: "work-materials", work: work.id, repo: work.repo });
       // Same addresses, other content: the preview reloads the media.
       this.services.preview?.assetsChanged?.(work, [path.join(work.dir, LOCK_FILE)]);
@@ -279,15 +407,141 @@ export class Materials {
     const locks = this.readLocks(work.dir);
     return this.lock(
       work,
-      [...this.references(work)].filter((ref) => !locks[ref]),
+      [...(await this.references(work))].filter((ref) => !locks[ref]),
     );
   }
+
+  // ---- .materials: the library code a work (or export snapshot) runs ---------------------
+
+  /** The work or export snapshot a file belongs to: its root, repository and lock file folder. */
+  rootOf(file) {
+    const { works: worksDir, tmp } = this.services.config.dirs;
+    if (inside(worksDir, file)) {
+      const [repo, id] = path.relative(worksDir, file).split(path.sep);
+      if (!repo || !id) return null;
+      try {
+        return { root: path.join(worksDir, repo, id), repo, dir: this.services.works.describe(repo, id).dir };
+      } catch {
+        return null;
+      }
+    }
+    const snapshots = path.join(tmp, "snapshots");
+    if (inside(snapshots, file)) {
+      const [id] = path.relative(snapshots, file).split(path.sep);
+      if (!id) return null;
+      const root = path.join(snapshots, id);
+      try {
+        const source = JSON.parse(fs.readFileSync(path.join(root, ".frame-snapshot.json"), "utf8"));
+        return { root, repo: source.repo, dir: path.join(root, "projects", source.slug) };
+      } catch {
+        return null;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Vite: `@materials/<library>/<path>` imported by a work (or an export snapshot), and
+   * relative imports inside the copied library code. Returns the copy in .materials/.
+   */
+  async resolveImport(source, importer) {
+    if (!importer) return null;
+    importer = importer.split("?")[0];
+    const marker = `${path.sep}${MATERIALIZED}${path.sep}`;
+    const bare = source.split("?")[0];
+    const query = source.slice(bare.length);
+    let spec;
+    if (bare.startsWith("@materials/")) spec = bare.slice(11);
+    else if (/^\.\.?\//.test(bare) && importer.includes(marker)) {
+      const base = importer.slice(0, importer.indexOf(marker) + marker.length - 1);
+      const target = path.resolve(path.dirname(importer), bare);
+      if (!inside(base, target)) return null; // the engine, node_modules
+      spec = path.relative(base, target).split(path.sep).join("/");
+    } else return null;
+    const place = this.rootOf(importer);
+    if (!place) return null;
+    const locks = this.readLocks(place.dir);
+    const head = await this.headOf(place.repo);
+    const ref = resolveSpec(spec, (candidate) => Boolean(locks[candidate] || head.has(candidate)));
+    if (!ref) {
+      if (bare.startsWith("@materials/")) throw new Error(`素材库里没有 ${bare}：先引用它所在的素材库，并检查路径`);
+      return null;
+    }
+    return (await this.copy(place, ref, locks[ref] ?? head.get(ref))) + query;
+  }
+
+  /** Put one library file into <root>/.materials/ at a version; returns its path there. */
+  async copy(place, ref, blob) {
+    const file = path.join(place.root, MATERIALIZED, ...ref.split("/"));
+    await this.ignoreCopies(place.repo);
+    return this.locks.run(`copy:${place.root}`, async () => {
+      const manifest = this.manifest(place.root);
+      if (manifest[ref] === blob && fs.existsSync(file)) return file;
+      writeFileAtomic(file, await this.text(place.repo, blob));
+      manifest[ref] = blob;
+      this.saveManifest(place.root);
+      return file;
+    });
+  }
+  manifest(root) {
+    if (!this.manifests.has(root)) {
+      let value = {};
+      try {
+        value = JSON.parse(fs.readFileSync(path.join(root, MATERIALIZED, ".manifest.json"), "utf8"));
+      } catch {}
+      this.manifests.set(root, value);
+    }
+    return this.manifests.get(root);
+  }
+  saveManifest(root) {
+    writeFileAtomic(path.join(root, MATERIALIZED, ".manifest.json"), JSON.stringify(this.manifest(root), null, 2) + "\n");
+  }
+  /** Worktrees never commit the copies (also in repositories set up before they existed). */
+  async ignoreCopies(repo) {
+    if (this.excluded.has(repo)) return;
+    await this.services.repos.prepare(this.services.repos.get(repo).dir);
+    this.excluded.add(repo);
+  }
+
+  /**
+   * Bring a root's copies up to date with its locks and the libraries: changed versions are
+   * rewritten (the preview reloads them), files no longer there are removed. With `all`,
+   * every library file the work imports is copied first (before a type check).
+   */
+  async refreshCopies(place, { all = false } = {}) {
+    const locks = this.readLocks(place.dir);
+    const head = await this.headOf(place.repo);
+    const wanted = new Set(Object.keys(this.manifest(place.root)));
+    if (all) for (const ref of (await this.follow(place.repo, locks, this.imports({ dir: place.dir }))).refs) if (IMPORTABLE.test(ref)) wanted.add(ref);
+    for (const ref of wanted) {
+      const blob = locks[ref] ?? head.get(ref);
+      if (blob) await this.copy(place, ref, blob);
+      else
+        await this.locks.run(`copy:${place.root}`, async () => {
+          fs.rmSync(path.join(place.root, MATERIALIZED, ...ref.split("/")), { force: true });
+          delete this.manifest(place.root)[ref];
+          this.saveManifest(place.root);
+        });
+    }
+  }
+  /** After the libraries changed: works running copies of their code follow (where not locked). */
+  async refreshRepo(repo) {
+    this.heads.delete(repo);
+    const base = path.join(this.services.config.dirs.works, repo);
+    if (!fs.existsSync(base)) return;
+    for (const id of fs.readdirSync(base)) {
+      if (!fs.existsSync(path.join(base, id, MATERIALIZED, ".manifest.json"))) continue;
+      const place = this.rootOf(path.join(base, id, "projects"));
+      if (place) await this.refreshCopies(place).catch(() => {});
+    }
+  }
+
   /** The work's libraries and the files it uses: locked version, current version. */
   async status(work) {
     const dir = await this.dir(work.repo);
     const head = await this.head(dir);
     const locks = this.readLocks(work.dir);
-    const used = this.references(work);
+    const { refs: used, unresolved } = await this.usage(work);
     const files = [...new Set([...Object.keys(locks), ...used])].sort().map((ref) => ({
       ref,
       url: `materials/${ref}`,
@@ -296,7 +550,7 @@ export class Materials {
       current: head.get(ref) ?? null,
       outdated: Boolean(locks[ref] && head.get(ref) && locks[ref] !== head.get(ref)),
     }));
-    return { ...(await this.linked(work)), files };
+    return { ...(await this.linked(work)), files, unresolved };
   }
 
   /**
@@ -344,6 +598,16 @@ export function materialsPlugin(services) {
   const materials = (services.materials = new Materials(services));
   // A version of a work (and its publication) records the material versions it uses.
   works.beforeSave.push((work) => materials.lockReferenced(work));
+  // Library code: the preview resolves @materials/… to copies at the versions each work uses,
+  // which follow the libraries (unlocked files) and the works' lock files (pull, revert, edits).
+  services.preview?.importResolvers?.push((source, importer) => materials.resolveImport(source, importer));
+  services.events.subscribe((event) => {
+    if (event.type === "materials" && event.repo) void materials.refreshRepo(event.repo).catch(() => {});
+    if (event.type === "work-files" && event.files?.some((file) => file.endsWith(LOCK_FILE))) {
+      const place = materials.rootOf(path.join(services.config.dirs.works, event.repo, event.work, "projects"));
+      if (place) void materials.refreshCopies(place).catch(() => {});
+    }
+  });
   const base = "/api/repos/:repo/materials";
   const scope = (params) => materials.scope(params.repo);
 
@@ -500,7 +764,7 @@ export function materialsPlugin(services) {
     name: "materials_use",
     title: "使用素材",
     description:
-      "在作品中使用素材库里的文件前调用：锁定这些文件当前的版本（之后素材库里的改动不会影响作品），返回在代码、图层或音轨中使用的地址 materials/<库>/<文件>（代码里写 assetUrl(地址)）。update: true 把已锁定的文件更新到最新版本。",
+      "在作品中使用素材库里的文件前调用：锁定这些文件当前的版本（之后素材库里的改动不会影响作品），返回用法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。",
     input: { work: workArg, files: z.array(refArg).min(1).max(100), update: z.boolean().default(false) },
     async run({ files, update }, ctx) {
       const work = await ctx.work();
@@ -510,9 +774,12 @@ export function materialsPlugin(services) {
       if (outside.length) throw problem(400, `作品没有引用这些素材库：${[...new Set(outside.map((ref) => ref.split("/")[0]))].join("、")}，先用 materials_link 引用`);
       const result = await materials.lock(work, files, { update });
       if (result.missing.length) throw problem(404, `素材不存在：${result.missing.join("、")}`);
+      const usage = files.map((ref) =>
+        SCRIPT.test(ref) || !/\.[^/]+$/.test(ref) ? { ref, import: `@materials/${ref.replace(/\.(m?[jt]sx?)$/, "")}` } : { ref, url: `materials/${ref}` },
+      );
       return asJson(
-        { files: files.map((ref) => ({ ref, url: `materials/${ref}` })), locked: result.locked },
-        `可以使用：${files.map((ref) => `materials/${ref}`).join("、")}${result.locked.length ? `（已锁定 ${result.locked.length} 个文件的当前版本）` : ""}`,
+        { files: usage, locked: result.locked },
+        `可以使用：${usage.map((item) => (item.import ? `import … from "${item.import}"` : item.url)).join("、")}${result.locked.length ? `（已锁定 ${result.locked.length} 个文件的当前版本：${result.locked.join("、")}）` : ""}`,
       );
     },
   });
@@ -541,6 +808,70 @@ export function materialsPlugin(services) {
       const saved = await materials.put(work.repo, library, relative, from, { source: source || url, license });
       const info = await probe(await materials.file(work.repo, {}, saved.ref)).catch(() => ({}));
       return asJson({ ...saved, ...info }, `已保存到素材库：materials/${saved.ref}`);
+    },
+  });
+
+  tools.add({
+    name: "material_read",
+    readOnly: true,
+    title: "阅读素材库文件",
+    description:
+      "读取素材库里的文本文件（代码、JSON、SVG、说明等）。默认是素材库现在的版本；locked: true 读本作品锁定的版本（作品实际运行的那个）。媒体文件只返回信息。",
+    input: { work: workArg, library: libraryArg, path: z.string().min(1).max(300), locked: z.boolean().default(false) },
+    async run({ library, path: relative, locked }, ctx) {
+      const work = await ctx.work();
+      const ref = `${library}/${relative}`;
+      if (!validRef(ref)) throw problem(400, "无效的路径");
+      const versions = locked ? materials.readLocks(work.dir) : {};
+      if (locked && !versions[ref]) throw problem(404, `本作品没有锁定 materials/${ref}`);
+      if (!IMPORTABLE.test(ref)) {
+        const info = await probe(await materials.file(work.repo, versions, ref)).catch(() => null);
+        if (!info) throw notFound(`素材不存在：materials/${ref}`);
+        return asJson({ ref, ...info }, `materials/${ref} 是媒体文件，不能作为文本读取`);
+      }
+      let text;
+      if (versions[ref]) text = await materials.text(work.repo, versions[ref]);
+      else {
+        const file = confined(await materials.dir(work.repo), ref);
+        if (!fs.existsSync(file)) throw notFound(`素材不存在：materials/${ref}`);
+        if (fs.statSync(file).size > TEXT_LIMIT) throw problem(413, "文件太大，不能作为文本读取");
+        text = fs.readFileSync(file, "utf8");
+      }
+      return { data: { ref, version: locked ? "locked" : "current", sha256: sha256(text) }, text };
+    },
+  });
+
+  tools.add({
+    name: "material_edit",
+    published: true, // the libraries are not the work: allowed on a published one
+    title: "修改素材库文件",
+    description:
+      "在素材库的文本文件（代码、JSON、SVG 等）中做精确替换，保存为素材库的一个新版本（按顺序执行，全部成功才写入）。每个 oldText 必须与文件内容逐字一致且恰好出现一次，否则设置 replaceAll。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。",
+    destructive: true,
+    input: {
+      work: workArg,
+      library: libraryArg,
+      path: z.string().min(1).max(300),
+      edits: z
+        .array(z.strictObject({ oldText: z.string().min(1), newText: z.string(), replaceAll: z.boolean().default(false) }))
+        .min(1)
+        .max(50),
+    },
+    async run({ library, path: relative, edits }, ctx) {
+      const work = await ctx.work();
+      const ref = `${library}/${relative}`;
+      if (!validRef(ref) || !IMPORTABLE.test(ref)) throw problem(400, "只能修改素材库里的文本文件（代码、JSON、SVG 等）");
+      const file = confined(await materials.dir(work.repo), ref);
+      if (!fs.existsSync(file)) throw notFound(`素材不存在：materials/${ref}`);
+      let content = fs.readFileSync(file, "utf8");
+      for (const [index, edit] of edits.entries()) {
+        const count = content.split(edit.oldText).length - 1;
+        if (count === 0) throw problem(400, `第 ${index + 1} 处替换：找不到 oldText。${nearMiss(content, edit.oldText, "material_read")}`);
+        if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${index + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
+        content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
+      }
+      const saved = await materials.put(work.repo, library, relative, { content }, { replace: true });
+      return asJson({ ...saved, sha256: sha256(content) }, `已修改素材库文件 materials/${saved.ref}（${edits.length} 处），保存为新版本`);
     },
   });
 

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { AudioLines, ChevronDown, ChevronRight, Copy, Eye, FileQuestion, FileText, Film, FolderPlus, Lock, Music, Pencil, PlusSquare, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
+import { AudioLines, ChevronDown, ChevronRight, Copy, Eye, FileCode2, FileQuestion, FileText, Film, FolderPlus, Lock, Music, Pencil, PlusSquare, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
 import { api, del, formatBytes, formatTime, materialsPath, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast } from "../lib/ui";
 import type { Asset } from "../lib/types";
@@ -141,9 +141,12 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
       { label: "打开", icon: <Eye size={14} />, onClick: () => openMaterial(file.ref) },
       { label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => addToChat({ type: "asset", url: file.url }) },
       {
-        label: "复制引用地址",
+        label: file.kind === "code" ? "复制导入语句" : "复制引用地址",
         icon: <Copy size={14} />,
-        onClick: () => navigator.clipboard.writeText(`assetUrl("${file.url}")`).then(() => toast("已复制")),
+        onClick: () =>
+          navigator.clipboard
+            .writeText(file.kind === "code" ? `import {  } from "@materials/${file.ref.replace(/\.(m?[jt]sx?)$/, "")}";` : `assetUrl("${file.url}")`)
+            .then(() => toast("已复制")),
       },
       "separator",
       {
@@ -273,6 +276,8 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
                         <AudioLines size={26} />
                       ) : file.kind === "data" ? (
                         <FileText size={26} />
+                      ) : file.kind === "code" ? (
+                        <FileCode2 size={26} />
                       ) : (
                         <FileQuestion size={26} />
                       )}

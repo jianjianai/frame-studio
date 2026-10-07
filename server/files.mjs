@@ -142,7 +142,8 @@ export class WorkWatcher {
       watcher = fs.watch(work.root, { recursive: true }, (_, name) => {
         if (!name) return;
         const relative = String(name).split(path.sep).join("/");
-        if (/(^|\/)(\.git|node_modules|exports|\.cache)(\/|$)/.test(relative) || relative.endsWith(".tmp")) return;
+        // .materials holds generated copies of library code; the preview's own watcher follows them.
+        if (/(^|\/)(\.git|node_modules|exports|\.cache|\.materials)(\/|$)/.test(relative) || relative.endsWith(".tmp")) return;
         changed.add(relative);
         clearTimeout(timer);
         timer = setTimeout(() => {

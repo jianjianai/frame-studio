@@ -146,6 +146,8 @@ export function workTsconfig() {
           skipLibCheck: true,
           allowJs: true,
           types: ["vite/client"],
+          // Material library code, copied at the versions the work uses (see server/materials.mjs).
+          paths: { "@materials/*": ["./.materials/*"] },
         },
         include: ["projects", "src/*.d.ts"],
         // Tests (often with their own runners such as Playwright) are not part of what the preview loads.
@@ -188,7 +190,7 @@ export function platformInstructions() {
 - \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载。
 - \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改（格式见 frame_guide layers / audio）。
 - \`speech_synthesize\`：整段旁白用 \`lines\` + \`place\` + \`subtitles: true\` 一次生成配音、排上音轨并写字幕；\`subtitles_edit\` 改字幕，\`work_update\` 改时长和镜头标记。
-- \`assets_list\`、\`asset_import\`：作品自己的素材（public/）。素材库是作品共用的素材：\`materials_list\` 查看，\`materials_link\` 关联或取消关联（用户要求时），\`materials_use\` 锁定版本后用 \`materials/<库>/<文件>\` 地址，\`material_write\` 往素材库里放文件（见 frame_guide assets）。
+- \`assets_list\`、\`asset_import\`：作品自己的素材（public/）。素材库是作品共用的素材：\`materials_list\` 查看，\`materials_link\` 关联或取消关联（用户要求时），\`materials_use\` 锁定版本后用 \`materials/<库>/<文件>\` 地址，\`material_write\` / \`material_edit\` 往素材库里放、改文件。素材库里的代码用 \`import … from "@materials/<库>/<路径>"\` 直接导入（见 frame_guide assets）；\`.materials/\` 是 FRAME 生成的副本，不要改。
 - \`version_save\`、\`export_video\` 等：版本和导出。
 - \`work_delete\`：用户要删除作品时用。只做标记，由用户在首页作品列表中确认删除或保留；你不能直接删除作品。
 

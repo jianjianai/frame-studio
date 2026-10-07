@@ -119,7 +119,7 @@ frame export ab12cd34 --width 1920
 | `files_list` / `file_read` / `file_write` / `file_edit` / `file_move` / `file_delete` | 作品文件操作（外部 AI 使用；内置 AI 用自己的文件工具） |
 | `assets_list` / `asset_import` | 作品自己的素材（public/） |
 | `materials_list` / `materials_link` / `materials_use` | 素材库：查看、关联或取消关联（也可新建）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
-| `material_write` / `material_move` / `material_delete` | 往素材库里放文件（网址、作品文件或文本内容）、移动、删除；每次修改都是素材库的一个版本 |
+| `material_write` / `material_read` / `material_edit` / `material_move` / `material_delete` | 往素材库里放文件（网址、作品文件或文本内容）、读取和精确修改文本（代码）、移动、删除；每次修改都是素材库的一个版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |
 | `layers_get` / `layers_edit` | visual.json 图层 |
 | `audio_get` / `audio_edit` / `audio_place` | audio.json 混音 |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |

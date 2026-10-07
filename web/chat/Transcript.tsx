@@ -85,6 +85,8 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   work_update: "修改作品信息",
   materials_list: "查看素材库",
   materials_link: "关联素材库",
+  material_read: "阅读素材库文件",
+  material_edit: "修改素材库文件",
   materials_use: "使用素材",
   material_write: "写入素材库",
   material_move: "移动素材",
