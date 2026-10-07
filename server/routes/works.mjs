@@ -84,6 +84,8 @@ export function workRoutes(services) {
     await works.trash(params.id, params.repo);
   });
   router.post("/api/works/:repo/:id/restore", ({ params }) => works.restore(params.id, params.repo));
+  /** Keep a work an AI asked to delete (confirming is moving it to the recycle bin, above). */
+  router.delete("/api/works/:repo/:id/delete-request", ({ params }) => ({ cleared: works.clearDeleteRequest(params.repo, params.id) }));
   router.post("/api/works/:repo/:id/free", async ({ params }) => {
     idle(params);
     services.watcher.unwatch({ repo: params.repo, id: params.id });

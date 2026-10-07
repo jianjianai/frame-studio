@@ -14,8 +14,9 @@ import { nearMiss } from "./tools/work-tools.mjs";
  * Experience libraries: Markdown documents of production know-how, shared by the works
  * of a content repository. They live on the repository's `frame/experience` branch
  * (checked out at <home>/experience/<repo>/); each top-level folder is one library.
- * A work links one library (`experience` in project.ts) by its folder name. The AI reads it
- * before working and keeps it organized; people edit it in the studio. Versions work like a
+ * A work links libraries (`experiences` in project.ts) by folder name. The AI reads them
+ * before working, keeps them organized, links them and saves their versions on request;
+ * people edit them in the studio. Versions work like a
  * work's. Renaming a library leaves an alias (old name → new name in .aliases.json, on the
  * same branch), so links in works that cannot be rewritten (published, only on GitHub) still
  * find it.
@@ -255,7 +256,7 @@ export class Experience {
     const current = this.current(work);
     const gone = missing.length ? `作品关联的经验库「${missing.join("」「")}」已被删除。` : "";
     if (!current.length) {
-      const text = `## 经验库\n\n${gone || "本作品没有关联经验库。"}需要记录经验时，建议用户在左侧「经验」面板中选择或新建一个。`;
+      const text = `## 经验库\n\n${gone || "本作品没有关联经验库。"}需要记录经验时，征得用户同意后用 experience_link 关联已有的经验库或新建一个。`;
       return { text, state: { experience: {} } };
     }
     const { sections, seen } = experienceBrief(current);
@@ -272,7 +273,7 @@ export class Experience {
     const { missing } = this.linkedSync(work);
     const current = this.current(work);
     if (!current.length)
-      return { libraries: [], missing, hint: "这个作品没有关联经验库。用户可以在左侧「经验」中选择（可以多个）。" };
+      return { libraries: [], missing, hint: "这个作品没有关联经验库。用户同意后用 experience_link 关联（可以多个），用户也可以在左侧「经验」中选择。" };
     return {
       libraries: current.map(({ library, documents }) => ({
         library: library.id,
@@ -350,30 +351,34 @@ export function experiencePlugin(services) {
   });
 
   // ---- AI tools ---------------------------------------------------------------------
-  /** The library a tool call means: the `library` argument, or the only one the work links. */
+  /**
+   * The library a tool call means: the `library` argument (any library of the repository, so
+   * the AI can also organize libraries the work does not link), or the only one the work links.
+   */
   const libraryOf = async (ctx, name) => {
     const work = await ctx.work();
     const { libraries, missing } = await experience.linked(work);
+    if (name?.trim()) {
+      const dir = await experience.dir(work.repo);
+      const all = await experience.libraries(work.repo);
+      const id = experience.resolve(dir, name.trim()) ?? all.find((item) => item.title === name.trim())?.id;
+      if (!id)
+        throw problem(400, `经验库「${name}」不存在。现有的经验库：${all.map((item) => `「${item.title}」`).join("") || "（无）"}；新建用 experience_link 的 create`, "NO_EXPERIENCE");
+      return { work, library: libraries.find((item) => item.id === id) ?? { id, title: experience.title(dir, id), root: path.join(dir, id), dir } };
+    }
     if (!libraries.length)
       throw problem(
         409,
         missing.length
-          ? `关联的经验库「${missing.join("」「")}」已被删除，请用户在左侧「经验」面板中重新选择。`
-          : "这个作品没有关联经验库。请用户在左侧「经验」面板中为作品选择经验库（或新建）。",
+          ? `关联的经验库「${missing.join("」「")}」已被删除。用 experience_link 关联其他经验库（先征得用户同意），或请用户在左侧「经验」面板中选择。`
+          : "这个作品没有关联经验库。用 experience_link 关联已有的或新建一个（先征得用户同意），或请用户在左侧「经验」面板中选择。",
         "NO_EXPERIENCE",
       );
-    const names = libraries.map((item) => `「${item.id}」`).join("");
-    if (!name) {
-      if (libraries.length === 1) return { work, library: libraries[0] };
-      throw problem(400, `作品关联了多个经验库：${names}，用 library 参数指定一个`, "LIBRARY_REQUIRED");
-    }
-    const id = experience.resolve(libraries[0].dir, name);
-    const library = libraries.find((item) => item.id === id || item.title === name);
-    if (!library) throw problem(400, `作品没有关联经验库「${name}」，关联的是：${names}`, "NO_EXPERIENCE");
-    return { work, library };
+    if (libraries.length === 1) return { work, library: libraries[0] };
+    throw problem(400, `作品关联了多个经验库：${libraries.map((item) => `「${item.id}」`).join("")}，用 library 参数指定一个`, "LIBRARY_REQUIRED");
   };
   const docPath = z.string().min(1).max(300).describe("经验库内的相对路径，例如 README.md 或 开场.md");
-  const libraryArg = z.string().max(80).optional().describe("经验库名称；作品关联了多个经验库时必填");
+  const libraryArg = z.string().max(80).optional().describe("经验库名称；作品关联了多个经验库时必填。整理经验库时也可以指定作品没有关联的经验库");
   const notify = (work, library, file) => experience.changed(work.repo, [`${library.id}/${file}`]);
 
   tools.add({
@@ -421,12 +426,96 @@ export function experiencePlugin(services) {
     },
   });
 
+  const nameArg = z.string().min(1).max(60).describe("经验库名称");
+  tools.add({
+    name: "experience_link",
+    published: true, // creating libraries is fine on a published work; changing its links is checked below
+    title: "关联经验库",
+    description:
+      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
+    input: { work: workArg, add: z.array(nameArg).max(10).default([]), remove: z.array(nameArg).max(10).default([]), create: z.array(nameArg).max(5).default([]) },
+    async run({ add, remove, create }, ctx) {
+      const work = await ctx.work();
+      const published = Boolean(works.published(work));
+      if (published && (add.length || remove.length))
+        throw problem(423, "作品已发布，不能改变它关联的经验库。经验库本身可以照常整理（用 library 参数指定），也可以用 create 新建。要改关联，请用户先取消发布或创建副本。", "PUBLISHED");
+      const dir = await experience.dir(work.repo);
+      const all = await experience.libraries(work.repo);
+      // A folder name (or an earlier one), or a library's title.
+      const find = (name) => experience.resolve(dir, name.trim()) ?? all.find((item) => item.title === name.trim())?.id ?? null;
+      const unknown = add.filter((name) => !find(name));
+      if (unknown.length)
+        throw problem(400, `经验库不存在：${unknown.join("、")}。现有的经验库：${all.map((item) => `「${item.title}」`).join("") || "（无）"}；新建用 create`);
+      const adding = add.map(find);
+      const created = [];
+      for (const name of create) {
+        const id = find(name) ?? (await experience.create(work.repo, name)).id;
+        if (!all.some((item) => item.id === id)) created.push(id);
+        adding.push(id);
+      }
+      if (published)
+        return asJson(
+          { created, experiences: experience.linkedSync(work).libraries.map(({ id, title }) => ({ id, title })) },
+          `${created.length ? `已新建经验库：${created.map((id) => `「${id}」`).join("")}` : "没有新建经验库（同名的已存在）"}。作品已发布，没有关联到它；读写时用 library 参数指定。`,
+        );
+      const before = experience.linkedSync(work).libraries;
+      // Links through earlier names or to deleted libraries can be removed too.
+      const dropping = new Set(remove.map((name) => find(name) ?? name.trim()));
+      const kept = experience.names(work).filter((name) => !dropping.has(experience.resolve(dir, name) ?? name));
+      await works.update(work, { experiences: [...new Set([...kept, ...adding])] });
+      const after = experience.linkedSync(work).libraries;
+      const added = after.filter((item) => !before.some((old) => old.id === item.id));
+      const removed = before.filter((item) => !after.some((now) => now.id === item.id));
+      // The new libraries as a brief shows them; the session then knows them like its brief.
+      const { sections, seen } = experienceBrief(added.map(({ id, title, root }) => ({ library: { id, title }, documents: readLibrary(root) })));
+      if (ctx.scope.session) services.ai?.noteExperienceLibraries(ctx.scope.session, { added: seen, removed: removed.map((item) => item.id) });
+      return {
+        data: { experiences: after.map(({ id, title }) => ({ id, title })), added: added.map((item) => item.id), removed: removed.map((item) => item.id) },
+        text: [
+          `本作品关联的经验库：${after.map((item) => `「${item.title}」`).join("") || "（无）"}`,
+          removed.length ? `已取消关联：${removed.map((item) => `「${item.title}」`).join("")}，之前读到的那些经验不再适用于这个作品。` : "",
+          sections.length ? `新关联的经验库，动手前对照，照着做：\n\n${briefText(sections)}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n\n"),
+      };
+    },
+  });
+
+  tools.add({
+    name: "experience_commit",
+    published: true, // the experience branch, not the work: allowed on a published work
+    title: "保存经验库版本",
+    description:
+      "把经验库里未保存的修改保存为一个版本（Git 提交）。同一作品库的经验库在同一个分支上，会一起保存，和用户在「经验」面板点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。",
+    input: { work: workArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
+    async run({ message, push }, ctx) {
+      const work = await ctx.work();
+      const scope = await experience.scope(work.repo);
+      const files = (await works.status(scope)).files.map((file) => file.path);
+      const commit = await works.commit(scope, message);
+      let pushed = null;
+      if (push)
+        try {
+          await works.push(scope);
+          pushed = { ok: true };
+        } catch (error) {
+          pushed = { ok: false, error: error.message };
+        }
+      const pushText = !pushed ? "" : pushed.ok ? "，已推送到 GitHub" : `。推送到 GitHub 失败：${pushed.error}（请用户在「经验」面板的版本与同步中处理）`;
+      return asJson(
+        { commit, files, pushed },
+        commit ? `已保存经验库版本 ${commit.slice(0, 7)}：${files.join("、")}${pushText}` : `经验库没有未保存的修改${pushText}`,
+      );
+    },
+  });
+
   tools.add({
     name: "experience_write",
     published: true, // writes outside the work: allowed on a published (view-only) work
     title: "写入经验",
     description:
-      "创建或整体替换经验库中的一篇 Markdown 文档。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在文档目录里）。只改几处时用 experience_edit。修改是未保存状态，用户在「经验」面板中查看并保存版本。",
+      "创建或整体替换经验库中的一篇 Markdown 文档。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在文档目录里）。只改几处时用 experience_edit。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在「经验」面板中保存）。",
     destructive: true,
     input: { work: workArg, library: libraryArg, path: docPath, content: z.string().max(512 * 1024), expectedSha256: z.string().optional() },
     async run({ library: name, path: file, content, expectedSha256 }, ctx) {

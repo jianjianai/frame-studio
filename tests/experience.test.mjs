@@ -125,11 +125,62 @@ describe("experience libraries", () => {
     expect(ambiguous.body.error.message).toContain("用 library 参数指定");
     expect((await tool("experience_write", { work: work.id, library: "竖屏短片", path: "节奏.md", content: "# 节奏\n\n- 3 秒一切\n" })).status).toBe(200);
     expect((await tool("experience_read", { work: work.id, library: "竖屏短片", path: "节奏.md" })).body.text).toContain("3 秒一切");
-    expect((await tool("experience_read", { work: work.id, library: "知识类视频", path: "节奏.md" })).status).toBe(400);
+    // A library the work does not link can be named too (organizing); this one has no such document.
+    expect((await tool("experience_read", { work: work.id, library: "知识类视频", path: "节奏.md" })).status).toBe(404);
+    expect((await tool("experience_read", { work: work.id, library: "没有这个库", path: "节奏.md" })).body.error.message).toContain("现有的经验库");
     const overview = await tool("experience_read", { work: work.id });
     expect(overview.body.text).toContain("## 经验库「通用规范」");
     expect(overview.body.text).toMatch(/## 经验库「竖屏短片」[\s\S]*### 节奏.md[\s\S]*3 秒一切/);
     expect((await tool("work_context", { work: work.id })).body.data.experiences.libraries.map((item) => item.library)).toEqual(["通用规范", "竖屏短片"]);
+  });
+
+  it("lets the AI link libraries and save their versions", async () => {
+    const { ai, works, tools } = app.services;
+    const created = (await call("/api/works", { method: "POST", body: { title: "AI 关联经验库" } })).body;
+    const work = await app.services.openWork(created.id, "local");
+    const { snapshotFiles } = await import("../server/ai/context.mjs");
+    const session = { meta: { id: "link-session", work: work.id, repo: "local", queue: [], context: { experience: works.writeBrief(work).experience } }, files: snapshotFiles(work.dir) };
+    ai.sessions.set(session.meta.id, session);
+    const scope = { work: work.id, repo: "local", session: session.meta.id };
+    const context = () => ai.turnPrompt(session, { text: "继续", attachments: [], view: null }, work).at(-1).text;
+
+    // Unknown names are refused with the list, before anything is created.
+    await expect(tools.call("experience_link", { add: ["不存在"], create: ["不该建"] }, scope)).rejects.toMatchObject({ status: 400 });
+    expect((await call(`${lib}/libraries`)).body.some((item) => item.id === "不该建")).toBe(false);
+
+    const linked = await tools.call("experience_link", { add: ["知识类视频"], create: ["新经验"] }, scope);
+    expect(linked.data.experiences.map((item) => item.id)).toEqual(["知识类视频", "新经验"]);
+    expect(linked.text).toContain("## 经验库「新经验」");
+    expect(works.meta(work).meta.experiences).toEqual(["知识类视频", "新经验"]);
+    // The AI saw them in the tool's answer: the next message does not repeat them.
+    expect(context()).not.toContain("经验库");
+    // create with an existing name links it; remove leaves the library itself alone.
+    expect((await tools.call("experience_link", { create: ["新经验"] }, scope)).data.added).toEqual([]);
+    const removed = await tools.call("experience_link", { remove: ["新经验"] }, scope);
+    expect(removed.data).toMatchObject({ removed: ["新经验"], experiences: [{ id: "知识类视频" }] });
+    expect(context()).not.toContain("不再关联");
+    expect((await call(`${lib}/libraries`)).body.some((item) => item.id === "新经验")).toBe(true);
+
+    // Saving the libraries' changes is a version of the experience branch (no work hooks run for it).
+    const hooks = [];
+    works.beforeSave.push((target) => hooks.push(target.id));
+    try {
+      const saved = await tools.call("experience_commit", { message: "新建经验库「新经验」", push: true }, scope);
+      expect(saved.data.commit).toMatch(/^[0-9a-f]{40}$/);
+      expect(saved.data.files).toContain("新经验/README.md");
+      expect(saved.data.pushed).toMatchObject({ ok: false }); // the local repository has no GitHub
+      expect(saved.text).toContain("推送到 GitHub 失败");
+    } finally {
+      works.beforeSave.pop();
+    }
+    expect(hooks).toEqual([]);
+    expect((await call(`${lib}/status`)).body.files).toEqual([]);
+    expect((await call(`${lib}/history`)).body[0].message).toBe("新建经验库「新经验」");
+    expect((await tools.call("experience_commit", { message: "再存" }, scope)).text).toBe("经验库没有未保存的修改");
+    // Linking changes the work, so a published work refuses it; saving experience does not.
+    await call(`/api/works/local/${work.id}/publish`, { method: "POST" });
+    await expect(tools.call("experience_link", { add: ["新经验"] }, scope)).rejects.toMatchObject({ status: 423 });
+    expect((await tools.call("experience_commit", { message: "已发布也能存" }, scope)).text).toBe("经验库没有未保存的修改");
   });
 
   it("tells a chat session only what changed since it last knew", async () => {

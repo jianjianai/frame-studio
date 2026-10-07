@@ -111,6 +111,7 @@ export class Works {
           ...summary,
           updatedAt: head.date,
           location: local && remote ? "both" : local ? "local" : "remote",
+          ...(trash ? {} : { deleteRequest: this.deleteRequest(repoId, entry.id) }),
           synced: Boolean(local && remote && (local.oid === remote.oid || (await gitOk(dir, ["merge-base", "--is-ancestor", local.oid, remote.oid])))),
           checkedOut,
         });
@@ -428,7 +429,28 @@ export class Works {
       }
     });
     this.settings.update("recent", (recent) => recent.filter((item) => !(item.id === id && item.repo === repo)));
+    this.clearDeleteRequest(repo, id);
     this.events.emit({ type: "works", repo });
+  }
+
+  // ---- deletion requested by an AI ------------------------------------------------
+  // An AI cannot delete a work: it marks it, and the user confirms in the work list
+  // (which moves it to the recycle bin) or keeps it.
+
+  deleteRequest(repo, id) {
+    return this.settings.get("deleteRequests").find((item) => item.repo === repo && item.id === id) ?? null;
+  }
+  requestDelete(work, reason) {
+    const request = { repo: work.repo, id: work.id, reason: String(reason || "").trim().slice(0, 300), at: new Date().toISOString() };
+    this.settings.update("deleteRequests", (list) => [...list.filter((item) => !(item.repo === work.repo && item.id === work.id)), request]);
+    this.events.emit({ type: "works", repo: work.repo });
+    return request;
+  }
+  clearDeleteRequest(repo, id) {
+    if (!this.deleteRequest(repo, id)) return false;
+    this.settings.update("deleteRequests", (list) => list.filter((item) => !(item.repo === repo && item.id === id)));
+    this.events.emit({ type: "works", repo });
+    return true;
   }
 
   async restore(id, repo) {
@@ -553,7 +575,8 @@ export class Works {
 
   /** Save a version of everything changed in the work. Returns null when nothing changed. */
   async commit(work, message) {
-    for (const hook of this.beforeSave) await hook(work);
+    // Hooks are for works (material locks); experience and material scopes have no project folder.
+    if (work.slug) for (const hook of this.beforeSave) await hook(work);
     const commit = await this.locks.run(`${work.repo}/${work.id}`, () => this.commitAll(work.root, message || "保存版本"));
     if (commit) this.events.emit({ type: "work-versions", work: work.id });
     return commit;

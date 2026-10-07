@@ -6,6 +6,8 @@ const defaults = () => ({
   version: 1,
   repos: [],
   recent: [],
+  /** Works an AI asked to delete: { repo, id, reason, at }; the user confirms in the work list. */
+  deleteRequests: [],
   ai: { profiles: [], defaultProfile: "claude-account", permission: "edits" },
   speech: { defaultProvider: "edge", providers: {} },
   github: { accounts: [] },

@@ -112,7 +112,10 @@ export const CORE_TOOLS = new Set([
   "experience_read",
   "experience_write",
   "experience_edit",
+  "experience_link",
+  "experience_commit",
   "materials_list",
+  "materials_link",
   "materials_use",
 ]);
 

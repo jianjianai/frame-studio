@@ -790,7 +790,9 @@ export class AiManager {
     if (references.length) lines.push("用户引用：" + references.join("；"));
     // Published: the files are read-only and FRAME's changing tools refuse; talking it over and the experience library are fine.
     if (services.works.published(work))
-      lines.push("这个作品已发布，只能查看：不要修改作品文件（文件是只读的，修改会失败）。可以讨论、复盘，把经验整理进经验库；要改作品，请用户先取消发布或创建副本。");
+      lines.push(
+        "这个作品已发布，只能查看：不要修改作品文件（文件是只读的，修改会失败），也不能改变它关联的经验库和素材库。经验库和素材库本身不属于作品，可以照常整理：讨论、复盘，用 experience_* 工具整理经验并用 experience_commit 保存，用 material_write / material_move / material_delete 整理素材库，需要时用 experience_link / materials_link 的 create 新建库。要改作品，请用户先取消发布或创建副本。",
+      );
     if (session.meta.branch?.dropped && !session.meta.branch.told) {
       lines.push("这是从之前的对话中间分支出来的对话：分支点之后那些轮次对作品文件做过的修改仍在文件里，没有回退。改文件前先读取最新内容。");
       session.meta.branch = { ...session.meta.branch, told: true };
@@ -825,6 +827,16 @@ export class AiManager {
     const session = this.sessions.get(sessionId);
     if (!session?.meta.context?.experience) return;
     session.meta.context = { ...session.meta.context, experience: noteSeen(session.meta.context.experience, library, file, hash, level) };
+    this.saveMeta(session);
+  }
+
+  /** The AI linked or unlinked experience libraries itself: it knows the new ones as its tool showed them. */
+  noteExperienceLibraries(sessionId, { added = {}, removed = [] }) {
+    const session = this.sessions.get(sessionId);
+    if (!session?.meta.context) return;
+    const experience = { ...session.meta.context.experience, ...added };
+    for (const id of removed) delete experience[id];
+    session.meta.context = { ...session.meta.context, experience };
     this.saveMeta(session);
   }
 

@@ -236,6 +236,20 @@
 .work-info {
   padding: 8px 8px 10px 12px;
 }
+/* works an AI asked to delete, waiting for the user */
+.delete-request {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--danger) 7%, transparent);
+}
+.delete-requests > p {
+  margin: -4px 0 4px;
+}
 .trash-row {
   display: flex;
   align-items: center;

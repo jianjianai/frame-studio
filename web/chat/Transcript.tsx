@@ -77,13 +77,14 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   speech_voices: "列出声音",
   versions_list: "版本历史",
   version_save: "保存版本",
+  work_delete: "请求删除作品",
   version_restore: "恢复版本",
   version_diff: "查看改动",
   export_video: "导出视频",
   task_status: "任务状态",
   work_update: "修改作品信息",
   materials_list: "查看素材库",
-  materials_link: "引用素材库",
+  materials_link: "关联素材库",
   materials_use: "使用素材",
   material_write: "写入素材库",
   material_move: "移动素材",
@@ -94,6 +95,8 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   experience_write: "写入经验",
   experience_edit: "修改经验",
   experience_delete: "删除经验文档",
+  experience_link: "关联经验库",
+  experience_commit: "保存经验库版本",
 };
 export function toolTitle(title: string) {
   if (title === "Compact conversation") return "压缩上下文";

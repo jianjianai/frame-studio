@@ -445,8 +445,10 @@ export function materialsPlugin(services) {
 
   tools.add({
     name: "materials_link",
-    title: "引用素材库",
-    description: "增加或移除本作品引用的素材库（project.ts 的 materials）。create 中的名称会先新建为空素材库再引用。移除引用不影响已经锁定、正在使用的文件。",
+    published: true, // creating libraries is fine on a published work; changing its links is checked below
+    title: "关联素材库",
+    description:
+      "增加或移除本作品关联（引用）的素材库（project.ts 的 materials，可以多个）。add 关联已有的素材库，create 新建空素材库并关联（同名的已存在时直接关联），remove 取消关联（素材库本身不受影响，已经锁定、正在使用的文件照常可用）。用户要求时使用；不确定时先问用户。",
     input: {
       work: workArg,
       add: z.array(libraryArg).max(20).default([]),
@@ -455,13 +457,42 @@ export function materialsPlugin(services) {
     },
     async run({ add, remove, create }, ctx) {
       const work = await ctx.work();
-      for (const name of create) await materials.create(work.repo, name);
-      const all = new Set((await materials.libraries(work.repo)).map((item) => item.id));
-      const unknown = add.filter((name) => !all.has(name) && !create.includes(name));
-      if (unknown.length) throw problem(400, `素材库不存在：${unknown.join("、")}（可以用 create 新建）`);
-      const names = [...materials.names(work).filter((name) => !remove.includes(name)), ...add, ...create.map((name) => name.trim())];
-      await works.update(work, { materials: [...new Set(names)] });
-      return asJson({ materials: materials.names(work) }, `本作品引用的素材库：${materials.names(work).join("、") || "（无）"}`);
+      const published = Boolean(works.published(work));
+      if (published && (add.length || remove.length))
+        throw problem(423, "作品已发布，不能改变它关联的素材库。素材库本身可以照常整理（material_write / material_move / material_delete），也可以用 create 新建。要改关联，请用户先取消发布或创建副本。", "PUBLISHED");
+      const all = await materials.libraries(work.repo);
+      const find = (name) => all.find((item) => item.id === name.trim() || item.title === name.trim())?.id ?? null;
+      const unknown = add.filter((name) => !find(name));
+      if (unknown.length)
+        throw problem(400, `素材库不存在：${unknown.join("、")}。现有的素材库：${all.map((item) => `「${item.id}」`).join("") || "（无）"}；新建用 create`);
+      const adding = add.map(find);
+      const created = [];
+      for (const name of create) {
+        const id = find(name) ?? (await materials.create(work.repo, name)).id;
+        if (!all.some((item) => item.id === id)) created.push(id);
+        adding.push(id);
+      }
+      if (published)
+        return asJson(
+          { created, materials: materials.names(work) },
+          `${created.length ? `已新建素材库：${created.map((id) => `「${id}」`).join("")}` : "没有新建素材库（同名的已存在）"}。作品已发布，没有关联到它；用 material_write 往里放文件。`,
+        );
+      const dropping = new Set(remove.map((name) => find(name) ?? name.trim()));
+      const before = materials.names(work);
+      await works.update(work, { materials: [...new Set([...before.filter((name) => !dropping.has(name)), ...adding])] });
+      const after = materials.names(work);
+      const added = after.filter((name) => !before.includes(name));
+      const removed = before.filter((name) => !after.includes(name));
+      return asJson(
+        { materials: after, added, removed },
+        [
+          `本作品关联的素材库：${after.map((name) => `「${name}」`).join("") || "（无）"}`,
+          added.length ? `新关联：${added.join("、")}（用 materials_list 查看文件，materials_use 使用）` : "",
+          removed.length ? `已取消关联：${removed.join("、")}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+      );
     },
   });
 

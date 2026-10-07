@@ -110,19 +110,21 @@ frame export ab12cd34 --width 1920
 | 工具 | 作用 |
 |---|---|
 | `frame_guide` | 制作指南（接口与示例），按主题读取 |
-| `works_list` / `work_create` / `work_update` | 列出、新建作品，修改标题、时长、镜头标记等 |
+| `works_list` / `work_create` / `work_update` | 列出、新建作品，修改标题、时长、镜头标记、封面画面等 |
+| `work_delete` | 请求删除作品：只做标记，用户在首页作品列表中确认（移到回收站）或保留 |
 | `work_context` | 作品现状：元数据、需求、关联的经验库、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查（内置 AI 的会话说明里已有需求和经验库，这里只给经验库目录） |
 | `work_check` | 类型、素材引用、真实浏览器加载并渲染几帧和一段音频 |
 | `preview_frames` / `storyboard` | 渲染指定时间的画面 / 带时间标注的分镜总览图 |
 | `preview_audio` | 一段混音的响度、静音段、削波 |
 | `files_list` / `file_read` / `file_write` / `file_edit` / `file_move` / `file_delete` | 作品文件操作（外部 AI 使用；内置 AI 用自己的文件工具） |
 | `assets_list` / `asset_import` | 作品自己的素材（public/） |
-| `materials_list` / `materials_link` / `materials_use` | 素材库：查看、引用或取消引用、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
+| `materials_list` / `materials_link` / `materials_use` | 素材库：查看、关联或取消关联（也可新建）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
 | `material_write` / `material_move` / `material_delete` | 往素材库里放文件（网址、作品文件或文本内容）、移动、删除；每次修改都是素材库的一个版本 |
 | `layers_get` / `layers_edit` | visual.json 图层 |
 | `audio_get` / `audio_edit` / `audio_place` | audio.json 混音 |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
-| `experience_read` / `experience_write` / `experience_edit` / `experience_delete` | 作品关联的经验库：照着做，过程中随时整理经验（未保存状态，用户在「经验」中保存版本） |
+| `experience_read` / `experience_write` / `experience_edit` / `experience_delete` | 作品关联的经验库：照着做，过程中随时整理经验（未保存状态） |
+| `experience_link` / `experience_commit` | 关联、取消关联或新建经验库；把经验库的修改保存为版本（可选推送到 GitHub） |
 | `subtitles_edit` | 字幕：整体替换、追加（替换重叠的旧字幕）、按时间段删除 |
 | `versions_list` / `version_save` / `version_diff` / `version_restore` | 版本 |
 | `export_video` / `task_status` / `exports_list` | 导出 MP4 |

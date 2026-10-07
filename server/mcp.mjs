@@ -10,7 +10,7 @@ import { CORE_TOOLS } from "./tools/registry.mjs";
 export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 TypeScript 按绝对时间绘制的动画（Canvas/Pixi/Three/Babylon/Lottie/Remotion/图层合成），加多轨音频。
 工作顺序：work_context 了解现状 → frame_guide 查接口 → 修改文件 → work_check → preview_frames/storyboard 亲眼确认画面（preview_audio 确认声音）。
 用户在播放器里实时看到保存后的修改；work_context 的 userView 是用户正在看的时间点和选区。
-work_context 的 notes 是作品的需求与约定，experiences 是关联的经验库（可以有多个，各自的首页和文档目录）：动手前对照它们，相关文档用 experience_read 读全文；用户纠正你、确认了某种做法或解决了难题时，用 experience_edit/experience_write 整理进经验库（关联了多个时用 library 参数指定）。
+work_context 的 notes 是作品的需求与约定，experiences 是关联的经验库（可以有多个，各自的首页和文档目录）：动手前对照它们，相关文档用 experience_read 读全文；用户纠正你、确认了某种做法或解决了难题时，用 experience_edit/experience_write 整理进经验库（关联了多个时用 library 参数指定），用户认可后用 experience_commit 保存版本；用户要求时用 experience_link / materials_link 关联或取消关联经验库、素材库。用户要删除作品时用 work_delete（只做标记，由用户在作品列表中确认）。
 图层用 layers_edit、混音用 audio_edit/audio_place、配音加字幕用 speech_synthesize（lines + place + subtitles）、字幕用 subtitles_edit；多个作品共用的素材在素材库里（materials_list / materials_link / materials_use，地址 materials/<库>/<文件>）；参数格式不确定时先查 frame_guide 对应主题。`;
 
 /**

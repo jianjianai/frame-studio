@@ -22,6 +22,8 @@ export interface WorkSummary {
   /** When the work was published ("" when it is not). */
   publishedAt?: string;
   checkedOut: boolean;
+  /** An AI asked to delete the work; the user confirms (recycle bin) or keeps it. */
+  deleteRequest?: { reason: string; at: string } | null;
   error?: string;
 }
 

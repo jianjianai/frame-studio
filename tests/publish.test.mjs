@@ -64,7 +64,22 @@ describe("published works and copies", () => {
     ai.sessions.set(session.meta.id, session);
     const prompt = ai.turnPrompt(session, { text: "复盘一下", attachments: [], view: null }, await app.services.openWork(work.id, "local"));
     expect(prompt.at(-1).text).toContain("这个作品已发布，只能查看");
+    expect(prompt.at(-1).text).toContain("经验库和素材库本身不属于作品，可以照常整理");
     ai.sessions.delete(session.meta.id);
+
+    // Organizing the libraries goes on: new libraries (not linked to it), their files and versions.
+    const tool = (name, args) => call(`/api/tools/${name}`, { method: "POST", body: { work: work.id, ...args } });
+    expect((await tool("experience_link", { add: ["通用"] })).status).toBe(423);
+    const newLibrary = await tool("experience_link", { create: ["复盘"] });
+    expect(newLibrary.body.data.created).toEqual(["复盘"]);
+    expect(newLibrary.body.text).toContain("没有关联到它");
+    expect((await tool("experience_write", { library: "复盘", path: "要点.md", content: "# 要点\n\n- 开场太慢\n" })).status).toBe(200);
+    expect((await tool("experience_read", { library: "复盘", path: "要点.md" })).body.text).toContain("开场太慢");
+    expect((await tool("experience_commit", { message: "复盘要点" })).body.data.files).toContain("复盘/要点.md");
+    expect((await tool("materials_link", { remove: ["x"] })).status).toBe(423);
+    expect((await tool("materials_link", { create: ["精选"] })).body.data).toMatchObject({ created: ["精选"], materials: [] });
+    expect((await tool("material_write", { library: "精选", path: "note.txt", content: "好用" })).status).toBe(200);
+    expect(readProjectSource(fs.readFileSync(path.join(work.dir, "project.ts"), "utf8")).meta.experiences).toEqual(["通用"]);
 
     expect((await call(`${route}/unpublish`, { method: "POST" })).status).toBe(200);
     expect((await git(work.root, ["log", "-1", "--format=%s"])).trim()).toBe("取消发布");
@@ -99,5 +114,27 @@ describe("published works and copies", () => {
     // A published work can still go to the recycle bin (its read-only checkout is removed).
     await works.trash(source.id, "local");
     expect(fs.existsSync(source.root)).toBe(false);
+  });
+
+  it("lets an AI only ask to delete a work; the user confirms or keeps it", async () => {
+    const work = await works.create({ title: "不要了" });
+    const asked = await call("/api/tools/work_delete", { method: "POST", body: { work: work.id, reason: "用户说这个作品不要了" } });
+    expect(asked.status).toBe(200);
+    expect(asked.body.text).toContain("作品还在");
+    const listed = async () => (await call("/api/works")).body.find((item) => item.id === work.id);
+    expect((await listed()).deleteRequest).toMatchObject({ reason: "用户说这个作品不要了" });
+    expect(fs.existsSync(work.dir)).toBe(true);
+
+    // Keeping it clears the request; the AI can also take it back.
+    expect((await call(`/api/works/local/${work.id}/delete-request`, { method: "DELETE" })).body).toEqual({ cleared: true });
+    expect((await listed()).deleteRequest).toBeNull();
+    await call("/api/tools/work_delete", { method: "POST", body: { work: work.id } });
+    expect((await call("/api/tools/work_delete", { method: "POST", body: { work: work.id, cancel: true } })).body.text).toBe("已撤回删除请求");
+
+    // Confirming is moving it to the recycle bin, which also clears the request.
+    await call("/api/tools/work_delete", { method: "POST", body: { work: work.id, reason: "再次请求" } });
+    expect((await call(`/api/works/local/${work.id}`, { method: "DELETE" })).status).toBe(200);
+    expect(await listed()).toBeUndefined();
+    expect(app.services.settings.get("deleteRequests")).toEqual([]);
   });
 });

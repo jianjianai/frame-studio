@@ -78,6 +78,12 @@ export function WorkCard({ work, onMenu, remote }: { work: WorkSummary; onMenu?:
               <Lock size={9} /> 已发布
             </span>
           )}
+          {work.deleteRequest && (
+            <span className="badge danger" title={`AI 请求删除${work.deleteRequest.reason ? "：" + work.deleteRequest.reason : ""}。在首页上方确认删除或保留。`}>
+              {" "}
+              AI 请求删除
+            </span>
+          )}
           {work.location === "remote" && <span className="badge"> 仅 GitHub</span>}
           {remote && work.location === "local" && <span className="badge"> 仅本机</span>}
           {remote && work.location === "both" && !work.synced && (
@@ -140,9 +146,15 @@ export function Welcome({ version }: { version: string }) {
   const byRepo = useMemo(() => repos.map((repo) => ({ repo, works: filtered.filter((work) => work.repo === repo.id) })), [repos, filtered]);
 
   const remoteOf = (work: WorkSummary) => Boolean(repos.find((repo) => repo.id === work.repo)?.remote);
+  // An AI may only ask: the user moves the work to the recycle bin or keeps it.
+  const requested = works.filter((work) => work.deleteRequest);
+  // The list is reloaded here too, not only on the server's event (a slow or dropped connection).
+  const confirmDelete = (work: WorkSummary) => run(() => del(`/api/works/${work.repo}/${work.id}`).then(load), `已把「${work.title}」移到回收站`);
+  const keepWork = (work: WorkSummary) => run(() => del(`/api/works/${work.repo}/${work.id}/delete-request`).then(load), `已保留「${work.title}」`);
   const workMenu = (work: WorkSummary) => (event: React.MouseEvent) =>
     openMenu(event, [
       { label: "打开", onClick: () => openWork(work) },
+      ...(work.deleteRequest ? [{ label: "保留（不删除）", icon: <Undo2 size={14} />, onClick: () => keepWork(work) }] : []),
       ...(work.checkedOut && !work.publishedAt
         ? [
             {
@@ -277,6 +289,36 @@ export function Welcome({ version }: { version: string }) {
               </button>
             </div>
           </section>
+
+          {requested.length > 0 && (
+            <section className="delete-requests">
+              <h2>
+                <Trash2 size={15} /> AI 请求删除
+              </h2>
+              <p className="muted small-text">AI 不能直接删除作品，只能提出请求。确认删除会把作品移到回收站（可以恢复）；不想删就保留。</p>
+              {requested.map((work) => (
+                <div className="delete-request" key={work.repo + work.id}>
+                  <div className="grow" style={{ minWidth: 0 }}>
+                    <strong className="ellipsis" title={work.title}>
+                      {work.title}
+                    </strong>
+                    <div className="muted small-text">
+                      {work.deleteRequest!.reason || "（AI 没有说明原因）"} · {timeAgo(work.deleteRequest!.at)}
+                    </div>
+                  </div>
+                  <button className="btn small" onClick={() => openWork(work)}>
+                    打开
+                  </button>
+                  <button className="btn small" onClick={() => keepWork(work)}>
+                    保留
+                  </button>
+                  <button className="btn small danger" onClick={() => confirmDelete(work)}>
+                    确认删除
+                  </button>
+                </div>
+              ))}
+            </section>
+          )}
 
           {recent.length > 0 && (
             <section>

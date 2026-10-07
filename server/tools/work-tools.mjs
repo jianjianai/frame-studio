@@ -342,6 +342,31 @@ export function registerWorkTools(registry) {
   });
 
   registry.add({
+    name: "work_delete",
+    published: true, // only a mark beside the work: also for published works
+    title: "请求删除作品",
+    description:
+      "请求删除作品。只做标记，作品不会被删除也不会改动：用户在首页作品列表中看到「AI 请求删除」和你写的原因，确认后作品才移到回收站（可以恢复），也可以选择保留。用户明确要删除作品时使用；cancel: true 撤回请求。",
+    input: {
+      work: workArg,
+      reason: z.string().max(300).default("").describe("为什么删除，显示给用户"),
+      cancel: z.boolean().default(false),
+    },
+    async run({ reason, cancel }, ctx) {
+      const work = await ctx.work();
+      if (cancel) {
+        const cleared = works.clearDeleteRequest(work.repo, work.id);
+        return asJson({ requested: false }, cleared ? "已撤回删除请求" : "这个作品没有删除请求");
+      }
+      const request = works.requestDelete(work, reason);
+      return asJson(
+        { requested: true, ...request },
+        "已标记为「AI 请求删除」，作品还在。请告诉用户：在首页作品列表中确认删除（移到回收站，可以恢复）或保留。",
+      );
+    },
+  });
+
+  registry.add({
     name: "work_update",
     title: "修改作品信息",
     description: "修改 project.ts 中的标题、副标题、描述、时长、帧率、镜头标记、封面画面，只替换字段值、保留文件其余内容。字幕用 subtitles_edit。",
