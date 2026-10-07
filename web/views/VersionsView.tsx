@@ -19,7 +19,16 @@ export function VersionsView() {
         <button
           className="icon-btn"
           title="刷新"
-          onClick={() => api(`${workPath(work.repo, work.id)}/sync`, { method: "POST" }).then(() => setRefresh(Date.now()))}
+          // A manual refresh also compares with GitHub (the bar above the editor shows the result).
+          onClick={() =>
+            Promise.all([
+              api(`${workPath(work.repo, work.id)}/sync`, { method: "POST" }),
+              api(`${workPath(work.repo, work.id)}/remote/check`, { method: "POST" }),
+            ]).then(
+              () => setRefresh(Date.now()),
+              () => setRefresh(Date.now()),
+            )
+          }
         >
           <RefreshCw size={15} />
         </button>
@@ -130,7 +139,13 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
     <>
       {/* The work's own warning sits above the editor; the shared libraries warn here. */}
       {source !== "work" && (
-        <RemoteBar base={`${base}/remote`} repo={work.repo} scope={`${source}-${work.repo}`} what={source === "experience" ? "经验库" : "素材库"} onSettled={() => void load()} />
+        <RemoteBar
+          base={`${base}/remote`}
+          repo={work.repo}
+          scope={`${source}-${work.repo}`}
+          what={source === "experience" ? "经验库" : "素材库"}
+          onSettled={() => void load()}
+        />
       )}
       {busy && <div className="view-progress" />}
       <section className="view-section">

@@ -46,7 +46,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `documents.mjs` | `visual.json` / `audio.json` 的读取与原子编辑（UI 与 AI 共用） |
 | `preview.mjs` | Vite 中间件；拦截作品文件的热更新，改为向舞台发送 `preview-update` |
 | `render.mjs` | 无界面 Chromium：渲染帧、分镜、封面画面、响度分析、运行检查、MP4 导出（ffmpeg） |
-| `remote-sync.mjs` | 连接 GitHub 的作品库自动同步：保存版本后在后台推送（作品、经验库、素材库分支）；打开的作品定期只取自己的分支和 GitHub 对比，能快进就自动更新，否则广播 `remote-state`（`behind` / `diverged` / `conflict` / `error`），工作台和 AI 的每条消息都会提示；用户选择更新、合并、采用 GitHub 或保留本机；启动后和每半小时补推只领先于 GitHub 的分支 |
+| `remote-sync.mjs` | 连接 GitHub 的作品库自动同步：保存版本后在后台推送（作品、经验库、素材库分支）；打开作品、手动刷新和推送被拒时只取这个分支和 GitHub 对比，能快进就自动更新，否则广播 `remote-state`（`behind` / `diverged` / `conflict` / `error`），工作台和 AI 的每条消息都会提示；用户选择更新、合并、采用 GitHub 或保留本机；启动后和每半小时补推只领先于 GitHub 的分支 |
 | `covers.mjs` | 首页封面：`project.ts` 的 `poster` 图片，或作品在 `posterTime`（不写时自动挑选）的画面。按作品文件的版本缓存；列出作品时在后台逐个重做过期的封面，完成后广播 `work-cover` |
 | `checks.mjs` | 作品检查：元数据、TypeScript、素材引用、真实加载 |
 | `tools/` | 工具注册表（zod 参数），MCP、CLI、内置 AI 共用 |

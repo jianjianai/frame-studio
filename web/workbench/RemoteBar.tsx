@@ -19,28 +19,19 @@ export interface RemoteState {
   at?: string;
 }
 
-const CHECK_EVERY_MS = 3 * 60 * 1000;
-
 /**
  * The remote state of `scope` (a work id, or experience-<repo> / materials-<repo>) from the
- * API under `base` (…/remote). With `watch`, it is checked against GitHub now, whenever the
- * window comes back and every few minutes; others only follow the events.
+ * API under `base` (…/remote). With `check`, it is compared with GitHub when shown (opening
+ * the work or panel); otherwise only by a manual refresh and when versions are pushed —
+ * the events bring every result.
  */
-export function useRemoteState(base: string, repo: string, scope: string, { watch = false } = {}) {
+export function useRemoteState(base: string, repo: string, scope: string, { check: checkOnOpen = false } = {}) {
   const [state, setState] = useState<RemoteState | null>(null);
   const check = useCallback(() => api<RemoteState>(`${base}/check`, { method: "POST" }).then(setState, () => {}), [base]);
   useEffect(() => {
-    void api<RemoteState>(base).then(setState, () => {});
-    if (!watch) return;
-    void check();
-    const timer = setInterval(() => document.visibilityState === "visible" && void check(), CHECK_EVERY_MS);
-    const visible = () => document.visibilityState === "visible" && void check();
-    document.addEventListener("visibilitychange", visible);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", visible);
-    };
-  }, [base, watch, check]);
+    if (checkOnOpen) void check();
+    else void api<RemoteState>(base).then(setState, () => {});
+  }, [base, checkOnOpen, check]);
   useServerEvent(
     (event) => {
       if (event.type === "remote-state" && event.repo === repo && event.work === scope) setState(event.state as RemoteState);
@@ -54,8 +45,20 @@ export function useRemoteState(base: string, repo: string, scope: string, { watc
  * The warning above the editor when GitHub has newer versions or both sides changed, with
  * the ways out, so nobody keeps editing an outdated copy. `what` names it: 作品, 经验库, 素材库.
  */
-export function RemoteBar({ base, repo, scope, what = "作品", onSettled }: { base: string; repo: string; scope: string; what?: string; onSettled?: () => void }) {
-  const [state, check, setState] = useRemoteState(base, repo, scope, { watch: true });
+export function RemoteBar({
+  base,
+  repo,
+  scope,
+  what = "作品",
+  onSettled,
+}: {
+  base: string;
+  repo: string;
+  scope: string;
+  what?: string;
+  onSettled?: () => void;
+}) {
+  const [state, check, setState] = useRemoteState(base, repo, scope, { check: true });
   // Paths come from the branch root: a work's files are shown as in its folder.
   const names = (files: string[] = []) => files.map((file) => file.replace(/^projects\/[^/]+\//, "")).join("、");
   const [busy, setBusy] = useState(false);
@@ -71,9 +74,21 @@ export function RemoteBar({ base, repo, scope, what = "作品", onSettled }: { b
   }, [state, toast]);
 
   const settle = async (strategy: "update" | "merge" | "remote" | "local") => {
-    if (strategy === "remote" && !(await confirm(`改用 GitHub 上的${what}？本机的新版本和未保存的修改会另存为备份，${what}回到 GitHub 上的样子。`, { confirm: "采用 GitHub 的版本", danger: true })))
+    if (
+      strategy === "remote" &&
+      !(await confirm(`改用 GitHub 上的${what}？本机的新版本和未保存的修改会另存为备份，${what}回到 GitHub 上的样子。`, {
+        confirm: "采用 GitHub 的版本",
+        danger: true,
+      }))
+    )
       return;
-    if (strategy === "local" && !(await confirm(`保留本机的${what}？GitHub 上那些新版本的修改不会出现在${what}里（仍保留在历史中），本机的版本会推送到 GitHub。`, { confirm: "保留本机的版本", danger: true })))
+    if (
+      strategy === "local" &&
+      !(await confirm(`保留本机的${what}？GitHub 上那些新版本的修改不会出现在${what}里（仍保留在历史中），本机的版本会推送到 GitHub。`, {
+        confirm: "保留本机的版本",
+        danger: true,
+      }))
+    )
       return;
     setBusy(true);
     try {

@@ -502,8 +502,6 @@ export class AiManager {
     this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message) });
     try {
       await this.attach(session, work);
-      // GitHub may have newer versions of the work (another machine): never work on an old copy unawares.
-      await this.services.remoteSync?.beforeTurn(work, session.meta.id);
       const prompt = this.turnPrompt(session, message, work);
       const response = await session.process.connection.prompt({ sessionId: session.meta.acpSessionId, prompt });
       this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null });

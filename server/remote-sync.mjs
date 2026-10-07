@@ -2,12 +2,10 @@ import { git, gitOk } from "./git.mjs";
 import { readJson } from "./http.mjs";
 import { problem } from "./util.mjs";
 
-const CHECK_AGAIN_MS = 20000; // a check asked for sooner than this reuses the last answer
-
 /**
  * Works (and the library branches) of repositories connected to GitHub stay in step with it.
- * Every saved version is pushed in the background. An open work is compared with GitHub
- * (when opened, when its window comes back, every few minutes): newer versions there are
+ * Every saved version is pushed in the background. A work is compared with GitHub when it
+ * is opened, on a manual refresh and when a push is refused: newer versions there are
  * brought in at once when that is safe (fast-forward, no AI at work), otherwise the work is
  * marked "behind" or "diverged" (both sides have new versions) and everybody is told —
  * the studio shows it, the AI gets it with each message — so nobody keeps editing an
@@ -110,19 +108,9 @@ export class RemoteSync {
    * Compare with GitHub. Newer versions there are brought in when that is safe; local-only
    * versions are pushed; otherwise the state says what the user has to decide.
    */
-  check(scope, { force = false, session } = {}) {
-    const last = this.get(scope);
-    if (!force && last && last.state !== "pushing" && Date.now() - Date.parse(last.at) < CHECK_AGAIN_MS) return Promise.resolve(last);
+  /** Compare now (`session`: an AI turn that does not count as "at work"). */
+  check(scope, { session } = {}) {
     return this.serial(scope, () => this.compare(scope, { bringIn: true, session }));
-  }
-
-  /**
-   * Before an AI turn: bring GitHub's newer versions in first (the AI about to start is not
-   * "at work" yet), but never hold the turn up for long on a slow connection.
-   */
-  beforeTurn(scope, session) {
-    if (!this.services.repos.get(scope.repo).remote) return Promise.resolve(null);
-    return Promise.race([this.check(scope, { session }).catch(() => null), new Promise((resolve) => setTimeout(() => resolve(null), 5000))]);
   }
 
   async compare(scope, { bringIn, session }) {
@@ -253,7 +241,7 @@ export function remoteSyncPlugin(services) {
   const bases = { work: "/api/works/:repo/:id/remote", experience: "/api/repos/:repo/experience/remote", materials: "/api/repos/:repo/materials/remote" };
   for (const [kind, base] of Object.entries(bases)) {
     router.get(base, async ({ params }) => sync.get(await scopes[kind](params)) ?? { state: "unknown" });
-    router.post(`${base}/check`, async ({ params }) => sync.check(await scopes[kind](params), { force: true }));
+    router.post(`${base}/check`, async ({ params }) => sync.check(await scopes[kind](params)));
     router.post(`${base}/settle`, async ({ params, req }) => sync.settle(await scopes[kind](params), (await readJson(req)).strategy));
   }
 }

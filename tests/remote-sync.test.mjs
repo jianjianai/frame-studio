@@ -55,7 +55,7 @@ describe("automatic sync with GitHub", () => {
     await a.works.commit(work, "a 改了");
     await a.sync.pushNow(work);
     // B is behind: with nothing in the way, the newer version comes in by itself.
-    expect(await b.sync.check(copy, { force: true })).toMatchObject({ state: "synced", pulled: 1 });
+    expect(await b.sync.check(copy)).toMatchObject({ state: "synced", pulled: 1 });
     expect(read(copy, "notes.md")).toBe("a 的第一版\n");
 
     // An AI at work on B: nothing is brought in under it, and it says so.
@@ -63,9 +63,9 @@ describe("automatic sync with GitHub", () => {
     await a.works.commit(work, "a 又改了");
     await a.sync.pushNow(work);
     b.sessions.push({ id: "s1", status: "running" });
-    expect(await b.sync.check(copy, { force: true })).toMatchObject({ state: "behind", behind: 1, waiting: "ai" });
+    expect(await b.sync.check(copy)).toMatchObject({ state: "behind", behind: 1, waiting: "ai" });
     // …except the turn that is about to start.
-    expect(await b.sync.check(copy, { force: true, session: "s1" })).toMatchObject({ state: "synced", pulled: 1 });
+    expect(await b.sync.check(copy, { session: "s1" })).toMatchObject({ state: "synced", pulled: 1 });
     b.sessions.length = 0;
   });
 
@@ -81,7 +81,7 @@ describe("automatic sync with GitHub", () => {
     await a.works.commit(work, "a 的结尾");
     await a.sync.pushNow(work);
     write(copy, "notes.md", "b 写的结尾\n"); // unsaved on B, same file
-    const behind = await b.sync.check(copy, { force: true });
+    const behind = await b.sync.check(copy);
     expect(behind).toMatchObject({ state: "behind", behind: 1 });
     expect(behind.blocked).toEqual([`projects/${copy.slug}/notes.md`]);
 
@@ -91,7 +91,7 @@ describe("automatic sync with GitHub", () => {
     // Keeping B's version pushes it; A then gets it.
     expect(await b.sync.settle(copy, "local")).toMatchObject({ state: "synced" });
     expect(read(copy, "notes.md")).toBe("b 写的结尾\n");
-    expect(await a.sync.check(work, { force: true })).toMatchObject({ state: "synced", pulled: 2 });
+    expect(await a.sync.check(work)).toMatchObject({ state: "synced", pulled: 2 });
     expect(read(work, "notes.md")).toBe("b 写的结尾\n");
   });
 
@@ -108,7 +108,7 @@ describe("automatic sync with GitHub", () => {
     expect(await b.sync.pushNow(copy)).toMatchObject({ state: "diverged", ahead: 1, behind: 1 });
     expect(await b.sync.settle(copy, "merge")).toMatchObject({ state: "synced" });
     expect(read(copy, "a.md")).toBe("a\n");
-    expect(await a.sync.check(work, { force: true })).toMatchObject({ state: "synced" });
+    expect(await a.sync.check(work)).toMatchObject({ state: "synced" });
     expect(read(work, "b.md")).toBe("b\n");
   });
 
@@ -127,7 +127,7 @@ describe("automatic sync with GitHub", () => {
 
   it("reports what it cannot do, and leaves local-only repositories alone", async () => {
     const local = await a.works.create({ title: "只在本机" });
-    expect(await a.sync.check(local, { force: true })).toMatchObject({ state: "local" });
+    expect(await a.sync.check(local)).toMatchObject({ state: "local" });
     const work = await a.works.create({ repo: a.repo.id, title: "断网" });
     const info = a.repos.get(a.repo.id);
     await git(info.dir, ["remote", "set-url", "origin", "file:///nonexistent/works.git"]);
