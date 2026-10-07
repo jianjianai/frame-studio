@@ -86,8 +86,20 @@ export function WorkCard({ work, onMenu, remote }: { work: WorkSummary; onMenu?:
           )}
           {work.location === "remote" && <span className="badge"> 仅 GitHub</span>}
           {remote && work.location === "local" && <span className="badge"> 仅本机</span>}
-          {remote && work.location === "both" && !work.synced && (
-            <span className="badge warn" title="本机有还没同步到 GitHub 的版本">
+          {remote && work.location === "both" && work.remoteNewer && work.synced && (
+            <span className="badge warn" title="GitHub 上有更新的版本（来自其他设备）。打开作品时会更新到最新版本，避免在旧版本上编辑。">
+              {" "}
+              GitHub 有更新
+            </span>
+          )}
+          {remote && work.location === "both" && work.remoteNewer && !work.synced && (
+            <span className="badge danger" title="本机和 GitHub 上都有新的版本。打开作品后选择合并双方、采用 GitHub 的版本或保留本机的版本。">
+              {" "}
+              冲突
+            </span>
+          )}
+          {remote && work.location === "both" && !work.synced && !work.remoteNewer && (
+            <span className="badge warn" title="本机有还没推送到 GitHub 的版本（保存版本后会自动推送）">
               {" "}
               未同步
             </span>
@@ -123,6 +135,15 @@ export function Welcome({ version }: { version: string }) {
     document.title = "FRAME Studio";
     void load();
   }, []);
+  // Newer versions on GitHub (other devices) show on the cards: refresh what GitHub has, once per visit.
+  const fetched = useRef(new Set<string>());
+  useEffect(() => {
+    for (const repo of repos)
+      if (repo.remote && repo.ready && !fetched.current.has(repo.id) && Date.now() - Date.parse(repo.fetchedAt || "0") > 60000) {
+        fetched.current.add(repo.id);
+        void api(`/api/repos/${repo.id}/fetch`, { method: "POST" }).catch(() => {});
+      }
+  }, [repos]);
   // Files of a work changed (the AI or another window at work): list again once it calms down,
   // which also has the server make that work's cover anew.
   const later = useRef<ReturnType<typeof setTimeout>>(undefined);

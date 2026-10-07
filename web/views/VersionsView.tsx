@@ -6,6 +6,7 @@ import type { Version, WorkStatus } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { RepoDialog } from "../components/RepoDialog";
 import { ViewHeader } from "./ViewHeader";
+import { RemoteBar } from "../workbench/RemoteBar";
 
 const statusLabel: Record<string, string> = { M: "修改", A: "新增", D: "删除", "?": "新增", R: "重命名", U: "冲突" };
 
@@ -127,6 +128,10 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
 
   return (
     <>
+      {/* The work's own warning sits above the editor; the shared libraries warn here. */}
+      {source !== "work" && (
+        <RemoteBar base={`${base}/remote`} repo={work.repo} scope={`${source}-${work.repo}`} what={source === "experience" ? "经验库" : "素材库"} onSettled={() => void load()} />
+      )}
       {busy && <div className="view-progress" />}
       <section className="view-section">
         {!locked && (

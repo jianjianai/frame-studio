@@ -14,6 +14,7 @@ import { experiencePlugin } from "./experience.mjs";
 import { promptsPlugin } from "./prompts.mjs";
 import { materialsPlugin } from "./materials.mjs";
 import { coversPlugin } from "./covers.mjs";
+import { remoteSyncPlugin } from "./remote-sync.mjs";
 import { studioRoutes } from "./routes/studio.mjs";
 import { aiPlugin } from "./ai/routes.mjs";
 import { speechPlugin } from "./speech/plugin.mjs";
@@ -39,4 +40,4 @@ function corePlugin(services) {
   registerExportTools(tools);
 }
 
-export const plugins = [corePlugin, speechPlugin, experiencePlugin, materialsPlugin, coversPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];
+export const plugins = [corePlugin, speechPlugin, experiencePlugin, materialsPlugin, coversPlugin, remoteSyncPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];

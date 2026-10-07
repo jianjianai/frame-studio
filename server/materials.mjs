@@ -122,8 +122,10 @@ export class Materials {
     return this.locks.run(repo, async () => {
       const result = await change(dir);
       await git(dir, ["add", "-A", "--", ...paths]);
-      if (!(await gitOk(dir, ["diff", "--cached", "--quiet"]))) await git(dir, ["commit", "-q", "-m", message]);
+      const changed = !(await gitOk(dir, ["diff", "--cached", "--quiet"]));
+      if (changed) await git(dir, ["commit", "-q", "-m", message]);
       this.services.events.emit({ type: "materials", repo, paths });
+      if (changed) this.services.works.saved(await this.scope(repo));
       return result;
     });
   }

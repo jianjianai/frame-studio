@@ -183,6 +183,24 @@ describe("experience libraries", () => {
     expect((await tools.call("experience_commit", { message: "已发布也能存" }, scope)).text).toBe("经验库没有未保存的修改");
   });
 
+  it("tells the AI when GitHub has newer versions of the work or both sides do", async () => {
+    const { ai, works, remoteSync } = app.services;
+    const created = (await call("/api/works", { method: "POST", body: { title: "两台电脑" } })).body;
+    const work = await app.services.openWork(created.id, "local");
+    const { snapshotFiles } = await import("../server/ai/context.mjs");
+    const session = { meta: { id: "remote-session", work: work.id, repo: "local", queue: [], context: { experience: works.writeBrief(work).experience } }, files: snapshotFiles(work.dir) };
+    const context = () => ai.turnPrompt(session, { text: "继续", attachments: [], view: null }, work).at(-1).text;
+    remoteSync.set(work, { state: "behind", ahead: 0, behind: 2, blocked: ["projects/x/scene.ts"] });
+    expect(context()).toContain("GitHub 上有这个作品 2 个更新的版本");
+    expect(context()).toContain("不要修改作品文件");
+    remoteSync.set(work, { state: "diverged", ahead: 1, behind: 3 });
+    expect(context()).toContain("冲突：本机 1 个、GitHub 3 个");
+    remoteSync.set(work, { state: "synced", ahead: 0, behind: 0, pulled: 4 });
+    expect(context()).toContain("拉取了 4 个更新的版本");
+    remoteSync.set(work, { state: "synced", ahead: 0, behind: 0 });
+    expect(context()).not.toContain("GitHub");
+  });
+
   it("tells a chat session only what changed since it last knew", async () => {
     const { ai, works, auth } = app.services;
     const created = (await call("/api/works", { method: "POST", body: { title: "音乐短片" } })).body;

@@ -33,6 +33,7 @@ import { EditorArea, type EditorHandle } from "./EditorArea";
 import { PrecacheBar } from "./PrecacheBar";
 import { BottomPanel } from "./BottomPanel";
 import { StatusBar } from "./StatusBar";
+import { RemoteBar } from "./RemoteBar";
 import { ExplorerView } from "../views/ExplorerView";
 import { AssetsView } from "../views/AssetsView";
 import { AudioView } from "../views/AudioView";
@@ -339,6 +340,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
           )}
           <main className="wb-center">
             {readOnly && <PublishedBar />}
+            <RemoteBar base={`${workPath(work.repo, work.id)}/remote`} repo={work.repo} scope={work.id} onSettled={() => void reload()} />
             <div className="wb-editor">
               <EditorArea ref={editor} onActiveChange={setEditing} />
             </div>

@@ -1705,6 +1705,38 @@
   font-size: 12px;
   flex: none;
 }
+/* GitHub has newer versions, or both sides do: shown until settled. */
+.remote-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  line-height: 1.5;
+  flex: none;
+}
+/* The message keeps a readable width; the buttons wrap below it when the column is narrow. */
+.remote-bar > span.grow {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+.remote-bar.warn {
+  background: color-mix(in srgb, var(--warn) 16%, var(--bg));
+}
+.remote-bar.warn > svg:first-child {
+  color: var(--warn);
+}
+.remote-bar.danger {
+  background: color-mix(in srgb, var(--danger) 14%, var(--bg));
+}
+.remote-bar.danger > svg:first-child {
+  color: var(--danger);
+}
+.view .remote-bar {
+  margin: 0 0 4px;
+}
 .wb-title-name .badge {
   display: inline-flex;
   align-items: center;

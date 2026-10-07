@@ -502,6 +502,8 @@ export class AiManager {
     this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message) });
     try {
       await this.attach(session, work);
+      // GitHub may have newer versions of the work (another machine): never work on an old copy unawares.
+      await this.services.remoteSync?.beforeTurn(work, session.meta.id);
       const prompt = this.turnPrompt(session, message, work);
       const response = await session.process.connection.prompt({ sessionId: session.meta.acpSessionId, prompt });
       this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null });
@@ -793,6 +795,17 @@ export class AiManager {
       lines.push(
         "这个作品已发布，只能查看：不要修改作品文件（文件是只读的，修改会失败），也不能改变它关联的经验库和素材库。经验库和素材库本身不属于作品，可以照常整理：讨论、复盘，用 experience_* 工具整理经验并用 experience_commit 保存，用 material_write / material_move / material_delete 整理素材库，需要时用 experience_link / materials_link 的 create 新建库。要改作品，请用户先取消发布或创建副本。",
       );
+    const remote = services.remoteSync?.get(work);
+    if (remote?.state === "behind")
+      lines.push(
+        `GitHub 上有这个作品 ${remote.behind} 个更新的版本（来自其他设备或对话），本机的作品文件还是旧的${remote.blocked?.length ? `（本机未保存的修改和它们改了同样的文件：${remote.blocked.join("、")}）` : ""}。不要修改作品文件：请用户先在工作台顶部的提示中更新到最新版本，避免在旧版本上继续修改。`,
+      );
+    else if (remote?.state === "diverged" || remote?.state === "conflict")
+      lines.push(
+        `本机和 GitHub 上都有这个作品的新版本（冲突：本机 ${remote.ahead} 个、GitHub ${remote.behind} 个）。不要修改作品文件：请用户先在工作台顶部的提示中选择合并双方、采用 GitHub 的版本或保留本机的版本。`,
+      );
+    else if (remote?.pulled && Date.now() - Date.parse(remote.at) < 15000)
+      lines.push(`这一轮开始前，FRAME 从 GitHub 拉取了 ${remote.pulled} 个更新的版本（其他设备上的修改），作品文件已是最新：改文件前先读取。`);
     if (session.meta.branch?.dropped && !session.meta.branch.told) {
       lines.push("这是从之前的对话中间分支出来的对话：分支点之后那些轮次对作品文件做过的修改仍在文件里，没有回退。改文件前先读取最新内容。");
       session.meta.branch = { ...session.meta.branch, told: true };

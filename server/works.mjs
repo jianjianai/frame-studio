@@ -22,6 +22,8 @@ export class Works {
   briefProviders = [];
   /** Run before a version is saved or the work published, e.g. locking the material versions it uses. */
   beforeSave = [];
+  /** Run after new versions were made (works and library branches), e.g. pushing them to GitHub: (scope) => void. */
+  afterSave = [];
 
   constructor({ config, settings, repos, events }) {
     this.config = config;
@@ -113,6 +115,8 @@ export class Works {
           location: local && remote ? "both" : local ? "local" : "remote",
           ...(trash ? {} : { deleteRequest: this.deleteRequest(repoId, entry.id) }),
           synced: Boolean(local && remote && (local.oid === remote.oid || (await gitOk(dir, ["merge-base", "--is-ancestor", local.oid, remote.oid])))),
+          // GitHub has versions this machine does not (from another device): the local copy is outdated.
+          remoteNewer: Boolean(local && remote && local.oid !== remote.oid && !(await gitOk(dir, ["merge-base", "--is-ancestor", remote.oid, local.oid]))),
           checkedOut,
         });
       }
@@ -268,7 +272,20 @@ export class Works {
     });
     this.touch(repo, id);
     this.events.emit({ type: "works", repo });
-    return this.describe(repo, id);
+    const work = this.describe(repo, id);
+    this.saved(work);
+    return work;
+  }
+
+  /** New versions exist: tell the afterSave hooks (they must not throw). */
+  saved(scope) {
+    for (const hook of this.afterSave)
+      try {
+        hook(scope);
+      } catch {}
+  }
+  lockFiles(root, locked) {
+    lockFiles(root, locked);
   }
 
   /** Create a work from an existing project folder (one containing project.ts). */
@@ -346,6 +363,7 @@ export class Works {
       if (published) lockFiles(work.root, true);
       this.events.emit({ type: "works", repo: work.repo });
       this.events.emit({ type: "work-versions", work: work.id });
+      if (commit) this.saved(work);
       return commit;
     });
   }
@@ -384,7 +402,9 @@ export class Works {
       }
     });
     this.events.emit({ type: "works", repo: source.repo });
-    return this.describe(source.repo, id);
+    const copy = this.describe(source.repo, id);
+    this.saved(copy);
+    return copy;
   }
 
   // ---- recycle bin and local space ------------------------------------------
@@ -578,7 +598,10 @@ export class Works {
     // Hooks are for works (material locks); experience and material scopes have no project folder.
     if (work.slug) for (const hook of this.beforeSave) await hook(work);
     const commit = await this.locks.run(`${work.repo}/${work.id}`, () => this.commitAll(work.root, message || "保存版本"));
-    if (commit) this.events.emit({ type: "work-versions", work: work.id });
+    if (commit) {
+      this.events.emit({ type: "work-versions", work: work.id });
+      this.saved(work);
+    }
     return commit;
   }
 
@@ -631,6 +654,7 @@ export class Works {
       const short = commit.slice(0, 7);
       const result = await this.commitAll(work.root, `恢复到版本 ${short}`);
       this.events.emit({ type: "work-versions", work: work.id });
+      if (result) this.saved(work);
       return result;
     });
   }
@@ -681,15 +705,20 @@ export class Works {
       try {
         await git(work.root, ["merge", "--no-edit", "-m", "合并 GitHub 上的修改", "origin/" + work.branch], { env: this.repos.env(this.repos.get(work.repo)) });
       } catch (error) {
+        const files = (await git(work.root, ["diff", "--name-only", "--diff-filter=U"]).catch(() => "")).split("\n").filter(Boolean);
         await git(work.root, ["merge", "--abort"]).catch(() => {});
-        throw conflict("双方修改了同一处内容，无法自动合并。可以采用 GitHub 的版本（本地版本保留为备份），或手动修改后再推送。", { git: error.message });
+        throw conflict("双方修改了同一处内容，无法自动合并。可以采用 GitHub 的版本（本机版本保留为备份），或保留本机的版本。", { git: error.message, files });
       }
+    } else if (strategy === "local") {
+      // Keep this machine's content; GitHub's versions stay in the history as merged.
+      await git(work.root, ["merge", "-s", "ours", "--no-edit", "-m", "保留本机的版本（GitHub 上的修改留在历史中）", "origin/" + work.branch]);
     } else if (strategy === "remote") {
       const backup = `refs/frame-backup/${work.id}/${new Date().toISOString().replace(/[:.]/g, "-")}`;
       await git(work.root, ["update-ref", backup, "HEAD"]);
       await git(work.root, ["reset", "--hard", "origin/" + work.branch], { env: this.repos.env(this.repos.get(work.repo)) });
     } else throw problem(400, "未知的处理方式");
     this.events.emit({ type: "work-versions", work: work.id });
+    if (strategy !== "remote") this.saved(work);
     return this.status(work);
   }
 

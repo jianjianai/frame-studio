@@ -19,6 +19,8 @@ export interface WorkSummary {
   location: "local" | "remote" | "both";
   /** GitHub has every version of the local copy. */
   synced?: boolean;
+  /** GitHub has versions the local copy does not (another device): it is outdated. */
+  remoteNewer?: boolean;
   /** When the work was published ("" when it is not). */
   publishedAt?: string;
   checkedOut: boolean;
