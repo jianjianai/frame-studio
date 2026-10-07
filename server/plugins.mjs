@@ -8,6 +8,7 @@ import { registerAssetTools } from "./tools/asset-tools.mjs";
 import { registerDocumentTools } from "./tools/document-tools.mjs";
 import { registerExportTools } from "./tools/export-tools.mjs";
 import { registerGuideTools } from "./tools/guide-tools.mjs";
+import { registerSearchTools } from "./tools/search-tools.mjs";
 import { mcpPlugin } from "./mcp.mjs";
 import { oauthPlugin } from "./oauth.mjs";
 import { experiencePlugin } from "./experience.mjs";
@@ -39,6 +40,7 @@ function corePlugin(services) {
   registerAssetTools(tools);
   registerDocumentTools(tools);
   registerExportTools(tools);
+  registerSearchTools(tools);
 }
 
 export const plugins = [corePlugin, speechPlugin, experiencePlugin, materialsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];

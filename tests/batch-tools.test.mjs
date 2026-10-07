@@ -130,4 +130,23 @@ describe("tools that save the AI calls", () => {
     const many = await tool("material_read", { work: work.id, paths: ["上传库/a.json", "上传库/b.txt"] });
     expect(many.body.text).toContain("=== materials/上传库/b.txt\nb");
   });
+
+  it("searches the work, the libraries, the guide and the engine in one call", async () => {
+    const { globTest } = await import("../server/tools/search-tools.mjs");
+    expect(["a.ts", "scenes/b.ts", "scenes/x.md"].filter(globTest("*.ts"))).toEqual(["a.ts", "scenes/b.ts"]);
+    expect(["a.ts", "scenes/b.ts", "scenes/deep/c.ts"].filter(globTest("scenes/**"))).toEqual(["scenes/b.ts", "scenes/deep/c.ts"]);
+    fs.writeFileSync(path.join(work.dir, "a.ts"), "// 第一行\nexport const Glow = 1;\nconst other = Glow + 1;\n// 结尾\n");
+    const found = await tool("search", { work: work.id, pattern: "glow", context: 1 });
+    expect(found.body.text).toContain("a.ts\n  1- // 第一行\n  2: export const Glow = 1;\n  3: const other = Glow + 1;\n  4- // 结尾");
+    expect(found.body.data.total).toBe(2);
+    expect((await tool("search", { work: work.id, pattern: "glow", caseSensitive: true })).body.text).toContain("没有找到");
+    // Several words, regex, other scopes.
+    await app.services.materials.put("local", "上传库", "fx.ts", { content: "export function sparkle() {}\n" });
+    const wide = await tool("search", { work: work.id, patterns: ["sparkle", "快"], scope: ["materials", "experience"] });
+    expect(wide.body.text).toContain("materials/上传库/fx.ts");
+    expect(wide.body.text).toContain("经验库 规范/节奏.md");
+    expect((await tool("search", { work: work.id, pattern: "export (const|function) \\w+", regex: true, scope: ["work", "materials"], filesOnly: true })).body.text).toMatch(/a\.ts（1 处）[\s\S]*materials\/上传库\/fx\.ts（1 处）/);
+    expect((await tool("search", { work: work.id, pattern: "assetUrl", scope: ["guide", "engine"], glob: "*.md", limit: 3 })).body.text).toContain("frame_guide");
+    expect((await tool("search", { work: work.id, pattern: "(", regex: true })).status).toBe(400);
+  });
 });

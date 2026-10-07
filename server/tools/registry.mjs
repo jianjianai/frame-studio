@@ -94,6 +94,7 @@ export function describeIssues(issues) {
  */
 export const CORE_TOOLS = new Set([
   "frame_guide",
+  "search",
   "work_context",
   "work_check",
   "work_update",

@@ -117,6 +117,7 @@ frame export ab12cd34 --width 1920
 | `preview_frames` / `storyboard` | 渲染指定时间的画面 / 带时间标注的分镜总览图（`work_check` 的 `frames: true` 也会附上检查时渲染的 5 个时刻） |
 | `preview_audio` | 一段混音的响度、静音段、削波 |
 | `files_list` / `file_read` / `file_write` / `file_edit` / `file_move` / `file_delete` | 作品文件操作（外部 AI 使用；内置 AI 用自己的文件工具） |
+| `search` | 搜文字或正则（多个关键词、区分大小写、文件过滤、上下文行数），范围可选作品、素材库（含代码）、经验库、制作指南、引擎源码；返回 文件:行号 和上下文 |
 | `files_batch` | 一次调用对多个文件读、写、精确替换、删除、移动；默认能做的都做、失败的逐项说明（同一文件前面失败则后面跳过），`atomic` 时全部成功才写入；`check` / `frames` 改完直接检查并看画面 |
 | `assets_list` / `asset_import` | 作品自己的素材（public/）：网址、base64（小文件）、本机模式下的服务器文件；`items` 一次导入多个；服务器模式不能从内网地址导入 |
 | `upload_link` | AI 所在电脑上的文件：返回一次性上传地址（15 分钟、用一次），AI 用 curl 上传到作品 public/ 或素材库，文件不经过对话 |

@@ -4,6 +4,7 @@
 
 - 内置 AI 的会话说明（作品根目录的 `AGENTS.md`）里已经有它：经验库小时是全部文档，大时是 README 和其他文档的目录。与当前任务相关的文档用 `experience_read` 读全文，照着已有经验做；没有变化的不用重复读。
 - 外部 AI 用 `work_context` 得到 README 和目录，或用不带 path 的 `experience_read`。
+- 找某个主题的经验（例如“转场”“字幕”）用 `search`，`scope: ["experience"]`：返回匹配的文档和行，再读相关的全文。
 - 用户或其他对话改了经验库时，下一条消息的 `[FRAME]` 会说明改了什么。
 - 制作中发现值得记住的东西就当场整理进去：`experience_edit`（改几处）、`experience_write`（新建或整篇重写）、`experience_delete`（合并后删掉旧文档）。
 - 修改是未保存状态，用户在「经验」面板里查看改动、保存版本、同步到 GitHub。用户认可或要求提交时用 `experience_commit` 保存版本（`message` 说明改了什么；`push: true` 同时推送到 GitHub）。同一作品库的所有经验库在一个分支上，会一起保存。
