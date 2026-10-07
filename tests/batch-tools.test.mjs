@@ -149,4 +149,47 @@ describe("tools that save the AI calls", () => {
     expect((await tool("search", { work: work.id, pattern: "assetUrl", scope: ["guide", "engine"], glob: "*.md", limit: 3 })).body.text).toContain("frame_guide");
     expect((await tool("search", { work: work.id, pattern: "(", regex: true })).status).toBe(400);
   });
+
+  it("searches like grep: any text file, long lines, big files, whole words, across lines, locked versions", async () => {
+    const w = (file, text) => {
+      fs.mkdirSync(path.dirname(path.join(work.dir, file)), { recursive: true });
+      fs.writeFileSync(path.join(work.dir, file), text);
+    };
+    w("tools/build.py", "def render_frame():\n    pass\n"); // not a known extension: judged by content
+    w("public/data.dat", Buffer.concat([Buffer.from("render_frame"), Buffer.alloc(10)])); // binary content
+    w("anim.json", JSON.stringify({ layers: Array.from({ length: 400 }, (_, i) => ({ nm: i === 399 ? "深处的图层" : `layer${i}` })) })); // one long line
+    w("big.txt", "x".repeat(1.5 * 1024 * 1024) + "\n大文件里的词\n");
+    w("words.ts", "const spark = 1;\nconst sparkle = 2;\n// 火花效果和火花\n");
+    w("multi.ts", "function a() {\n  return 1;\n}\nfunction b() {\n  return 2;\n}\n");
+    const run = (args) => tool("search", { work: work.id, ...args }).then((result) => result.body);
+
+    const py = await run({ pattern: "render_frame" });
+    expect(py.text).toContain("tools/build.py\n  1: def render_frame():");
+    expect(py.text).not.toContain("data.dat");
+    expect(py.text).toContain("1 个二进制文件");
+    const deep = await run({ pattern: "深处的图层" });
+    expect(deep.text).toMatch(/anim\.json\n {2}1: …[^\n]*深处的图层/);
+    expect((await run({ pattern: "大文件里的词" })).text).toContain("big.txt");
+    // Whole words (Chinese included), several file patterns, exclusions.
+    expect((await run({ pattern: "spark", wholeWord: true })).data.total).toBe(1);
+    expect((await run({ pattern: "火花", wholeWord: true, glob: "*.{ts,tsx}" })).data.total).toBe(0);
+    expect((await run({ pattern: "spark", glob: ["*.ts", "*.py"], exclude: "words.*" })).text).toContain("没有找到");
+    // Across lines, with separate before / after context and a per-file cap.
+    const multi = await run({ pattern: "function \\w\\(\\) \\{\\n\\s+return 2", regex: true, multiline: true, before: 0, after: 1 });
+    expect(multi.text).toContain("multi.ts\n  4: function b() {\n  5:   return 2;\n  6- }");
+    expect(multi.data.files[0].matches).toEqual([{ line: 4, endLine: 5 }]);
+    const capped = await run({ pattern: "return", maxPerFile: 1, context: 0 });
+    expect(capped.data.files.find((item) => item.file === "multi.ts").matches).toHaveLength(1);
+    expect(capped.text).toContain("只显示了");
+
+    // "used": the library code at the version the work locked, not as the library is now.
+    await app.services.materials.create("local", "代码库");
+    await app.services.materials.put("local", "代码库", "fx.ts", { content: "export const version = 'old';\n" });
+    w("uses.ts", 'import { version } from "@materials/代码库/fx";\n');
+    await fetch(`${base}/api/works/local/${work.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ materials: ["上传库", "代码库"] }) });
+    await app.services.materials.lockReferenced(work);
+    await app.services.materials.put("local", "代码库", "fx.ts", { content: "export const version = 'new';\n" }, { replace: true });
+    expect((await run({ pattern: "version =", scope: ["used"] })).text).toContain("materials/代码库/fx.ts（本作品锁定的版本）\n  1: export const version = 'old';");
+    expect((await run({ pattern: "version =", scope: ["materials"], glob: "代码库/**" })).text).toContain("'new'");
+  });
 });
