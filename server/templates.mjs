@@ -218,6 +218,8 @@ export function platformInstructions() {
 4. 看画面确认（work_check 的 frames: true，或 preview_frames 看指定时刻），符合要求后再结束。
 5. 简短告诉用户做了什么、在哪个时间点可以看到。版本由用户手动保存，除非用户要求，不要调用 version_save。
 
+混音：音效响时不要压低音乐（不加 duck，也不用音量自动化把音乐压下去）；只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求。
+
 随机效果用固定种子；不要在模块导入时播放声音或访问网络；dispose 时释放自己创建的资源。
 `;
 }

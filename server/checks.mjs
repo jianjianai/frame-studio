@@ -105,6 +105,38 @@ export async function materialReferences(services, work) {
   return problems;
 }
 
+/** A voice track: its name or id says so, or it plays generated voice-over (public/voice/). */
+const VOICE = /voice|vocal|narrat|dialog|speech|\bvo\b|配音|旁白|人声|对白|解说|朗读|台词/i;
+function voiceTrack(document, id) {
+  const track = document.tracks?.find((item) => item.id === id);
+  if (!track) return false;
+  if (VOICE.test(`${track.id} ${track.name ?? ""}`)) return true;
+  const sources = new Map((document.sources ?? []).map((source) => [source.id, source]));
+  const clips = (document.clips ?? []).filter((clip) => clip.track === id);
+  return clips.length > 0 && clips.every((clip) => /\/voice\//.test(sources.get(clip.source)?.src ?? ""));
+}
+
+/**
+ * The user's mixing rule: sound effects never push the music down. A duck processor may
+ * only listen to a voice track (and only when the user asked for it, which a check cannot see).
+ */
+export function mixingRules(document) {
+  const problems = [];
+  if (!document) return problems;
+  for (const owner of [...(document.tracks ?? []), ...(document.buses ?? []), { id: "master", name: "主输出", processors: document.master?.processors }])
+    for (const processor of owner.processors ?? [])
+      if (processor.type === "duck" && !voiceTrack(document, processor.track)) {
+        const trigger = document.tracks?.find((item) => item.id === processor.track);
+        problems.push({
+          severity: "warning",
+          source: "audio",
+          file: "audio.json",
+          message: `「${owner.name ?? owner.id}」的 duck 由「${trigger?.name ?? processor.track}」触发，它不是人声音轨。混音原则：音效响时不要压低音乐，只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求；去掉这个 duck，用音量调平衡。`,
+        });
+      }
+  return problems;
+}
+
 /**
  * Full check: metadata, types, asset references and a real browser load that
  * renders a few frames and a little audio. Results are kept for the UI and AI.
@@ -119,6 +151,7 @@ export async function checkWork(services, work, { runtime = true, frames = false
     if (!parsed.success)
       for (const issue of parsed.error.issues)
         problems.push({ severity: "error", source: "project", file: "project.ts", message: `${issue.path.join(".") || "(根)"}：${issue.message}` });
+    problems.push(...mixingRules(meta.meta.audioDocument));
   }
   // The library code the work imports, at its versions, where tsc finds it.
   await services.materials?.refreshCopies({ root: work.root, repo: work.repo, dir: work.dir }, { all: true }).catch(() => {});

@@ -66,3 +66,29 @@ describe("audio.json", () => {
     expect(readProjectDir(work.dir).loads.audio).toBe("./audio");
   });
 });
+
+describe("mixing rules", async () => {
+  const { mixingRules } = await import("../server/checks.mjs");
+  const doc = (trigger) => ({
+    sources: [
+      { id: "vo", kind: "file", src: "films/w/voice/line1.mp3" },
+      { id: "boom", kind: "file", src: "films/w/sfx/boom.wav" },
+    ],
+    tracks: [
+      { id: "music", name: "配乐", processors: [{ type: "duck", track: trigger }] },
+      { id: "t1", name: "轨道 1" },
+      { id: "fx", name: "音效" },
+    ],
+    clips: [
+      { id: "c1", track: "t1", source: "vo", start: 0, duration: 1 },
+      { id: "c2", track: "fx", source: "boom", start: 0, duration: 1 },
+    ],
+  });
+  it("warns when sound effects push the music down, never when a voice does", () => {
+    expect(mixingRules(doc("fx"))).toMatchObject([{ severity: "warning", source: "audio", message: expect.stringContaining("「配乐」的 duck 由「音效」触发") }]);
+    // A track playing generated voice-over counts as voice whatever its name.
+    expect(mixingRules(doc("t1"))).toEqual([]);
+    expect(mixingRules({ tracks: [{ id: "narration", name: "Narration" }, { id: "m", name: "BGM", processors: [{ type: "duck", track: "narration" }] }] })).toEqual([]);
+    expect(mixingRules(null)).toEqual([]);
+  });
+});

@@ -8,6 +8,11 @@
 - `speech_synthesize`：生成配音并可直接放到「配音」音轨（见 `speech`）。
 - `audio_get` / `audio_edit`：读取或原子修改整个混音文档。
 
+## 混音原则（用户的要求，必须遵守）
+
+- **音效响时不要压低音乐**：不给音乐加由音效触发的 `duck`，也不要用音量自动化在音效处把音乐压下去。音效和音乐的平衡靠各自的音量（`gain`）和 EQ 调好。
+- **只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求**：用户说了“说话时压低音乐”之类的话，才在音乐轨加 `duck`（`track` 指向人声音轨）。没要求时，靠把音乐整体调低让人声清楚。
+
 ## audio.json 结构
 
 ```json
@@ -19,7 +24,7 @@
     { "id": "synth", "kind": "generated", "module": "pad", "trackId": "main", "engine": "tone" }
   ],
   "tracks": [
-    { "id": "music", "name": "配乐", "gain": 0.6, "processors": [{ "type": "duck", "track": "voice", "amount": 0.35 }] },
+    { "id": "music", "name": "配乐", "gain": 0.45 },
     { "id": "voice", "name": "配音", "gain": 1, "processors": [{ "type": "compressor" }] },
     { "id": "fx", "name": "音效", "gain": 0.8, "sends": [{ "bus": "space", "gain": 0.3 }] }
   ],
@@ -35,7 +40,7 @@
 
 - clip：`start`/`duration` 是作品时间；`offset` 是素材内起点；`rate` 速度（默认变调，`preservePitch: true` 保持音高）；`pitch` 半音移调；`gain` 0–4；`pan` -1–1；`fadeIn`/`fadeOut`；`loop` 循环长度；`automation: [{at, value}]` 音量自动化（at 为片段内时间）；`muted`。
 - 片段不能超过作品时长；所有 id 唯一、字母开头。
-- 处理器（轨道/总线/master 的 `processors`）：`gain`、`pan`、`filter`（type/frequency/q/gain）、`compressor`、`limiter`、`delay`、`reverb`、`distortion`、`stereo`、`duck`（被 `track` 指定的音轨触发时压低本轨，用于人声避让）、`tone`（任意 Tone.js 效果：`{ "type": "tone", "effect": "Chorus", "options": { "wet": 0.4 } }`，effect 可选 AutoFilter、AutoPanner、AutoWah、BitCrusher、Chebyshev、Chorus、Distortion、FeedbackDelay、FrequencyShifter、Freeverb、JCReverb、PingPongDelay、PitchShift、Phaser、Reverb、StereoWidener、Tremolo、Vibrato）。
+- 处理器（轨道/总线/master 的 `processors`）：`gain`、`pan`、`filter`（type/frequency/q/gain）、`compressor`、`limiter`、`delay`、`reverb`、`distortion`、`stereo`、`duck`（被 `track` 指定的音轨触发时压低本轨。只用于人声避让，而且要用户明确要求，见上面的混音原则）、`tone`（任意 Tone.js 效果：`{ "type": "tone", "effect": "Chorus", "options": { "wet": 0.4 } }`，effect 可选 AutoFilter、AutoPanner、AutoWah、BitCrusher、Chebyshev、Chorus、Distortion、FeedbackDelay、FrequencyShifter、Freeverb、JCReverb、PingPongDelay、PitchShift、Phaser、Reverb、StereoWidener、Tremolo、Vibrato）。
 - 音轨/总线：`id`、`name`（必填），`gain` 0–4、`pan`、`muted`、`processors`、`output`（默认 `master`，或某个总线 id）、`sends: [{ bus, gain }]`。
 - 处理器参数（都可省略用默认值）：`gain{gain}`、`pan{pan}`、`filter{type: lowpass|highpass|bandpass|notch|lowshelf|highshelf|peaking|allpass, frequency, q, gain}`、`compressor{threshold, knee, ratio, attack, release}`、`limiter{ceiling, release}`、`delay{time, feedback, mix}`、`reverb{seconds, decay, mix}`、`distortion{drive, mix}`、`stereo{width}`、`duck{track, amount, attack, release}`、`tone{effect, options, tail}`。
 

@@ -13,6 +13,7 @@ export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 
 少调用：多个文件的读、写、替换、删除、移动放进一次 files_batch（失败的会逐项说明，只重试失败的；check: true 改完直接检查）；asset_import / material_write 用 items 一次导入多个；你所在电脑上的文件用 upload_link 拿到上传地址再用 curl 上传（不经过对话）；export_video 用 wait 等它完成。
 用户在播放器里实时看到保存后的修改；work_context 的 userView 是用户正在看的时间点和选区。
 work_context 的 notes 是作品的需求与约定，experiences 是关联的经验库（可以有多个，各自的首页和文档目录）：动手前对照它们，相关文档用 experience_read 读全文；用户纠正你、确认了某种做法或解决了难题时，用 experience_edit/experience_write 整理进经验库（关联了多个时用 library 参数指定），用户认可后用 experience_commit 保存版本；用户要求时用 experience_link / materials_link 关联或取消关联经验库、素材库。用户要删除作品时用 work_delete（只做标记，由用户在作品列表中确认）。
+混音：音效响时不要压低音乐（不加 duck）；只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求。
 图层用 layers_edit、混音用 audio_edit/audio_place、配音加字幕用 speech_synthesize（lines + place + subtitles）、字幕用 subtitles_edit；多个作品共用的素材和代码在素材库里（materials_list / materials_link / materials_use，素材地址 materials/<库>/<文件>，代码用 import … from "@materials/<库>/<路径>" 导入；material_read / material_edit 读改素材库文件）；参数格式不确定时先查 frame_guide 对应主题。`;
 
 /**
