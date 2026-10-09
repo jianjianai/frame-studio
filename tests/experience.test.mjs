@@ -38,13 +38,25 @@ describe("experience libraries", () => {
     expect(overview.body.text).toContain("经验库「知识类视频」");
     expect(overview.body.text).toContain("## 用户偏好");
 
-    const written = await tool("experience_write", { work: work.id, path: "开场.md", content: "# 开场\n\n- 前 3 秒给出问题\n" });
+    const written = await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "开场.md", content: "# 开场\n\n- 前 3 秒给出问题\n" }] });
     expect(written.status).toBe(200);
-    const edited = await tool("experience_edit", { work: work.id, path: "开场.md", edits: [{ oldText: "前 3 秒", newText: "前 2 秒" }] });
+    const edited = await tool("experience_write", { work: work.id, operations: [{ op: "edit", path: "开场.md", edits: [{ oldText: "前 3 秒", newText: "前 2 秒" }] }] });
     expect(edited.body.text).toContain("1 处");
     expect((await tool("experience_read", { work: work.id, path: "开场.md" })).body.text).toContain("前 2 秒给出问题");
     expect((await tool("experience_read", { work: work.id, path: "../README.md" })).status).toBe(400);
-    expect((await tool("experience_write", { work: work.id, path: "x.js", content: "" })).status).toBe(400);
+    const refused = await tool("experience_write", {
+      work: work.id,
+      operations: [
+        { op: "write", path: "x.js", content: "" },
+        { op: "delete", path: "README.md" },
+        { op: "write", path: "临时.md", content: "# 临时\n" },
+        { op: "move", from: "临时.md", to: "归档.md" },
+      ],
+    });
+    expect(refused.body.data.results.map((item) => item.status)).toEqual(["failed", "failed", "ok", "ok"]);
+    expect(refused.body.text).toContain("只存放 .md 或 .txt");
+    expect((await tool("experience_read", { work: work.id, path: "归档.md" })).body.text).toBe("# 临时\n");
+    await tool("experience_write", { work: work.id, operations: [{ op: "delete", path: "归档.md" }] });
 
     const context = await tool("work_context", { work: work.id });
     // Callers without a chat session (external MCP clients) get the README and the index here.
@@ -76,7 +88,7 @@ describe("experience libraries", () => {
     const created = await call(`${lib}/libraries`, { method: "POST", body: { name: "旧名称" } });
     const work = (await call("/api/works", { method: "POST", body: { title: "改名测试" } })).body;
     await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experiences: [created.body.id] } });
-    await tool("experience_write", { work: work.id, path: "做法.md", content: "# 做法\n\n- 先画分镜\n" });
+    await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "做法.md", content: "# 做法\n\n- 先画分镜\n" }] });
 
     const renamed = await call(`${lib}/libraries/${encodeURIComponent("旧名称")}/rename`, { method: "POST", body: { name: "新名称" } });
     expect(renamed.body).toEqual({ id: "新名称", title: "新名称" });
@@ -120,10 +132,10 @@ describe("experience libraries", () => {
     expect(brief).toContain("本作品关联了 2 个经验库");
     expect(brief.indexOf("## 经验库「通用规范」")).toBeLessThan(brief.indexOf("## 经验库「竖屏短片」"));
 
-    const ambiguous = await tool("experience_write", { work: work.id, path: "节奏.md", content: "# 节奏\n" });
+    const ambiguous = await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "节奏.md", content: "# 节奏\n" }] });
     expect(ambiguous.status).toBe(400);
     expect(ambiguous.body.error.message).toContain("用 library 参数指定");
-    expect((await tool("experience_write", { work: work.id, library: "竖屏短片", path: "节奏.md", content: "# 节奏\n\n- 3 秒一切\n" })).status).toBe(200);
+    expect((await tool("experience_write", { work: work.id, library: "竖屏短片", operations: [{ op: "write", path: "节奏.md", content: "# 节奏\n\n- 3 秒一切\n" }] })).status).toBe(200);
     expect((await tool("experience_read", { work: work.id, library: "竖屏短片", path: "节奏.md" })).body.text).toContain("3 秒一切");
     // A library the work does not link can be named too (organizing); this one has no such document.
     expect((await tool("experience_read", { work: work.id, library: "知识类视频", path: "节奏.md" })).status).toBe(404);
@@ -242,9 +254,9 @@ describe("experience libraries", () => {
     const response = await fetch(`${base}/mcp`, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", Authorization: "Bearer " + token },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "experience_write", arguments: { path: "开场.md", content: "# 开场\n\n- 前 3 秒给出问题\n" } } }),
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "experience_write", arguments: { operations: [{ op: "write", path: "开场.md", content: "# 开场\n\n- 前 3 秒给出问题\n" }] } } }),
     });
-    expect(await response.text()).toContain("已写入经验库");
+    expect(await response.text()).toContain("全部完成");
     expect(context()).not.toContain("经验库");
 
     // A bound session's tools have no work parameter, and a stray one is ignored.
@@ -259,7 +271,9 @@ describe("experience libraries", () => {
     const listed = await mcp("tools/list", {});
     expect(listed.tools.some((tool) => "work" in (tool.inputSchema.properties ?? {}))).toBe(false);
     expect(listed.tools.find((tool) => tool.name === "experience_read")._meta).toEqual({ "anthropic/alwaysLoad": true });
-    expect(listed.tools.find((tool) => tool.name === "file_write")._meta).toBeUndefined();
+    expect(listed.tools.find((tool) => tool.name === "experience_commit")._meta).toBeUndefined();
+    // Built-in agents edit files with their own tools.
+    expect(listed.tools.some((tool) => tool.name === "files_batch")).toBe(false);
     const stray = await mcp("tools/call", { name: "experience_read", arguments: { work: "work-" + work.id, path: "开场.md" } });
     expect(stray.isError).toBeFalsy();
     expect(stray.content[0].text).toContain("前 3 秒给出问题");
@@ -274,15 +288,15 @@ describe("experience libraries", () => {
       }
       throw new Error("no permission request");
     };
-    const write = (content) => mcp("tools/call", { name: "experience_write", arguments: { path: "开场.md", content } });
+    const write = (content) => mcp("tools/call", { name: "experience_write", arguments: { operations: [{ op: "write", path: "开场.md", content }] } });
     let [result] = await Promise.all([write("# 开场\n\n- 被拒绝\n"), answer("reject")]);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("用户没有允许这次修改");
     expect((await mcp("tools/call", { name: "experience_read", arguments: { path: "开场.md" } })).content[0].text).toContain("前 3 秒给出问题");
     [result] = await Promise.all([write("# 开场\n\n- 允许了\n"), answer("allow")]);
-    expect(result.content[0].text).toContain("已写入经验库");
+    expect(result.content[0].text).toContain("全部完成");
     session.meta.configOptions = [{ id: "mode", currentValue: "acceptEdits" }];
-    expect((await write("# 开场\n\n- 不用确认\n")).content[0].text).toContain("已写入经验库");
+    expect((await write("# 开场\n\n- 不用确认\n")).content[0].text).toContain("全部完成");
     ai.sessions.delete(session.meta.id);
   });
 });

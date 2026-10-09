@@ -2,7 +2,7 @@ import { installOffline } from "../engine/offline-session";
 import { importWork, workSourceFromQuery } from "./load-work";
 
 /**
- * Headless capture page used by the server for AI frame previews, storyboards
+ * Headless capture page used by the server for AI frame previews, contact sheets
  * and video export. Exposes window.__FRAME_STUDIO__ (frame/capture/audioChunk).
  */
 (window as unknown as { __FRAME_RENDER_ERRORS__: string[] }).__FRAME_RENDER_ERRORS__ = [];

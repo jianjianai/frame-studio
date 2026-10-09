@@ -10,7 +10,7 @@ import { workArg, asJson } from "./tools/registry.mjs";
 import { importFromUrl, decodeData } from "./tools/asset-tools.mjs";
 import { eachSettled, summarize, errorOf } from "./tools/batch.mjs";
 import { Readable } from "node:stream";
-import { nearMiss } from "./tools/work-tools.mjs";
+import { editList, applyEdits } from "./tools/file-ops.mjs";
 import { probe } from "./media.mjs";
 
 /**
@@ -180,7 +180,7 @@ export class Materials {
     return result;
   }
   libraryOf(dir, id) {
-    if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound(`素材库「${id}」不存在`);
+    if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound(`素材库「${id}」不存在（新建用 materials_link 的 create）`);
     return path.join(dir, id);
   }
   /** Note where a third-party file comes from, in the library's README. */
@@ -727,7 +727,7 @@ export function materialsPlugin(services) {
       const work = await ctx.work();
       const published = Boolean(works.published(work));
       if (published && (add.length || remove.length))
-        throw problem(423, "作品已发布，不能改变它关联的素材库。素材库本身可以照常整理（material_write / material_move / material_delete），也可以用 create 新建。要改关联，请用户先取消发布或创建副本。", "PUBLISHED");
+        throw problem(423, "作品已发布，不能改变它关联的素材库。素材库本身可以照常整理（material_write），也可以用 create 新建。要改关联，请用户先取消发布或创建副本。", "PUBLISHED");
       const all = await materials.libraries(work.repo);
       const find = (name) => all.find((item) => item.id === name.trim() || item.title === name.trim())?.id ?? null;
       const unknown = add.filter((name) => !find(name));
@@ -792,58 +792,6 @@ export function materialsPlugin(services) {
     },
   });
 
-  const writeItem = {
-    library: libraryArg,
-    path: z.string().min(1).max(300).describe("素材库内的路径，例如 logos/brand.svg"),
-    url: z.string().url().optional(),
-    work_file: z.string().optional().describe("本作品中的文件，相对 projects/<名称>/"),
-    content: z.string().max(4 * 1024 * 1024).optional().describe("文本内容（SVG、JSON、代码）"),
-    data: z.string().max(12 * 1024 * 1024).optional().describe("文件内容的 base64（≤8 MB）；没有终端时用，否则用 upload_link"),
-    source: z.string().max(300).optional(),
-    license: z.string().max(300).optional(),
-  };
-  tools.add({
-    name: "material_write",
-    published: true, // the libraries are not the work: allowed on a published one
-    title: "写入素材库",
-    description:
-      "把文件放进素材库（每次修改都会保存为素材库的一个版本）：从网址下载（url）、从本作品的文件复制（work_file，例如 public/logo.png）、文本内容（content，例如 SVG、JSON、代码）或 base64（data，小文件）。一次放多个用 items（某项失败不影响其他项，结果逐项列出）。你所在电脑上的文件用 upload_link 上传。同名文件会被替换为新版本；已锁定旧版本的作品不受影响。第三方素材在 source / license 中写清来源与许可。",
-    destructive: true,
-    input: {
-      work: workArg,
-      ...Object.fromEntries(Object.entries(writeItem).map(([key, value]) => [key, ["library", "path"].includes(key) ? value.optional() : value])),
-      items: z.array(z.strictObject(writeItem)).max(20).optional().describe("一次放多个；每项和单个的参数相同"),
-    },
-    async run({ work: _ignored, items, ...single }, ctx) {
-      const work = await ctx.work();
-      const one = async ({ library, path: relative, url, work_file, content, data, source, license }) => {
-        if (!library || !relative) throw problem(400, "需要 library 和 path");
-        if ([url, work_file, content, data].filter((value) => value !== undefined).length !== 1) throw problem(400, "url、work_file、content、data 必须且只能提供一个");
-        const from = url
-          ? { url }
-          : work_file
-            ? { file: confined(work.dir, work_file) }
-            : data !== undefined
-              ? { stream: Readable.from([decodeData(data, relative)]) }
-              : { content };
-        const saved = await materials.put(work.repo, library, relative, from, { source: source || url, license });
-        const info = await probe(await materials.file(work.repo, {}, saved.ref)).catch(() => ({}));
-        return { ...saved, ...info };
-      };
-      if (!items?.length) {
-        const saved = await one(single);
-        return asJson(saved, `已保存到素材库：materials/${saved.ref}`);
-      }
-      const results = await eachSettled(items, one);
-      return {
-        data: results.map((result, index) => (result.ok ? { ok: true, ...result.value } : { ok: false, item: index, error: errorOf(result.error) })),
-        text: summarize(results, (result, index) =>
-          result.ok ? `✓ ${index + 1}. materials/${result.value.ref}` : `✗ ${index + 1}. ${items[index].library}/${items[index].path}：${result.error.message}`,
-        ),
-      };
-    },
-  });
-
   /** A library file as text (current version, or the version this work locked). */
   const readMaterial = async (work, ref, locked) => {
     if (!validRef(ref)) throw problem(400, "无效的路径");
@@ -901,65 +849,83 @@ export function materialsPlugin(services) {
     },
   });
 
+  const pathArg = z.string().min(1).max(300);
+  const inLibrary = z.string().min(1).max(60).optional();
+  const materialOperation = z.discriminatedUnion("op", [
+    z.strictObject({
+      op: z.literal("put"),
+      library: inLibrary,
+      path: pathArg,
+      url: z.string().url().optional(),
+      work_file: z.string().optional(),
+      content: z.string().max(4 * 1024 * 1024).optional(),
+      data: z.string().max(12 * 1024 * 1024).optional(),
+      source: z.string().max(300).optional(),
+      license: z.string().max(300).optional(),
+    }),
+    z.strictObject({ op: z.literal("edit"), library: inLibrary, path: pathArg, edits: editList }),
+    z.strictObject({ op: z.literal("move"), library: inLibrary, from: pathArg, to: pathArg, to_library: libraryArg.optional() }),
+    z.strictObject({ op: z.literal("delete"), library: inLibrary, path: pathArg }),
+  ]);
   tools.add({
-    name: "material_edit",
+    name: "material_write",
     published: true, // the libraries are not the work: allowed on a published one
-    title: "修改素材库文件",
+    title: "修改素材库",
     description:
-      "在素材库的文本文件（代码、JSON、SVG 等）中做精确替换，保存为素材库的一个新版本（按顺序执行，全部成功才写入）。每个 oldText 必须与文件内容逐字一致且恰好出现一次，否则设置 replaceAll。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。",
+      "修改素材库，一次可以做多个操作，按顺序执行，每个操作保存为素材库的一个版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB，没有终端时用），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。你所在电脑上的文件用 upload_link 上传。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。",
     destructive: true,
     input: {
       work: workArg,
-      library: libraryArg,
-      path: z.string().min(1).max(300),
-      edits: z
-        .array(z.strictObject({ oldText: z.string().min(1), newText: z.string(), replaceAll: z.boolean().default(false) }))
-        .min(1)
-        .max(50),
+      library: libraryArg.optional().describe("各操作默认的素材库"),
+      operations: z.array(materialOperation).min(1).max(30),
     },
-    async run({ library, path: relative, edits }, ctx) {
+    async run({ library: fallback, operations }, ctx) {
       const work = await ctx.work();
-      const ref = `${library}/${relative}`;
-      if (!validRef(ref) || !IMPORTABLE.test(ref)) throw problem(400, "只能修改素材库里的文本文件（代码、JSON、SVG 等）");
-      const file = confined(await materials.dir(work.repo), ref);
-      if (!fs.existsSync(file)) throw notFound(`素材不存在：materials/${ref}`);
-      let content = fs.readFileSync(file, "utf8");
-      for (const [index, edit] of edits.entries()) {
-        const count = content.split(edit.oldText).length - 1;
-        if (count === 0) throw problem(400, `第 ${index + 1} 处替换：找不到 oldText。${nearMiss(content, edit.oldText, "material_read")}`);
-        if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${index + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
-        content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
-      }
-      const saved = await materials.put(work.repo, library, relative, { content }, { replace: true });
-      return asJson({ ...saved, sha256: sha256(content) }, `已修改素材库文件 materials/${saved.ref}（${edits.length} 处），保存为新版本`);
-    },
-  });
-
-  tools.add({
-    name: "material_move",
-    published: true,
-    title: "移动素材",
-    description: "在素材库内（或到另一个素材库）移动、重命名文件。已锁定这个文件的作品仍使用锁定的版本；在用新地址前更新它们的引用。",
-    destructive: true,
-    input: { work: workArg, library: libraryArg, from: z.string().min(1), to: z.string().min(1), to_library: libraryArg.optional() },
-    async run({ library, from, to, to_library }, ctx) {
-      const work = await ctx.work();
-      const moved = await materials.move(work.repo, library, from, to, { toLibrary: to_library });
-      return asJson(moved, `已移动到 materials/${moved.ref}`);
-    },
-  });
-
-  tools.add({
-    name: "material_delete",
-    published: true,
-    title: "删除素材",
-    description: "从素材库删除一个文件（保存为一个版本，可以从历史恢复）。已锁定它的作品仍能使用锁定的版本。",
-    destructive: true,
-    input: { work: workArg, library: libraryArg, path: z.string().min(1) },
-    async run({ library, path: relative }, ctx) {
-      const work = await ctx.work();
-      await materials.delete(work.repo, library, relative);
-      return asJson({ deleted: `${library}/${relative}` }, `已从素材库「${library}」删除 ${relative}`);
+      const one = async (item) => {
+        const library = item.library ?? fallback;
+        if (!library) throw problem(400, "需要 library（写在操作里或外层）");
+        if (item.op === "put") {
+          const { url, work_file, content, data, source, license } = item;
+          if ([url, work_file, content, data].filter((value) => value !== undefined).length !== 1) throw problem(400, "url、work_file、content、data 必须且只能提供一个");
+          const from = url
+            ? { url }
+            : work_file
+              ? { file: confined(work.dir, work_file) }
+              : data !== undefined
+                ? { stream: Readable.from([decodeData(data, item.path)]) }
+                : { content };
+          const saved = await materials.put(work.repo, library, item.path, from, { source: source || url, license });
+          const info = await probe(await materials.file(work.repo, {}, saved.ref)).catch(() => ({}));
+          return { ...saved, ...info, line: `materials/${saved.ref}` };
+        }
+        if (item.op === "edit") {
+          const ref = `${library}/${item.path}`;
+          if (!validRef(ref) || !IMPORTABLE.test(ref)) throw problem(400, "只能修改素材库里的文本文件（代码、JSON、SVG 等）");
+          const file = confined(await materials.dir(work.repo), ref);
+          if (!fs.existsSync(file)) throw notFound(`素材不存在：materials/${ref}`);
+          const content = applyEdits(fs.readFileSync(file, "utf8"), item.edits, "material_read");
+          const saved = await materials.put(work.repo, library, item.path, { content }, { replace: true });
+          return { ...saved, sha256: sha256(content), line: `materials/${saved.ref}（${item.edits.length} 处）` };
+        }
+        if (item.op === "move") {
+          const moved = await materials.move(work.repo, library, item.from, item.to, { toLibrary: item.to_library });
+          return { ...moved, line: `materials/${library}/${item.from} → materials/${moved.ref}` };
+        }
+        await materials.delete(work.repo, library, item.path);
+        return { deleted: `${library}/${item.path}`, line: `已删除 materials/${library}/${item.path}` };
+      };
+      // One after another: later operations may depend on earlier ones.
+      const results = await eachSettled(operations, one, 1);
+      return {
+        data: results.map((result, index) =>
+          result.ok ? { ok: true, op: operations[index].op, ...Object.fromEntries(Object.entries(result.value).filter(([key]) => key !== "line")) } : { ok: false, item: index, error: errorOf(result.error) },
+        ),
+        text: summarize(results, (result, index) =>
+          result.ok
+            ? `✓ ${index + 1}. ${operations[index].op} ${result.value.line}`
+            : `✗ ${index + 1}. ${operations[index].op} ${operations[index].library ?? fallback ?? ""}/${operations[index].path ?? operations[index].from}：${result.error.message}`,
+        ),
+      };
     },
   });
 }

@@ -6,7 +6,8 @@
 
 - `audio_place`：把 `public/` 中的音频文件放到某条音轨的某个时间（音轨不存在会自动创建，audio.json 不存在会自动创建并在 project.ts 中声明）。
 - `speech_synthesize`：生成配音并可直接放到「配音」音轨（见 `speech`）。
-- `audio_get` / `audio_edit`：读取或原子修改整个混音文档。
+- `audio_get` / `audio_edit`：读取或原子修改混音文档（`update` 只改一项的部分字段）。
+- `preview_audio`：响度检查；`src` 指向配乐文件并加 `beats: true` 时给出 BPM、每个节拍的时间和最强的起音，用来把切点、画面变化放在节拍上（文件内时间换算到作品时间：片段 `start` + 文件内时间 − 片段 `offset`）。
 
 ## 混音原则（用户的要求，必须遵守）
 
@@ -53,12 +54,16 @@
   { "op": "put", "collection": "sources", "value": { "id": "bgm", "kind": "file", "src": "films/work-1a2b3c4d/music/bgm.mp3" } },
   { "op": "put", "collection": "tracks", "value": { "id": "music", "name": "配乐", "gain": 0.6 } },
   { "op": "put", "collection": "clips", "value": { "id": "c1", "track": "music", "source": "bgm", "start": 0, "duration": 15, "fadeOut": 2 } },
+  { "op": "update", "collection": "clips", "id": "c1", "patch": { "gain": 0.8, "fadeIn": 0.5 } },
+  { "op": "update", "collection": "master", "patch": { "gain": 0.9 } },
   { "op": "split", "id": "c1", "at": 8, "newId": "c1b" },
   { "op": "remove", "collection": "clips", "id": "c1b" }
 ]}
 ```
 
-- `put`：在 sources/tracks/clips/buses 中新增，或**整项替换** id 相同的一项（先 `audio_get` 拿到原值再改）。
+- `update`：按 collection（sources/tracks/clips/buses/master）+ id 只改 `patch` 里的字段，嵌套对象逐项合并，数组（processors、automation、sends）整体替换；`unset` 删除字段（有默认值的字段恢复默认）。改音量、时间、淡入淡出、静音都用它。
+- `put`：在 sources/tracks/clips/buses 中新增一项，或用完整内容**整项替换** id 相同的一项。
+- `audio_get` 每项一行，省略取默认值的字段。
 - `remove`：按 collection + id 删除；`split`：在作品时间 `at` 切开片段；`replace`：`{ "op": "replace", "document": {…} }` 替换整个文档。
 - 只是把一个文件放上音轨时，`audio_place` 更简单。
 

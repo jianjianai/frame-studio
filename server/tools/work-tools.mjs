@@ -2,9 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { workArg, asJson } from "./registry.mjs";
-import { tree, readText, writeText, removePath, movePath, TEXT_LIMIT } from "../files.mjs";
+import { tree } from "../files.mjs";
 import { checkWork } from "../checks.mjs";
-import { problem, confined, sha256 } from "../util.mjs";
+import { problem, confined } from "../util.mjs";
+import { editList, runFileOperations, describeFileOperations } from "./file-ops.mjs";
 import { probe } from "../media.mjs";
 import { projectAudioTracks } from "../../src/engine/types.ts";
 import { formatTime } from "../render.mjs";
@@ -13,21 +14,8 @@ const cueSchema = z
   .strictObject({ start: z.number().nonnegative(), end: z.number().positive(), text: z.string().min(1).max(500) })
   .refine((cue) => cue.end > cue.start, "end 必须大于 start");
 
-/** Explain why an exact replacement missed: usually indentation or a stale copy of the file. */
-export function nearMiss(content, oldText, reader = "file_read") {
-  const squash = (text) => text.replace(/\s+/g, " ").trim();
-  if (squash(content).includes(squash(oldText))) return "忽略空白后能找到：请按文件中的缩进和换行逐字复制。";
-  const first = oldText
-    .split("\n")
-    .find((line) => line.trim())
-    ?.trim();
-  const lines = content.split("\n");
-  const at = first ? lines.findIndex((line) => line.includes(first)) : -1;
-  if (at >= 0) return `第一行出现在第 ${at + 1} 行，但后面的内容不同；先用 ${reader} 读取最新内容。`;
-  return `文件可能已经改变，先用 ${reader} 读取最新内容。`;
-}
-
-const relativePath = z.string().min(1).max(400).describe("相对作品目录 projects/<名称>/ 的路径，例如 scene.ts 或 public/bg.png");
+// Paths are relative to projects/<名称>/ (the tool descriptions say so once, not per field).
+const relativePath = z.string().min(1).max(400);
 
 export async function listAssets(work) {
   const base = path.join(work.dir, "public");
@@ -56,6 +44,18 @@ function summarizeMeta(meta) {
     subtitles: meta.subtitles?.length ? meta.subtitles : [],
     status: meta.status,
   };
+}
+
+/**
+ * The work against GitHub. An external AI is compared now (it starts with work_context, like
+ * opening the work in the studio); built-in sessions are told about changes with each message.
+ */
+async function githubState(services, work, { compare }) {
+  const sync = services.remoteSync;
+  if (!sync || !services.repos.get(work.repo)?.remote) return null;
+  if (!compare) return sync.get(work);
+  const late = new Promise((resolve) => setTimeout(() => resolve(sync.get(work) ?? { state: "unknown" }), 8000).unref());
+  return Promise.race([sync.check(work).catch(() => sync.get(work)), late]);
 }
 
 export function registerWorkTools(registry) {
@@ -110,7 +110,8 @@ export function registerWorkTools(registry) {
   registry.add({
     name: "work_context",
     title: "作品现状",
-    description: "读取作品的元数据、文件、素材、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果，以及作品需求和关联的经验库。外部 AI 开始工作前先调用。",
+    description:
+      "读取作品的元数据、文件、素材（地址、类型、时长、尺寸）、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果、最近的导出、作品需求和关联的经验库，以及是否已发布、和 GitHub 是否同步（warnings 里的情况要先处理）。外部 AI 开始工作前先调用。",
     readOnly: true,
     input: { work: workArg },
     async run(_, ctx) {
@@ -123,8 +124,18 @@ export function registerWorkTools(registry) {
       const status = await works.status(work);
       const view = services.viewState.get(`${work.repo}/${work.id}`) || null;
       const notesFile = path.join(work.dir, "AGENTS.md");
+      const publishedAt = works.published(work);
+      const github = await githubState(services, work, { compare: !ctx.scope.session });
+      const warnings = [
+        publishedAt && "作品已发布，只能查看：不能修改作品文件、图层、混音和它关联的经验库/素材库（经验库、素材库本身可以照常整理）。要修改，请用户先取消发布或创建副本。",
+        github?.state === "behind" &&
+          `GitHub 上有这个作品 ${github.behind} 个更新的版本，本机的文件还是旧的。不要修改作品：请用户先在工作台顶部的提示中更新到最新版本。`,
+        ["diverged", "conflict"].includes(github?.state) &&
+          `本机和 GitHub 上都有这个作品的新版本（本机 ${github.ahead} 个、GitHub ${github.behind} 个）。不要修改作品：请用户先在工作台顶部的提示中选择合并、采用 GitHub 或保留本机的版本。`,
+      ].filter(Boolean);
       const result = {
-        work: { id: work.id, repo: work.repo, slug: work.slug, dir: work.dir, branch: work.branch },
+        ...(warnings.length ? { warnings } : {}),
+        work: { id: work.id, repo: work.repo, slug: work.slug, dir: work.dir, branch: work.branch, published: Boolean(publishedAt), github: github && github.state },
         meta: meta.ok ? summarizeMeta(meta.meta) : { error: meta.error },
         entry: meta.ok ? meta.loads : null,
         layers:
@@ -158,6 +169,10 @@ export function registerWorkTools(registry) {
         lastVersion: status.head,
         userView: view && { time: view.time, playing: view.playing, selection: view.selection, at: view.at },
         lastCheck: services.checks.get(`${work.repo}/${work.id}`) || null,
+        exports: services.exports
+          .list(work)
+          .slice(0, 5)
+          .map(({ name, createdAt, duration, width, height, size }) => ({ name, createdAt, duration, width, height, size })),
         // The production know-how to follow; read it in full with experience_read.
         experiences: services.experience ? services.experience.summary(work, { inBrief: Boolean(ctx.scope.session) }) : null,
       };
@@ -169,7 +184,7 @@ export function registerWorkTools(registry) {
     name: "work_check",
     title: "检查作品",
     description:
-      "检查 project.ts 元数据、TypeScript 类型、素材引用，并在浏览器中实际加载、渲染几帧（开头、1/4、1/2、3/4、结尾）和一小段音频。返回所有问题。修改代码后调用；frames: true 同时返回这 5 个时刻的分镜图，不用再调 storyboard。",
+      "检查 project.ts 元数据、TypeScript 类型、素材引用，并在浏览器中实际加载、渲染几帧（开头、1/4、1/2、3/4、结尾）和一小段音频。返回所有问题。修改代码后调用；frames: true 同时返回这 5 个时刻的分镜图。",
     readOnly: true,
     input: {
       work: workArg,
@@ -195,9 +210,9 @@ export function registerWorkTools(registry) {
   registry.add({
     name: "files_list",
     title: "列出文件",
-    description: "列出作品目录中的文件（不含 exports、.cache）。",
+    description: "列出作品目录中的文件和大小（不含 exports、.cache）。素材的类型、时长、尺寸见 work_context 的 assets。",
     readOnly: true,
-    input: { work: workArg, dir: z.string().optional().describe("子目录，例如 public") },
+    input: { work: workArg, dir: z.string().optional().describe("子目录（相对 projects/<名称>/），例如 public") },
     async run({ dir }, ctx) {
       const work = await ctx.work();
       const base = dir ? confined(work.dir, dir) : work.dir;
@@ -205,101 +220,6 @@ export function registerWorkTools(registry) {
     },
   });
 
-  registry.add({
-    name: "file_read",
-    title: "读取文件",
-    description: "读取作品中的文本文件。返回文件内容，另附 {sha256, lines}：sha256 可传给 file_write 的 expectedSha256，防止覆盖用户刚做的修改。",
-    readOnly: true,
-    input: { work: workArg, path: relativePath, startLine: z.number().int().min(1).optional(), lineCount: z.number().int().min(1).max(5000).optional() },
-    async run({ path: file, startLine, lineCount }, ctx) {
-      const work = await ctx.work();
-      const result = readText(work.dir, file);
-      let content = result.content;
-      const lines = content.split("\n");
-      const meta = { path: file, sha256: result.hash, lines: lines.length };
-      if (startLine || lineCount) {
-        const from = Math.min((startLine || 1) - 1, lines.length);
-        content = lines.slice(from, from + (lineCount || lines.length)).join("\n");
-        meta.range = [from + 1, Math.min(from + (lineCount || lines.length), lines.length)];
-      }
-      return { data: { ...meta, size: result.size }, meta, text: content };
-    },
-  });
-
-  registry.add({
-    name: "file_write",
-    title: "写入文件",
-    description: "创建或整体替换作品中的文本文件，自动创建所在文件夹。保存后用户的预览立即更新。只改几处时用 file_edit。",
-    destructive: true,
-    input: {
-      work: workArg,
-      path: relativePath,
-      content: z.string().max(4 * 1024 * 1024),
-      expectedSha256: z.string().optional().describe("可选：读取时得到的 sha256；文件已被改动则拒绝写入"),
-    },
-    async run({ path: file, content, expectedSha256 }, ctx) {
-      const work = await ctx.work();
-      if (file.split("/")[0] === "exports") throw problem(400, "exports/ 是导出目录");
-      const result = writeText(work.dir, file, content, { expectedHash: expectedSha256 });
-      return { data: { path: file, sha256: result.hash }, meta: { sha256: result.hash }, text: `已写入 ${file}` };
-    },
-  });
-
-  registry.add({
-    name: "file_edit",
-    title: "编辑文件",
-    description: "在文本文件中做精确替换（按顺序执行，全部成功才写入）。每个 oldText 必须与文件内容逐字一致（含缩进）且恰好出现一次，否则设置 replaceAll。",
-    input: {
-      work: workArg,
-      path: relativePath,
-      edits: z
-        .array(z.strictObject({ oldText: z.string().min(1), newText: z.string(), replaceAll: z.boolean().default(false) }))
-        .min(1)
-        .max(50),
-    },
-    async run({ path: file, edits }, ctx) {
-      const work = await ctx.work();
-      const current = readText(work.dir, file);
-      let content = current.content;
-      for (const [index, edit] of edits.entries()) {
-        const count = content.split(edit.oldText).length - 1;
-        if (count === 0) throw problem(400, `第 ${index + 1} 处替换：找不到 oldText。${nearMiss(content, edit.oldText)}`);
-        if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${index + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
-        content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
-      }
-      const result = writeText(work.dir, file, content, { expectedHash: current.hash });
-      return { data: { path: file, sha256: result.hash }, meta: { sha256: result.hash }, text: `已修改 ${file}（${edits.length} 处）` };
-    },
-  });
-
-  registry.add({
-    name: "file_delete",
-    title: "删除文件",
-    description: "删除作品中的文件或文件夹（可以从版本历史恢复）。",
-    destructive: true,
-    input: { work: workArg, path: relativePath },
-    async run({ path: file }, ctx) {
-      const work = await ctx.work();
-      removePath(work.dir, file);
-      return asJson({ deleted: file }, `已删除 ${file}`);
-    },
-  });
-
-  registry.add({
-    name: "file_move",
-    title: "移动文件",
-    description: "移动或重命名作品中的文件。注意同时更新代码里的引用。",
-    input: { work: workArg, from: relativePath, to: relativePath },
-    async run({ from, to }, ctx) {
-      movePath((await ctx.work()).dir, from, to);
-      return asJson({ from, to }, `已移动 ${from} → ${to}`);
-    },
-  });
-
-  const editList = z
-    .array(z.strictObject({ oldText: z.string().min(1), newText: z.string(), replaceAll: z.boolean().default(false) }))
-    .min(1)
-    .max(50);
   const batchOperation = z.discriminatedUnion("op", [
     z.strictObject({ op: z.literal("read"), path: relativePath, startLine: z.number().int().min(1).optional(), lineCount: z.number().int().min(1).max(5000).optional() }),
     z.strictObject({ op: z.literal("write"), path: relativePath, content: z.string().max(4 * 1024 * 1024), expectedSha256: z.string().optional() }),
@@ -307,14 +227,13 @@ export function registerWorkTools(registry) {
     z.strictObject({ op: z.literal("delete"), path: relativePath }),
     z.strictObject({ op: z.literal("move"), from: relativePath, to: relativePath }),
   ]);
-  const READ_BUDGET = 1024 * 1024; // text of reads returned in one call
 
   registry.add({
     name: "files_batch",
     published: true, // reads are fine on a published work; changes are refused below
-    title: "批量文件操作",
+    title: "读写文件",
     description:
-      "一次调用对多个作品文件做读取（read）、写入（write）、精确替换（edit）、删除（delete）、移动（move），按顺序执行，省去逐个调用。默认能做的都做，失败的逐项说明原因（同一文件前面的操作失败时，后面针对它的操作会跳过），只需重试失败的；atomic: true 时任何一项失败就全部不改（一起改名之类必须同时成功的改动）。check: true 在改完后运行 work_check，frames: true 再附 5 个时刻的分镜图。",
+      "读写作品中的文本文件（代码、JSON、SVG 等；路径相对作品目录 projects/<名称>/，例如 scene.ts、public/bg.svg），一次调用可以做多个操作，按顺序执行：read（可用 startLine/lineCount 读一段，返回内容和 sha256）、write（新建或整体替换，自动建文件夹；expectedSha256 可防止覆盖别人刚做的修改）、edit（精确替换：每个 oldText 必须与文件逐字一致含缩进，且恰好出现一次，否则设 replaceAll）、delete、move。保存后用户的预览立即更新。默认能做的都做，失败的逐项说明原因（同一文件前面的操作失败时，后面针对它的操作会跳过），只需重试失败的；atomic: true 时任何一项失败就全部不改。check: true 改完后运行 work_check，frames: true 再附 5 个时刻的分镜图。",
     destructive: true,
     input: {
       work: workArg,
@@ -325,118 +244,17 @@ export function registerWorkTools(registry) {
     },
     async run({ operations, atomic, check, frames }, ctx) {
       const work = await ctx.work();
-      const changing = operations.some((item) => item.op !== "read");
-      if (changing) works.assertEditable(work);
-
-      // Plan against the files as each operation leaves them, without touching the disk yet.
-      const files = new Map(); // path → { content: string | null (absent), hash, folder }
-      const look = (file) => {
-        if (!files.has(file)) {
-          const full = confined(work.dir, file);
-          const stat = fs.statSync(full, { throwIfNoEntry: false });
-          if (stat?.isDirectory()) files.set(file, { content: null, hash: null, folder: true });
-          else if (stat?.isFile()) {
-            if (stat.size > TEXT_LIMIT) throw problem(413, `${file} 超过 ${TEXT_LIMIT / 1048576} MiB，不能作为文本处理`);
-            const content = fs.readFileSync(full, "utf8");
-            files.set(file, { content, hash: sha256(content) });
-          } else files.set(file, { content: null, hash: null });
-        }
-        return files.get(file);
-      };
-      const exists = (entry) => entry.content !== null || entry.folder;
-      const failed = new Set();
-      const results = [];
-      const steps = []; // { index, apply }
-      let readBytes = 0;
-      for (const [index, item] of operations.entries()) {
-        const paths = item.op === "move" ? [item.from, item.to] : [item.path];
-        const blocked = paths.find((file) => failed.has(file));
-        if (blocked) {
-          results.push({ index, op: item.op, path: paths.join(" → "), status: "skipped", message: `跳过：${blocked} 前面的操作失败` });
-          continue;
-        }
-        try {
+      if (operations.some((item) => item.op !== "read")) works.assertEditable(work);
+      const outcome = runFileOperations(work.dir, operations, {
+        atomic,
+        reader: "files_batch 的 read",
+        allow: (item, paths) => {
           if (item.op !== "read" && paths.some((file) => file.split("/")[0] === "exports")) throw problem(400, "exports/ 是导出目录");
-          if (item.op === "read") {
-            const entry = look(item.path);
-            if (entry.content === null) throw problem(404, entry.folder ? `${item.path} 是文件夹` : `文件不存在：${item.path}`, "NOT_FOUND");
-            const lines = entry.content.split("\n");
-            const from = Math.min((item.startLine || 1) - 1, lines.length);
-            const shown = item.startLine || item.lineCount ? lines.slice(from, from + (item.lineCount || lines.length)).join("\n") : entry.content;
-            readBytes += Buffer.byteLength(shown);
-            const cut = readBytes > READ_BUDGET;
-            results.push({ index, op: "read", path: item.path, status: "ok", sha256: entry.hash, lines: lines.length, content: cut ? null : shown, ...(cut ? { message: "这次读取的内容太多，这个文件没有返回，单独再读" } : {}) });
-          } else if (item.op === "write" || item.op === "edit") {
-            const entry = look(item.path);
-            if (entry.folder) throw problem(400, `${item.path} 是文件夹`);
-            let content;
-            if (item.op === "write") {
-              if (item.expectedSha256 !== undefined && (entry.hash ?? "") !== item.expectedSha256)
-                throw problem(409, `${item.path} 已被其他人修改，最新 sha256 是 ${entry.hash ?? "（文件不存在）"}`, "CONFLICT", { currentHash: entry.hash });
-              content = item.content;
-            } else {
-              if (entry.content === null) throw problem(404, `文件不存在：${item.path}`, "NOT_FOUND");
-              content = entry.content;
-              for (const [at, edit] of item.edits.entries()) {
-                const count = content.split(edit.oldText).length - 1;
-                if (count === 0) throw problem(400, `第 ${at + 1} 处替换找不到 oldText。${nearMiss(content, edit.oldText)}`);
-                if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${at + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
-                content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
-              }
-            }
-            const before = entry.hash;
-            const hash = sha256(content);
-            files.set(item.path, { content, hash });
-            results.push({ index, op: item.op, path: item.path, status: "ok", sha256: hash, ...(item.op === "edit" ? { edits: item.edits.length } : {}) });
-            steps.push({ index, apply: () => writeText(work.dir, item.path, content, { expectedHash: before ?? null }) });
-          } else if (item.op === "delete") {
-            if (item.path === "project.ts") throw problem(400, "不能删除 project.ts");
-            const entry = look(item.path);
-            if (!exists(entry)) throw problem(404, `文件不存在：${item.path}`, "NOT_FOUND");
-            files.set(item.path, { content: null, hash: null });
-            results.push({ index, op: "delete", path: item.path, status: "ok" });
-            steps.push({ index, apply: () => removePath(work.dir, item.path) });
-          } else {
-            const source = look(item.from);
-            if (!exists(source)) throw problem(404, `文件不存在：${item.from}`, "NOT_FOUND");
-            if (exists(look(item.to))) throw problem(409, `目标已存在：${item.to}`, "CONFLICT");
-            files.set(item.to, source);
-            files.set(item.from, { content: null, hash: null });
-            results.push({ index, op: "move", path: `${item.from} → ${item.to}`, status: "ok" });
-            steps.push({ index, apply: () => movePath(work.dir, item.from, item.to) });
-          }
-        } catch (error) {
-          for (const file of paths) failed.add(file);
-          results.push({ index, op: item.op, path: paths.join(" → "), status: "failed", message: error.message, ...(error.details?.currentHash !== undefined ? { currentSha256: error.details.currentHash } : {}) });
-        }
-      }
-
-      const problems = results.filter((result) => result.status !== "ok");
-      const applied = !(atomic && problems.length);
-      if (applied)
-        for (const step of steps)
-          try {
-            step.apply();
-          } catch (error) {
-            // Changed on disk since it was read a moment ago.
-            Object.assign(results.find((result) => result.index === step.index), { status: "failed", message: error.message });
-          }
-
-      const icon = { ok: "✓", failed: "✗", skipped: "–" };
-      const failedCount = results.filter((result) => result.status !== "ok").length;
-      const head = !applied
-        ? `atomic：${failedCount} 项不能完成，所有改动都没有写入：`
-        : failedCount
-          ? `完成 ${results.length - failedCount} 项，${failedCount} 项没有完成（只需重试这些）：`
-          : `全部完成（${results.length} 项）：`;
-      const lines = results.map(
-        (result) => `${icon[result.status]} ${result.index + 1}. ${result.op} ${result.path}${result.status === "ok" ? (result.op === "edit" ? `（${result.edits} 处）` : "") : `：${result.message}`}`,
-      );
-      const reads = results
-        .filter((result) => result.op === "read" && result.status === "ok")
-        .map((result) => `=== ${result.path}（sha256 ${result.sha256}，共 ${result.lines} 行）${result.content === null ? `\n${result.message}` : `\n${result.content}`}`);
-      let checked = null;
-      if (check && applied && steps.length) checked = await checkWork(services, work, { runtime: true, frames });
+          if (item.op === "delete" && item.path === "project.ts") throw problem(400, "不能删除 project.ts");
+        },
+      });
+      const { summary, reads } = describeFileOperations(outcome);
+      const checked = check && outcome.wrote ? await checkWork(services, work, { runtime: true, frames }) : null;
       const checkText = checked
         ? checked.ok
           ? `\n检查通过（${checked.ms} ms）。`
@@ -444,11 +262,11 @@ export function registerWorkTools(registry) {
         : "";
       return {
         data: {
-          applied,
-          results: results.map(({ content, ...result }) => result),
+          applied: outcome.applied,
+          results: outcome.results.map(({ content, ...result }) => result),
           ...(checked ? { check: { ok: checked.ok, problems: checked.problems } } : {}),
         },
-        text: [head, ...lines].join("\n") + checkText + (reads.length ? "\n\n" + reads.join("\n\n") : ""),
+        text: summary + checkText + (reads ? "\n\n" + reads : ""),
         images: checked?.sheet ? [{ data: checked.sheet, mimeType: "image/jpeg" }] : [],
       };
     },

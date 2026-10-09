@@ -95,7 +95,7 @@ describe("MCP OAuth", () => {
     const { tokens, client, code, verifier } = await authorize();
     expect(tokens).toMatchObject({ token_type: "Bearer", expires_in: 3600, scope: "frame:read frame:write" });
     const listed = await mcpResult(await mcp(tokens.access_token, "tools/list"));
-    expect(listed.tools.map((tool) => tool.name)).toContain("file_write");
+    expect(listed.tools.map((tool) => tool.name)).toContain("files_batch");
     // Codes are single use.
     const again = await fetch(base + "/oauth/token", form({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: client.client_id }));
     expect((await again.json()).error).toBe("invalid_grant");
@@ -110,7 +110,7 @@ describe("MCP OAuth", () => {
     const listed = await mcpResult(await mcp(tokens.access_token, "tools/list"));
     const names = listed.tools.map((tool) => tool.name);
     expect(names).toContain("work_context");
-    expect(names).not.toContain("file_write");
+    expect(names).not.toContain("files_batch");
     expect(names).not.toContain("works_list");
     const context = await mcpResult(await mcp(tokens.access_token, "tools/call", { name: "work_context", arguments: {} }));
     expect(context.content[0].text).toContain(work.id);

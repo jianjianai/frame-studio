@@ -49,14 +49,16 @@ export function createScene(options: SceneOptions) {
 ```json
 { "operations": [
   { "op": "add", "clip": { "id": "flash", "source": { "kind": "color", "color": "#ffffff" }, "start": 4.9, "duration": 0.3, "fadeOut": 0.3 } },
-  { "op": "update", "id": "logo", "patch": { "start": 3 } },
+  { "op": "update", "id": "logo", "patch": { "start": 3, "transform": { "opacity": 0.8 } } },
   { "op": "split", "id": "bg", "at": 5, "newId": "bg_b" },
   { "op": "reorder", "id": "title", "index": 2 },
   { "op": "remove", "id": "old" }
 ]}
 ```
 
-- `add` 可带 `index` 指定插入位置；`update` 的 `patch` 只写要改的字段，`unset` 列出要删除的可选字段；`replace` 为 `{ "op": "replace", "document": {…} }`。
+- `add` 可带 `index` 指定插入位置；`replace` 为 `{ "op": "replace", "document": {…} }`。
+- `update` 的 `patch` 只写要改的字段：嵌套对象（`transform`、`audio`、`source`、`crop`）逐项合并，例如 `{ "transform": { "opacity": 0.8 } }` 保留原来的 `x`/`y`；数组（关键帧）整体替换；`source` 换成另一种 `kind` 时整体替换。`unset` 删除字段，可写嵌套的 `transform.opacity`、`audio.gain`、`source.parameters.<名称>`。
+- `layers_get` 每个图层一行，省略取默认值的字段（`offset` 0、`phase` 0、`rate` 1、`fit` contain、`blend` source-over）。
 - 新的 scene 模块要先在 `scene.ts` 的 loaders 中注册（`名称: () => import("./scenes/名称")`），否则会报“场景模块未注册”。
 - scene 图层的模块是普通 Scene（见 `scene`），收到的 `time` 是图层内时间（已减去 start、考虑 rate/offset）。scene 图层输出透明画布即可叠加在下层之上。
 - 同时活跃的图层不超过 32 个。

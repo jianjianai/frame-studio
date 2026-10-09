@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { rendererIds } from "./adapters.mjs";
+import { mergePatch, unsetPath } from "./patch.mjs";
 const number = z.number().finite();
 const id = z
   .string()
@@ -162,6 +163,12 @@ export function sampleValue(value, time, fallback) {
     }
   return value[value.length - 1].value;
 }
+/** `{ opacity: 0.5 }` instead of `{ transform: { opacity: 0.5 } }` is the usual slip. */
+const misplacedTransform = (issue) => {
+  const keys = issue.code === "unrecognized_keys" ? issue.keys.filter((key) => ["x", "y", "width", "height", "rotation", "opacity"].includes(key)) : [];
+  return keys.length ? `${keys.join("、")} 要写在 transform 里，例如 {"transform":{"${keys[0]}":…}}` : undefined;
+};
+const UNSETTABLE = ["name", "offset", "phase", "rate", "loop", "audio", "hidden", "transform", "fit", "blend", "crop", "fadeIn", "fadeOut", "fadeOffset", "fadeDuration"];
 /** Pure edits shared by GUI, CLI and MCP; writes remain compare-and-swap transactions. */
 export const visualOperationSchema = z.discriminatedUnion("op", [
   z.strictObject({ op: z.literal("replace"), document: visualDocumentSchema }),
@@ -173,36 +180,29 @@ export const visualOperationSchema = z.discriminatedUnion("op", [
   z.strictObject({
     op: z.literal("update"),
     id,
+    // Nested objects merge field by field; the merged clip is validated as a whole.
     patch: z
       .strictObject({
         ...visualClipSchema.shape,
+        source: z.record(z.string(), z.unknown()),
         offset: visualClipSchema.shape.offset.removeDefault(),
         phase: visualClipSchema.shape.phase.removeDefault(),
         rate: visualClipSchema.shape.rate.removeDefault(),
         fit: visualClipSchema.shape.fit.removeDefault(),
         blend: visualClipSchema.shape.blend.removeDefault(),
-      })
+        audio: z.record(z.string(), z.unknown()),
+        crop: z.record(z.string(), z.unknown()),
+      }, { error: misplacedTransform })
       .omit({ id: true })
       .partial(),
     unset: z
       .array(
-        z.enum([
-          "name",
-          "offset",
-          "phase",
-          "rate",
-          "loop",
-          "audio",
-          "hidden",
-          "transform",
-          "fit",
-          "blend",
-          "crop",
-          "fadeIn",
-          "fadeOut",
-          "fadeOffset",
-          "fadeDuration",
-        ]),
+        z
+          .string()
+          .refine(
+            (path) => UNSETTABLE.includes(path) || /^(transform|audio|source\.parameters)\.[\w-]+$/.test(path),
+            `可以删除的字段：${UNSETTABLE.join("、")}，或嵌套字段如 transform.opacity、audio.gain、source.parameters.<名称>`,
+          ),
       )
       .optional(),
   }),
@@ -237,8 +237,9 @@ export function editVisualDocument(value, operations, context) {
       );
     if (op.op === "remove") doc.clips.splice(index, 1);
     if (op.op === "update") {
-      doc.clips[index] = { ...doc.clips[index], ...op.patch };
-      for (const key of op.unset ?? []) delete doc.clips[index][key];
+      const clip = mergePatch(doc.clips[index], op.patch);
+      for (const path of op.unset ?? []) unsetPath(clip, path);
+      doc.clips[index] = clip;
     }
     if (op.op === "reorder") {
       const [clip] = doc.clips.splice(index, 1);

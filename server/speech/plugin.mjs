@@ -134,7 +134,7 @@ export function speechPlugin(services) {
       }
       const cut = results.filter((item) => place && (!item.clip || (item.duration && item.clip.duration < item.duration - 1e-3)));
       const describe = (item) =>
-        `${place ? `${round(item.start)}–${round(item.end)}s${item.clip ? "" : "（未放置）"} ` : ""}${item.url}（${item.duration?.toFixed(2) ?? "?"} 秒）${lines ? " " + item.text : ""}`;
+        `${place ? `${round(item.start)}–${round(item.end)}s${item.clip ? ` 片段 ${item.clip.id}` : "（未放置）"} ` : ""}${item.url}（${item.duration?.toFixed(2) ?? "?"} 秒）${lines ? " " + item.text : ""}`;
       return {
         data: { items: results, end: place ? round(at) : undefined },
         text:
@@ -143,7 +143,7 @@ export function speechPlugin(services) {
           (place ? `\n最后一句结束于 ${round(at)} 秒。` : "") +
           (cut.length
             ? `\n注意：作品只有 ${total} 秒，${cut.map((item) => `「${item.text.slice(0, 12)}」${item.clip ? "被截断" : "没有放上音轨"}`).join("、")}。` +
-              `用 work_update 把 duration 改到至少 ${Math.ceil(at)} 秒，再重新放置这些句子（audio_place 用上面的地址，或 audio_edit 把被截断片段的 duration 改回音频时长）。`
+              `用 work_update 把 duration 改到至少 ${Math.ceil(at)} 秒，再重新放置这些句子（audio_place 用上面的地址，或 audio_edit 的 update 把被截断片段的 duration 改回音频时长）。`
             : ""),
       };
     },

@@ -6,7 +6,7 @@
 - 外部 AI 用 `work_context` 得到 README 和目录，或用不带 path 的 `experience_read`。
 - 找某个主题的经验（例如“转场”“字幕”）用 `search`，`scope: ["experience"]`：返回匹配的文档和行，再读相关的全文。
 - 用户或其他对话改了经验库时，下一条消息的 `[FRAME]` 会说明改了什么。
-- 制作中发现值得记住的东西就当场整理进去：`experience_edit`（改几处）、`experience_write`（新建或整篇重写）、`experience_delete`（合并后删掉旧文档）。
+- 制作中发现值得记住的东西就当场整理进去：`experience_write` 的 `edit`（改几处）、`write`（新建或整篇重写）、`delete`（合并后删掉旧文档）、`move`（改名），一次调用可以改几篇。
 - 修改是未保存状态，用户在「经验」面板里查看改动、保存版本、同步到 GitHub。用户认可或要求提交时用 `experience_commit` 保存版本（`message` 说明改了什么；`push: true` 同时推送到 GitHub）。同一作品库的所有经验库在一个分支上，会一起保存。
 
 ## 值得记录的

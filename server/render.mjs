@@ -191,7 +191,7 @@ export class Renderer {
     return { page, context, size, errors, logs, close: closeContext };
   }
 
-  /** Warm page for interactive tools (frames, storyboard, audio analysis). */
+  /** Warm page for interactive tools (frames, contact sheets, audio analysis). */
   async warmPage(work, width) {
     const meta = this.services.works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
@@ -323,66 +323,35 @@ export class Renderer {
   }
 
   /** One labelled contact sheet; much cheaper for AI context than many images. */
-  async storyboard(work, { times, columns, width = 480 }) {
-    const { frames, width: w, height: h, errors } = await this.frames(work, { times, width, subtitles: true });
+  async storyboard(work, { times, columns, width = 480, subtitles = true }) {
+    const { frames, width: w, height: h, errors } = await this.frames(work, { times, width, subtitles });
     return { image: await contactSheet(frames, w, h, columns), times: frames.map((frame) => frame.time), errors };
   }
 
-  /** Loudness summary: RMS/peak per window so an AI can "hear" a segment. */
-  async audioStats(work, { start = 0, duration = 10, window = 0.5 }) {
+  /** A segment of the work's mix as stereo float PCM (48 kHz), rendered offline in the page. */
+  async audioPcm(work, { start = 0, duration = 10 }) {
     this.lastUse = Date.now();
     const handle = await this.warmPage(work);
     const total = handle.project.duration;
     start = Math.max(0, Math.min(total, start));
     duration = Math.max(0.05, Math.min(total - start, duration, 60));
-    const samples = [];
+    const chunks = [];
     for (let offset = 0; offset < duration - 1e-6; offset += 10) {
       const chunk = Math.min(10, duration - offset);
       const data = await handle.page.evaluate(({ start, chunk }) => window.__FRAME_STUDIO__.audioChunk(start, chunk), { start: start + offset, chunk });
       const pcm = Buffer.from(data, "base64");
-      samples.push(new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length / 2));
+      chunks.push(new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length / 2));
     }
-    const rate = 48000;
-    const perWindow = Math.max(1, Math.round(window * rate));
-    const windows = [];
-    let peakAll = 0,
-      sumAll = 0,
-      countAll = 0,
-      clipped = 0;
-    const all = samples.flatMap((chunk) => [chunk]);
-    let frameIndex = 0;
-    let acc = { sum: 0, peak: 0, n: 0 };
-    for (const chunk of all) {
-      for (let i = 0; i < chunk.length; i += 2) {
-        const l = chunk[i] / 32768,
-          r = chunk[i + 1] / 32768;
-        const v = Math.max(Math.abs(l), Math.abs(r));
-        if (v >= 0.999) clipped++;
-        acc.peak = Math.max(acc.peak, v);
-        acc.sum += (l * l + r * r) / 2;
-        acc.n++;
-        if (++frameIndex % perWindow === 0) {
-          windows.push(acc);
-          acc = { sum: 0, peak: 0, n: 0 };
-        }
+    const frames = chunks.reduce((sum, chunk) => sum + chunk.length / 2, 0);
+    const left = new Float32Array(frames),
+      right = new Float32Array(frames);
+    let at = 0;
+    for (const chunk of chunks)
+      for (let i = 0; i < chunk.length; i += 2, at++) {
+        left[at] = chunk[i] / 32768;
+        right[at] = chunk[i + 1] / 32768;
       }
-    }
-    if (acc.n) windows.push(acc);
-    const db = (value) => (value > 0 ? Math.round(20 * Math.log10(value) * 10) / 10 : -120);
-    const summary = windows.map((item, index) => {
-      peakAll = Math.max(peakAll, item.peak);
-      sumAll += item.sum;
-      countAll += item.n;
-      return { time: Math.round((start + index * window) * 100) / 100, rmsDb: db(Math.sqrt(item.sum / item.n)), peakDb: db(item.peak) };
-    });
-    return {
-      start,
-      duration,
-      windowSeconds: window,
-      overall: { rmsDb: db(Math.sqrt(sumAll / Math.max(1, countAll))), peakDb: db(peakAll), clippedSamples: clipped },
-      silentWindows: summary.filter((item) => item.rmsDb < -60).length,
-      windows: summary,
-    };
+    return { left, right, rate: 48000, start, duration };
   }
 
   /** Load the work in a fresh page and render a few times; report every error. */
@@ -546,6 +515,9 @@ export const formatTime = (seconds) => {
 
 
 /** Frames ({ time, png }) of one size as one labelled grid (JPEG): cheap for an AI to look at. */
+const escapeXml = (text) => String(text).replace(/[<>&"']/g, (char) => `&#${char.charCodeAt(0)};`);
+
+/** Frames of equal size w×h in a grid, each under a label (default "#n  time"). */
 export async function contactSheet(frames, w, h, columns) {
   columns = columns || Math.min(4, Math.ceil(Math.sqrt(frames.length)));
   const rows = Math.ceil(frames.length / columns);
@@ -558,7 +530,7 @@ export async function contactSheet(frames, w, h, columns) {
     composites.push({ input: frame.png, left: x, top: y + label });
     composites.push({
       input: Buffer.from(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${label}"><text x="2" y="19" font-family="sans-serif" font-size="16" fill="#e8edf2">#${index + 1}  ${formatTime(frame.time)}</text></svg>`,
+        `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${label}"><text x="2" y="19" font-family="sans-serif" font-size="16" fill="#e8edf2">${escapeXml(frame.label ?? `#${index + 1}  ${formatTime(frame.time)}`)}</text></svg>`,
       ),
       left: x,
       top: y,

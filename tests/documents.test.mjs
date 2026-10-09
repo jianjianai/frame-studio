@@ -36,6 +36,38 @@ describe("visual.json", () => {
   });
 });
 
+describe("partial updates", () => {
+  it("merges nested layer fields and removes nested ones", () => {
+    const update = (patch, unset) => editVisual(work, { operations: [{ op: "update", id: "title", patch, ...(unset ? { unset } : {}) }] }).document.clips[0];
+    update({ transform: { x: 0.1, opacity: [{ at: 0, value: 0 }, { at: 1, value: 1 }] } });
+    expect(update({ transform: { opacity: 0.5 } }).transform).toEqual({ x: 0.1, opacity: 0.5 });
+    expect(update({ source: { parameters: { speed: 2 } } }).source).toMatchObject({ kind: "scene", module: "title", parameters: { speed: 2 } });
+    expect(update({}, ["transform.x", "transform.opacity"]).transform).toBeUndefined();
+    // A source of another kind replaces the old one.
+    expect(update({ source: { kind: "color", color: "#ff0000" } }).source).toEqual({ kind: "color", color: "#ff0000" });
+    expect(() => update({ opacity: 0.5 })).toThrow(/要写在 transform 里/);
+    expect(() => update({}, ["start"])).toThrow(/可以删除的字段/);
+  });
+
+  it("updates part of a mix item", () => {
+    const placed = placeAudio(work, { src: "films/work-doc/a.wav", start: 1, duration: 2, trackName: "音乐" });
+    const edited = editAudio(work, {
+      operations: [
+        { op: "update", collection: "clips", id: placed.clip.id, patch: { gain: 0.5, fadeOut: 0.5 } },
+        { op: "update", collection: "tracks", id: placed.track.id, patch: { muted: true } },
+        { op: "update", collection: "master", patch: { gain: 0.8 } },
+      ],
+    }).document;
+    expect(edited.clips[0]).toMatchObject({ start: 1, duration: 2, gain: 0.5, fadeOut: 0.5 });
+    expect(edited.tracks[0]).toMatchObject({ name: "音乐", muted: true });
+    expect(edited.master.gain).toBe(0.8);
+    const reset = editAudio(work, { operations: [{ op: "update", collection: "clips", id: placed.clip.id, patch: {}, unset: ["gain"] }] }).document;
+    expect(reset.clips[0].gain).toBe(1);
+    expect(() => editAudio(work, { operations: [{ op: "update", collection: "clips", id: "nope", patch: { gain: 1 } }] })).toThrow(/没有 id 为 nope/);
+    expect(() => editAudio(work, { operations: [{ op: "update", collection: "clips", id: placed.clip.id, patch: { id: "x" } }] })).toThrow(/不能修改 id/);
+  });
+});
+
 describe("audio.json", () => {
   it("creates and declares the mix document on first edit", () => {
     expect(readAudio(work).declared).toBe(false);

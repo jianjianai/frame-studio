@@ -29,7 +29,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 1. `work_context`：看作品现状、素材、用户正在看的时间点和选中的图层。
 2. 用 `frame_guide <主题>` 确认接口，再修改文件。保存后用户的预览立刻更新。
 3. `work_check`：类型、素材引用、真实浏览器加载。有错先修。
-4. `preview_frames`（几个时间点）或 `storyboard`（整体节奏）亲眼检查画面；有声音时用 `preview_audio`。
+4. `preview_frames` 亲眼检查画面（`times` 看几个时间点，`count` 取样看整体节奏）；有声音时用 `preview_audio`。
    报错里的 `scenes/x.ts:行:列` 是作品源码中的位置，可以直接定位。
 5. 用一两句话告诉用户改了什么、在哪个时间点能看到。版本由用户手动保存，除非用户要求，不要调用 `version_save`。
 
@@ -37,13 +37,13 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 
 | 要做的事 | 工具 |
 |---|---|
-| 改代码 | `file_read` / `file_edit` / `file_write`（内置 AI 也可直接用自己的读写工具） |
+| 改代码 | 内置 AI 用自己的读写工具；外部 AI 用 `files_batch`（read / write / edit / delete / move，一次可以多个） |
 | 排图层 | `layers_get` / `layers_edit`（见 `layers`） |
-| 配乐、音效、混音 | `audio_place`、`audio_get` / `audio_edit`（见 `audio`） |
+| 配乐、音效、混音 | `audio_place`、`audio_get` / `audio_edit`，配乐节拍 `preview_audio` 的 `src` + `beats`（见 `audio`） |
 | 配音和字幕 | `speech_synthesize`（`lines` + `place` + `subtitles: true` 一次完成整段旁白）、`subtitles_edit`（见 `speech`、`subtitles`） |
 | 标题、时长、镜头标记 | `work_update` |
-| 素材 | `assets_list`、`asset_import`；素材库 `materials_list`、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
-| 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status` |
+| 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身）；素材库 `materials_list`、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
+| 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status`（完成时返回下载地址） |
 
 ## 选择做法
 

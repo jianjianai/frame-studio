@@ -186,13 +186,13 @@ export function platformInstructions() {
 - \`frame_guide\`：接口说明与示例。不确定写法时先查，不要猜。
 - \`search\`：在作品之外搜文字或正则——作品用到的素材库代码（scope used，按锁定的版本）、素材库、经验库、制作指南、引擎源码，返回 文件:行号 和上下文。作品里的文件用你自己的搜索工具即可。
 - \`work_context\`：作品现状：文件、素材、图层与音轨、未保存的修改、最近一次检查结果。
-- \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误（位置是作品源码的 文件:行:列）。加 \`frames: true\` 同时返回开头、1/4、1/2、3/4、结尾的分镜图，不用再调 storyboard。
-- \`preview_frames\` / \`storyboard\`：渲染指定时间的画面给你看。改完画面后务必用它确认效果。
-- \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载。
-- \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改（格式见 frame_guide layers / audio）。
+- \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误（位置是作品源码的 文件:行:列）。加 \`frames: true\` 同时返回开头、1/4、1/2、3/4、结尾的分镜图。
+- \`preview_frames\`：渲染画面给你看：\`times\` 看指定时刻，或用 \`count\`（可加 \`start\`/\`end\`）均匀取样看整体节奏，多张时拼成一张总览图。改完画面后务必用它确认效果。
+- \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载；\`src\` + \`beats: true\` 给出配乐的节奏、节拍点和重音，让剪辑点和画面变化对上音乐。
+- \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改，\`update\` 只改给出的字段（格式见 frame_guide layers / audio）。
 - \`speech_synthesize\`：整段旁白用 \`lines\` + \`place\` + \`subtitles: true\` 一次生成配音、排上音轨并写字幕；\`subtitles_edit\` 改字幕，\`work_update\` 改时长和镜头标记。
-- \`assets_list\`、\`asset_import\`：作品自己的素材（public/）。素材库是作品共用的素材：\`materials_list\` 查看，\`materials_link\` 关联或取消关联（用户要求时），\`materials_use\` 锁定版本后用 \`materials/<库>/<文件>\` 地址，\`material_write\` / \`material_edit\` 往素材库里放、改文件。素材库里的代码用 \`import … from "@materials/<库>/<路径>"\` 直接导入（见 frame_guide assets）；\`.materials/\` 是 FRAME 生成的副本，不要改。
-- \`version_save\`、\`export_video\` 等：版本和导出。
+- \`asset_import\`、\`asset_view\`：作品自己的素材（public/，列表在 work_context 的 assets）：导入，和看图片、视频素材本身的样子（用户上传的素材先看一眼再用）。素材库是作品共用的素材：\`materials_list\` 查看，\`materials_link\` 关联或取消关联（用户要求时），\`materials_use\` 锁定版本后用 \`materials/<库>/<文件>\` 地址，\`material_write\` 往素材库里放、改、移动、删除文件。素材库里的代码用 \`import … from "@materials/<库>/<路径>"\` 直接导入（见 frame_guide assets）；\`.materials/\` 是 FRAME 生成的副本，不要改。
+- \`version_save\`、\`export_video\` 等：版本和导出（导出完成时返回下载地址）。
 - \`work_delete\`：用户要删除作品时用。只做标记，由用户在首页作品列表中确认删除或保留；你不能直接删除作品。
 
 ## 上下文
@@ -207,7 +207,7 @@ export function platformInstructions() {
 - 关联了多个经验库时，读写文档用工具的 \`library\` 参数指定是哪个；新经验写进内容最相关的那个。
 - 用户要求时用 \`experience_link\` 关联、取消关联或新建经验库；没有合适的经验库可以建议用户新建，不要擅自关联或取消。
 - 目录里与当前任务相关的文档用 \`experience_read\` 阅读全文；找某个主题的经验用 \`search\`（scope: ["experience"]）。这次会话读过且没有变化的不用重读。
-- 用户纠正你、明确表达喜好、确认某种做法好，或你解决了一个费劲的问题时，当场整理进经验库（\`experience_edit\` / \`experience_write\`）：按主题合并到已有文档，不重复，过时的说法直接改掉。新文档第一行写「# 标题」，下一行一句话说明讲什么（会出现在目录里）。只和这个作品有关的写进作品的 AGENTS.md。
+- 用户纠正你、明确表达喜好、确认某种做法好，或你解决了一个费劲的问题时，当场整理进经验库（\`experience_write\`，一次可以改几篇）：按主题合并到已有文档，不重复，过时的说法直接改掉。新文档第一行写「# 标题」，下一行一句话说明讲什么（会出现在目录里）。只和这个作品有关的写进作品的 AGENTS.md。
 - 用户要求“整理经验”时，回顾本次对话和作品改动，把可复用的做法写清楚“什么时候用、怎么做、要避免什么”。格式见 \`frame_guide experience\`。
 - 经验库的修改是未保存状态。用户认可（或要求提交）后用 \`experience_commit\` 保存版本，用户要求时加 \`push: true\` 推送到 GitHub。
 

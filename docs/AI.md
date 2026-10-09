@@ -63,7 +63,7 @@ AI 在作品目录中工作，拥有读写文件和运行命令的能力（与�
 
 **已发布的作品**：只能查看，但可以继续聊天（复盘、整理经验）。作品文件在磁盘上设为只读（`projects/` 和根目录的受版本管理文件），代理自己的编辑工具也改不了；FRAME 工具中会修改作品的都会被拒绝（导出和经验库工具除外）；每条消息的 `[FRAME]` 都会说明作品已发布。
 
-**工具**：Claude Code 直接加载常用的 FRAME 工具（`CORE_TOOLS`），其余在需要时通过工具搜索加载。内置 AI 的会话只能操作当前作品，工具没有 `work` 参数。
+**工具**：Claude Code 直接加载常用的 FRAME 工具（`CORE_TOOLS`），其余在需要时通过工具搜索加载。内置 AI 的会话只能操作当前作品，工具没有 `work` 参数；它用自己的工具读写作品文件，所以工具列表里没有 `files_list` / `files_batch`，MCP 说明也只是一句话（完整用法在会话说明里）。
 
 ## 外部 AI 通过 MCP 使用 FRAME
 
@@ -112,30 +112,29 @@ frame export ab12cd34 --width 1920
 | `frame_guide` | 制作指南（接口与示例），按主题读取 |
 | `works_list` / `work_create` / `work_update` | 列出、新建作品，修改标题、时长、镜头标记、封面画面等 |
 | `work_delete` | 请求删除作品：只做标记，用户在首页作品列表中确认（移到回收站）或保留 |
-| `work_context` | 作品现状：元数据、需求、关联的经验库、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查（内置 AI 的会话说明里已有需求和经验库，这里只给经验库目录） |
+| `work_context` | 作品现状：元数据、需求、关联的经验库、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查、最近的导出、是否已发布、和 GitHub 的同步状态（外部 AI 调用时当场和 GitHub 比较，需要先处理的情况写在 `warnings`；内置 AI 的会话说明里已有需求和经验库，这里只给经验库目录） |
 | `work_check` | 类型、素材引用、真实浏览器加载并渲染几帧和一段音频 |
-| `preview_frames` / `storyboard` | 渲染指定时间的画面 / 带时间标注的分镜总览图（`work_check` 的 `frames: true` 也会附上检查时渲染的 5 个时刻） |
-| `preview_audio` | 一段混音的响度、静音段、削波 |
-| `files_list` / `file_read` / `file_write` / `file_edit` / `file_move` / `file_delete` | 作品文件操作（外部 AI 使用；内置 AI 用自己的文件工具） |
+| `preview_frames` | 渲染画面：`times` 指定时刻，或 `count`（加 `start`/`end`）均匀取样；4 张以内分开返回，更多拼成一张带时间标注的总览图（`work_check` 的 `frames: true` 也会附上检查时渲染的 5 个时刻） |
+| `preview_audio` | 一段混音或一个音频文件（`src`）的响度、静音段、削波；`beats: true` 给出 BPM、节拍点和最强的起音（ffmpeg 解码，mel 频带起音强度 + 自相关测速 + 动态规划找节拍） |
 | `search` | 和 grep 一样按内容判断文本文件（8 MB 以内），整行都搜、长行只显示匹配附近；文字或正则、多个关键词、整词、跨行、区分大小写、glob / exclude、前后上下文、每文件上限；范围可选作品、作品用到的素材库文件（锁定的版本）、素材库当前版本、经验库、制作指南、引擎源码；返回 文件:行号 和上下文 |
-| `files_batch` | 一次调用对多个文件读、写、精确替换、删除、移动；默认能做的都做、失败的逐项说明（同一文件前面失败则后面跳过），`atomic` 时全部成功才写入；`check` / `frames` 改完直接检查并看画面 |
-| `assets_list` / `asset_import` | 作品自己的素材（public/）：网址、base64（小文件）、本机模式下的服务器文件；`items` 一次导入多个；服务器模式不能从内网地址导入 |
+| `files_list` / `files_batch` | 作品文件（外部 AI 使用；内置 AI 的工具列表里没有它们，用自己的文件工具）：一次调用对一个或多个文件读、写、精确替换、删除、移动；默认能做的都做、失败的逐项说明（同一文件前面失败则后面跳过），`atomic` 时全部成功才写入；`check` / `frames` 改完直接检查并看画面 |
+| `asset_import` / `asset_view` | 作品自己的素材（public/，列表在 `work_context`）：导入网址、base64（小文件）、本机模式下的服务器文件，`items` 一次导入多个，服务器模式不能从内网地址导入；查看图片、视频素材本身（多个拼成带编号的总览图，视频按时间点抽帧） |
 | `upload_link` | AI 所在电脑上的文件：返回一次性上传地址（15 分钟、用一次），AI 用 curl 上传到作品 public/ 或素材库，文件不经过对话 |
 | `materials_list` / `materials_link` / `materials_use` | 素材库：查看、关联或取消关联（也可新建）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
-| `material_write` / `material_read` / `material_edit` / `material_move` / `material_delete` | 往素材库里放文件（网址、作品文件或文本内容）、读取和精确修改文本（代码）、移动、删除；每次修改都是素材库的一个版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |
-| `layers_get` / `layers_edit` | visual.json 图层 |
-| `audio_get` / `audio_edit` / `audio_place` | audio.json 混音 |
+| `material_read` / `material_write` | 读取素材库文件；修改素材库（`put` 放入网址、作品文件或文本内容，`edit` 精确修改文本，`move`、`delete`，一次可以多个操作），每次修改都是素材库的一个版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |
+| `layers_get` / `layers_edit` | visual.json 图层（读取时每层一行、省略默认值；`update` 嵌套对象逐项合并） |
+| `audio_get` / `audio_edit` / `audio_place` | audio.json 混音（`update` 只改给出的字段；`audio_place` 返回片段 id） |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
-| `experience_read` / `experience_write` / `experience_edit` / `experience_delete` | 作品关联的经验库：照着做，过程中随时整理经验（未保存状态） |
+| `experience_read` / `experience_write` | 作品关联的经验库：照着做，过程中随时整理经验（`write` / `edit` / `delete` / `move`，一次可以改几篇；未保存状态） |
 | `experience_link` / `experience_commit` | 关联、取消关联或新建经验库；把经验库的修改保存为版本（可选推送到 GitHub） |
 | `subtitles_edit` | 字幕：整体替换、追加（替换重叠的旧字幕）、按时间段删除 |
 | `versions_list` / `version_save` / `version_diff` / `version_restore` | 版本 |
-| `export_video` / `task_status` / `exports_list` | 导出 MP4（`wait` 秒数内等它完成） |
+| `export_video` / `task_status` | 导出 MP4（`wait` 秒数内等它完成）；完成时返回 1 小时有效的下载地址（`/api/downloads/<令牌>`，本机模式另给文件路径） |
 
 工具设计约定（新增工具时遵守）：
 
 - 返回给 AI 的文字要能直接行动：报错说明哪里错、应该怎么改；运行错误的位置是作品源码的 `文件:行:列`。
-- 自定义文字之外 AI 还需要的小数据（如 `sha256`）放在 `meta`，所有客户端都会收到。
+- 有自定义文字时，MCP 客户端只收到文字和 `meta`，收不到 `data`：AI 接下来要用的 id、地址都要写进文字；小数据（如 `sha256`）放在 `meta`。
 - 参数结构很大时（`layers_edit`、`audio_edit` 的文档操作）用 `publicInput` 向客户端公布精简结构，详细格式写进 `docs/guide`，并用 `guide` 指向该主题；服务端仍按完整结构校验。
 - 会覆盖或删除内容的工具标记 `destructive`。
 - 制作作品时几乎每次都用到的工具加入 `CORE_TOOLS`（`server/tools/registry.mjs`），Claude Code 不用先搜索就能调用。

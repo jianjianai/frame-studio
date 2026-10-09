@@ -3,6 +3,7 @@ import { audioEngines, audioProcessors, toneEffectNames } from "./audio-capabili
 export { audioEngines, audioProcessors } from "./audio-capabilities.mjs";
 import { toneOptionIssues } from "./tone-effect-options.mjs";
 import { assetReferenceSchema } from "./visual-document.mjs";
+import { mergePatch, unsetPath } from "./patch.mjs";
 const n = z.number().finite();
 const id = z
   .string()
@@ -301,6 +302,13 @@ export const audioOperationSchema = z.discriminatedUnion("op", [
     value: z.record(z.string(), z.unknown()),
   }),
   z.strictObject({
+    op: z.literal("update"),
+    collection: z.enum(["sources", "tracks", "clips", "buses", "master"]),
+    id: id.optional(),
+    patch: z.record(z.string(), z.unknown()),
+    unset: z.array(z.string().regex(/^[\w-]+(\.[\w-]+)*$/)).optional(),
+  }),
+  z.strictObject({
     op: z.literal("remove"),
     collection: z.enum(["sources", "tracks", "clips", "buses"]),
     id,
@@ -325,6 +333,23 @@ export function editAudioDocument(value, operations, context) {
         i = a.findIndex((v) => v.id === op.value.id);
       if (i < 0) a.push(op.value);
       else a[i] = op.value;
+    }
+    if (op.op === "update") {
+      // Only the fields given change; nested objects merge, arrays are replaced.
+      const apply = (item) => {
+        const next = mergePatch(item, op.patch);
+        for (const path of op.unset ?? []) unsetPath(next, path);
+        return next;
+      };
+      if (op.collection === "master") d.master = apply(d.master);
+      else {
+        if (!op.id) throw Error(`修改 ${op.collection} 中的项需要 id`);
+        if (op.patch.id !== undefined && op.patch.id !== op.id) throw Error("update 不能修改 id；要换 id 用 put 新增再 remove 旧的");
+        const a = d[op.collection],
+          i = a.findIndex((v) => v.id === op.id);
+        if (i < 0) throw Error(`${op.collection} 中没有 id 为 ${op.id} 的项（现有：${a.map((v) => v.id).join("、") || "无"}）`);
+        a[i] = apply(a[i]);
+      }
     }
     if (op.op === "remove") {
       const a = d[op.collection],

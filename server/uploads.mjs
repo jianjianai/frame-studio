@@ -3,11 +3,13 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { writeStream, uniquePath } from "./files.mjs";
+import { sendFile } from "./http.mjs";
 import { problem, confined } from "./util.mjs";
 import { probe } from "./media.mjs";
 import { workArg } from "./tools/registry.mjs";
 
 const LIFETIME_MS = 15 * 60 * 1000;
+const DOWNLOAD_LIFETIME_MS = 60 * 60 * 1000;
 
 /**
  * Files on the AI's own computer (an AI connected over MCP, e.g. Claude Code on the user's
@@ -15,6 +17,9 @@ const LIFETIME_MS = 15 * 60 * 1000;
  * and the bytes go straight to the work's public/ or a material library — never through
  * the conversation. An address is the credential: random, for one file at one place,
  * usable once, for 15 minutes.
+ *
+ * The other way round, `services.downloads.link(file)` gives an exported video an address
+ * the AI can curl or hand to the user: random, for that file only, for an hour.
  */
 export function uploadsPlugin(services) {
   const { router, tools, works } = services;
@@ -97,6 +102,26 @@ export function uploadsPlugin(services) {
     const url = target.startsWith("public/") ? `films/${work.slug}/${target.slice(7)}` : null;
     return { ok: true, path: target, ...(url ? { url } : {}), size: saved.size, ...info };
   };
+  const downloads = new Map(); // token → { file, name, expires }
+  services.downloads = {
+    link(file, name = path.basename(file)) {
+      for (const [token, item] of downloads) if (item.expires < Date.now()) downloads.delete(token);
+      const token = randomBytes(24).toString("base64url");
+      downloads.set(token, { file, name, expires: Date.now() + DOWNLOAD_LIFETIME_MS });
+      return { url: `${base()}/api/downloads/${token}`, expiresInMinutes: DOWNLOAD_LIFETIME_MS / 60000 };
+    },
+  };
+  router.get(
+    "/api/downloads/:token",
+    ({ params, req, res }) => {
+      const item = downloads.get(params.token);
+      if (!item || item.expires < Date.now()) throw problem(404, "下载地址无效或已过期：重新导出，或在工作台的导出列表中下载", "NOT_FOUND");
+      res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(item.name)}`);
+      sendFile(req, res, item.file);
+    },
+    { public: true },
+  );
+
   router.put("/api/uploads/:token", receive, { raw: true, public: true });
   router.post("/api/uploads/:token", receive, { raw: true, public: true });
 }

@@ -34,5 +34,5 @@ const random = seeded(42);           // 固定种子随机数：每次 createSce
 
 ## 交付前
 
-- `work_check` 无错误；`storyboard` 检查整体节奏；`preview_audio` 检查全片响度。
+- `work_check` 无错误；`preview_frames`（`count` 取样）检查整体节奏；`preview_audio` 检查全片响度。
 - 告诉用户可以在“导出”里生成 MP4。

@@ -120,13 +120,22 @@ describe("tools that save the AI calls", () => {
     expect(guide.body.data.topics).toEqual(["scene", "layers"]);
     await app.services.experience.create("local", "规范");
     await fetch(`${base}/api/works/local/${work.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ experiences: ["规范"] }) });
-    await tool("experience_write", { work: work.id, path: "节奏.md", content: "# 节奏\n\n- 快\n" });
+    await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "节奏.md", content: "# 节奏\n\n- 快\n" }] });
     const docs = await tool("experience_read", { work: work.id, paths: ["README.md", "节奏.md", "没有.md"] });
     expect(docs.body.data.documents.map((item) => item.ok)).toEqual([true, true, false]);
     expect(docs.body.text).toContain("=== 节奏.md\n# 节奏");
-    await tool("material_write", { work: work.id, items: [{ library: "上传库", path: "a.json", content: "{}" }, { library: "上传库", path: "b.txt", content: "b" }, { library: "没有", path: "c.txt", content: "c" }] }).then(
-      (result) => expect(result.body.data.map((item) => item.ok)).toEqual([true, true, false]),
-    );
+    await tool("material_write", {
+      work: work.id,
+      library: "上传库",
+      operations: [
+        { op: "put", path: "a.json", content: "{}" },
+        { op: "put", path: "b.txt", content: "b" },
+        { op: "put", library: "没有", path: "c.txt", content: "c" },
+      ],
+    }).then((result) => {
+      expect(result.body.data.map((item) => item.ok)).toEqual([true, true, false]);
+      expect(result.body.text).toContain("新建用 materials_link 的 create");
+    });
     const many = await tool("material_read", { work: work.id, paths: ["上传库/a.json", "上传库/b.txt"] });
     expect(many.body.text).toContain("=== materials/上传库/b.txt\nb");
   });
@@ -191,5 +200,86 @@ describe("tools that save the AI calls", () => {
     await app.services.materials.put("local", "代码库", "fx.ts", { content: "export const version = 'new';\n" }, { replace: true });
     expect((await run({ pattern: "version =", scope: ["used"] })).text).toContain("materials/代码库/fx.ts（本作品锁定的版本）\n  1: export const version = 'old';");
     expect((await run({ pattern: "version =", scope: ["materials"], glob: "代码库/**" })).text).toContain("'new'");
+  });
+
+  it("shows assets as pictures and music as beats", async () => {
+    const { ffmpegExecutable } = await import("../server/render.mjs");
+    const publicDir = path.join(work.dir, "public", "look");
+    fs.mkdirSync(publicDir, { recursive: true });
+    await sharp({ create: { width: 64, height: 32, channels: 3, background: "#0a0" } }).png().toFile(path.join(publicDir, "green.png"));
+    fs.writeFileSync(path.join(publicDir, "mark.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8" fill="red"/></svg>');
+    // A drum loop at 120 BPM: a low thump on every beat from 0.25 s.
+    const rate = 22050;
+    const samples = new Int16Array(rate * 12);
+    for (let beat = 0.25; beat < 12; beat += 0.5)
+      for (let i = 0; i < 0.12 * rate; i++) {
+        const at = Math.round(beat * rate) + i;
+        if (at < samples.length) samples[at] += Math.round(20000 * Math.exp(-i / (0.03 * rate)) * Math.sin((2 * Math.PI * 70 * i) / rate));
+      }
+    const header = Buffer.alloc(44);
+    header.write("RIFF", 0);
+    header.writeUInt32LE(36 + samples.length * 2, 4);
+    header.write("WAVEfmt ", 8);
+    header.writeUInt32LE(16, 16);
+    header.writeUInt16LE(1, 20);
+    header.writeUInt16LE(1, 22);
+    header.writeUInt32LE(rate, 24);
+    header.writeUInt32LE(rate * 2, 28);
+    header.writeUInt16LE(2, 32);
+    header.writeUInt16LE(16, 34);
+    header.write("data", 36);
+    header.writeUInt32LE(samples.length * 2, 40);
+    fs.writeFileSync(path.join(publicDir, "drums.wav"), Buffer.concat([header, Buffer.from(samples.buffer)]));
+
+    const one = await tool("asset_view", { work: work.id, files: [`films/${work.slug}/look/green.png`] });
+    expect(one.body.images).toHaveLength(1);
+    expect(one.body.text).toContain("图片 64×32");
+    const sheet = await tool("asset_view", { work: work.id, files: ["public/look/green.png", "public/look/mark.svg", "public/look/drums.wav"] });
+    expect(sheet.body.text).toContain("#2 public/look/mark.svg");
+    expect(sheet.body.text).toContain("没有画面的文件");
+    expect((await sharp(Buffer.from(sheet.body.images[0].data, "base64")).metadata()).width).toBeGreaterThan(480);
+    expect((await tool("asset_view", { work: work.id, files: ["films/other-work/a.png"] })).status).toBe(400);
+    if (ffmpegExecutable()) {
+      const music = await tool("preview_audio", { work: work.id, src: `films/${work.slug}/look/drums.wav`, beats: true });
+      expect(music.status).toBe(200);
+      expect(Math.abs(music.body.data.rhythm.bpm - 120)).toBeLessThan(3);
+      const beats = music.body.data.rhythm.beats;
+      expect(beats.length).toBeGreaterThan(18);
+      for (const time of beats) expect(Math.abs(((time - 0.25 + 0.25) % 0.5) - 0.25)).toBeLessThan(0.03);
+      expect(music.body.text).toContain("节奏约");
+    }
+  });
+
+  it("reads documents compactly, edits parts and says where things are", async () => {
+    const layers = await tool("layers_get", { work: work.id });
+    expect(layers.body.text).toMatch(/\n {2}\{"id":"title"/);
+    expect(layers.body.text).not.toContain('"rate":1');
+    fs.mkdirSync(path.join(work.dir, "public"), { recursive: true });
+    fs.writeFileSync(path.join(work.dir, "public", "hit.wav"), fs.readFileSync(path.join(work.dir, "public", "look", "drums.wav")));
+    const placed = await tool("audio_place", { work: work.id, src: "public/hit.wav", start: 1, duration: 1 });
+    const clip = placed.body.data.clip.id;
+    expect(placed.body.text).toContain(`片段 ${clip}`);
+    expect(placed.body.data.clip.source).toBeDefined();
+    await tool("audio_edit", { work: work.id, operations: [{ op: "update", collection: "clips", id: clip, patch: { gain: 0.5 } }] });
+    const mix = await tool("audio_get", { work: work.id });
+    expect(mix.body.text).toContain(`"id":"${clip}"`);
+    expect(mix.body.text).toContain('"gain":0.5');
+    expect(mix.body.text).not.toContain('"pan":0');
+    expect(mix.body.text).toContain(`films/${work.slug}/hit.wav`);
+
+    // work_context: exports, publishing and GitHub (a local repository has none).
+    const context = await tool("work_context", { work: work.id });
+    expect(context.body.data.work).toMatchObject({ published: false, github: null });
+    expect(context.body.data.exports).toEqual([]);
+    expect(context.body.data.warnings).toBeUndefined();
+
+    // A download address serves one file, without a login, for a while.
+    const file = path.join(work.dir, "public", "hit.wav");
+    const link = app.services.downloads.link(file, "成片.wav");
+    const response = await fetch(link.url.replace(/^https?:\/\/[^/]+/, base));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("content-disposition")).toContain(encodeURIComponent("成片.wav"));
+    expect(Buffer.from(await response.arrayBuffer()).equals(fs.readFileSync(file))).toBe(true);
+    expect((await fetch(`${base}/api/downloads/nope`)).status).toBe(404);
   });
 });

@@ -120,8 +120,8 @@ describe("material libraries", () => {
     await tool("materials_link", { work: work.id, remove: ["品牌"] });
     const linked = await tool("materials_link", { work: work.id, add: ["品牌"], create: ["音效"] });
     expect(linked.body.data.materials).toEqual(["品牌", "音效"]);
-    const written = await tool("material_write", { work: work.id, library: "音效", path: "notes/readme.txt", content: "说明" });
-    expect(written.body.data).toMatchObject({ ref: "音效/notes/readme.txt", url: "materials/音效/notes/readme.txt" });
+    const written = await tool("material_write", { work: work.id, operations: [{ op: "put", library: "音效", path: "notes/readme.txt", content: "说明" }] });
+    expect(written.body.data[0]).toMatchObject({ ok: true, ref: "音效/notes/readme.txt", url: "materials/音效/notes/readme.txt" });
     const used = await tool("materials_use", { work: work.id, files: ["音效/notes/readme.txt"] });
     expect(used.body.text).toContain("materials/音效/notes/readme.txt");
     const opened = await app.services.openWork(work.id, "local");
@@ -132,8 +132,15 @@ describe("material libraries", () => {
       ["音效", true],
     ]);
     expect((await tool("materials_list", { work: work.id, library: "音效" })).body.data).toMatchObject([{ path: "notes/readme.txt", locked: "已锁定" }]);
-    expect((await tool("material_move", { work: work.id, library: "音效", from: "notes/readme.txt", to: "readme.txt" })).status).toBe(200);
-    expect((await tool("material_delete", { work: work.id, library: "音效", path: "README.md" })).status).toBe(400);
+    const changed = await tool("material_write", {
+      work: work.id,
+      library: "音效",
+      operations: [
+        { op: "move", from: "notes/readme.txt", to: "readme.txt" },
+        { op: "delete", path: "README.md" },
+      ],
+    });
+    expect(changed.body.data.map((item) => item.ok)).toEqual([true, false]);
     expect((await tool("materials_link", { work: work.id, remove: ["音效"] })).body.data.materials).toEqual(["品牌"]);
     // The locked file is still served after the move.
     expect((await call(`/files/local/${work.id}/materials/${encodeURIComponent("音效")}/notes/readme.txt`)).body).toBe("说明");
@@ -195,8 +202,8 @@ describe("material libraries", () => {
     expect(fs.readFileSync(noiseCopy, "utf8")).toContain("n + 100");
 
     // The AI edits library code in place; a missing import is a check error.
-    const edited = await tool("material_edit", { work: work.id, library: "特效", path: "noise.ts", edits: [{ oldText: "n + 100", newText: "n * 3" }] });
-    expect(edited.status).toBe(200);
+    const edited = await tool("material_write", { work: work.id, library: "特效", operations: [{ op: "edit", path: "noise.ts", edits: [{ oldText: "n + 100", newText: "n * 3" }] }] });
+    expect(edited.body.data[0].ok).toBe(true);
     expect((await tool("material_read", { work: work.id, library: "特效", path: "noise.ts" })).body.text).toContain("n * 3");
     fs.appendFileSync(scene, 'import "@materials/特效/missing";\n');
     const missing = await checkWork(app.services, work, { runtime: false });

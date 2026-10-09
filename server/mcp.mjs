@@ -8,13 +8,19 @@ import { problem } from "./util.mjs";
 import { CORE_TOOLS } from "./tools/registry.mjs";
 
 export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 TypeScript 按绝对时间绘制的动画（Canvas/Pixi/Three/Babylon/Lottie/Remotion/图层合成），加多轨音频。
-工作顺序：work_context 了解现状 → frame_guide 查接口（topics 一次查几个）→ 修改文件 → work_check（frames: true 同时得到分镜图）亲眼确认画面（preview_audio 确认声音）。
+工作顺序：work_context 了解现状（warnings 里的情况先处理）→ frame_guide 查接口（topics 一次查几个）→ 修改 → work_check（frames: true 同时得到分镜图）亲眼确认画面（preview_frames 看指定时刻或整体，preview_audio 确认声音）。
 找代码、用法和经验用 search（scope 可含 work、used（作品用到的素材库文件，锁定的版本）、materials、experience、guide、engine，返回 文件:行号 和上下文），不要逐个读文件。
-少调用：多个文件的读、写、替换、删除、移动放进一次 files_batch（失败的会逐项说明，只重试失败的；check: true 改完直接检查）；asset_import / material_write 用 items 一次导入多个；你所在电脑上的文件用 upload_link 拿到上传地址再用 curl 上传（不经过对话）；export_video 用 wait 等它完成。
+作品文件用 files_batch 读写（read / write / edit / delete / move，一次可以放多个；失败的逐项说明，只重试失败的；check: true 改完直接检查）。asset_import / material_write 一次可以导入多个；你所在电脑上的文件用 upload_link 拿到上传地址再用 curl 上传（不经过对话）；export_video 用 wait 等它完成，完成时返回下载地址。
 用户在播放器里实时看到保存后的修改；work_context 的 userView 是用户正在看的时间点和选区。
-work_context 的 notes 是作品的需求与约定，experiences 是关联的经验库（可以有多个，各自的首页和文档目录）：动手前对照它们，相关文档用 experience_read 读全文；用户纠正你、确认了某种做法或解决了难题时，用 experience_edit/experience_write 整理进经验库（关联了多个时用 library 参数指定），用户认可后用 experience_commit 保存版本；用户要求时用 experience_link / materials_link 关联或取消关联经验库、素材库。用户要删除作品时用 work_delete（只做标记，由用户在作品列表中确认）。
+看用户给的图片、视频素材用 asset_view；配乐要对上节拍时用 preview_audio 的 src + beats: true。
+work_context 的 notes 是作品的需求与约定，experiences 是关联的经验库（可以有多个，各自的首页和文档目录）：动手前对照它们，相关文档用 experience_read 读全文；用户纠正你、确认了某种做法或解决了难题时，用 experience_write 整理进经验库（关联了多个时用 library 参数指定），用户认可后用 experience_commit 保存版本；用户要求时用 experience_link / materials_link 关联或取消关联经验库、素材库。用户要删除作品时用 work_delete（只做标记，由用户在作品列表中确认）。
 混音：音效响时不要压低音乐（不加 duck）；只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求。
-图层用 layers_edit、混音用 audio_edit/audio_place、配音加字幕用 speech_synthesize（lines + place + subtitles）、字幕用 subtitles_edit；多个作品共用的素材和代码在素材库里（materials_list / materials_link / materials_use，素材地址 materials/<库>/<文件>，代码用 import … from "@materials/<库>/<路径>" 导入；material_read / material_edit 读改素材库文件）；参数格式不确定时先查 frame_guide 对应主题。`;
+图层用 layers_edit、混音用 audio_edit（update 只改给出的字段）/ audio_place、配音加字幕用 speech_synthesize（lines + place + subtitles）、字幕用 subtitles_edit；多个作品共用的素材和代码在素材库里（materials_list / materials_use，素材地址 materials/<库>/<文件>，代码用 import … from "@materials/<库>/<路径>" 导入；material_read / material_write 读改素材库）；参数格式不确定时先查 frame_guide 对应主题。`;
+
+/** Built-in agents have all of this, and more, in their session brief (the work-root AGENTS.md). */
+const AGENT_INSTRUCTIONS = "FRAME Studio 视频作品工具。用法见作品根目录 AGENTS.md（会话说明）；作品文件用你自己的读写工具。";
+/** Built-in agents edit the work's files with their own tools. */
+const AGENT_HIDDEN = new Set(["works_list", "work_create", "files_list", "files_batch"]);
 
 /**
  * The chat session behind an MCP request (from the agent's internal token). Kept out of
@@ -46,10 +52,11 @@ const DECLINED = "用户没有允许这次修改（当前模式下修改需要�
  * user of a chat session before a tool changes anything (it decides when that is needed).
  */
 export function createMcpServer(registry, scope = {}, { confirm } = {}) {
-  const server = new McpServer({ name: "frame", version: appVersion }, { instructions: MCP_INSTRUCTIONS });
+  const server = new McpServer({ name: "frame", version: appVersion }, { instructions: scope.agent ? AGENT_INSTRUCTIONS : MCP_INSTRUCTIONS });
   for (const tool of registry.list()) {
     if (scope.readOnly && !tool.readOnly) continue;
     if (scope.work && ["work_create", "works_list"].includes(tool.name)) continue;
+    if (scope.agent && AGENT_HIDDEN.has(tool.name)) continue;
     // A session bound to one work never names a work: the parameter is hidden (fewer tokens,
     // nothing to get wrong) and ignored if a client sends it anyway.
     const shape = tool.publicSchema.shape ?? {};
@@ -83,7 +90,7 @@ export function createMcpServer(registry, scope = {}, { confirm } = {}) {
 
 /** Scope of a request: internal agent tokens are bound to their work; OAuth grants may be bound and/or read-only. */
 export function scopeOf(principal) {
-  if (principal?.kind === "internal" && principal.work) return { work: principal.work, repo: principal.repo };
+  if (principal?.kind === "internal" && principal.work) return { work: principal.work, repo: principal.repo, agent: true };
   if (principal?.kind === "oauth")
     return { ...(principal.work ? { work: principal.work, repo: principal.repo } : {}), ...(principal.readOnly ? { readOnly: true } : {}) };
   if (principal?.kind === "token" && principal.readOnly) return { readOnly: true };

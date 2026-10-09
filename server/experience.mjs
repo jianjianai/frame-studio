@@ -8,7 +8,7 @@ import { problem, notFound, conflict, confined, Locks } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
 import { readLibrary, libraryBrief, experienceBrief, briefText } from "./ai/context.mjs";
-import { nearMiss } from "./tools/work-tools.mjs";
+import { editList, runFileOperations, describeFileOperations } from "./tools/file-ops.mjs";
 
 /**
  * Experience libraries: Markdown documents of production know-how, shared by the works
@@ -379,7 +379,6 @@ export function experiencePlugin(services) {
   };
   const docPath = z.string().min(1).max(300).describe("经验库内的相对路径，例如 README.md 或 开场.md");
   const libraryArg = z.string().max(80).optional().describe("经验库名称；作品关联了多个经验库时必填。整理经验库时也可以指定作品没有关联的经验库");
-  const notify = (work, library, file) => experience.changed(work.repo, [`${library.id}/${file}`]);
 
   tools.add({
     name: "experience_read",
@@ -526,74 +525,41 @@ export function experiencePlugin(services) {
     },
   });
 
+  const opPath = z.string().min(1).max(300);
+  const docOperation = z.discriminatedUnion("op", [
+    z.strictObject({ op: z.literal("write"), path: opPath, content: z.string().max(512 * 1024), expectedSha256: z.string().optional() }),
+    z.strictObject({ op: z.literal("edit"), path: opPath, edits: editList }),
+    z.strictObject({ op: z.literal("delete"), path: opPath }),
+    z.strictObject({ op: z.literal("move"), from: opPath, to: opPath }),
+  ]);
   tools.add({
     name: "experience_write",
     published: true, // writes outside the work: allowed on a published (view-only) work
-    title: "写入经验",
+    title: "整理经验库",
     description:
-      "创建或整体替换经验库中的一篇 Markdown 文档。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在文档目录里）。只改几处时用 experience_edit。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在「经验」面板中保存）。",
+      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名）。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。失败的逐项说明原因，只需重试失败的。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在「经验」面板中保存）。",
     destructive: true,
-    input: { work: workArg, library: libraryArg, path: docPath, content: z.string().max(512 * 1024), expectedSha256: z.string().optional() },
-    async run({ library: name, path: file, content, expectedSha256 }, ctx) {
+    input: { work: workArg, library: libraryArg, operations: z.array(docOperation).min(1).max(30) },
+    async run({ library: name, operations }, ctx) {
       const { work, library } = await libraryOf(ctx, name);
-      if (!/\.(md|txt)$/i.test(file)) throw problem(400, "经验库只存放 .md 或 .txt 文档");
-      const result = writeText(library.root, file, content, { expectedHash: expectedSha256 });
-      noteSeen(ctx, library, file, result.hash, "content");
-      notify(work, library, file);
-      return { data: { path: file, sha256: result.hash }, meta: { sha256: result.hash }, text: `已写入经验库「${library.title}」的 ${file}` };
-    },
-  });
-
-  tools.add({
-    name: "experience_edit",
-    published: true, // writes outside the work: allowed on a published (view-only) work
-    title: "修改经验",
-    description: "在经验库文档中做精确替换（按顺序执行，全部成功才写入）。每个 oldText 必须与文档内容逐字一致且恰好出现一次，否则设置 replaceAll。",
-    input: {
-      work: workArg,
-      library: libraryArg,
-      path: docPath,
-      edits: z
-        .array(z.strictObject({ oldText: z.string().min(1), newText: z.string(), replaceAll: z.boolean().default(false) }))
-        .min(1)
-        .max(50),
-    },
-    async run({ library: name, path: file, edits }, ctx) {
-      const { work, library } = await libraryOf(ctx, name);
-      const current = readText(library.root, file);
-      let content = current.content;
-      for (const [index, edit] of edits.entries()) {
-        const count = content.split(edit.oldText).length - 1;
-        if (count === 0) throw problem(400, `第 ${index + 1} 处替换：找不到 oldText。${nearMiss(content, edit.oldText, "experience_read")}`);
-        if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${index + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
-        content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
+      const outcome = runFileOperations(library.root, operations, {
+        reader: "experience_read",
+        allow: (item, paths) => {
+          if (paths.some((file) => !/\.(md|txt)$/i.test(file))) throw problem(400, "经验库只存放 .md 或 .txt 文档");
+          if (paths[0] === "README.md" && (item.op === "delete" || item.op === "move")) throw problem(400, "README.md 是经验库的入口，不能删除或改名");
+        },
+      });
+      const changed = [...new Set(outcome.changed)];
+      for (const file of changed) {
+        const exists = fs.existsSync(path.join(library.root, file));
+        noteSeen(ctx, library, file, exists ? readText(library.root, file).hash : null, exists ? "content" : undefined);
       }
-      const result = writeText(library.root, file, content, { expectedHash: current.hash });
-      noteSeen(ctx, library, file, result.hash, "content");
-      notify(work, library, file);
+      if (changed.length) experience.changed(work.repo, changed.map((file) => `${library.id}/${file}`));
+      const { summary } = describeFileOperations(outcome);
       return {
-        data: { path: file, sha256: result.hash },
-        meta: { sha256: result.hash },
-        text: `已修改经验库「${library.title}」的 ${file}（${edits.length} 处）`,
+        data: { library: library.id, applied: outcome.applied, results: outcome.results },
+        text: `经验库「${library.title}」：${summary}${changed.length ? "\n修改未保存：用户认可后用 experience_commit 保存版本。" : ""}`,
       };
-    },
-  });
-
-  tools.add({
-    name: "experience_delete",
-    published: true, // writes outside the work: allowed on a published (view-only) work
-    title: "删除经验文档",
-    description: "删除经验库中的一篇文档（合并到其他文档后清理旧文档时用）。可以从经验库的版本历史恢复。",
-    destructive: true,
-    input: { work: workArg, library: libraryArg, path: docPath },
-    async run({ library: name, path: file }, ctx) {
-      const { work, library } = await libraryOf(ctx, name);
-      if (file === "README.md") throw problem(400, "README.md 是经验库的入口，不能删除");
-      confined(library.root, file);
-      removePath(library.root, file);
-      noteSeen(ctx, library, file, null);
-      notify(work, library, file);
-      return asJson({ deleted: file }, `已删除经验库「${library.title}」的 ${file}`);
     },
   });
 }
