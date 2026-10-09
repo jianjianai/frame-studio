@@ -14,6 +14,7 @@ import { oauthPlugin } from "./oauth.mjs";
 import { experiencePlugin } from "./experience.mjs";
 import { promptsPlugin } from "./prompts.mjs";
 import { materialsPlugin } from "./materials.mjs";
+import { resourcesPlugin } from "./resources.mjs";
 import { coversPlugin } from "./covers.mjs";
 import { remoteSyncPlugin } from "./remote-sync.mjs";
 import { uploadsPlugin } from "./uploads.mjs";
@@ -43,4 +44,4 @@ function corePlugin(services) {
   registerSearchTools(tools);
 }
 
-export const plugins = [corePlugin, speechPlugin, experiencePlugin, materialsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];
+export const plugins = [corePlugin, speechPlugin, experiencePlugin, materialsPlugin, resourcesPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];

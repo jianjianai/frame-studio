@@ -3,7 +3,7 @@
 ## 时间与缓动（`src/engine/math.ts`）
 
 ```ts
-import { clamp, mix, phase, smooth, easeInOut, seeded, sampleKeys } from "../../src/engine/math";
+import { clamp, mix, phase, smooth, easeInOut, seeded, sampleKeys } from "@frame/engine/math";
 const p = phase(t, 2, 3.5);         // t 在 2→3.5 秒之间从 0 线性到 1（两端截断）
 const e = easeInOut(p);              // 缓入缓出；smooth 是更柔和的 smoothstep
 const x = mix(-200, 0, e);           // 插值

@@ -2,10 +2,8 @@
 
 `scene.ts` 导出 `createScene`。播放器、截图和导出都调用同一个 `render(time)`。
 
-> 下面的示例写在 `scene.ts` 里。放在 `scenes/` 下的模块要多一层：`"../../../src/engine/types"`。
-
 ```ts
-import type { Scene, SceneOptions } from "../../src/engine/types";
+import type { Scene, SceneOptions } from "@frame/engine/types";
 
 export function createScene({ width, height, quality }: SceneOptions): Scene | Promise<Scene> {
   // quality: "draft" | "standard" | "high"，可据此降低粒子数量等
@@ -21,8 +19,8 @@ export function createScene({ width, height, quality }: SceneOptions): Scene | P
 ## Canvas 2D 示例
 
 ```ts
-import type { Scene, SceneOptions } from "../../src/engine/types";
-import { clamp, phase, smooth, mix, seeded } from "../../src/engine/math";
+import type { Scene, SceneOptions } from "@frame/engine/types";
+import { clamp, phase, smooth, mix, seeded } from "@frame/engine/math";
 
 export function createScene({ width, height }: SceneOptions): Scene {
   const canvas = document.createElement("canvas");
@@ -66,7 +64,7 @@ export function createScene({ width, height }: SceneOptions): Scene {
 - 异步资源（图片、字体、模型）在 `createScene` 中 `await` 加载，或放到 `prepareFrame`。图片用 `assetUrl`：
 
 ```ts
-import { assetUrl } from "../../src/engine/types";
+import { assetUrl } from "@frame/engine/types";
 const image = new Image();
 image.src = assetUrl("films/work-1a2b3c4d/bg.jpg");
 await image.decode();

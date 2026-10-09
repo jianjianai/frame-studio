@@ -3,7 +3,7 @@
 平台在不执行代码的情况下读取 `project.ts`，所以字段只能是字面量（字符串、数字、数组、对象）或同文件里的常量，加载入口必须写成 `() => import("./文件")`。
 
 ```ts
-import type { AnimationProject } from "../../src/engine/types";
+import type { AnimationProject } from "@frame/engine/types";
 
 const project: AnimationProject = {
   id: "work-1a2b3c4d",            // 等于文件夹名，不要修改
@@ -19,6 +19,7 @@ const project: AnimationProject = {
   posterTime: 6.5,                 // 封面用这一秒的画面（可选）
   tags: [],
   status: "draft",
+  tempo: { bpm: 118.12, firstBeat: 0.035, beatsPerBar: 4 },   // 配乐的节拍（可选）
   beats: [{ at: 0, title: "开场", detail: "标题从下方升起" }],
   subtitles: [{ start: 1, end: 3.5, text: "夏天，就该这样过" }],
   credits: [],
@@ -31,6 +32,7 @@ export default project;
 ```
 
 - `renderer` 只是说明主要技术，真正的画面由 `load` 指向的 `scene.ts` 决定。
+- `tempo` 是配乐的节拍网格：`bpm`、`firstBeat`（作品时间里第一小节第一拍的秒数）、`beatsPerBar`（默认 4）。用 `preview_audio` 的 `src` + `beats: true` 分析配乐，再用 `work_update` 写进来。代码（包括素材库里的资源）用 `@frame/engine/tempo` 按它卡点：`beatAt(k)` 第 k 拍的时间（`beatAt(2.5)` 是第 2 拍后的反拍）、`barAt(n)` 第 n 小节第一拍、`pulse(t)` 每拍跳一下的 0–1 包络、`sinceBeat(t)`、`beatLength()`。不写 `tempo` 时按 120 BPM、从 0 秒开始。改了 `tempo` 预览会整页重新加载。
 - `beats` 是镜头标记，显示在时间轴上，方便用户和 AI 指代片段；可加唯一 `id`。
 - `subtitles` 由播放器绘制在画面底部（导出时可选择烧录）。用户也会在时间轴上编辑字幕。用 `subtitles_edit` 修改（见 `subtitles`）。
 - 修改时长、标题、镜头标记等字段用 `work_update` 工具；它只替换字段值，保留文件其余格式。

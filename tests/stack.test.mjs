@@ -39,9 +39,9 @@ describe("browser error cleanup", () => {
   it("merges one error reported at several times", () => {
     expect(mergeTimedErrors(["0:07.50 渲染失败：X", "0:09.95 渲染失败：X", "HTTP 404 /a"])).toEqual(["0:07.50、0:09.95 渲染失败：X", "HTTP 404 /a"]);
   });
-  it("suggests the engine path for the file's depth", () => {
+  it("suggests the engine alias when a relative engine path is wrong", () => {
     expect(engineImportHint("scenes/bg.ts", "TS2307", "Cannot find module '../../src/engine/types' or its corresponding type declarations.")).toBe(
-      '。这个文件应写 "../../../src/engine/types"',
+      '。改成 "@frame/engine/types"（任何层级都一样）',
     );
     expect(engineImportHint("scene.ts", "TS2307", "Cannot find module '../../src/engine/types'")).toBe("");
   });

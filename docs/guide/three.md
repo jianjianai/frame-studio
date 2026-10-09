@@ -4,10 +4,10 @@
 
 ```ts
 import * as THREE from "three";
-import type { SceneOptions } from "../../src/engine/types";
-import { createThreeScene, } from "../../src/engine/scene-adapters";
-import { loadGltf, setAnimationTime, createPostPipeline } from "../../src/engine/three-assets";
-import { smooth, phase } from "../../src/engine/math";
+import type { SceneOptions } from "@frame/engine/types";
+import { createThreeScene, } from "@frame/engine/scene-adapters";
+import { loadGltf, setAnimationTime, createPostPipeline } from "@frame/engine/three-assets";
+import { smooth, phase } from "@frame/engine/math";
 
 export function createScene(options: SceneOptions) {
   return createThreeScene(options, async (renderer) => {
@@ -48,8 +48,8 @@ export function createScene(options: SceneOptions) {
 
 ```ts
 import * as THREE from "three";
-import { createPostPipeline, disposeObject } from "../../src/engine/three-assets";
-import type { Scene, SceneOptions } from "../../src/engine/types";
+import { createPostPipeline, disposeObject } from "@frame/engine/three-assets";
+import type { Scene, SceneOptions } from "@frame/engine/types";
 
 export async function createScene({ width, height }: SceneOptions): Promise<Scene> {
   const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, preserveDrawingBuffer: true });

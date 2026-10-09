@@ -73,7 +73,7 @@
 
 ```ts
 // audio.ts
-import { createAudioRack, createToneSequence, createSamplerAudio, createToneAudio } from "../../src/engine/audio-adapters";
+import { createAudioRack, createToneSequence, createSamplerAudio, createToneAudio } from "@frame/engine/audio-adapters";
 
 // 1) 合成器旋律：每个音符独立实例，跳转到延音中间也正确
 const melody = createToneSequence({
@@ -109,8 +109,22 @@ export const { generators, createAudio } = createAudioRack({ melody, piano, nois
 ```
 
 - 较长的乐谱（Part/Sequence/Transport）用 `createToneTimeline({ duration, build })`：首次生成整段 PCM，之后精确跳转。
-- 纯数学合成可以用 `createPcmAudio({ main: () => [left, right] })`（`src/engine/procedural-audio.ts`），适合短音效。
+- 纯数学合成可以用 `createPcmAudio({ main: () => [left, right] })`（`@frame/engine/procedural-audio`），适合短音效。多个作品都会用到的音效放进素材库（见下一节），不要每个作品各写一份。
 - 最底层：导出 `createAudio({ context, destination, when, offset, duration, rate })`，用 Web Audio 节点在 `when` 时刻播放源时间 `offset` 起的 `duration` 秒，返回 `{ dispose }`。
+
+## 素材库里的音效
+
+素材库里的音效模块（`export default defineSounds(…)`，写法见 `resources`）不用写进作品的 `audio.ts`：
+
+- 找：`resources_search` 的 `kind: "sound"` 或关键词（「关门」「通知」），每个音效有名称、时长和重音时刻 `hit`。
+- 放：`audio_place` 的 `sound: "<素材库>/<文件>#<名称>"`，时长默认用音效自己的；用户也可以从「素材 → 资源」把音效拖到音轨上。要卡在某个事件上时，片段 `start` = 事件时间 − `hit`。
+- 在 audio.json 里它是一个生成音源，`module` 写素材库文件地址：
+
+```json
+{ "id": "sfx_slam", "kind": "generated", "module": "materials/s0rrow/code/sfx.ts", "trackId": "slam" }
+```
+
+- 和素材库里的其他文件一样按版本锁定；作品只生成它实际放了的音效。
 
 ## 检查
 

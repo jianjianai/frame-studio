@@ -4,8 +4,8 @@
 
 ```ts
 import { Scene, ArcRotateCamera, HemisphericLight, MeshBuilder, Vector3, Color4, StandardMaterial, Color3 } from "@babylonjs/core";
-import type { SceneOptions } from "../../src/engine/types";
-import { createBabylonScene } from "../../src/engine/babylon-adapter";
+import type { SceneOptions } from "@frame/engine/types";
+import { createBabylonScene } from "@frame/engine/babylon-adapter";
 
 export function createScene(options: SceneOptions) {
   return createBabylonScene(options, (engine, canvas) => {

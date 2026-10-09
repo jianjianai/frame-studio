@@ -297,18 +297,30 @@ export function registerAssetTools(registry) {
   registry.add({
     name: "audio_place",
     title: "放置音频",
-    description: "把作品中的音频文件放到音轨上（不存在的音轨会自动创建）。用于配乐、音效、配音和录音。",
+    description:
+      "把音频放到音轨上（不存在的音轨会自动创建）：作品或素材库里的音频文件（src），或素材库音效模块里的一个音效（sound，resources_search 找到的地址，时长默认用音效自己的）。用于配乐、音效、配音和录音。",
     input: {
       work: workArg,
-      src: z.string().describe("films/<名称>/…、public/… 或 materials/<素材库>/… 地址"),
+      src: z.string().optional().describe("films/<名称>/…、public/… 或 materials/<素材库>/… 地址"),
+      sound: z.string().max(300).optional().describe("素材库音效：<素材库>/<文件>#<名称>，例如 s0rrow/code/sfx.ts#slam"),
       start: z.number().nonnegative().default(0),
       duration: z.number().positive().optional().describe("默认放到文件结束或作品结束"),
       track: z.string().max(60).default("音效").describe("音轨名称"),
       name: z.string().max(100).optional(),
       gain: z.number().min(0).max(4).default(1),
     },
-    async run({ src, start, duration, track, name, gain }, ctx) {
+    async run({ src, sound, start, duration, track, name, gain }, ctx) {
       const work = await ctx.work();
+      if (Boolean(src) === Boolean(sound)) throw problem(400, "src 和 sound 必须且只能提供一个");
+      if (sound) {
+        const found = await services.resources.sound(work, sound);
+        const result = placeAudio(work, { sound: found, start, duration: duration ?? found.duration, trackName: track, name: name ?? found.title, gain });
+        await services.materials?.lockReferenced(work);
+        return asJson(
+          { clip: result.clip, track: result.track.name, sha256: result.sha256 },
+          `已把音效「${found.title}」放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始，时长 ${result.clip.duration.toFixed(2)}s。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
+        );
+      }
       const info = await probe(await resolveAsset(services, work, src));
       if (src.startsWith("public/")) src = `films/${work.slug}/${src.slice(7)}`;
       const result = placeAudio(work, { src, start, duration: duration ?? info.duration, trackName: track, name, gain });

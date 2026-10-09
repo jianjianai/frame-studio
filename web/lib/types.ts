@@ -87,6 +87,8 @@ export interface WorkInfo {
     /** Cover image of the work; without it the cover is the frame at posterTime (or one picked automatically). */
     poster?: string;
     posterTime?: number;
+    /** The music's beat grid in work time (library code follows it). */
+    tempo?: { bpm: number; firstBeat: number; beatsPerBar: number };
     beats: Beat[];
     subtitles: Subtitle[];
     visual?: { background: string; clips: VisualClip[] };
@@ -139,6 +141,31 @@ export interface Asset {
   duration?: number;
   width?: number;
   height?: number;
+  /** A sound of a library sound module (`<library>/<file>#<name>`) instead of a file. */
+  sound?: string;
+}
+
+/** A resource of the material libraries, as /resources lists it. */
+export interface ResourceItem {
+  id: string;
+  type: "resource" | "sound";
+  kind: string;
+  kindLabel: string;
+  key: string;
+  title: string;
+  description?: string;
+  tags?: string[];
+  usage?: string;
+  library: string;
+  ref: string;
+  import?: string;
+  module?: string;
+  duration?: number;
+  hit?: number;
+  preview?: { width?: number; height?: number; duration?: number };
+  /** What its pictures depend on (thumbnail cache key). */
+  version: string;
+  outdated?: boolean;
 }
 
 export interface Problem {

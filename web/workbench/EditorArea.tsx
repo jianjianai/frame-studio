@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useImperativeHandle, useState, type Ref } from "react";
-import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye } from "lucide-react";
+import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes } from "lucide-react";
 import { api, formatTime, workPath, experiencePath, useServerEvent, materialsPath } from "../lib/api";
 import { Markdown } from "../chat/Markdown";
 import { useToast, useConfirm } from "../lib/ui";
@@ -7,6 +7,7 @@ import { useWorkbench } from "./store";
 import { PreviewPane } from "./PreviewPane";
 import { CodeEditor } from "./CodeEditor";
 import { DiffEditor } from "./DiffEditor";
+import { ResourceViewer } from "./ResourceViewer";
 
 export interface EditorHandle {
   openFile(path: string, options?: { line?: number; preview?: boolean }): void;
@@ -14,17 +15,19 @@ export interface EditorHandle {
   openExperience(path: string, options?: { preview?: boolean }): void;
   /** A file of the repository's material libraries (`<library>/<path>`): viewed, not edited here. */
   openMaterial(ref: string, options?: { preview?: boolean }): void;
+  /** A resource or sound of the material libraries (`<library>/<file>#<name>`), previewed. */
+  openResource(id: string, options?: { preview?: boolean; title?: string }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
   openDiff(title: string, query: string, options?: { preview?: boolean; source?: Source }): void;
 }
-type Source = "work" | "experience" | "materials";
+type Source = "work" | "experience" | "materials" | "resource";
 interface Tab {
   /** Unique key: the work file path, `exp:<path>` for experience documents, `mat:<ref>` for material files, `diff:…` for diffs. */
   path: string;
   /** Path inside its source (sent to the source's file API). */
   file: string;
   source: Source;
-  kind: "text" | "image" | "audio" | "video" | "file" | "diff";
+  kind: "text" | "image" | "audio" | "video" | "file" | "diff" | "resource";
   title?: string;
   diff?: string;
   content?: string;
@@ -76,7 +79,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   const confirm = useConfirm();
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
-  const apis: Record<Source, string> = { work: workPath(work.repo, work.id), experience: experiencePath(work.repo), materials: materialsPath(work.repo) };
+  const apis: Record<Source, string> = { work: workPath(work.repo, work.id), experience: experiencePath(work.repo), materials: materialsPath(work.repo), resource: "" };
 
   const load = useCallback(
     async (tab: Pick<Tab, "file" | "source">) => {
@@ -140,6 +143,11 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       openTab({ path: `mat:${ref}`, file: ref, source: "materials", kind: kindOf(ref), preview: Boolean(options.preview) }, options),
     [openTab],
   );
+  const openResource = useCallback(
+    (id: string, options: { preview?: boolean; title?: string } = {}) =>
+      place({ path: `res:${id}`, file: id, source: "resource", kind: "resource", title: options.title, preview: Boolean(options.preview) }, options),
+    [place],
+  );
   const openDiff = useCallback(
     (title: string, query: string, options: { preview?: boolean; source?: Source } = {}) => {
       const preview = options.preview ?? true;
@@ -154,9 +162,10 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       openFile: (path, options) => void openFile(path, options),
       openExperience: (path, options) => void openExperience(path, options),
       openMaterial: (ref, options) => void openMaterial(ref, options),
+      openResource,
       openDiff,
     }),
-    [openFile, openExperience, openMaterial, openDiff],
+    [openFile, openExperience, openMaterial, openResource, openDiff],
   );
 
   // Files changed by the AI or other tools: refresh clean tabs, flag dirty ones.
@@ -230,7 +239,9 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     ? null
     : current.kind === "diff"
       ? `改动「${current.title}」`
-      : current.source === "experience"
+      : current.kind === "resource"
+        ? `素材库资源预览 ${current.file}`
+        : current.source === "experience"
         ? `经验库文档 ${current.file.split("/").slice(1).join("/")}`
         : current.source === "materials"
           ? `素材库文件 materials/${current.file}`
@@ -238,7 +249,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   useEffect(() => onActiveChange?.(activeLabel), [activeLabel, onActiveChange]);
   const update = (path: string, change: Partial<Tab>) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...change } : item)));
   const tooltip = (tab: Tab) =>
-    `${tab.kind === "diff" ? `改动：${tab.title}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
+    `${tab.kind === "diff" ? `改动：${tab.title}` : tab.kind === "resource" ? `资源：${tab.file}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
 
   return (
     <div className="editor-area">
@@ -256,7 +267,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               onDoubleClick={() => update(tab.path, { preview: false })}
               onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
             >
-              {tab.kind === "diff" ? <FileDiff size={14} /> : tab.source === "experience" ? <BookOpen size={14} /> : fileIcon(tab.file)}
+              {tab.kind === "diff" ? <FileDiff size={14} /> : tab.kind === "resource" ? <Shapes size={14} /> : tab.source === "experience" ? <BookOpen size={14} /> : fileIcon(tab.file)}
               <span className="ellipsis">{tab.title ?? tab.file.split("/").pop()}</span>
               <button
                 className="tab-close"
@@ -301,8 +312,10 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
                   </div>
                 </div>
               )}
-              {current.kind === "diff" ? (
-                <DiffEditor query={current.diff!} source={current.source} />
+              {current.kind === "resource" ? (
+                <ResourceViewer key={current.file} id={current.file} />
+              ) : current.kind === "diff" ? (
+                <DiffEditor query={current.diff!} source={current.source === "resource" ? "materials" : current.source} />
               ) : current.source === "materials" ? (
                 <MaterialViewer key={current.file} fileRef={current.file} kind={current.kind} />
               ) : current.kind === "text" ? (

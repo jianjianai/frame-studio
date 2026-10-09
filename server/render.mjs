@@ -56,7 +56,11 @@ export class Renderer {
     this.lastUse = 0;
     this.token = services.auth.issueInternal({ purpose: "render" });
     services.events.subscribe((event) => {
-      if (event.type === "preview-update") this.invalidate(`${event.repo}/${event.work}`);
+      if (event.type === "preview-update") {
+        this.invalidate(`${event.repo}/${event.work}`);
+        this.invalidateResources(event.repo, event.work);
+      }
+      if (event.type === "materials" && event.repo) this.invalidateResources(event.repo);
     });
     this.sweeper = setInterval(() => this.sweep(), 30000);
     this.sweeper.unref();
@@ -493,6 +497,114 @@ export class Renderer {
       await handle?.close();
       snapshot.dispose();
     }
+  }
+
+  /**
+   * The preview page of a library code module (src/preview/resource.ts) in a work's context:
+   * its asset base, tempo and the library versions it uses. Kept warm per work and module.
+   */
+  async resourcePage(work, ref) {
+    const key = `resource:${work.repo}/${work.id}|${ref}`;
+    const existing = this.pages.get(key);
+    if (existing && !existing.stale) {
+      existing.usedAt = Date.now();
+      return existing.handle;
+    }
+    if (existing) {
+      this.pages.delete(key);
+      existing.handle.then(
+        (handle) => handle.close(),
+        () => {},
+      );
+    }
+    const meta = this.services.works.meta(work);
+    const query = new URLSearchParams({
+      material: ref,
+      assetBase: `/files/${work.repo}/${work.id}/`,
+      materialBase: this.services.preview.moduleUrl(path.join(work.root, ".materials")) + "/",
+      tempo: JSON.stringify((meta.ok && meta.meta.tempo) || null),
+    });
+    const entry = { usedAt: Date.now(), stale: false };
+    entry.handle = this.openResourcePage(`${this.services.baseUrl}/preview/resource.html?${query}`);
+    this.pages.set(key, entry);
+    entry.handle.catch(() => this.pages.get(key) === entry && this.pages.delete(key));
+    return entry.handle;
+  }
+
+  async openResourcePage(url, timeoutMs = 60000) {
+    const browser = await this.browser();
+    this.openPages++;
+    let closed = false;
+    let context;
+    const close = () => {
+      if (!closed) {
+        closed = true;
+        this.openPages--;
+        this.lastUse = Date.now();
+      }
+      return context?.close().catch(() => {});
+    };
+    try {
+      context = await browser.newContext({ viewport: { width: 800, height: 800 }, deviceScaleFactor: 1, extraHTTPHeaders: { Authorization: "Bearer " + this.token } });
+      const page = await context.newPage();
+      const errors = [];
+      const logs = [];
+      page.on("pageerror", (error) => errors.push(error.stack || error.message));
+      page.on("console", (message) => {
+        if (["error", "warning"].includes(message.type())) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
+        if (logs.length > 50) logs.shift();
+      });
+      const reoptimized = () => logs.some((line) => line.includes("Outdated Optimize Dep")) || errors.some((line) => line.startsWith("HTTP 504 "));
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await page.goto(url, { waitUntil: "load", timeout: timeoutMs });
+          await page.waitForFunction(() => window.__FRAME_RESOURCE__?.ready || window.__FRAME_RESOURCE__?.error, null, { timeout: timeoutMs, polling: 50 });
+          break;
+        } catch (error) {
+          if (attempt >= 3 || !(reoptimized() || /Execution context was destroyed|navigation/i.test(error.message))) throw error;
+          errors.length = 0;
+          logs.length = 0;
+        }
+      }
+      const failure = await page.evaluate(() => window.__FRAME_RESOURCE__?.error);
+      if (failure) throw problem(422, [failure, ...errors].join("\n"), "RESOURCE_LOAD_FAILED");
+      return { page, errors, logs, close };
+    } catch (error) {
+      await close();
+      throw error.status ? error : problem(422, "资源预览无法加载：" + error.message, "RESOURCE_LOAD_FAILED");
+    }
+  }
+
+  /** Frames of one resource (`key` of library module `ref`) as PNG buffers, `width` pixels wide. */
+  async resourceFrames(work, { ref, key, preset, values, times, width = 640 }) {
+    this.lastUse = Date.now();
+    let handle;
+    try {
+      handle = await this.resourcePage(work, ref);
+    } catch (error) {
+      error.message = this.clean(work, error.message);
+      throw error;
+    }
+    const info = await handle.page.evaluate((key) => window.__FRAME_RESOURCE__.resources.find((item) => item.key === key) ?? null, key);
+    if (!info) throw problem(404, `materials/${ref} 里没有资源 ${key}`, "NOT_FOUND");
+    const moments = times?.length ? times : [info.time];
+    const frames = [];
+    const before = handle.errors.length;
+    for (const time of moments) {
+      try {
+        const data = await handle.page.evaluate(({ key, options }) => window.__FRAME_RESOURCE__.render(key, options), { key, options: { preset, values, time, width } });
+        frames.push({ time, png: Buffer.from(data.split(",")[1], "base64") });
+      } catch (error) {
+        throw problem(422, this.clean(work, [error.message, ...handle.errors.slice(before)].join("\n")), "RENDER_FAILED");
+      }
+    }
+    return { frames, info };
+  }
+
+  /** Library code changed or the work's versions moved: drop warm resource pages of the repository. */
+  invalidateResources(repo, work) {
+    for (const [key, entry] of this.pages)
+      if (key.startsWith(`resource:${repo}/${work ? work + "|" : ""}`)) entry.stale = true;
   }
 
   async close() {

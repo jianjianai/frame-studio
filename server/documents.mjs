@@ -78,9 +78,9 @@ export function editAudio(work, { operations, expectedSha256, dryRun = false }) 
   return { document: next, sha256: sha };
 }
 
-/** Generated sources need `loadAudio` in project.ts; add it when audio.ts exists. */
+/** Generated sources need `loadAudio` in project.ts; add it when audio.ts exists. Library sound modules do not. */
 function ensureGeneratorLoader(work, document) {
-  if (!document.sources.some((source) => source.kind === "generated")) return;
+  if (!document.sources.some((source) => source.kind === "generated" && !source.module.startsWith("materials/"))) return;
   const entry = ["audio.ts", "audio.tsx", "audio.js"].find((name) => fs.existsSync(path.join(work.dir, name)));
   if (!entry) return;
   const projectFile = path.join(work.dir, "project.ts");
@@ -90,10 +90,11 @@ function ensureGeneratorLoader(work, document) {
 }
 
 /**
- * Place an audio file (recording, voice-over, imported music) on a track.
+ * Place an audio file (recording, voice-over, imported music) or a sound of a library sound
+ * module (`sound: { module: "materials/<library>/<file>.ts", id }`) on a track.
  * Creates the track when `trackName` does not exist yet.
  */
-export function placeAudio(work, { src, start = 0, duration, trackName = "录音", name, gain = 1 }) {
+export function placeAudio(work, { src, sound, start = 0, duration, trackName = "录音", name, gain = 1 }) {
   const current = ensureAudioDocument(work);
   const doc = current.document;
   let track = doc.tracks.find((item) => item.name === trackName);
@@ -102,8 +103,11 @@ export function placeAudio(work, { src, start = 0, duration, trackName = "录音
     track = { id: "track_" + shortId(), name: trackName, gain: 1, pan: 0, muted: false, processors: [], output: "master", sends: [] };
     operations.push({ op: "put", collection: "tracks", value: track });
   }
-  const sourceId = "src_" + shortId();
-  operations.push({ op: "put", collection: "sources", value: { id: sourceId, kind: "file", src } });
+  // One source per sound: placing the same sound again reuses it.
+  const existing = sound && doc.sources.find((item) => item.kind === "generated" && item.module === sound.module && item.trackId === sound.id);
+  const sourceId = existing?.id ?? "src_" + shortId();
+  if (!existing)
+    operations.push({ op: "put", collection: "sources", value: sound ? { id: sourceId, kind: "generated", module: sound.module, trackId: sound.id } : { id: sourceId, kind: "file", src } });
   const length = Math.min(duration ?? current.duration - start, current.duration - start);
   if (length <= 0) throw problem(400, `开始时间 ${start} 秒超出了作品时长 ${current.duration} 秒；需要更长的作品时先用 work_update 修改 duration`);
   const clip = { id: "clip_" + shortId(), track: track.id, source: sourceId, name: name || undefined, start, duration: length, gain };

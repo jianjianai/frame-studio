@@ -4,9 +4,9 @@
 
 ```ts
 import { Graphics, Text, Container, BlurFilter } from "pixi.js";
-import type { SceneOptions } from "../../src/engine/types";
-import { createPixiScene } from "../../src/engine/scene-adapters";
-import { seeded, smooth, phase } from "../../src/engine/math";
+import type { SceneOptions } from "@frame/engine/types";
+import { createPixiScene } from "@frame/engine/scene-adapters";
+import { seeded, smooth, phase } from "@frame/engine/math";
 
 export function createScene(options: SceneOptions) {
   return createPixiScene(options, (app) => {

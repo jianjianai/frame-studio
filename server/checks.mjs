@@ -32,7 +32,7 @@ export async function typeCheck(work) {
     if (library) {
       const [, ref, row, column, severity, code, message] = library;
       const engine = code === "TS2307" && /'([^']*src\/engine\/[^']*)'/.exec(message)?.[1];
-      const hint = engine ? `。素材库第一层的文件写 "../../src/engine/…"，每深一层多一个 "../"` : "";
+      const hint = engine ? `。素材库里的代码写 "@frame/engine/${engine.split("src/engine/")[1]}"（任何层级都一样）` : "";
       problems.push({ severity, source: "types", message: `素材库代码 materials/${ref}:${row}:${column}：${message} (${code})${hint}` });
       continue;
     }
@@ -56,8 +56,9 @@ export async function typeCheck(work) {
 export function engineImportHint(file, code, message) {
   const spec = code === "TS2307" && /'([^']*src\/engine\/[^']*)'/.exec(message)?.[1];
   if (!spec) return "";
-  const correct = "../".repeat(file.split("/").length + 1) + "src/engine/" + spec.split("src/engine/")[1];
-  return correct === spec ? "" : `。这个文件应写 "${correct}"`;
+  const module = spec.split("src/engine/")[1];
+  const correct = "../".repeat(file.split("/").length + 1) + "src/engine/" + module;
+  return correct === spec ? "" : `。改成 "@frame/engine/${module}"（任何层级都一样）`;
 }
 
 /** Static references films/<slug>/... must point at existing files of this work. */

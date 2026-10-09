@@ -44,6 +44,8 @@ export async function createPreview({ config, httpServer, events }) {
   const importResolvers = [];
   const worksPlugin = {
     name: "frame-works",
+    // Before Vite's own resolver: pages request library code copies that may not exist yet.
+    enforce: "pre",
     async resolveId(source, importer) {
       for (const resolve of importResolvers) {
         const found = await resolve(source, importer);
@@ -69,7 +71,11 @@ export async function createPreview({ config, httpServer, events }) {
     clearScreen: false,
     plugins: [react(), worksPlugin],
     cacheDir: path.join(config.home, "tmp", "vite-cache"),
-    resolve: { preserveSymlinks: false },
+    resolve: {
+      preserveSymlinks: false,
+      // Works and library code import the engine the same way from any folder.
+      alias: [{ find: /^@frame\/engine\//, replacement: path.join(appRoot, "src", "engine") + "/" }],
+    },
     server: {
       middlewareMode: true,
       // Any domain may reach the studio (reverse proxies, tunnels); our own guard in http.mjs
@@ -82,7 +88,7 @@ export async function createPreview({ config, httpServer, events }) {
       },
     },
     optimizeDeps: {
-      entries: ["src/preview/stage.ts", "src/preview/render.ts", ...(config.dev ? ["web/main.tsx"] : [])],
+      entries: ["src/preview/stage.ts", "src/preview/render.ts", "src/preview/resource.ts", ...(config.dev ? ["web/main.tsx"] : [])],
       include: ["tone", "react", "react-dom", "react-dom/client", "three", "pixi.js", "gsap", "zod"],
     },
     worker: { format: "es" },

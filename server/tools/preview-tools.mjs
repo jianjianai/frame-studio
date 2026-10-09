@@ -122,6 +122,11 @@ export function registerPreviewTools(registry) {
             : "没有找到节拍（声音太短、太安静或没有节奏）。",
         );
         if (src && rhythm.beats.length) lines.push("文件放到音轨上时，作品时间 = 片段 start + （文件内时间 − 片段 offset）。");
+        // The grid library code follows (@frame/engine/tempo): first downbeat in work time.
+        if (rhythm.beats.length >= 2)
+          lines.push(
+            `按这首配乐卡点时，把节拍写进作品：work_update 的 tempo: { bpm: ${rhythm.bpm}, firstBeat: <作品时间里第一小节第一拍的秒数>${rhythm.beatsPerBar ? `, beatsPerBar: ${rhythm.beatsPerBar}` : ""} }，代码里用 beatAt(k) / barAt(n)（@frame/engine/tempo）取时间。`,
+          );
       }
       return asJson(stats, lines.join("\n"));
     },

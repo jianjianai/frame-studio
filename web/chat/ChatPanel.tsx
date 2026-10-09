@@ -30,6 +30,7 @@ import {
   BookmarkPlus,
   GitBranch,
   ChevronLeft,
+  Shapes,
 } from "lucide-react";
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
@@ -885,7 +886,7 @@ function UserMessage({
 }
 
 function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; onRemove?: () => void }) {
-  const { stage, openFile, openMaterial } = useWorkbench();
+  const { stage, openFile, openMaterial, openResource } = useWorkbench();
   let icon = <Paperclip size={12} />,
     label = "";
   if (attachment.type === "frame") {
@@ -908,6 +909,9 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
   } else if (attachment.type === "experience") {
     icon = <BookOpen size={12} />;
     label = `经验：${attachment.library}/${attachment.path}`;
+  } else if (attachment.type === "resource") {
+    icon = <Shapes size={12} />;
+    label = `资源 ${attachment.title || attachment.id.split("#").pop()}`;
   } else if (attachment.type === "problem") {
     icon = <AlertCircle size={12} />;
     label = attachment.message.slice(0, 40);
@@ -918,6 +922,7 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
       onClick={() => {
         if (attachment.type === "frame") void stage.seek(attachment.time);
         else if (attachment.type === "range") void stage.seek(attachment.start);
+        else if (attachment.type === "resource") openResource(attachment.id, { preview: true, title: attachment.title });
         else if (attachment.type === "asset") {
           // A material library file, or one of the work's own (films/<slug>/x is public/x).
           const material = /^materials\/(.+)$/.exec(attachment.url)?.[1];

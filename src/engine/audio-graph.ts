@@ -16,6 +16,7 @@ import {
   LIVE_LOOKAHEAD_SECONDS,
 } from "./media-buffering";
 import { audioSegments } from "./audio-document.mjs";
+import { importMaterial } from "./materials";
 import { prepareSignalsmith } from "./signalsmith-audio";
 import { prepareTone } from "./tone-runtime";
 import { AudioSourcePool } from "./audio-source-pool";
@@ -29,6 +30,8 @@ export interface PreparedAudio {
   tracks: AudioTrack[];
   buffers: Map<string, AudioBuffer>;
   generated?: GeneratedAudioModule;
+  /** Sound modules of the material libraries named by audio.json (materials/<library>/<file>). */
+  library?: Map<string, GeneratedAudioModule>;
   files?: AudioSourcePool;
   document?: AudioMixDocument;
   modules?: Map<string, GeneratedAudioModule>;
@@ -82,11 +85,24 @@ function releaseGenerator(
     mod.disposeAudio?.(context);
   }
 }
+const fromLibrary = (track: AudioTrack) => track.kind === "generated" && Boolean(track.module?.startsWith("materials/"));
 function generator(prepared: PreparedAudio, track: AudioTrack) {
   if (track.kind !== "generated") throw Error("Not a generated track");
-  const mod = track.module ? prepared.generated?.generators?.[track.module] : undefined;
-  if (!mod) throw Error("audio.ts 的 generators 中没有声音生成器：" + (track.module ?? track.id));
+  const mod = !track.module ? undefined : fromLibrary(track) ? prepared.library?.get(track.module) : prepared.generated?.generators?.[track.module];
+  if (!mod) throw Error(fromLibrary(track) ? "素材库里的声音模块没有默认导出声音（export default defineSounds(…)）：" + track.module : "audio.ts 的 generators 中没有声音生成器：" + (track.module ?? track.id));
   return { mod, id: track.sourceTrackId ?? track.id };
+}
+/** Library sound modules export their sounds as the default export (see ./resources defineSounds). */
+async function librarySounds(tracks: AudioTrack[]) {
+  const library = new Map<string, GeneratedAudioModule>();
+  for (const track of tracks)
+    if (track.kind === "generated" && track.module && fromLibrary(track) && !library.has(track.module)) {
+      const mod = await importMaterial<{ default?: GeneratedAudioModule }>(track.module);
+      if (!mod.default || typeof mod.default.createAudio !== "function")
+        throw Error("素材库里的声音模块没有默认导出声音（export default defineSounds(…)）：" + track.module);
+      library.set(track.module, mod.default);
+    }
+  return library;
 }
 export async function prepareAudio(
   project: AnimationProject,
@@ -95,11 +111,13 @@ export async function prepareAudio(
   previous?: PreparedAudio,
 ): Promise<PreparedAudio> {
   const tracks = projectAudioTracks(project),
-    generated = tracks.some((t) => t.kind === "generated") ? await project.loadAudio?.() : undefined;
+    generated = tracks.some((t) => t.kind === "generated" && !fromLibrary(t)) ? await project.loadAudio?.() : undefined,
+    library = await librarySounds(tracks);
   const prepared: PreparedAudio = {
     tracks,
     buffers: new Map(),
     generated,
+    library,
     files: previous?.files ?? new AudioSourcePool(),
     sourceKeys: new Map(),
     project,
@@ -119,13 +137,17 @@ export async function prepareAudio(
       if (track.kind === "file") prepared.sourceKeys!.set(track.src, prepared.files!.bind(track.src));
     for (const track of tracks)
       if (track.kind === "generated") {
-        const { mod } = generator(prepared, track),
+        const { mod, id } = generator(prepared, track),
           key = track.module!;
         if (!prepared.modules!.has(key)) {
           prepared.modules!.set(key, mod);
           signal?.throwIfAborted();
           await waitAudioReady(retainGenerator(mod, context), signal);
         }
+        // A library of many sounds makes only the ones this work plays, all before playback:
+        // generated clips are scheduled to the end of the work at once.
+        if (fromLibrary(track))
+          await mod.prepareSegment?.({ trackId: id, context, offset: 0, duration: track.duration ?? project.duration, rate: 1, signal });
       }
     signal?.throwIfAborted();
     return prepared;

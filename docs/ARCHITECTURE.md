@@ -55,11 +55,16 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `ai/` | ACP 客户端：代理进程池、会话、权限、登录、自定义 API |
 | `speech/` | 语音引擎与模型下载 |
 | `audio-analysis.mjs` `beat-this/` | AI 的“听”：ffmpeg 解码后算响度；节拍和小节交给 [Beat This!](https://github.com/CPJKU/beat_this)（MIT）模型，由 `beat-this/analyze.py` 在独立的 Python 进程中运行（`FRAME_BEAT_PYTHON`），一次只跑一个 |
+| `resources.mjs` | 素材库代码里声明的资源（`defineResources` 的角色、场景、效果……，`defineSounds` 的音效）和导出的函数：不运行代码，用 Babel 静态读出字面量字段、zod 参数和注释，按 Git blob 缓存；`resources_search` / `resource_view` 工具、工作台的资源列表、缩略图（无界面浏览器渲染，按代码版本缓存在 `cache/resources/`） |
 | `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件：Git blob，LFS 内容按需下载；`@materials/...` 代码导入由 Vite 插件解析到作品根目录 `.materials/` 中的副本，锁定版本或素材库当前版本，锁定时沿导入关系一并锁定）、导出文件、后台任务 |
 
 ## 预览与热更新
 
 舞台页 `/preview/stage.html` 在 iframe 中运行，只负责画面：通过 `/@fs/<作品>/project.ts` 动态导入作品，用 `createPlayerSession` 播放。工作台通过同源的 `window.__FRAME_STAGE__` 控制播放，舞台用 `postMessage` 回报状态。
+
+载入作品时页面设置作品的素材地址、节拍（`project.ts` 的 `tempo`，`src/engine/tempo.ts`）和素材库代码副本的位置（`src/engine/materials.ts`）。引擎在任何文件里都按 `@frame/engine/<模块>` 导入（Vite 别名和作品 tsconfig 的 paths）。文档里写的素材库代码（audio.json 生成音源的 `module: "materials/<库>/<文件>.ts"`）在运行时按 `/@fs/<作品根>/.materials/<文件>` 导入，Vite 插件先把作品锁定的版本复制过去。
+
+资源预览页 `/preview/resource.html` 在同样的作品环境里导入一个素材库代码文件，画出其中的资源（工作台的资源标签页通过同源的 `window.__FRAME_RESOURCE__` 控制参数和时间，播放音效）；服务端用同一个页面无界面渲染缩略图和给 AI 的预览图。
 
 保存作品文件时，Vite 的 `hotUpdate` 钩子使改动模块失效并打上时间戳，但阻止整页刷新；服务端合并 120 ms 内的改动后广播 `preview-update`。舞台带时间戳重新导入 `project.ts`，调用 `session.updateProject()` 原地替换场景和音频，播放位置保持不变。素材文件（`public/`）的改动由目录监听发现。
 

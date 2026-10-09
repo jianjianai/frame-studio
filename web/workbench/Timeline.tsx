@@ -592,8 +592,11 @@ export function Timeline() {
       if (target.row.startsWith("track:") || target.row === "new-track") {
         // A new track is created by the same audio edit as the clip, so one undo removes both.
         const track = (target.row !== "new-track" && rows.find((row) => row.id === target.row)?.track?.name) || nextTrackName();
-        await history.run("audio", "放入音频", () =>
-          api(`${base}/audio/place`, { body: { src: asset.url, start: target.start, duration: asset.duration, track, name } }),
+        // A library sound (resources) becomes a generated clip of its sound module.
+        await history.run("audio", asset.sound ? "放入音效" : "放入音频", () =>
+          api(`${base}/audio/place`, {
+            body: asset.sound ? { sound: asset.sound, start: round3(target.start), track, name } : { src: asset.url, start: round3(target.start), duration: asset.duration, track, name },
+          }),
         );
         return;
       }

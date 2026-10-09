@@ -156,6 +156,8 @@ async function load(timestamp?: number) {
 }
 
 let updating: Promise<void> = Promise.resolve();
+/** When the library code copies (.materials/) last changed: modules named by documents are imported anew. */
+let materialStamp: number | undefined;
 /**
  * Changed public files must not be played from the asset precache: drop them
  * from it before the work reloads them (the workbench caches the new versions).
@@ -181,7 +183,10 @@ async function hotUpdate(timestamp: number, files: string[]) {
     setStatus({ updating: true });
     try {
       await dropCachedAssets(files);
-      const next = await importWork(source, timestamp);
+      if (files.some((file) => file.includes("/.materials/"))) materialStamp = timestamp;
+      const next = await importWork(source, timestamp, materialStamp);
+      // Scene code may compute beat times when it is imported: a new grid needs fresh modules.
+      if (JSON.stringify(next.tempo) !== JSON.stringify(project?.tempo) && project) return location.reload();
       const kinds = changeKinds(files);
       if (!session || state.status === "error" || next.renderer !== project?.renderer) start(next, lastSnapshot);
       else {

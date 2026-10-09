@@ -15,14 +15,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | `public/` | 素材。代码中写 `assetUrl("films/<名称>/文件名")` |
 | `AGENTS.md` | 这个作品的需求和约定。新确认的需求写回这里 |
 
-引擎（只读）在作品根目录的 `src/engine/`，按文件所在层级写相对路径：
-
-| 文件位置 | 引擎导入写法 |
-|---|---|
-| `scene.ts`、`project.ts`、`audio.ts` | `"../../src/engine/types"` |
-| `scenes/*.ts` | `"../../../src/engine/types"` |
-
-写错时 `work_check` 会给出这个文件应写的路径。
+引擎（只读，源码在作品根目录的 `src/engine/`）在任何文件里都这样导入：`import { … } from "@frame/engine/<模块>"`，例如 `"@frame/engine/types"`、`"@frame/engine/math"`、`"@frame/engine/tempo"`。作品和素材库代码写法相同，移动文件不用改导入。
 
 ## 工作循环
 
@@ -41,7 +34,8 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 排图层 | `layers_get` / `layers_edit`（见 `layers`） |
 | 配乐、音效、混音 | `audio_place`、`audio_get` / `audio_edit`，配乐节拍 `preview_audio` 的 `src` + `beats`（见 `audio`） |
 | 配音和字幕 | `speech_synthesize`（`lines` + `place` + `subtitles: true` 一次完成整段旁白）、`subtitles_edit`（见 `speech`、`subtitles`） |
-| 标题、时长、镜头标记 | `work_update` |
+| 标题、时长、节拍、镜头标记 | `work_update`（配乐节拍写进 `tempo`，见 `project`） |
+| 复用素材库里的角色、场景、效果、转场、音效 | `resources_search` 找、`resource_view` 看详情和预览图，音效用 `audio_place` 的 `sound` 放到音轨（见 `resources`） |
 | 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身）；素材库 `materials_list`、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
 | 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status`（完成时返回下载地址） |
 
@@ -51,6 +45,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 - **动态图形 / 文字动画 / 数据可视化**：Canvas 2D 场景，见 `scene`。需要大量精灵、滤镜用 `pixi`。
 - **三维**：`three`（或 `babylon`），可加载 GLB 模型。
 - 以上可以混用：在 `visual.json` 里叠加多个 scene 图层。
+- 动手画一个角色、场景、道具或效果之前，先用 `resources_search` 看素材库里有没有现成的：有就导入复用（参数不够就改素材库里的代码，所有作品受益），不要在作品里重画或拷贝一份。
 
 ## 必须遵守
 

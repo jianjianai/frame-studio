@@ -2,10 +2,15 @@ import type { GeneratedAudioModule, GeneratedAudioOptions } from "./types";
 
 export type StereoPcm = [Float32Array, Float32Array];
 
-/** Short-film generators prepare once, then reuse their in-memory sound on every seek/export. */
+/**
+ * Short-film generators prepare once, then reuse their in-memory sound on every seek/export.
+ * `lazy`: make only the sounds that are played (a library of many sounds), each before its
+ * first segment, instead of all of them up front.
+ */
 export function createPcmAudio(
   tracks: Record<string, () => StereoPcm | Promise<StereoPcm>>,
   sampleRate = 48000,
+  { lazy = false }: { lazy?: boolean } = {},
 ): GeneratedAudioModule {
   const buffers = new Map<string, AudioBuffer>();
   const preparing = new Map<string, Promise<void>>();
@@ -31,8 +36,16 @@ export function createPcmAudio(
     async prepareAudio(context) {
       // Called before the transport clock starts. AudioBuffers can be shared by
       // independent AudioContext/OfflineAudioContext instances; nodes cannot.
-      await Promise.all(Object.keys(tracks).map((id) => prepare(id, context)));
+      if (!lazy) await Promise.all(Object.keys(tracks).map((id) => prepare(id, context)));
     },
+    ...(lazy
+      ? {
+          async prepareSegment({ trackId, context }: { trackId: string; context: BaseAudioContext }) {
+            if (!Object.hasOwn(tracks, trackId)) throw new Error("未知生成音轨: " + trackId);
+            await prepare(trackId, context);
+          },
+        }
+      : {}),
     createAudio({
       trackId,
       context,

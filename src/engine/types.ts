@@ -61,6 +61,14 @@ export const projectSchema = z
     experiences: z.array(z.string()).optional(),
     /** The material libraries the work uses files from (names); see materials.lock.json. */
     materials: z.array(z.string()).optional(),
+    /** The music's beat grid in work time; library code reads it through ./tempo. */
+    tempo: z
+      .object({
+        bpm: z.number().min(20).max(400),
+        firstBeat: z.number().nonnegative().default(0),
+        beatsPerBar: z.number().int().min(1).max(16).default(4),
+      })
+      .optional(),
     beats: z.array(
       z.object({
         at: z.number().nonnegative(),

@@ -129,7 +129,7 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
       }
       if (pathname.startsWith("/files/")) return await serveWorkFile(req, res, pathname);
       if (pathname.startsWith("/films/")) return await serveFilmFallback(req, res, pathname);
-      if (pathname === "/preview/stage.html" || pathname === "/preview/render.html") {
+      if (["/preview/stage.html", "/preview/render.html", "/preview/resource.html"].includes(pathname)) {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
         return res.end(await preview.html(req.url, pathname.slice(1).replace("preview/", "src/preview/")));
       }

@@ -289,9 +289,15 @@ export class Materials {
    */
   async usage(work) {
     const refs = new Set();
+    // Library code named by a document (a sound module in audio.json) runs like an import.
+    const named = [];
     for (const file of this.sourceFiles(work))
-      for (const match of fs.readFileSync(file, "utf8").matchAll(MATERIAL_REF)) if (!match[1].includes("${") && validRef(match[1])) refs.add(match[1]);
-    const imports = this.imports(work);
+      for (const match of fs.readFileSync(file, "utf8").matchAll(MATERIAL_REF))
+        if (!match[1].includes("${") && validRef(match[1])) {
+          refs.add(match[1]);
+          if (SCRIPT.test(match[1])) named.push({ spec: match[1], from: path.relative(work.dir, file).split(path.sep).join("/") });
+        }
+    const imports = [...this.imports(work), ...named];
     if (!imports.length) return { refs, unresolved: [] };
     const code = await this.follow(work.repo, this.readLocks(work.dir), imports);
     for (const ref of code.refs) refs.add(ref);
@@ -449,11 +455,13 @@ export class Materials {
    * relative imports inside the copied library code. Returns the copy in .materials/.
    */
   async resolveImport(source, importer) {
-    if (!importer) return null;
-    importer = importer.split("?")[0];
     const marker = `${path.sep}${MATERIALIZED}${path.sep}`;
     const bare = source.split("?")[0];
     const query = source.slice(bare.length);
+    // A page's own request (Vite names the HTML entry as importer): /@fs/<root>/.materials/<ref>
+    if (bare.startsWith("/@fs/")) return this.resolveRequest(bare, query);
+    if (!importer) return null;
+    importer = importer.split("?")[0];
     let spec;
     if (bare.startsWith("@materials/")) spec = bare.slice(11);
     else if (/^\.\.?\//.test(bare) && importer.includes(marker)) {
@@ -471,6 +479,31 @@ export class Materials {
       if (bare.startsWith("@materials/")) throw new Error(`素材库里没有 ${bare}：先引用它所在的素材库，并检查路径`);
       return null;
     }
+    return (await this.copy(place, ref, locks[ref] ?? head.get(ref))) + query;
+  }
+
+  /**
+   * A page importing library code a document names (src/engine/materials.ts):
+   * /@fs/<root>/.materials/<ref>, copied there first at the version the work uses.
+   */
+  async resolveRequest(bare, query) {
+    if (!bare.startsWith("/@fs/") || !bare.includes(`/${MATERIALIZED}/`)) return null;
+    const decode = (part) => {
+      try {
+        return decodeURIComponent(part);
+      } catch {
+        return part;
+      }
+    };
+    const file = path.resolve(bare.slice(4).split("/").map(decode).join("/"));
+    const place = this.rootOf(file);
+    const base = place && path.join(place.root, MATERIALIZED);
+    if (!place || !inside(base, file)) return null;
+    const spec = path.relative(base, file).split(path.sep).join("/");
+    const locks = this.readLocks(place.dir);
+    const head = await this.headOf(place.repo);
+    const ref = resolveSpec(spec, (candidate) => Boolean(locks[candidate] || head.has(candidate)));
+    if (!ref) throw new Error(`素材库里没有 materials/${spec}：先引用它所在的素材库，并检查路径`);
     return (await this.copy(place, ref, locks[ref] ?? head.get(ref))) + query;
   }
 

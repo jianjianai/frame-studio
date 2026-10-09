@@ -125,6 +125,7 @@ export type ChatAttachment =
   | { type: "asset"; url: string; path?: string }
   | { type: "file"; path: string }
   | { type: "experience"; library: string; path: string }
+  | { type: "resource"; id: string; title?: string }
   | { type: "problem"; message: string };
 
 export interface Selection {
@@ -145,6 +146,8 @@ export interface WorkbenchContextValue {
   openExperience: (path: string, options?: { preview?: boolean }) => void;
   /** Open a file of the material libraries (`<library>/<path>`) in a viewer tab. */
   openMaterial: (ref: string, options?: { preview?: boolean }) => void;
+  /** Preview a resource or sound of the material libraries (`<library>/<file>#<name>`) in a tab. */
+  openResource: (id: string, options?: { preview?: boolean; title?: string }) => void;
   /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. */
   openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" | "materials" }) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;

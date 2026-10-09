@@ -351,7 +351,7 @@ export function registerWorkTools(registry) {
   registry.add({
     name: "work_update",
     title: "修改作品信息",
-    description: "修改 project.ts 中的标题、副标题、描述、时长、帧率、镜头标记、封面画面，只替换字段值、保留文件其余内容。字幕用 subtitles_edit。",
+    description: "修改 project.ts 中的标题、副标题、描述、时长、帧率、节拍（tempo）、镜头标记、封面画面，只替换字段值、保留文件其余内容。字幕用 subtitles_edit。",
     input: {
       work: workArg,
       title: z.string().min(1).max(120).optional(),
@@ -365,6 +365,10 @@ export function registerWorkTools(registry) {
         .optional()
         .describe("镜头标记（整体替换），显示在时间轴上，方便和用户指代片段"),
       posterTime: z.number().nonnegative().optional().describe("封面用这一秒的画面（替换上传的封面图片）"),
+      tempo: z
+        .strictObject({ bpm: z.number().min(20).max(400), firstBeat: z.number().nonnegative().default(0), beatsPerBar: z.number().int().min(1).max(16).default(4) })
+        .optional()
+        .describe("配乐的节拍：BPM、第一小节第一拍在作品里的秒数、每小节拍数（preview_audio 的 beats 给出）。代码和素材库资源用 @frame/engine/tempo 的 beatAt / barAt 跟着它卡点"),
     },
     async run({ work: _ignored, posterTime, ...changes }, ctx) {
       const work = await ctx.work();

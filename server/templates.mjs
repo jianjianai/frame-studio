@@ -45,7 +45,7 @@ export function createWorkFiles({ slug, title, width, height, duration, fps, des
     subtitles: [],
     credits: [],
   };
-  const project = `import type { AnimationProject } from "../../src/engine/types";
+  const project = `import type { AnimationProject } from "@frame/engine/types";
 
 const project: AnimationProject = {
 ${Object.entries(meta)
@@ -77,8 +77,8 @@ export default project;
     ".gitattributes": GIT_ATTRIBUTES,
     [base + "project.ts"]: project,
     [base + "visual.json"]: JSON.stringify(visual, null, 2) + "\n",
-    [base + "scene.ts"]: `import type { SceneOptions } from "../../src/engine/types";
-import { createCompositionScene } from "../../src/engine/compositor";
+    [base + "scene.ts"]: `import type { SceneOptions } from "@frame/engine/types";
+import { createCompositionScene } from "@frame/engine/compositor";
 import visual from "./visual.json";
 
 // visual.json 排列图层；"scene" 图层的 module 名称在这里注册。
@@ -88,7 +88,7 @@ export function createScene(options: SceneOptions) {
   });
 }
 `,
-    [base + "scenes/title.ts"]: `import type { Scene, SceneOptions } from "../../../src/engine/types";
+    [base + "scenes/title.ts"]: `import type { Scene, SceneOptions } from "@frame/engine/types";
 import project from "../project";
 
 // 示例图层：按绝对时间绘制，可任意跳转。可以替换或删除。
@@ -146,8 +146,8 @@ export function workTsconfig() {
           skipLibCheck: true,
           allowJs: true,
           types: ["vite/client"],
-          // Material library code, copied at the versions the work uses (see server/materials.mjs).
-          paths: { "@materials/*": ["./.materials/*"] },
+          // The engine from any folder, and material library code copied at the versions the work uses (see server/materials.mjs).
+          paths: { "@frame/engine/*": ["./src/engine/*"], "@materials/*": ["./.materials/*"] },
         },
         include: ["projects", "src/*.d.ts"],
         // Tests (often with their own runners such as Playwright) are not part of what the preview loads.
@@ -180,7 +180,8 @@ export function platformInstructions() {
 - \`visual.json\`：图层时间轴（图片/视频/颜色/scene 模块），人工也会在界面上编辑它。
 - \`audio.json\`：多轨音频；\`audio.ts\` 可以写代码生成的声音。
 - \`public/\`：素材，代码里用 \`assetUrl("films/<名称>/文件")\` 引用。
-- 引擎导入：\`scene.ts\` 写 \`"../../src/engine/..."\`，\`scenes/*.ts\` 写 \`"../../../src/engine/..."\`。
+- 引擎导入：任何文件都写 \`"@frame/engine/<模块>"\`（例如 \`"@frame/engine/types"\`、\`"@frame/engine/tempo"\`）。
+- \`project.ts\` 的 \`tempo\` 是配乐的节拍（\`preview_audio\` 的 beats 分析后用 \`work_update\` 写入），代码用 \`@frame/engine/tempo\` 的 \`beatAt\` / \`barAt\` / \`pulse\` 卡点。
 
 ## 工具（MCP 服务器 frame）
 - \`frame_guide\`：接口说明与示例。不确定写法时先查，不要猜。
@@ -191,6 +192,7 @@ export function platformInstructions() {
 - \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载；\`src\` + \`beats: true\` 给出配乐的节奏、每个节拍和每小节第一拍（Beat This! 模型），让剪辑点和画面变化对上音乐。
 - \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改，\`update\` 只改给出的字段（格式见 frame_guide layers / audio）。
 - \`speech_synthesize\`：整段旁白用 \`lines\` + \`place\` + \`subtitles: true\` 一次生成配音、排上音轨并写字幕；\`subtitles_edit\` 改字幕，\`work_update\` 改时长和镜头标记。
+- \`resources_search\`、\`resource_view\`：素材库里可以直接复用的角色、物品、场景、界面、效果、转场、文字和音效（以及素材库代码导出的函数）。动手画一个东西之前先找；找到就 \`import … from "@materials/<库>/<路径>"\` 复用，音效用 \`audio_place\` 的 \`sound\`。不合适就给素材库里的代码加参数，不要拷进作品。新写的可复用东西放进素材库并声明成资源（见 frame_guide resources）。
 - \`asset_import\`、\`asset_view\`：作品自己的素材（public/，列表在 work_context 的 assets）：导入，和看图片、视频素材本身的样子（用户上传的素材先看一眼再用）。素材库是作品共用的素材：\`materials_list\` 查看，\`materials_link\` 关联或取消关联（用户要求时），\`materials_use\` 锁定版本后用 \`materials/<库>/<文件>\` 地址，\`material_write\` 往素材库里放、改、移动、删除文件。素材库里的代码用 \`import … from "@materials/<库>/<路径>"\` 直接导入（见 frame_guide assets）；\`.materials/\` 是 FRAME 生成的副本，不要改。
 - \`version_save\`、\`export_video\` 等：版本和导出（导出完成时返回下载地址）。
 - \`work_delete\`：用户要删除作品时用。只做标记，由用户在首页作品列表中确认删除或保留；你不能直接删除作品。

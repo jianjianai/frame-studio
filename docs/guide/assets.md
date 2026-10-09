@@ -2,7 +2,7 @@
 
 作品自己的素材放在作品的 `public/` 下，代码与文档中用 `films/<名称>/<public 下的路径>` 引用：`public/img/logo.png` → `films/work-1a2b3c4d/img/logo.png`。多个作品共用的素材放在素材库里，用 `materials/<素材库>/<路径>` 引用（见下）。
 
-- 代码中：`assetUrl("films/work-1a2b3c4d/img/logo.png")`、`assetUrl("materials/品牌/logo.svg")`（`src/engine/types`）。
+- 代码中：`assetUrl("films/work-1a2b3c4d/img/logo.png")`、`assetUrl("materials/品牌/logo.svg")`（`@frame/engine/types`）。
 - visual.json / audio.json 中：直接写 `films/...` 或 `materials/...` 字符串。
 - 不要写绝对网址或 `../` 路径，也不要引用其他作品的素材。
 
@@ -17,7 +17,7 @@
 
 ### 素材库里的代码
 
-多个作品共用的代码（特效、转场、图表组件、工具函数、着色器）也放在素材库里，作品直接导入，不用复制：
+多个作品共用的代码（角色、场景、特效、转场、图表组件、工具函数、着色器、音效）也放在素材库里，作品直接导入，不用复制。里面声明的资源用 `resources_search` / `resource_view` 查找和预览（写法见 `resources`）：
 
 ```ts
 // 作品的 scene.ts 或 scenes/*.ts
@@ -25,10 +25,11 @@ import { particles } from "@materials/特效/particles"; // 素材库「特效�
 import glow from "@materials/特效/glow.frag?raw";
 ```
 
-- 素材库里的代码和作品代码写法一样：素材库第一层的文件用 `"../../src/engine/..."` 导入引擎，每深一层多一个 `"../"`；同一素材库里的文件用相对路径互相导入（`"./noise"`），其他素材库用 `"@materials/<库>/<路径>"`；npm 包照常导入。用到的素材写 `assetUrl("materials/<库>/<路径>")`。
+- 素材库里的代码和作品代码写法一样：引擎用 `"@frame/engine/<模块>"` 导入；同一素材库里的文件用相对路径互相导入（`"./noise"`、`"../draw"`），其他素材库用 `"@materials/<库>/<路径>"`；npm 包照常导入。用到的素材（图片、字体）写 `assetUrl("materials/<库>/<路径>")`。
 - 版本同样按文件锁定：保存版本时（或 `materials_use`）锁定作品导入的代码、这些代码导入的文件和用到的素材。素材库里的代码之后再改，作品不变；`materials_use` 加 `update: true` 改用新版本（连同它导入的文件）。
 - FRAME 把作品用到的版本复制到作品根目录的 `.materials/`（自动生成，不提交），预览、`work_check`、导出和你自己运行的 `tsc` 都从那里读取。不要修改 `.materials/` 里的文件，修改素材库用 `material_write`。
-- 素材库里的代码要通用：参数从调用方传入，不要依赖某个作品的文件。
+- 素材库里的代码要通用：参数从调用方传入，不要依赖某个作品的文件，也不要写死某一首歌的节拍、某个作品的字体目录或文案。节拍从作品的 `tempo` 读（`@frame/engine/tempo`），字体放在素材库里按 `materials/…` 加载。
+- 某个作品需要不一样的效果时，给素材库里的函数加参数（带默认值，不影响其他作品），不要把文件拷进作品再改：拷贝的副本不会再得到素材库的改进。
 
 ## 获取素材
 
@@ -42,4 +43,4 @@ import glow from "@materials/特效/glow.frag?raw";
 - 视频：H.264 MP4 或 VP9 WebM。视频图层逐帧解码，长视频尽量预先裁短。
 - 音频：MP3 / M4A / WAV / OGG。
 - 三维：GLB（可用 Draco 压缩）。
-- 字体：WOFF2，通过 `FontFace` 加载（见 `scene`）。
+- 字体：WOFF2，通过 `FontFace` 加载（见 `scene`）。多个作品共用的字体放进素材库，放完整的字体文件，不要只取某个作品用到的字（换了文案就会缺字）。

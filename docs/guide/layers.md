@@ -4,8 +4,8 @@
 
 ```ts
 // scene.ts
-import type { SceneOptions } from "../../src/engine/types";
-import { createCompositionScene } from "../../src/engine/compositor";
+import type { SceneOptions } from "@frame/engine/types";
+import { createCompositionScene } from "@frame/engine/compositor";
 import visual from "./visual.json";
 
 export function createScene(options: SceneOptions) {

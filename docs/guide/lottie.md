@@ -12,8 +12,8 @@ Lottie JSON 放在 `public/`，最简单的用法是 visual.json 图层：
 在代码中使用：
 
 ```ts
-import { createLottieScene } from "../../src/engine/lottie-adapter";
-import { assetUrl, type SceneOptions } from "../../src/engine/types";
+import { createLottieScene } from "@frame/engine/lottie-adapter";
+import { assetUrl, type SceneOptions } from "@frame/engine/types";
 
 export const createScene = (options: SceneOptions) => createLottieScene(options, assetUrl("films/work-1a2b3c4d/intro.json"));
 ```

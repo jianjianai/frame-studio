@@ -16,17 +16,18 @@ import {
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast, Dialog } from "../lib/ui";
-import type { Asset } from "../lib/types";
+import type { Asset, ResourceItem } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { assetDrag } from "../workbench/assetDrag";
 import { ViewHeader } from "./ViewHeader";
 import { uploadBlobs, uploadFiles } from "./upload";
 import { MaterialsPanel } from "./MaterialsPanel";
+import { ResourcesPanel } from "./ResourcesPanel";
 
 export function AssetsView() {
   const { work, stage, addToChat, reload, openFile, readOnly } = useWorkbench();
   const toast = useToast();
-  const [tab, setTab] = useState<"work" | "library">("work");
+  const [tab, setTab] = useState<"work" | "library" | "resources">("work");
   // A published work's own files are view-only; the shared materials library is not part of it.
   const locked = readOnly && tab === "work";
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -90,6 +91,11 @@ export function AssetsView() {
       });
       await reload();
     }, "已放到「音效」音轨");
+  const placeSound = (item: ResourceItem) =>
+    run(async () => {
+      await api(`${base}/audio/place`, { body: { sound: item.id, start: stage.playback.get().time, track: "音效", name: item.title } });
+      await reload();
+    }, `已把「${item.title}」放到「音效」音轨`);
   /** Share one of the work's files with other works: copy it into a material library. */
   const toLibrary = (asset: Asset) =>
     run(async () => {
@@ -163,6 +169,9 @@ export function AssetsView() {
         <button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}>
           素材库 <span className="faint">{work.meta?.materials?.length || ""}</span>
         </button>
+        <button className={tab === "resources" ? "active" : ""} onClick={() => setTab("resources")} title="素材库代码里声明的角色、场景、效果、音效等，可以预览和复用">
+          资源
+        </button>
       </div>
       {busy && <div className="view-progress" />}
       {tab === "work" ? (
@@ -201,8 +210,10 @@ export function AssetsView() {
           ))}
           {!assets.length && <div className="empty">把图片、视频、音频拖到这里，或点上方按钮上传。</div>}
         </div>
-      ) : (
+      ) : tab === "library" ? (
         <MaterialsPanel onPlace={(asset, how) => (how === "layer" ? addLayer(asset) : placeAudio(asset))} />
+      ) : (
+        <ResourcesPanel onPlaceSound={placeSound} />
       )}
       {urlDialog && (
         <UrlDialog

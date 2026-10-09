@@ -1,5 +1,7 @@
 import { projectSchema, type AnimationProject } from "../engine/types";
 import { resolveProject } from "../engine/resolve-project";
+import { setTempo } from "../engine/tempo";
+import { materialBaseOf, setMaterialBase } from "../engine/materials";
 
 export interface WorkSource {
   /** /@fs URL of the work's project.ts */
@@ -18,9 +20,11 @@ export function workSourceFromQuery(params = new URLSearchParams(location.search
 /**
  * Import (or re-import after an edit) a work. `timestamp` busts the browser
  * module cache; Vite has already given changed modules the same timestamp.
+ * `materialStamp` is the timestamp of the last change to the library code copies.
  */
-export async function importWork(source: WorkSource, timestamp?: number): Promise<AnimationProject> {
+export async function importWork(source: WorkSource, timestamp?: number, materialStamp?: number): Promise<AnimationProject> {
   (globalThis as { __FRAME_ASSET_BASE__?: string }).__FRAME_ASSET_BASE__ = source.assetBase;
+  setMaterialBase(materialBaseOf(source.module), materialStamp);
   const url = source.module + (timestamp ? `?t=${timestamp}` : "");
   const mod = (await import(/* @vite-ignore */ url)) as { default: AnimationProject };
   const project = mod.default;
@@ -29,6 +33,7 @@ export async function importWork(source: WorkSource, timestamp?: number): Promis
   if (!parsed.success)
     throw new Error("project.ts 元数据无效：" + parsed.error.issues.map((issue) => `${issue.path.join(".") || "(根)"} ${issue.message}`).join("；"));
   const meta = parsed.data;
+  setTempo(meta.tempo);
   return resolveProject({
     ...meta,
     load: project.load,
@@ -43,7 +48,8 @@ export function changeKinds(files: string[]) {
   let visual = false,
     audio = false;
   for (const file of files) {
-    if (/project\.ts$/.test(file)) visual = audio = true;
+    // Library code may be a sound module named by audio.json as well as drawing code.
+    if (/project\.ts$/.test(file) || file.includes("/.materials/")) visual = audio = true;
     else if (/(^|\/)(audio[^/]*|music|sound[^/]*)(\/|\.|$)/i.test(file) || /\.(wav|mp3|ogg|opus|flac|m4a|aac|sf2|mid)$/i.test(file)) audio = true;
     else visual = true;
   }

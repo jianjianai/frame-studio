@@ -133,7 +133,8 @@ export const audioSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     id,
     kind: z.literal("generated"),
-    module: id,
+    // A generator of the work's audio.ts, or a sound module of a material library.
+    module: z.union([id, z.string().max(300).regex(/^materials\/[^/]+\/[^?#]+\.(?:m?[jt]sx?)$/, "素材库里的声音模块写 materials/<素材库>/<路径>.ts")]),
     trackId: z.string().min(1).max(100).default("main"),
     engine: z.enum(audioEngines.map((e) => e.id)).default("custom"),
   }),

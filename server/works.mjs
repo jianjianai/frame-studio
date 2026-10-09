@@ -324,7 +324,7 @@ export class Works {
   async update(work, changes) {
     this.assertEditable(work);
     const file = path.join(work.dir, "project.ts");
-    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats", "experiences", "materials"];
+    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "beats", "tempo", "experiences", "materials"];
     if ("materials" in changes && !(Array.isArray(changes.materials) && changes.materials.every((name) => typeof name === "string")))
       throw problem(400, "materials 必须是素材库名称的列表");
     if ("experiences" in changes && !(Array.isArray(changes.experiences) && changes.experiences.every((name) => typeof name === "string")))

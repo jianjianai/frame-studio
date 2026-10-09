@@ -146,6 +146,11 @@ export function studioRoutes(services) {
   router.post("/api/works/:repo/:id/audio/place", async ({ params, req }) => {
     const body = await readJson(req);
     const work = await services.openEditable(params.id, params.repo);
+    if (body.sound) {
+      // A sound of a library sound module, by its resource id (<library>/<file>#<name>).
+      const sound = await services.resources.sound(work, String(body.sound));
+      return placed(work, () => placeAudio(work, { sound, start: body.start, duration: body.duration ?? sound.duration, trackName: body.track, name: body.name ?? sound.title }));
+    }
     let duration = body.duration;
     if (!duration) {
       // Dropped without a known length (a material library file): measure it.
