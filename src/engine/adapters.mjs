@@ -9,7 +9,6 @@ export const adapters = Object.freeze([
     alpha: true,
     offline: true,
   },
-  { id: "remotion", name: "Remotion", category: "react", template: true, seek: "absolute", alpha: true, offline: true },
   {
     id: "canvas",
     name: "Canvas 2D",

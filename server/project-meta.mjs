@@ -5,7 +5,7 @@ import { parse } from "@babel/parser";
 export const validSlug = (id) =>
   typeof id === "string" && id.length <= 64 && /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(id) && !/^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i.test(id);
 
-const loaders = { load: "scene", loadAudio: "audio", loadVisual: "visual", loadAudioDocument: "audioDocument", loadRemotion: "remotion" };
+const loaders = { load: "scene", loadAudio: "audio", loadVisual: "visual", loadAudioDocument: "audioDocument" };
 
 function parseSource(code, filename = "project.ts") {
   return parse(code, {

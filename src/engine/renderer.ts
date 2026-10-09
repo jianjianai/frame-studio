@@ -1,4 +1,4 @@
-import type { AnimationProject, Scene, Quality, ScenePlayback } from "./types";
+import type { AnimationProject, Scene, Quality } from "./types";
 import { activeSubtitle, paintSubtitle } from "./subtitles";
 
 export interface RendererUpdateOptions {
@@ -30,7 +30,6 @@ export class FrameRenderer {
   private request?: AbortController;
   private tail: Promise<unknown> = Promise.resolve();
   private preparing = false;
-  private cleanupSurface?: () => void;
   private cleanupErrors: string[] = [];
   private sceneBuffering = false;
   private slowFrames = new Set<number>();
@@ -50,35 +49,11 @@ export class FrameRenderer {
       if (this.cleanupErrors.length > 50) this.cleanupErrors.shift();
     }
   }
-  private mountSurface(scene: Scene) {
-    if (!scene.element || !this.canvas.parentElement) return undefined;
-    const parent = this.canvas.parentElement, el = scene.element;
-    const position = parent.style.position, visibility = this.canvas.style.visibility;
-    const css = el.style.cssText;
-    if (getComputedStyle(parent).position === "static") parent.style.position = "relative";
-    this.canvas.style.visibility = "hidden";
-    el.style.cssText = "position:absolute;overflow:hidden;pointer-events:none";
-    parent.append(el);
-    const resize = () => Object.assign(el.style, {
-      left: this.canvas.offsetLeft + "px", top: this.canvas.offsetTop + "px",
-      width: this.canvas.clientWidth + "px", height: this.canvas.clientHeight + "px",
-    });
-    const observer = new ResizeObserver(resize);
-    observer.observe(this.canvas);
-    resize();
-    return () => {
-      observer.disconnect();
-      el.remove();
-      el.style.cssText = css;
-      parent.style.position = position;
-      this.canvas.style.visibility = visibility;
-    };
-  }
   private paint(context: CanvasRenderingContext2D, canvas: HTMLCanvasElement, scene: Scene, project: AnimationProject, time: number, subtitles: boolean) {
     context.fillStyle = "#000000";
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(scene.canvas, 0, 0, canvas.width, canvas.height);
-    if (subtitles && !scene.element)
+    if (subtitles)
       paintSubtitle(context, activeSubtitle(project.subtitles, time), canvas.width, canvas.height);
   }
   async init(width = 1280, height = 720, quality: Quality = "standard"): Promise<void> {
@@ -94,21 +69,12 @@ export class FrameRenderer {
     this.replacement?.abort();
     const controller = this.replacement = new AbortController();
     const signal = AbortSignal.any([controller.signal, ...(options.signal ? [options.signal] : []), AbortSignal.timeout(60000)]);
-    let scene: Scene | undefined, stage: HTMLDivElement | undefined, stagedStyle = "";
+    let scene: Scene | undefined;
     let owned = true;
-    const releaseStage = () => {
-      if (scene?.element && stage?.contains(scene.element)) {
-        scene.element.remove();
-        scene.element.style.cssText = stagedStyle;
-      }
-      stage?.remove();
-      stage = undefined;
-    };
     const dispose = () => {
       if (!owned) return;
       owned = false;
       signal.removeEventListener("abort", dispose);
-      releaseStage();
       this.disposeScene(scene);
     };
     try {
@@ -122,20 +88,8 @@ export class FrameRenderer {
       });
       signal.throwIfAborted();
       if (this.destroyed || epoch !== this.replacementRevision) throw new DOMException("Superseded scene", "AbortError");
-      // DOM/Remotion scenes need a connected element to initialize. They stay invisible until commit.
-      if (scene.element && this.canvas.parentElement) {
-        stagedStyle = scene.element.style.cssText;
-        stage = document.createElement("div");
-        stage.style.cssText = "position:absolute;inset:0;opacity:0;pointer-events:none;overflow:hidden";
-        Object.assign(stage.style, { width: this.canvas.clientWidth + "px", height: this.canvas.clientHeight + "px" });
-        scene.element.style.cssText = "position:absolute;inset:0;width:100%;height:100%;overflow:hidden;pointer-events:none";
-        stage.append(scene.element);
-        this.canvas.parentElement.append(stage);
-      }
       let time = Math.max(0, Math.min(project.duration, options.time()));
       let captions = options.subtitles();
-      scene.setPlayback?.({ time, playing: false, rate: 1, volume: 0, muted: true });
-      scene.setSubtitles?.(captions);
       await scene.prepareFrame?.(time, { signal });
       signal.throwIfAborted();
       await scene.render(time);
@@ -157,8 +111,6 @@ export class FrameRenderer {
           const nextTime = Math.max(0, Math.min(project.duration, options.time()));
           const nextCaptions = options.subtitles();
           if (nextTime === time && nextCaptions === captions) return;
-          candidate.setPlayback?.({ time: nextTime, playing: false, rate: 1, volume: 0, muted: true });
-          candidate.setSubtitles?.(nextCaptions);
           await candidate.prepareFrame?.(nextTime, { signal });
           signal.throwIfAborted();
           await candidate.render(nextTime);
@@ -172,14 +124,10 @@ export class FrameRenderer {
           const previous = this.scene, previousTail = this.tail;
           ++this.revision;
           this.request?.abort();
-          this.cleanupSurface?.();
-          this.cleanupSurface = undefined;
-          releaseStage();
           this.canvas.width = options.width; this.canvas.height = options.height;
           this.ctx.drawImage(surface, 0, 0);
           this.scene = candidate;
           this.project = project;
-          this.cleanupSurface = this.mountSurface(candidate);
           this.lastTime = time;
           this.renderCount++;
           this.sceneEpoch++;
@@ -225,7 +173,6 @@ export class FrameRenderer {
       }, 100);
       try {
         const combined = AbortSignal.any([request.signal, AbortSignal.timeout(45000)]);
-        scene.setSubtitles?.(subtitles);
         await scene.prepareFrame?.(time, { signal: combined });
         combined.throwIfAborted();
         await scene.render(time);
@@ -250,14 +197,12 @@ export class FrameRenderer {
     return task;
   }
   dataURL(): string {
-    if (this.scene?.element) throw new Error("DOM scene capture is asynchronous; use await capture() or captureAt().");
     return this.canvas.toDataURL("image/png");
   }
-  setPlayback(state: ScenePlayback) { this.scene?.setPlayback?.(state); }
   async capture(): Promise<string> {
     if (this.destroyed) throw new Error("Renderer disposed");
     await this.settled();
-    return this.scene?.capture ? this.scene.capture() : this.canvas.toDataURL("image/png");
+    return this.canvas.toDataURL("image/png");
   }
   async settled() { await this.tail; }
   diagnostics() {
@@ -284,8 +229,6 @@ export class FrameRenderer {
     this.destroyed = true;
     this.request?.abort();
     this.replacement?.abort();
-    this.scene?.setPlayback?.({ time: this.lastTime, playing: false, rate: 1, volume: 0, muted: true });
-    this.cleanupSurface?.();
     this.sceneBuffering = false;
     this.slowFrames.clear();
     this.publishBuffering();

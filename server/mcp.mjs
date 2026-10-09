@@ -7,7 +7,7 @@ import { readJson } from "./http.mjs";
 import { problem } from "./util.mjs";
 import { CORE_TOOLS } from "./tools/registry.mjs";
 
-export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 TypeScript 按绝对时间绘制的动画（Canvas/Pixi/Three/Babylon/Lottie/Remotion/图层合成），加多轨音频。
+export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 TypeScript 按绝对时间绘制的动画（Canvas/Pixi/Three/Babylon/Lottie/图层合成），加多轨音频。
 工作顺序：work_context 了解现状（warnings 里的情况先处理）→ frame_guide 查接口（topics 一次查几个）→ 修改 → work_check（frames: true 同时得到分镜图）亲眼确认画面（preview_frames 看指定时刻或整体，preview_audio 确认声音）。
 找代码、用法和经验用 search（scope 可含 work、used（作品用到的素材库文件，锁定的版本）、materials、experience、guide、engine，返回 文件:行号 和上下文），不要逐个读文件。
 作品文件用 files_batch 读写（read / write / edit / delete / move，一次可以放多个；失败的逐项说明，只重试失败的；check: true 改完直接检查）。asset_import / material_write 一次可以导入多个；你所在电脑上的文件用 upload_link 拿到上传地址再用 curl 上传（不经过对话）；export_video 用 wait 等它完成，完成时返回下载地址。

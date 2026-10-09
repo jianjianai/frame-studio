@@ -35,7 +35,6 @@ export async function importWork(source: WorkSource, timestamp?: number): Promis
     loadAudio: project.loadAudio,
     loadVisual: project.loadVisual,
     loadAudioDocument: project.loadAudioDocument,
-    loadRemotion: project.loadRemotion,
   });
 }
 

@@ -10,7 +10,7 @@ const project: AnimationProject = {
   title: "夏日海报",
   subtitle: "",
   description: "15 秒竖屏促销短片",
-  renderer: "composition",         // composition | canvas | pixi | three | babylon | remotion
+  renderer: "composition",         // composition | canvas | pixi | three | babylon
   engineProtocol: 1,
   composition: { width: 1080, height: 1920 },
   duration: 15,                    // 秒，最长 3600
@@ -30,7 +30,7 @@ const project: AnimationProject = {
 export default project;
 ```
 
-- `renderer` 只是说明主要技术，真正的画面由 `load` 指向的 `scene.ts` 决定。Remotion 作品还要 `loadRemotion: () => import("./composition")`。
+- `renderer` 只是说明主要技术，真正的画面由 `load` 指向的 `scene.ts` 决定。
 - `beats` 是镜头标记，显示在时间轴上，方便用户和 AI 指代片段；可加唯一 `id`。
 - `subtitles` 由播放器绘制在画面底部（导出时可选择烧录）。用户也会在时间轴上编辑字幕。用 `subtitles_edit` 修改（见 `subtitles`）。
 - 修改时长、标题、镜头标记等字段用 `work_update` 工具；它只替换字段值，保留文件其余格式。

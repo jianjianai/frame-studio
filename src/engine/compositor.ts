@@ -85,7 +85,6 @@ async function source(
     const mod = await load();
     signal.throwIfAborted();
     const scene = await mod.createScene(options);
-    if (scene.element) { scene.dispose(); throw new Error('DOM scenes must be composed in Remotion; embed Canvas scenes with FrameScene.'); }
     if (signal.aborted) {
       scene.dispose();
       signal.throwIfAborted();

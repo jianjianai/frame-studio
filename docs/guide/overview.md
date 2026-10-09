@@ -50,8 +50,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 - **以素材为主**（图片、视频、配音、字幕的剪辑排版）：用 `visual.json` 图层 + `audio.json`，见 `layers`、`audio`。
 - **动态图形 / 文字动画 / 数据可视化**：Canvas 2D 场景，见 `scene`。需要大量精灵、滤镜用 `pixi`。
 - **三维**：`three`（或 `babylon`），可加载 GLB 模型。
-- **React / CSS / SVG 排版**：`remotion`。
-- 以上可以混用：在 `visual.json` 里叠加多个 scene 图层，或在 Remotion 中用 `FrameScene` 嵌入 Canvas/WebGL 场景。
+- 以上可以混用：在 `visual.json` 里叠加多个 scene 图层。
 
 ## 必须遵守
 

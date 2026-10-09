@@ -81,7 +81,7 @@ export function createPlayerSession({
   let updateEpoch = 0, updating: AbortController | undefined, renderFailed = false;
   const hotUpdate = { revision: 0, updates: 0, lastError: "" };
   const publish = () => {
-    if (!canceled) { output.setPlayback(readPlayback(sound)); onSnapshot(readPlayback(sound)); }
+    if (!canceled) onSnapshot(readPlayback(sound));
   };
   const diagnosticErrors: string[] = [];
   const recordError = (error: unknown) => { diagnosticErrors.push(String(error)); if (diagnosticErrors.length > 50) diagnosticErrors.shift(); };
@@ -293,7 +293,6 @@ export function createPlayerSession({
     if (canceled) return;
     if (!api.ready) { raf = requestAnimationFrame(tick); return; }
     try {
-      output.setPlayback(readPlayback(sound));
       const t = sound.clock.time();
       const end = segmentEnd();
       if (end !== null && t >= end) {
@@ -469,7 +468,6 @@ export function createPlayerSession({
       // An abort after acceptance belongs to the next update/export. It cannot
       // turn an already paired picture/audio revision into a cancelled result.
       if (canceled || epoch !== updateEpoch) return committed;
-      output.setPlayback(readPlayback(sound));
       try { await drawRequested(sound.clock.time(), subtitles()); }
       catch (error) { if (!canceled) { recordError(error); renderFailed = true; pausePlayback(); onError("渲染错误：" + String(error)); } }
       publish();

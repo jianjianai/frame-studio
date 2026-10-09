@@ -5,9 +5,3 @@ allowBuilds:
   ffmpeg-static: true
   msedge-tts: false
 verifyDepsBeforeRun: false
-minimumReleaseAgeExclude:
-  - '@remotion/media@4.0.530'
-  - '@remotion/player@4.0.530'
-  - '@remotion/transitions@4.0.530'
-  - '@remotion/web-renderer@4.0.530'
-  - remotion@4.0.530
