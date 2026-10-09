@@ -7,7 +7,7 @@
 - `audio_place`：把 `public/` 中的音频文件放到某条音轨的某个时间（音轨不存在会自动创建，audio.json 不存在会自动创建并在 project.ts 中声明）。
 - `speech_synthesize`：生成配音并可直接放到「配音」音轨（见 `speech`）。
 - `audio_get` / `audio_edit`：读取或原子修改混音文档（`update` 只改一项的部分字段）。
-- `preview_audio`：响度检查；`src` 指向配乐文件并加 `beats: true` 时给出 BPM、每个节拍的时间和最强的起音，用来把切点、画面变化放在节拍上（文件内时间换算到作品时间：片段 `start` + 文件内时间 − 片段 `offset`）。
+- `preview_audio`：响度检查；`src` 指向配乐文件并加 `beats: true` 时给出 BPM、拍号、每个节拍和每小节第一拍的时间，用来把切点放在节拍上、段落和大的画面变化放在小节开头（文件内时间换算到作品时间：片段 `start` + 文件内时间 − 片段 `offset`）。
 
 ## 混音原则（用户的要求，必须遵守）
 

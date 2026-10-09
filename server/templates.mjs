@@ -188,7 +188,7 @@ export function platformInstructions() {
 - \`work_context\`：作品现状：文件、素材、图层与音轨、未保存的修改、最近一次检查结果。
 - \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误（位置是作品源码的 文件:行:列）。加 \`frames: true\` 同时返回开头、1/4、1/2、3/4、结尾的分镜图。
 - \`preview_frames\`：渲染画面给你看：\`times\` 看指定时刻，或用 \`count\`（可加 \`start\`/\`end\`）均匀取样看整体节奏，多张时拼成一张总览图。改完画面后务必用它确认效果。
-- \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载；\`src\` + \`beats: true\` 给出配乐的节奏、节拍点和重音，让剪辑点和画面变化对上音乐。
+- \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载；\`src\` + \`beats: true\` 给出配乐的节奏、每个节拍和每小节第一拍（Beat This! 模型），让剪辑点和画面变化对上音乐。
 - \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改，\`update\` 只改给出的字段（格式见 frame_guide layers / audio）。
 - \`speech_synthesize\`：整段旁白用 \`lines\` + \`place\` + \`subtitles: true\` 一次生成配音、排上音轨并写字幕；\`subtitles_edit\` 改字幕，\`work_update\` 改时长和镜头标记。
 - \`asset_import\`、\`asset_view\`：作品自己的素材（public/，列表在 work_context 的 assets）：导入，和看图片、视频素材本身的样子（用户上传的素材先看一眼再用）。素材库是作品共用的素材：\`materials_list\` 查看，\`materials_link\` 关联或取消关联（用户要求时），\`materials_use\` 锁定版本后用 \`materials/<库>/<文件>\` 地址，\`material_write\` 往素材库里放、改、移动、删除文件。素材库里的代码用 \`import … from "@materials/<库>/<路径>"\` 直接导入（见 frame_guide assets）；\`.materials/\` 是 FRAME 生成的副本，不要改。

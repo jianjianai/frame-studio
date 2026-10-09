@@ -115,7 +115,7 @@ frame export ab12cd34 --width 1920
 | `work_context` | 作品现状：元数据、需求、关联的经验库、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查、最近的导出、是否已发布、和 GitHub 的同步状态（外部 AI 调用时当场和 GitHub 比较，需要先处理的情况写在 `warnings`；内置 AI 的会话说明里已有需求和经验库，这里只给经验库目录） |
 | `work_check` | 类型、素材引用、真实浏览器加载并渲染几帧和一段音频 |
 | `preview_frames` | 渲染画面：`times` 指定时刻，或 `count`（加 `start`/`end`）均匀取样；4 张以内分开返回，更多拼成一张带时间标注的总览图（`work_check` 的 `frames: true` 也会附上检查时渲染的 5 个时刻） |
-| `preview_audio` | 一段混音或一个音频文件（`src`）的响度、静音段、削波；`beats: true` 给出 BPM、节拍点和最强的起音（ffmpeg 解码，mel 频带起音强度 + 自相关测速 + 动态规划找节拍） |
+| `preview_audio` | 一段混音或一个音频文件（`src`）的响度、静音段、削波；`beats: true` 给出 BPM、拍号、每个节拍和每小节第一拍（ffmpeg 解码后交给 [Beat This!](https://github.com/CPJKU/beat_this) 模型，`server/beat-this/analyze.py`；一次只跑一个，约为音频长度的十分之一） |
 | `search` | 和 grep 一样按内容判断文本文件（8 MB 以内），整行都搜、长行只显示匹配附近；文字或正则、多个关键词、整词、跨行、区分大小写、glob / exclude、前后上下文、每文件上限；范围可选作品、作品用到的素材库文件（锁定的版本）、素材库当前版本、经验库、制作指南、引擎源码；返回 文件:行号 和上下文 |
 | `files_list` / `files_batch` | 作品文件（外部 AI 使用；内置 AI 的工具列表里没有它们，用自己的文件工具）：一次调用对一个或多个文件读、写、精确替换、删除、移动；默认能做的都做、失败的逐项说明（同一文件前面失败则后面跳过），`atomic` 时全部成功才写入；`check` / `frames` 改完直接检查并看画面 |
 | `asset_import` / `asset_view` | 作品自己的素材（public/，列表在 `work_context`）：导入网址、base64（小文件）、本机模式下的服务器文件，`items` 一次导入多个，服务器模式不能从内网地址导入；查看图片、视频素材本身（多个拼成带编号的总览图，视频按时间点抽帧） |

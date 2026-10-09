@@ -1,3 +1,4 @@
+import path from "node:path";
 import { z } from "zod";
 import sharp from "sharp";
 import { workArg, asJson } from "./registry.mjs";
@@ -5,7 +6,7 @@ import { resolveAsset } from "./asset-tools.mjs";
 import { formatTime } from "../render.mjs";
 import { problem } from "../util.mjs";
 import { probe } from "../media.mjs";
-import { decodeAudio, loudness, trackBeats, mixDown } from "../audio-analysis.mjs";
+import { decodeAudio, loudness, beatThis, mixDown } from "../audio-analysis.mjs";
 
 const seconds = z.number().finite().nonnegative();
 const SEPARATE_MAX = 8;
@@ -75,7 +76,7 @@ export function registerPreviewTools(registry) {
     name: "preview_audio",
     title: "分析声音",
     description:
-      "听不到声音时用数字确认：每个时间窗的响度（RMS/峰值 dBFS）、静音段和削波。默认分析作品混音（start 起 duration 秒，最多 60 秒）；src 分析单个音频或视频文件（films/…、materials/<库>/…，默认整个文件，最多 300 秒）。beats: true 再给出节奏（BPM）、每个节拍的时间和最强的起音（重音），用来把剪辑点、画面变化对上音乐。",
+      "听不到声音时用数字确认：每个时间窗的响度（RMS/峰值 dBFS）、静音段和削波。默认分析作品混音（start 起 duration 秒，最多 60 秒）；src 分析单个音频或视频文件（films/…、materials/<库>/…，默认整个文件，最多 300 秒）。beats: true 再用 Beat This! 模型给出节奏（BPM）、拍号、每个节拍和每小节第一拍的时间，用来把剪辑点、画面变化对上音乐（耗时约为音频长度的十分之一）。",
     readOnly: true,
     input: {
       work: workArg,
@@ -83,7 +84,7 @@ export function registerPreviewTools(registry) {
       start: seconds.default(0),
       duration: z.number().positive().max(300).optional().describe("秒数；混音默认 10（最多 60），文件默认到结尾（最多 300）"),
       window: z.number().min(0.05).max(10).optional().describe("响度窗口秒数；默认 0.5，长音频自动加大到不超过 60 个窗口"),
-      beats: z.boolean().default(false).describe("同时分析节拍"),
+      beats: z.boolean().default(false).describe("同时分析节拍和小节"),
     },
     async run({ src, start, duration, window, beats }, ctx) {
       const work = await ctx.work();
@@ -109,15 +110,16 @@ export function registerPreviewTools(registry) {
         ...stats.windows.map((item) => `${formatTime(item.time)} rms ${item.rmsDb} / peak ${item.peakDb}`),
       ];
       if (beats) {
-        const rhythm = trackBeats(mixDown(left, right), rate, { start: from });
+        const rhythm = await beatThis(mixDown(left, right), rate, { start: from, modelsDir: path.join(services.config.dirs.models, "beat-this") });
         stats.rhythm = rhythm;
+        const where = src ? "文件内时间" : "作品时间";
         lines.push(
           "",
-          rhythm.bpm
-            ? `节奏约 ${rhythm.bpm} BPM（节拍明显程度 ${rhythm.strength}，0–1${rhythm.strength < 0.3 ? "，节奏不明显，节拍点仅供参考" : ""}；如果听感明显快一倍或慢一倍，按两倍或一半理解）。` +
-                `\n节拍 ${rhythm.beats.length} 个（秒，${src ? "文件内时间" : "作品时间"}）：${listTimes(rhythm.beats)}` +
-                (rhythm.onsets.length ? `\n最强的起音（重音，适合放切点、闪光、文字出现）：${rhythm.onsets.map((item) => `${item.time.toFixed(2)}(${item.strength})`).join(" ")}` : "")
-            : "没有找到稳定的节奏（声音太短、太安静或没有节拍）。",
+          rhythm.beats.length >= 2
+            ? `节奏约 ${rhythm.bpm} BPM${rhythm.beatsPerBar ? `，每小节 ${rhythm.beatsPerBar} 拍` : ""}（Beat This! 模型）。` +
+                `\n节拍 ${rhythm.beats.length} 个（秒，${where}）：${listTimes(rhythm.beats)}` +
+                `\n小节第一拍 ${rhythm.downbeats.length} 个（秒，${where}；段落和大的画面变化放在这里）：${listTimes(rhythm.downbeats)}`
+            : "没有找到节拍（声音太短、太安静或没有节奏）。",
         );
         if (src && rhythm.beats.length) lines.push("文件放到音轨上时，作品时间 = 片段 start + （文件内时间 − 片段 offset）。");
       }

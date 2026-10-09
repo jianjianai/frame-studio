@@ -208,14 +208,18 @@ describe("tools that save the AI calls", () => {
     fs.mkdirSync(publicDir, { recursive: true });
     await sharp({ create: { width: 64, height: 32, channels: 3, background: "#0a0" } }).png().toFile(path.join(publicDir, "green.png"));
     fs.writeFileSync(path.join(publicDir, "mark.svg"), '<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20"><circle cx="10" cy="10" r="8" fill="red"/></svg>');
-    // A drum loop at 120 BPM: a low thump on every beat from 0.25 s.
+    // A drum loop at 120 BPM from 0.25 s: kick and snare on alternate beats, hi-hats on eighths.
     const rate = 22050;
     const samples = new Int16Array(rate * 12);
-    for (let beat = 0.25; beat < 12; beat += 0.5)
-      for (let i = 0; i < 0.12 * rate; i++) {
-        const at = Math.round(beat * rate) + i;
-        if (at < samples.length) samples[at] += Math.round(20000 * Math.exp(-i / (0.03 * rate)) * Math.sin((2 * Math.PI * 70 * i) / rate));
-      }
+    let seed = 7;
+    const noise = () => ((seed = (seed * 16807) % 2147483647) / 2147483647) * 2 - 1;
+    const add = (at, value) => at < samples.length && (samples[at] = Math.max(-32767, Math.min(32767, samples[at] + Math.round(value * 32767))));
+    for (let beat = 0.25, k = 0; beat < 12; beat += 0.5, k++) {
+      const s = Math.round(beat * rate);
+      for (let i = 0; i < 0.15 * rate; i++)
+        add(s + i, k % 2 ? 0.4 * Math.exp(-i / (0.03 * rate)) * noise() : 0.7 * Math.exp(-i / (0.04 * rate)) * Math.sin((2 * Math.PI * (55 + 80 * Math.exp(-i / (0.01 * rate))) * i) / rate));
+      for (const hat of [s, s + Math.round(0.25 * rate)]) for (let i = 0; i < 0.03 * rate; i++) add(hat + i, 0.12 * Math.exp(-i / (0.006 * rate)) * noise());
+    }
     const header = Buffer.alloc(44);
     header.write("RIFF", 0);
     header.writeUInt32LE(36 + samples.length * 2, 4);
@@ -241,13 +245,27 @@ describe("tools that save the AI calls", () => {
     expect((await tool("asset_view", { work: work.id, files: ["films/other-work/a.png"] })).status).toBe(400);
     if (ffmpegExecutable()) {
       const music = await tool("preview_audio", { work: work.id, src: `films/${work.slug}/look/drums.wav`, beats: true });
-      expect(music.status).toBe(200);
-      expect(Math.abs(music.body.data.rhythm.bpm - 120)).toBeLessThan(3);
-      const beats = music.body.data.rhythm.beats;
-      expect(beats.length).toBeGreaterThan(18);
-      for (const time of beats) expect(Math.abs(((time - 0.25 + 0.25) % 0.5) - 0.25)).toBeLessThan(0.03);
-      expect(music.body.text).toContain("节奏约");
+      if (process.env.FRAME_BEAT_PYTHON) {
+        expect(music.status).toBe(200);
+        expect(Math.abs(music.body.data.rhythm.bpm - 120)).toBeLessThan(3);
+        const beats = music.body.data.rhythm.beats;
+        expect(beats.length).toBeGreaterThan(18);
+        for (const time of beats) expect(Math.abs((time % 0.5) - 0.25)).toBeLessThan(0.05);
+        expect(music.body.text).toContain("小节第一拍");
+      } else {
+        // Without Beat This! installed the AI is told what is missing.
+        expect(music.status).toBe(503);
+        expect(music.body.error.code).toBe("NO_BEAT_THIS");
+      }
     }
+  });
+
+  it("derives tempo and meter from beats and downbeats", async () => {
+    const { describeRhythm } = await import("../server/audio-analysis.mjs");
+    const beats = Array.from({ length: 13 }, (_, index) => 0.5 + index * 0.5);
+    const rhythm = describeRhythm(beats, [0.5, 2, 3.5, 5, 6.5]);
+    expect(rhythm).toMatchObject({ bpm: 120, beatsPerBar: 3 });
+    expect(describeRhythm([], [])).toMatchObject({ bpm: null, beatsPerBar: null });
   });
 
   it("reads documents compactly, edits parts and says where things are", async () => {

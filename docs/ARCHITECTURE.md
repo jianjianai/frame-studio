@@ -27,6 +27,7 @@ libraries/<库>/                      frame/materials 分支的 worktree：素�
 experience/<库>/                     frame/experience 分支的 worktree：经验库（每个文件夹一个库，作品在 project.ts 的 experiences 中关联）
 exports/<库>/<作品>/                  导出的视频
 models/speech/                       下载的语音模型
+models/beat-this/                    节拍分析模型（本机运行时第一次分析下载；Docker 镜像自带）
 ai/sessions/                         AI 对话记录（JSONL）、图片、AI 上一轮结束时的作品文件快照
 tmp/                                 导出快照、Vite 缓存
 cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图片的缩略图）及其来源版本
@@ -53,6 +54,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `mcp.mjs` | `/mcp`（Streamable HTTP）与 `/api/tools` |
 | `ai/` | ACP 客户端：代理进程池、会话、权限、登录、自定义 API |
 | `speech/` | 语音引擎与模型下载 |
+| `audio-analysis.mjs` `beat-this/` | AI 的“听”：ffmpeg 解码后算响度；节拍和小节交给 [Beat This!](https://github.com/CPJKU/beat_this)（MIT）模型，由 `beat-this/analyze.py` 在独立的 Python 进程中运行（`FRAME_BEAT_PYTHON`），一次只跑一个 |
 | `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件：Git blob，LFS 内容按需下载；`@materials/...` 代码导入由 Vite 插件解析到作品根目录 `.materials/` 中的副本，锁定版本或素材库当前版本，锁定时沿导入关系一并锁定）、导出文件、后台任务 |
 
 ## 预览与热更新

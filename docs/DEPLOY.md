@@ -9,6 +9,16 @@ pnpm start            # http://127.0.0.1:4310
 
 只监听 127.0.0.1 时不需要登录。需要 Chrome 或 Chromium（AI 看画面、作品检查、导出用），找不到时设置 `FRAME_BROWSER=/path/to/chrome`。ffmpeg 随依赖安装（`ffmpeg-static`），也可用 `FFMPEG_PATH` 指定。
 
+节拍分析（`preview_audio` 的 `beats`）用 [Beat This!](https://github.com/CPJKU/beat_this)（MIT 许可，代码和模型），需要 Python 3.11+ 和 PyTorch（CPU 版约 1 GB）。不装时其他功能照常，AI 会得到“需要 Beat This!”的提示。本机安装：
+
+```bash
+python3 -m venv ~/.local/beat-this
+~/.local/beat-this/bin/pip install -r server/beat-this/requirements.txt
+FRAME_BEAT_PYTHON=~/.local/beat-this/bin/python pnpm start
+```
+
+模型（81 MB）第一次分析时下载到 `FRAME_HOME/models/beat-this`。
+
 ## Docker
 
 ```bash
@@ -17,7 +27,7 @@ FRAME_PASSWORD='设置一个强密码' docker compose -f deploy/compose.yaml up 
 ```
 
 - 所有数据在 `deploy/data`（容器内 `/data`）：作品库、设置、对话、导出、语音模型、AI 账号凭据（`/data/home`）。
-- 镜像包含 Chromium 和中日韩字体。三维场景在容器中用软件渲染，导出较慢。
+- 镜像包含 Chromium、中日韩字体和 Beat This!（Python + CPU 版 PyTorch + 模型，约 1 GB）。三维场景在容器中用软件渲染，导出较慢。
 - 更新：`git pull && docker compose -f deploy/compose.yaml up -d --build`。
 
 ### 反向代理
@@ -40,5 +50,7 @@ frame.example.com {
 | `FRAME_PUBLIC_URL` | （无） | 对外访问地址（反向代理后）；也是 MCP OAuth 的签发者地址，外部客户端据此完成授权 |
 | `FRAME_BROWSER` | 自动查找 | Chrome/Chromium 路径 |
 | `FFMPEG_PATH` | 自动查找 | ffmpeg 路径 |
+| `FRAME_BEAT_PYTHON` | `python3` | 装有 Beat This! 的 Python（镜像中为 `/opt/beat-this/bin/python`） |
+| `TORCH_HOME` | `FRAME_HOME/models/beat-this` | Beat This! 模型位置（镜像中为构建时下载好的 `/opt/beat-this/torch`） |
 | `FRAME_AGENT_HOME` | 用户主目录 | AI 代理（claude/codex）的 HOME，凭据保存于此 |
 | `FRAME_DEV` | （无） | `1` 时界面使用源码热更新 |
