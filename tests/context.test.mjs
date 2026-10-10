@@ -195,3 +195,13 @@ describe("session brief and per-message context", () => {
     expect(selectionText({ kind: "layer", id: "gone" }, meta)).toBe("");
   });
 });
+
+describe("session brief", () => {
+  it("tells the agent to answer in the user's language and to edit with its own tools", async () => {
+    const { platformInstructions } = await import("../server/templates.mjs");
+    const brief = platformInstructions();
+    // Claude answered a Chinese request in English; Bash edits made the user approve each one.
+    expect(brief).toContain("和用户交流用用户的语言（默认简体中文）");
+    expect(brief).toContain("不要用 sed -i、cat > 文件、tee 这类命令改文件");
+  });
+});

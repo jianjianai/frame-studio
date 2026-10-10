@@ -150,6 +150,8 @@ describe("tools that save the AI calls", () => {
     expect(found.body.text).toContain("a.ts\n  1- // 第一行\n  2: export const Glow = 1;\n  3: const other = Glow + 1;\n  4- // 结尾");
     expect(found.body.data.total).toBe(2);
     expect((await tool("search", { work: work.id, pattern: "glow", caseSensitive: true })).body.text).toContain("没有找到");
+    // A whole function after the match: AIs ask for 30–60 lines.
+    expect((await tool("search", { work: work.id, pattern: "glow", after: 60 })).status).toBe(200);
     // Several words, regex, other scopes.
     await app.services.materials.put("local", "上传库", "fx.ts", { content: "export function sparkle() {}\n" });
     const wide = await tool("search", { work: work.id, patterns: ["sparkle", "快"], scope: ["materials", "experience"] });

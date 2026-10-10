@@ -137,6 +137,7 @@ export function fieldsAt(schema, path) {
 export const CORE_TOOLS = new Set([
   "frame_guide",
   "search",
+  "material_read",
   "work_context",
   "work_check",
   "work_update",
