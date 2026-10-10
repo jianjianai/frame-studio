@@ -111,6 +111,12 @@ function evaluator(bindings) {
       case "ObjectExpression": {
         const result = {};
         for (const property of node.properties) {
+          if (property.type === "SpreadElement") {
+            const spread = value(property.argument, depth + 1);
+            if (!spread || typeof spread !== "object" || Array.isArray(spread)) return undefined;
+            Object.assign(result, spread);
+            continue;
+          }
           if (property.type !== "ObjectProperty" || property.computed) return undefined;
           const key = keyOf(property);
           const item = value(property.value, depth + 1);
@@ -119,6 +125,12 @@ function evaluator(bindings) {
         }
         return result;
       }
+      case "MemberExpression": {
+        // CAST.jie, CAST["a"] of a constant object.
+        const object = value(node.object, depth + 1);
+        const key = node.computed ? value(node.property, depth + 1) : node.property.name;
+        return object && typeof object === "object" && (typeof key === "string" || typeof key === "number") && Object.hasOwn(object, key) ? object[key] : undefined;
+      }
       default:
         return undefined;
     }
@@ -126,7 +138,16 @@ function evaluator(bindings) {
   return value;
 }
 const keyOf = (property) => (property.key.type === "Identifier" ? property.key.name : String(property.key.value));
-const propertiesOf = (object) => new Map((object?.type === "ObjectExpression" ? object.properties : []).filter((property) => property.type === "ObjectProperty" || property.type === "ObjectMethod").map((property) => [keyOf(property), property]));
+/** The properties of an object literal, including those spread in from constant object literals (`...SCREEN`). */
+function propertiesOf(object, bindings, depth = 0) {
+  const found = new Map();
+  if (object?.type === "Identifier" && bindings?.has(object.name) && depth < 8) return propertiesOf(bindings.get(object.name), bindings, depth + 1);
+  for (const property of object?.type === "ObjectExpression" ? object.properties : []) {
+    if (property.type === "SpreadElement") for (const [key, value] of propertiesOf(property.argument, bindings, depth + 1)) found.set(key, value);
+    else if ((property.type === "ObjectProperty" || property.type === "ObjectMethod") && !property.computed) found.set(keyOf(property), property);
+  }
+  return found;
+}
 
 /** A zod schema from its source: z.number().min(0).max(1).default(0.5).describe("…") and friends. */
 function zodDescriber(code, bindings, value) {
@@ -282,7 +303,7 @@ export function extractModule(code, ref) {
     const table = call.arguments[1];
     for (const property of table?.type === "ObjectExpression" ? table.properties : []) {
       if (property.type !== "ObjectProperty" || property.computed) continue;
-      const fields = propertiesOf(property.value);
+      const fields = propertiesOf(property.value, bindings);
       const field = (name) => (fields.get(name)?.value ? value(fields.get(name).value) : undefined);
       sounds.push({
         key: keyOf(property),
@@ -302,9 +323,9 @@ export function extractModule(code, ref) {
       let node = property.value;
       if (node.type === "CallExpression" && node.callee.type === "Identifier" && node.callee.name === "resource") node = node.arguments[0];
       if (node?.type !== "ObjectExpression") continue;
-      const fields = propertiesOf(node);
+      const fields = propertiesOf(node, bindings);
       const field = (name) => (fields.get(name)?.type === "ObjectProperty" ? value(fields.get(name).value) : undefined);
-      const preview = propertiesOf(fields.get("preview")?.value);
+      const preview = propertiesOf(fields.get("preview")?.value, bindings);
       const previewField = (name) => (preview.get(name)?.type === "ObjectProperty" ? value(preview.get(name).value) : undefined);
       const draw = preview.get("draw");
       const params = fields.get("params") ? zod(fields.get("params").value) : null;
@@ -703,7 +724,7 @@ export function resourcesPlugin(services) {
       const line = (entry) =>
         entry.type === "code"
           ? `- [${entry.kindLabel}] ${entry.id} ${entry.signature}${entry.doc ? `  // ${firstLine(entry.doc)}` : ""}`
-          : `- [${entry.kindLabel}] ${entry.id} ${entry.title}${entry.type === "sound" && entry.duration ? `（${entry.duration} 秒）` : ""}${entry.description ? " — " + firstLine(entry.description) : ""}`;
+          : `- [${entry.kindLabel}] ${entry.id} ${entry.title}${entry.type === "sound" && entry.duration && !/\d\s*秒/.test(entry.title) ? `（${entry.duration} 秒）` : ""}${entry.description ? " — " + firstLine(entry.description) : ""}`;
       if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源。可以换个说法，或不给 query 看全部目录。` : "素材库里还没有声明资源（见 frame_guide resources）。");
       let text;
       if (query) text = `找到 ${found.length} 个：\n${found.map(line).join("\n")}`;

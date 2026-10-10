@@ -107,6 +107,25 @@ describe("resource declarations, read without running code", () => {
     expect(sfx.exports).toEqual([]);
   });
 
+  it("follows constants: presets from a cast, spread preview settings", () => {
+    const code = `import { z } from "zod";
+import { defineResources, resource } from "@frame/engine/resources";
+const CAST = { jie: { hair: "short", seed: 301 }, yu: { hair: "curly" } };
+const FRAME = { width: 1080, height: 1920, duration: 3 };
+export const resources = defineResources({
+  person: resource({
+    kind: "character",
+    title: "人",
+    params: z.object({ hair: z.string().optional(), face: z.string().optional() }),
+    presets: { 杰: CAST.jie, 杰大笑: { ...CAST.jie, face: "laugh" }, 雨: CAST["yu"], 动态: { face: pick() } },
+    preview: { ...FRAME, draw(ctx) { ctx.fill(); } },
+  }),
+});`;
+    const [person] = extractModule(code, "库/people.ts").resources;
+    expect(person.presets).toEqual({ 杰: { hair: "short", seed: 301 }, 杰大笑: { hair: "short", seed: 301, face: "laugh" }, 雨: { hair: "curly" }, 动态: { "(代码)": "{ face: pick() }" } });
+    expect(person.preview).toMatchObject({ width: 1080, height: 1920, duration: 3 });
+  });
+
   it("ranks matches by where the words appear", () => {
     const entry = { title: "弹跳的球", key: "ball", tags: ["节拍"], description: "跟着节拍弹起", kindLabel: "物品" };
     expect(score(entry, "球")).toBeGreaterThan(score(entry, "弹起"));

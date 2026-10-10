@@ -15,8 +15,8 @@ interface Listing {
 const KINDS: [string, string][] = [
   ["", "全部"],
   ["character", "角色"],
-  ["prop", "物品"],
   ["set", "场景"],
+  ["prop", "物品"],
   ["ui", "界面"],
   ["effect", "效果"],
   ["transition", "转场"],
@@ -114,7 +114,9 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
       </div>
       {libraries.map((library) => {
         const items = shown.filter((item) => item.library === library);
-        const kinds = [...new Set(items.map((item) => item.kindLabel))];
+        // Characters first, sounds last (the order of KINDS).
+        const order = KINDS.map(([, label]) => label);
+        const kinds = [...new Set(items.map((item) => item.kindLabel))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
         const open = !closed.has(library);
         return (
           <section key={library} className="materials-library">
