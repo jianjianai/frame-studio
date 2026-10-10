@@ -289,6 +289,10 @@ describe("review data", () => {
     expect(text).toContain("本作品（抖音）：播放 5,000，是中位数的 1.43 倍");
     // Both works mark the reversal: it becomes a column of its own.
     expect(compareText(rows, { checkpoint: "7d" })).toContain("反转时还在");
+    // Day 3 has only the hourly views: say where the rest is.
+    expect(compareText(compareRows(entries, { checkpoint: "3d" }), { checkpoint: "3d" })).toContain(
+      "第 3 天只有每小时数据算出的播放、涨粉的：夏日（导出过的是发布后 1、6.5 天）",
+    );
 
     // Without a day asked for: the latest one most posts have reached.
     expect(defaultCheckpoint(entries)).toBe("7d");
@@ -400,10 +404,47 @@ describe("review data", () => {
         [1, "one", 1.2],
         [9, "four", 3.3],
       ]),
+      row("另一首歌", [[2, "other", 2.1]]),
       row("重置版", [[9, "four", 3.47]]),
     ]);
+    expect(table).toContain("| 歌曲时间 | 歌词 | 原版·抖音 | 重置版·抖音 |");
     expect(table).toContain("| 9 | four | ×3.3 | ×3.47 |");
     expect(table).not.toContain("| one |");
+    expect(table).not.toContain("另一首歌");
+  });
+});
+
+describe("one export at a time", () => {
+  it("reads a file uploaded twice once and tells two exports apart", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "frame-douyin-"));
+    const put = (name, data) => {
+      fs.writeFileSync(path.join(dir, name), data);
+      return { path: `raw/2026-10-09/${name}`, file: path.join(dir, name) };
+    };
+    const one = Object.entries(exports).map(([name, data]) => put(name, data));
+    const again = readExports([...one, put("流量数据-2.xlsx", exports["流量数据.xlsx"])]);
+    expect(again.conflicts).toEqual([]);
+    expect(again.duplicates).toEqual([{ path: "raw/2026-10-09/流量数据-2.xlsx", of: "raw/2026-10-09/流量数据.xlsx" }]);
+    expect(again.recognized.find((item) => item.path === "raw/2026-10-09/流量数据.xlsx").until).toBe("2026-10-08T20:00:00.000Z");
+    // The next day's export in the same folder: other numbers, the same parts.
+    const later = put(
+      "流量数据-3.xlsx",
+      workbook({
+        指标数据: [
+          ["播放量", "点赞量"],
+          ["9000", "600"],
+        ],
+        "播放量-新增-每小时趋势数据": [
+          ["日期", "播放量"],
+          [time(40), "50"],
+        ],
+      }),
+    );
+    expect(readExports([...one, later]).conflicts).toEqual([
+      "views 在 raw/2026-10-09/流量数据.xlsx 是 5000，在 raw/2026-10-09/流量数据-3.xlsx 是 9000",
+      "likes 在 raw/2026-10-09/流量数据.xlsx 是 350，在 raw/2026-10-09/流量数据-3.xlsx 是 600",
+      "raw/2026-10-09/流量数据.xlsx 和 raw/2026-10-09/流量数据-3.xlsx 都有每小时 views",
+    ]);
   });
 });
 
@@ -573,7 +614,11 @@ describe("reviews in the studio and for the AI", () => {
     });
 
     const text = (await tool("review_read", { work: work.id })).body.text;
-    expect(text).toContain("p1 抖音「17岁生日 #生日 #s0rrow」2026-10-07 23:00（北京时间）发布");
+    expect(text).toContain("p1 抖音「17岁生日 #生日 #s0rrow」2026-10-07 23 点多（北京时间，按每小时数据估计）发布");
+    expect(text).toContain("最新数据（统计到 2026-10-09 04:00，发布后 29 小时，来自 raw/2026-10-09/ 的 5 个文件）");
+    expect(text).toContain("6–7 秒 ×8.7（1.3 1.41 | 2.4 1.7） 镜头「转折」");
+    expect(text).toContain("看这几秒的画面：preview_frames 的 times 用 [6.5, 8.5, 10.5, 12.5, 14.5]");
+    expect(text).not.toContain("注意：作品在这次发布之后改过");
     expect(text).toContain("2 秒跳出 30.79%（同类 29%）");
     expect(text).toContain("5 秒留存 46.46%（同类 53%）");
     expect(text).toContain("目标：播放 1 万（完成 50%）");
@@ -587,6 +632,57 @@ describe("reviews in the studio and for the AI", () => {
     expect(text).toContain("6–8 秒 转折 ×5.16（按同类走结尾多 56.7%）");
     expect(text).toContain("评论导出：一级评论 2 条、回复 1 条；赞最多：「开飞行模式干嘛」（9 赞）");
     expect(text).toContain("raw/2026-10-09/流量数据.xlsx（已录入）");
+
+    // The same files again: nothing changes, and the folder can be named without raw/.
+    expect((await tool("review_import", { work: work.id, folder: "2026-10-09" })).body.text).toContain(
+      "这些文件之前已经导入过（p1 统计到 2026-10-09 04:00 的数据），这次没有变化。",
+    );
+    // The next export dropped into the same folder is not mixed in.
+    await call(`/api/repos/local/reviews/works/${work.id}/upload?name=${encodeURIComponent("流量数据.xlsx")}&folder=2026-10-09`, {
+      method: "POST",
+      raw: Buffer.from(
+        workbook({
+          指标数据: [
+            ["播放量", "点赞量"],
+            ["9000", "600"],
+          ],
+        }),
+      ),
+    });
+    const mixed = await tool("review_import", { work: work.id, folder: "raw/2026-10-09" });
+    expect(mixed.status).toBe(409);
+    expect(mixed.body.error.message).toContain(
+      "这些文件不是同一次导出的（views 在 raw/2026-10-09/流量数据-2.xlsx 是 9000，在 raw/2026-10-09/流量数据.xlsx 是 5000",
+    );
+    expect(mixed.body.error.message).toContain("- raw/2026-10-09/流量数据.xlsx：指标、每小时播放（分渠道），每小时数据到 2026-10-09 04:00");
+
+    // Numbers by the names people use; times only with their zone.
+    const named = await tool("review_write", {
+      work: work.id,
+      operations: [{ op: "snapshot", post: "p1", at: "2026-10-10T12:00:00+08:00", metrics: { 播放量: 9000, 点赞: 600, "2s跳出率": 0.3 } }],
+    });
+    expect(named.body.text).toContain("✓ 1. snapshot（播放量 记为 views、点赞 记为 likes、2s跳出率 记为 bounce2s）");
+    const zoneless = await tool("review_write", {
+      work: work.id,
+      operations: [{ op: "snapshot", post: "p1", at: "2026-10-10 13:00", metrics: { views: 9100 } }],
+    });
+    expect(zoneless.body.error.message).toContain("时间要写到分钟并带时区，例如 2026-10-08T20:00:00+08:00（北京时间）");
+    const history = (await tool("review_read", { work: work.id })).body.text;
+    expect(history).toContain("历次数据（共 2 次）：");
+    expect(history).toContain("| 2026-10-10 12:00 | 2.5 天 | 9,000 | 6.67% |");
+
+    // A stretch second by second, with what is on screen when it changes.
+    const seconds = (await tool("review_read", { work: work.id, seconds: [5, 9] })).body.text;
+    expect(seconds).toContain("5–9 秒：开始时还在 50%（同类 53%），这段走掉 50%（同类 16.98%），是同类的 ×2.94；这段按同类的流失率走，看到结尾的人多 66.04%");
+    expect(seconds).toContain("| 5 | 50% | 53% | 8% | 5.66% | ×1.41 | 镜头「开场」 |");
+    expect(seconds).toContain("| 6 | 46% | 50% | 34.78% | 4% | ×8.7 | 镜头「转折」 |");
+    expect(seconds).toContain("| 7 | 30% | 48% | 10% | 4.17% | ×2.4 | ◆反转 7 秒 |");
+    expect((await tool("review_read", { work: work.id, seconds: [20, 30] })).body.error.message).toContain("视频只有 15 秒");
+
+    // A version saved after posting that changes the picture: frames are not what viewers saw.
+    await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { beats: [{ at: 0, title: "新开场", detail: "" }] } });
+    await tool("version_save", { work: work.id, message: "改开场" });
+    expect((await tool("review_read", { work: work.id })).body.text).toContain("注意：作品在这次发布之后改过");
 
     // At day 1 the hourly data gives exact views, though the only snapshot is at 29 hours.
     const day1 = await tool("reviews_compare", { work: work.id, checkpoint: "1d", works: [work.id] });
@@ -602,6 +698,17 @@ describe("reviews in the studio and for the AI", () => {
       files: [{ from: "/Users/me/Downloads/后台截图.png", review: true, path: "raw/2026-10-10/后台截图.png" }],
     });
     expect(link.body.text).toContain("复盘资料的 raw/2026-10-10/后台截图.png");
+    expect(link.body.text).toContain("用 review_import 的 folder 导入：raw/2026-10-10");
+    const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
+    const later = await tool("upload_link", {
+      work: work.id,
+      files: [
+        { from: "/Users/me/Downloads/流量数据.xlsx", review: true },
+        { from: "/Users/me/Downloads/粉丝数据.xlsx", review: true, path: "2026-10-12/粉丝数据.xlsx" },
+      ],
+    });
+    expect(later.body.text).toContain(`复盘资料的 raw/${today}/流量数据.xlsx`);
+    expect(later.body.text).toContain("复盘资料的 raw/2026-10-12/粉丝数据.xlsx");
     const png = await (
       await import("sharp")
     )

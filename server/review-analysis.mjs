@@ -7,6 +7,7 @@ import {
   metricLabel,
   isBenchmarked,
   latest,
+  derive,
   snapshotsOf,
   seriesOf,
   retentionAt,
@@ -78,11 +79,7 @@ export function retentionAnalysis({ retention, benchmark, duration, segments = [
       .filter((moment) => moment.at <= end)
       .map((moment) => ({ ...moment, kept: round(r(moment.at), 4), ...(rb ? { keptBenchmark: round(rb(moment.at), 4) } : {}) })),
   };
-  const labelsAt = (t) => {
-    const out = {};
-    for (const segment of segments) if (segment.start <= t && t < segment.end && !out[segment.kind]) out[segment.kind] = segment.label;
-    return out;
-  };
+  const labelsAt = (t) => labelsAtTime(segments, t);
   if (rb) {
     const mine = churn(retention, end);
     const theirs = churn(benchmark, end);
@@ -136,6 +133,13 @@ export function retentionAnalysis({ retention, benchmark, duration, segments = [
     (result.segments[segment.kind] ??= []).push(entry);
   }
   return result;
+}
+
+/** What each kind of segment shows at second `t`: { 图层: "第二幕", 歌词: "…" }. */
+function labelsAtTime(segments, t) {
+  const out = {};
+  for (const segment of segments) if (segment.start <= t && t < segment.end && !out[segment.kind]) out[segment.kind] = segment.label;
+  return out;
 }
 
 /** Without similar videos to compare with: the steepest stretches and where the curve rises (rewatching). */
@@ -228,15 +232,46 @@ const RATE_OF = {
   unfollows: "unfollowRate",
   avgWatchTime: "watchRatio",
 };
+/** The numbers a post's history shows, export by export. */
+const HISTORY_COLUMNS = [
+  "views",
+  "likeRate",
+  "commentRate",
+  "shareRate",
+  "favoriteRate",
+  "followers",
+  "bounce2s",
+  "retention5s",
+  "retentionEnd",
+  "completionRate",
+];
 const segmentLine = (item) =>
   `${round(item.start, 1)}–${round(item.end, 1)} 秒 ${item.label}${finite(item.multiplier) ? ` ${times(item.multiplier)}` : ` 流失 ${formatPercent(item.lost)}`}${finite(item.gain) && Math.abs(item.gain) >= 0.01 ? `（按同类走结尾${item.gain > 0 ? "多" : "少"} ${formatPercent(Math.abs(item.gain))}）` : ""}`;
-const labelsText = (labels) =>
+const short = (text, max) => (text.length > max ? `${text.slice(0, max - 1)}…` : text);
+const labelsText = (labels, max = 30) =>
   Object.entries(labels ?? {})
-    .map(([kind, label]) => `${kind}「${label}」`)
+    .map(([kind, label]) => `${kind}「${short(label, max)}」`)
     .join(" ");
+/** "raw/2026-10-10/a.xlsx、raw/2026-10-10/b.xlsx、…" → "raw/2026-10-10/ 的 6 个文件". */
+const sourceText = (source) => {
+  const files = String(source || "")
+    .split("、")
+    .filter(Boolean);
+  const folders = new Set(files.map((file) => file.slice(0, file.lastIndexOf("/") + 1)));
+  return files.length > 2 && folders.size === 1 && [...folders][0] ? `${[...folders][0]} 的 ${files.length} 个文件` : files.join("、");
+};
+/** A post's time as known: imported without one, it is the first hour of the hourly data. */
+const postedText = (review, post) => {
+  const views = seriesOf(review, post, "views");
+  const estimated = views && Date.parse(views.start) === Date.parse(post.postedAt) && Date.parse(post.postedAt) % HOUR === 0;
+  return estimated ? `${beijing(post.postedAt).slice(0, 13)} 点多（北京时间，按每小时数据估计）` : `${beijing(post.postedAt)}（北京时间）`;
+};
 
-/** The overview review_read returns. `analyses[post]` = { retention, flow }; `segmentKinds` = { 幕: 4, 歌词: 17 }. */
-export function reviewText({ review, title, duration, files, documents, analyses, segmentKinds = {} }) {
+/**
+ * The overview review_read returns. `analyses[post]` = { retention, flow }; `segmentKinds` =
+ * { 幕: 4, 歌词: 17 }; `changed[post]` = the work's version now, when the picture changed since that post.
+ */
+export function reviewText({ review, title, duration, files, documents, analyses, segmentKinds = {}, changed = {} }) {
   const lines = [`复盘「${title}」（作品 ${review.work}${duration ? `，时长 ${round(duration, 2)} 秒` : ""}）`];
   if (review.moments.length) lines.push(`关键时刻：${review.moments.map((moment) => `${moment.label} ${moment.at} 秒`).join("、")}`);
   const kinds = Object.entries(segmentKinds);
@@ -253,7 +288,7 @@ export function reviewText({ review, title, duration, files, documents, analyses
     const { retention, flow } = analyses?.[post.id] ?? {};
     lines.push(
       "",
-      `${post.id} ${post.platform}${post.account ? `（${post.account}）` : ""}「${post.title ?? title}」${beijing(post.postedAt)}（北京时间）发布，现在${ageLabel(ageDays(post, new Date().toISOString())).replace("发布后 ", "已发布 ")}${post.url ? `；${post.url}` : ""}`,
+      `${post.id} ${post.platform}${post.account ? `（${post.account}）` : ""}「${post.title ?? title}」${postedText(review, post)}发布，现在${ageLabel(ageDays(post, new Date().toISOString())).replace("发布后 ", "已发布 ")}${post.url ? `；${post.url}` : ""}`,
       ...(post.pinnedComment ? [`  置顶评论：${post.pinnedComment}`] : []),
       ...(post.export || post.version || post.duration
         ? [
@@ -264,6 +299,11 @@ export function reviewText({ review, title, duration, files, documents, analyses
             ]
               .filter(Boolean)
               .join("，")}`,
+          ]
+        : []),
+      ...(changed[post.id]
+        ? [
+            `  注意：作品在这次发布之后改过（现在的版本 ${changed[post.id]}），preview_frames 看到的和按图层、镜头的分段是现在的作品，不一定是观众看到的；改了什么用 version_diff 对照发布时的版本`,
           ]
         : []),
       ...(post.notes ? [`  备注：${post.notes}`] : []),
@@ -292,11 +332,12 @@ export function reviewText({ review, title, duration, files, documents, analyses
     const numbers = now.metrics;
     // The standard metrics in their order, then the platform's own (投币…); rates go next to their counts.
     const custom = Object.keys(numbers).filter((key) => !METRICS.some((item) => item.key === key) && !isDerived(key));
-    const shown = [...METRICS.map((item) => item.key).filter((key) => key in numbers), ...custom];
+    // The average watch ratio already stands next to the average watch time.
+    const shown = [...METRICS.map((item) => item.key).filter((key) => key in numbers && !(key === "watchRatio" && "avgWatchTime" in numbers)), ...custom];
     // A metric the newest snapshot lacks comes from an earlier one: say which.
     const older = (key) => (now.from[key] !== now.at ? ageShort(ageDays(post, now.from[key])) : "");
     lines.push(
-      `  最新数据（${ageLabel(ageDays(post, now.at))}${list.at(-1).source ? `，来自 ${list.at(-1).source}` : ""}）：${shown
+      `  最新数据（统计到 ${beijing(now.at)}，${ageLabel(ageDays(post, now.at))}${list.at(-1).source ? `，来自 ${sourceText(list.at(-1).source)}` : ""}）：${shown
         .map((key) => {
           const rate =
             RATE_OF[key] && RATE_OF[key] in numbers
@@ -307,8 +348,24 @@ export function reviewText({ review, title, duration, files, documents, analyses
           return `${metricLabel(key)} ${key === "views" ? formatCount(numbers[key]) : formatValue(key, numbers[key])}${note ? `（${note}）` : ""}`;
         })
         .join("｜")}`,
-      `  数据记录：${list.map((snapshot) => ageLabel(ageDays(post, snapshot.at)).replace("发布后 ", "")).join("、")}（共 ${list.length} 次）`,
     );
+    // How the numbers moved between exports (for remove_snapshot or merging, the times are the snapshots' own).
+    if (list.length > 1) {
+      const rows = list.map((snapshot) => ({
+        snapshot,
+        metrics: derive(snapshot.metrics, { duration: length, retention: snapshot.retention, moments: review.moments }),
+      }));
+      const used = HISTORY_COLUMNS.filter((key) => rows.some((row) => finite(row.metrics[key])));
+      lines.push(
+        `  历次数据（共 ${list.length} 次）：`,
+        `  | 统计到（北京时间） | 发布后 | ${used.map(metricLabel).join(" | ")} | 来自 |`,
+        `  |${" --- |".repeat(used.length + 3)}`,
+        ...rows.map(
+          ({ snapshot, metrics }) =>
+            `  | ${beijing(snapshot.at)} | ${ageShort(ageDays(post, snapshot.at)).slice(2)} | ${used.map((key) => formatValue(key, metrics[key])).join(" | ")} | ${sourceText(snapshot.source) || "—"} |`,
+        ),
+      );
+    }
     if (flow) {
       const parts = [
         flow.firstHours.length
@@ -345,9 +402,13 @@ export function reviewText({ review, title, duration, files, documents, analyses
           `  流失率是同类几倍最高的几秒（括号里是前两秒、后两秒）：${retention.peaks
             .map(
               (peak) =>
-                `${peak.t}–${peak.t + 1} 秒 ${times(peak.multiplier)}（${peak.around.map((value) => (finite(value) ? round(value, 2) : "—")).join(" ")}）${labelsText(peak.labels) ? ` ${labelsText(peak.labels)}` : ""}`,
+                `${peak.t}–${peak.t + 1} 秒 ${times(peak.multiplier)}（${peak.around
+                  .map((value) => (finite(value) ? round(value, 2) : "—"))
+                  .map((value, index) => (index === 2 ? `| ${value}` : value))
+                  .join(" ")}）${labelsText(peak.labels) ? ` ${labelsText(peak.labels)}` : ""}`,
             )
             .join("；")}`,
+          `  看这几秒的画面：preview_frames 的 times 用 [${retention.peaks.map((peak) => peak.t + 0.5).join(", ")}]；一段时间逐秒的数字用 review_read 的 seconds`,
         );
       for (const [kind, items] of Object.entries(retention.segments))
         lines.push(`  按${kind}（${retention.hasBenchmark ? "流失率 ÷ 同类" : "这一段走掉的比例"}）：${items.map(segmentLine).join("；")}`);
@@ -375,6 +436,49 @@ export function reviewText({ review, title, duration, files, documents, analyses
     `原始文件：${files.length ? files.map((file) => `${file.path}${file.used ? "（已录入）" : "（未录入）"}`).join("、") : "（还没有。用户可以在「复盘」视图上传平台后台导出的表格或截图）"}`,
   );
   return lines.join("\n");
+}
+
+/**
+ * A stretch second by second: who is still watching, who leaves in each second (of those
+ * still there) next to similar videos, the multiple, and what is on screen whenever it
+ * changes; first the stretch as a whole, with what following similar videos there would
+ * leave at the end. Null when the stretch is outside the video.
+ */
+export function secondsText({ retention, benchmark, duration, segments = [], moments = [], from, to }) {
+  const end = duration > 0 ? duration : retention.at(-1)[0];
+  const a = Math.max(0, Math.floor(from));
+  const b = Math.min(Math.ceil(to), end);
+  if (!(b > a)) return null;
+  const r = (t) => retentionAt(retention, Math.min(t, end));
+  const rb = benchmark?.length ? (t) => retentionAt(benchmark, Math.min(t, end)) : null;
+  const lost = 1 - r(b) / r(a);
+  let head = `${a}–${round(b, 2)} 秒：开始时还在 ${formatPercent(r(a))}${rb ? `（同类 ${formatPercent(rb(a))}）` : ""}，这段走掉 ${formatPercent(lost)}`;
+  if (rb) {
+    const benchLost = 1 - rb(b) / rb(a);
+    const gain = (r(a) * (rb(b) / rb(a))) / r(b) - 1;
+    head += `（同类 ${formatPercent(benchLost)}）${benchLost > 0 ? `，是同类的 ${times(lost / benchLost)}` : ""}${finite(gain) ? `；这段按同类的流失率走，看到结尾的人${gain >= 0 ? "多" : "少"} ${formatPercent(Math.abs(gain))}` : ""}`;
+  }
+  const rows = [];
+  let shown = {};
+  for (let t = a; t < b - 1e-9; t++) {
+    const next = Math.min(t + 1, b);
+    const leaving = r(t) > 0 ? 1 - r(next) / r(t) : null;
+    const leavingTheirs = rb && rb(t) > 0 ? 1 - rb(next) / rb(t) : null;
+    const labels = labelsAtTime(segments, t + 0.5);
+    const changes = Object.entries(labels).filter(([kind, label]) => shown[kind] !== label);
+    shown = labels;
+    const marks = moments.filter((moment) => moment.at >= t && moment.at < next).map((moment) => `◆${moment.label} ${moment.at} 秒`);
+    const picture = [...marks, ...changes.map(([kind, label]) => `${kind}「${short(label, 40)}」`)].join(" ");
+    rows.push(
+      rb
+        ? `| ${t} | ${formatPercent(r(t))} | ${formatPercent(rb(t))} | ${formatPercent(leaving)} | ${formatPercent(leavingTheirs)} | ${finite(leaving) && leavingTheirs > 0 ? times(leaving / leavingTheirs) : "—"} | ${picture} |`
+        : `| ${t} | ${formatPercent(r(t))} | ${formatPercent(leaving)} | ${picture} |`,
+    );
+  }
+  const header = rb
+    ? ["| 秒 | 还在 | 同类还在 | 这一秒走掉 | 同类走掉 | 倍数 | 画面（变了才写） |", `|${" --- |".repeat(7)}`]
+    : ["| 秒 | 还在 | 这一秒走掉 | 画面（变了才写） |", `|${" --- |".repeat(4)}`];
+  return [head, "", ...header, ...rows].join("\n");
 }
 
 /** The comparison as the AI reads it: a table (similar videos' value next to each), the medians, how `current` stands. */
@@ -414,6 +518,17 @@ export function compareText(rows, { checkpoint, columns, current } = {}) {
       .map((key) => `${metricLabel(key)} ${formatValue(key, row.metrics[key])}，是中位数的 ${round(row.metrics[key] / medians[key], 2)} 倍`);
     if (notes.length) lines.push("", `本作品（${row.platform}）：${notes.join("；")}`);
   }
+  // Hourly data gives views and followers at any age; the rest needs an export near it.
+  const hourlyOnly = withData.filter(
+    (row) => row.exact?.length && Object.keys(row.metrics).every((key) => row.exact.includes(key) || key === "followsPerThousand"),
+  );
+  if (hourlyOnly.length && days !== null)
+    lines.push(
+      "",
+      `第 ${days} 天只有每小时数据算出的播放、涨粉的：${hourlyOnly
+        .map((row) => `${row.title}（${row.snapshots.length ? `导出过的是发布后 ${row.snapshots.join("、")} 天` : "只有每小时数据"}）`)
+        .join("；")}。比例和留存变化慢，可以用 checkpoint: "latest" 粗看`,
+    );
   if (without.length)
     lines.push(
       "",
@@ -437,26 +552,38 @@ export function momentColumns(rows) {
  * `rows[i].lyrics`: [{ songTime, label, multiplier }].
  */
 export function lyricsText(rows) {
-  const songs = rows.filter((row) => row.lyrics?.some((line) => finite(line.songTime)));
-  if (songs.length < 2) return "";
   const key = (line) => `${round(line.songTime, 1)}|${line.label}`;
-  const lines = new Map();
-  for (const row of songs)
-    for (const line of row.lyrics.filter((item) => finite(item.songTime))) {
-      const entry = lines.get(key(line)) ?? { songTime: line.songTime, label: line.label, values: new Map() };
-      entry.values.set(`${row.work}/${row.post}`, line.multiplier);
-      lines.set(key(line), entry);
-    }
-  const shared = [...lines.values()].filter((entry) => entry.values.size >= 2).sort((a, b) => a.songTime - b.songTime);
-  if (!shared.length) return "";
-  const header = `| 歌曲时间 | 歌词 | ${songs.map((row) => `${row.title}·${row.platform}`).join(" | ")} |`;
-  return [
-    "同一首歌按歌词对齐（流失率 ÷ 同类）：",
-    header,
-    `|${" --- |".repeat(songs.length + 2)}`,
-    ...shared.map(
-      (entry) =>
-        `| ${round(entry.songTime, 1)} | ${entry.label} | ${songs.map((row) => (finite(entry.values.get(`${row.work}/${row.post}`)) ? times(entry.values.get(`${row.work}/${row.post}`)) : "—")).join(" | ")} |`,
-    ),
-  ].join("\n");
+  // Works sharing lyric lines use the same song: one table per song.
+  const songs = [];
+  for (const row of rows.filter((item) => item.lyrics?.some((line) => finite(line.songTime)))) {
+    const keys = new Set(row.lyrics.filter((line) => finite(line.songTime)).map(key));
+    const song = songs.find((item) => [...keys].some((line) => item.keys.has(line)));
+    if (song) {
+      song.rows.push(row);
+      for (const line of keys) song.keys.add(line);
+    } else songs.push({ rows: [row], keys });
+  }
+  const tables = [];
+  for (const { rows: works } of songs.filter((song) => song.rows.length >= 2)) {
+    const lines = new Map();
+    for (const row of works)
+      for (const line of row.lyrics.filter((item) => finite(item.songTime))) {
+        const entry = lines.get(key(line)) ?? { songTime: line.songTime, label: line.label, values: new Map() };
+        entry.values.set(`${row.work}/${row.post}`, line.multiplier);
+        lines.set(key(line), entry);
+      }
+    const shared = [...lines.values()].filter((entry) => entry.values.size >= 2).sort((a, b) => a.songTime - b.songTime);
+    if (!shared.length) continue;
+    tables.push(
+      [
+        `| 歌曲时间 | 歌词 | ${works.map((row) => `${row.title}·${row.platform}`).join(" | ")} |`,
+        `|${" --- |".repeat(works.length + 2)}`,
+        ...shared.map(
+          (entry) =>
+            `| ${round(entry.songTime, 1)} | ${entry.label} | ${works.map((row) => (finite(entry.values.get(`${row.work}/${row.post}`)) ? times(entry.values.get(`${row.work}/${row.post}`)) : "—")).join(" | ")} |`,
+        ),
+      ].join("\n"),
+    );
+  }
+  return tables.length ? `同一首歌按歌词对齐（流失率 ÷ 同类）：\n${tables.join("\n\n")}` : "";
 }

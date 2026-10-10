@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { readTable } from "./sheets.mjs";
 
 /**
@@ -74,15 +76,40 @@ export function beijingTime(cell) {
 }
 const valueOf = (key, cell) => (SECONDS.has(key) ? parseSeconds(cell) : RATIOS.has(key) ? parsePercent(cell) : parseCount(cell));
 
+/** Within one export the same number reads the same in every sheet (ratios and seconds up to rounding). */
+const same = (key, a, b) => (RATIOS.has(key) ? Math.abs(a - b) <= 0.0006 : SECONDS.has(key) ? Math.abs(a - b) <= 0.6 : a === b);
+
 /**
  * Read a set of files (one export from the creator center): { platform, recognized: [{ path,
- * parts }], unrecognized, metrics, retention, retentionBenchmark, series, sources, comments,
- * dataEnd (start of the last hour in the hourly data: the numbers run up to the export),
- * firstHour (the hour of posting), commentsAt, postTitle }. `files`: [{ path, file }].
+ * parts, until? }], unrecognized, duplicates: [{ path, of }], conflicts, metrics, retention,
+ * retentionBenchmark, series, sources, comments, dataEnd (start of the last hour in the hourly
+ * data: the numbers run up to the export), firstHour (the hour of posting), commentsAt,
+ * postTitle }. `files`: [{ path, file }]. A file uploaded twice is read once. Files of two
+ * exports disagree — a part twice, or a number with two values — and say so in `conflicts`.
  */
 export function readExports(files) {
-  const out = { platform: null, recognized: [], unrecognized: [], metrics: {}, series: [], sources: [], retention: [], retentionBenchmark: [] };
+  const out = {
+    platform: null,
+    recognized: [],
+    unrecognized: [],
+    duplicates: [],
+    conflicts: [],
+    metrics: {},
+    series: [],
+    sources: [],
+    retention: [],
+    retentionBenchmark: [],
+  };
+  const hashes = new Map();
+  const owners = new Map();
+  const origins = {};
   for (const { path, file } of files) {
+    const hash = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+    if (hashes.has(hash)) {
+      out.duplicates.push({ path, of: hashes.get(hash) });
+      continue;
+    }
+    hashes.set(hash, path);
     let table;
     try {
       table = readTable(file);
@@ -90,13 +117,39 @@ export function readExports(files) {
       out.unrecognized.push(path);
       continue;
     }
+    const one = { metrics: {}, series: [] };
     const parts = [];
     for (const sheet of table.sheets) {
-      const part = readSheet(sheet, out);
+      const part = readSheet(sheet, one);
       if (part) parts.push(part);
     }
-    if (parts.length) out.recognized.push({ path, parts });
-    else out.unrecognized.push(path);
+    if (!parts.length) {
+      out.unrecognized.push(path);
+      continue;
+    }
+    for (const [key, value] of Object.entries(one.metrics)) {
+      if (key in out.metrics && !same(key, out.metrics[key], value))
+        out.conflicts.push(`${key} 在 ${origins[key]} 是 ${out.metrics[key]}，在 ${path} 是 ${value}`);
+      else if (!(key in out.metrics)) {
+        out.metrics[key] = value;
+        origins[key] = path;
+      }
+    }
+    // What an export has once.
+    const unique = [
+      ...(one.retention?.length ? ["逐秒留存"] : []),
+      ...one.series.map((series) => `每小时 ${series.key}`),
+      ...(one.sources?.length ? ["流量来源"] : []),
+      ...(one.comments ? ["评论"] : []),
+    ];
+    for (const part of unique)
+      if (owners.has(part)) out.conflicts.push(`${owners.get(part)} 和 ${path} 都有${part}`);
+      else owners.set(part, path);
+    for (const key of ["retention", "retentionBenchmark", "sources", "comments", "commentsAt", "postTitle"])
+      if (one[key]?.length ?? one[key]) out[key] = one[key];
+    out.series.push(...one.series);
+    const until = one.series.length ? Math.max(...one.series.map((series) => Date.parse(series.start) + (series.values.length - 1) * 3600000)) : null;
+    out.recognized.push({ path, parts, ...(until ? { until: new Date(until).toISOString() } : {}) });
   }
   if (out.recognized.length) out.platform = PLATFORM;
   // The platform's rates are rounded: the counts give them exactly.

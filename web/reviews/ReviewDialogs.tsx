@@ -416,7 +416,7 @@ export function ImportDialog({
 }: {
   preview: ImportPreview;
   posts: Post[];
-  onImport: (options: { post?: string; postedAt?: string; at: string }) => Promise<boolean>;
+  onImport: (options: { post?: string; postedAt?: string; at?: string }) => Promise<boolean>;
   onClose: () => void;
 }) {
   const same = posts.filter((post) => post.platform === preview.platform);
@@ -426,7 +426,12 @@ export function ImportDialog({
   const [busy, setBusy] = useState(false);
   const run = async () => {
     setBusy(true);
-    const ok = await onImport(target === "new" ? { postedAt: fromLocalInput(postedAt), at: fromLocalInput(at) } : { post: target, at: fromLocalInput(at) });
+    // The inputs show minutes: times left as they were go to the server as it read them (to the second).
+    const times = {
+      ...(at !== toLocalInput(preview.at) ? { at: fromLocalInput(at) } : {}),
+      ...(target === "new" && postedAt !== toLocalInput(preview.postedAt) ? { postedAt: fromLocalInput(postedAt) } : {}),
+    };
+    const ok = await onImport(target === "new" ? times : { post: target, ...times });
     setBusy(false);
     if (ok) onClose();
   };
@@ -455,11 +460,18 @@ export function ImportDialog({
       }
     >
       <p className="small-text">认出了：{parts.join("、")}。</p>
+      {preview.unchanged && <p className="small-text">这些文件之前已经导入过，再导入不会有变化。</p>}
+      {!preview.unchanged && preview.replaces && <p className="small-text">这条发布记录在这个时间已经有数据，导入会替换它。</p>}
       <div className="import-files">
         {preview.recognized.map((item) => (
           <div key={item.path} className="small-text">
             <span className="mono">{item.path.replace(/^raw\//, "")}</span>
             <span className="faint"> · {item.parts.join("、")}</span>
+          </div>
+        ))}
+        {preview.duplicates.map((item) => (
+          <div key={item.path} className="small-text faint">
+            <span className="mono">{item.path.replace(/^raw\//, "")}</span> · 和 {item.of.replace(/^raw\//, "")} 内容相同，只读一次
           </div>
         ))}
         {preview.unrecognized.map((path) => (

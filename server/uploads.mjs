@@ -7,6 +7,7 @@ import { sendFile } from "./http.mjs";
 import { problem, confined } from "./util.mjs";
 import { probe } from "./media.mjs";
 import { workArg } from "./tools/registry.mjs";
+import { beijing } from "./review-data.mjs";
 
 const LIFETIME_MS = 15 * 60 * 1000;
 const DOWNLOAD_LIFETIME_MS = 60 * 60 * 1000;
@@ -54,7 +55,7 @@ export function uploadsPlugin(services) {
               .boolean()
               .default(false)
               .describe(
-                "放进作品复盘资料的 raw/（平台导出的表格、后台截图；同一次导出的放进同一个文件夹，path 写 raw/<导出日期>/<文件名>），之后用 review_import 导入或 review_read 读取",
+                "放进作品复盘资料的 raw/（平台导出的表格、后台截图）：同一次导出的放进同一个文件夹，path 写 raw/<导出日期>/<文件名>，不写时放进 raw/<今天>/；之后用 review_import 导入或 review_read 读取",
               ),
             replace: z.boolean().default(false).describe("同名文件已存在时替换（默认另起名字）"),
             source: z.string().max(300).optional(),
@@ -69,18 +70,22 @@ export function uploadsPlugin(services) {
       sweep();
       const lines = [];
       const data = [];
+      // Review files' folders: what to import once they are up.
+      const folders = new Set();
       for (const given of files) {
         // An absolute path in `path` is the file on the AI's computer (the usual slip), not a place in the work.
         const local = given.from ?? (given.path && /^(\/|~|[A-Za-z]:[\\/])/.test(given.path) ? given.path : undefined);
         const name = local ? local.split(/[\\/]/).pop() : "";
         const file = { ...given, path: local && given.path === local ? undefined : given.path };
-        file.path ??= name ? (file.library ? name : file.review ? `raw/${name}` : `public/imports/${name}`) : undefined;
+        file.path ??= name ? (file.library || file.review ? name : `public/imports/${name}`) : undefined;
         delete file.from;
         if (!file.path) throw problem(400, "每个文件要写 from（你电脑上的文件）或 path（放到作品或素材库的哪里）");
         if (file.review) {
           if (file.library) throw problem(400, "review 和 library 只能选一个");
-          // Original files sit in raw/ (an export's files together in a folder) under their own name.
-          file.path = file.path.startsWith("raw/") ? file.path : `raw/${file.path.split("/").pop()}`;
+          // Original files sit in raw/, an export's files together in a folder: today's (Beijing time), like the studio's uploads.
+          const inner = file.path.replace(/^\/+/, "").replace(/^raw\//, "");
+          file.path = `raw/${inner.includes("/") ? inner : `${beijing(new Date().toISOString(), { time: false })}/${inner}`}`;
+          folders.add(file.path.slice(0, file.path.lastIndexOf("/")));
         } else if (file.library) {
           const dir = await services.materials.dir(work.repo);
           services.materials.libraryOf(dir, file.library);
@@ -101,7 +106,7 @@ export function uploadsPlugin(services) {
       }
       return {
         data: { uploads: data, expiresInMinutes: LIFETIME_MS / 60000 },
-        text: `在你的终端执行${data.some((item) => item.command.includes("<本机文件路径>")) ? "（把 <本机文件路径> 换成文件的位置）" : ""}，15 分钟内有效、每个地址只能用一次：\n\n${lines.join("\n\n")}`,
+        text: `在你的终端执行${data.some((item) => item.command.includes("<本机文件路径>")) ? "（把 <本机文件路径> 换成文件的位置）" : ""}，15 分钟内有效、每个地址只能用一次：\n\n${lines.join("\n\n")}${folders.size ? `\n\n上传完平台后台的导出后，用 review_import 的 folder 导入：${[...folders].join("、")}（截图等其他文件用 review_read 的 file 看）。` : ""}`,
       };
     },
   });

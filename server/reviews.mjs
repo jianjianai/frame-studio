@@ -36,12 +36,14 @@ import {
   derive,
   compareRows,
   defaultCheckpoint,
+  isZonedTime,
+  ZONED_HINT,
   formatPercent,
   ageLabel,
   ageDays,
   beijing,
 } from "./review-data.mjs";
-import { retentionAnalysis, flowAnalysis, reviewText, compareText, lyricsText, momentColumns } from "./review-analysis.mjs";
+import { retentionAnalysis, flowAnalysis, reviewText, secondsText, compareText, lyricsText, momentColumns } from "./review-analysis.mjs";
 import { readExports } from "./review-import.mjs";
 import { workSegments } from "./review-segments.mjs";
 
@@ -67,6 +69,15 @@ const ROOT_README = `# FRAME 复盘
 `;
 const validWorkId = (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id);
 const isDocument = (file) => /\.(md|txt)$/i.test(file) && !file.startsWith(`${RAW}/`);
+/** An original file or folder as people write it ("2026-10-10/流量数据.xlsx", "./raw/2026-10-10/") → "raw/…". */
+const rawPath = (value) => {
+  const clean = String(value || "")
+    .trim()
+    .replace(/\\/g, "/")
+    .replace(/^(\.\/|\/)+/, "")
+    .replace(/\/+$/, "");
+  return clean === RAW || clean.startsWith(`${RAW}/`) ? clean : `${RAW}/${clean}`;
+};
 const IMAGE = /\.(png|jpe?g|webp|gif|avif|bmp)$/i;
 /** A file name people chose, safe as one path segment. */
 const cleanName = (name) =>
@@ -272,6 +283,32 @@ export class Reviews {
     });
   }
 
+  /**
+   * The work's version now when what viewers see changed since `version` (the version a post
+   * published), else null: notes, production files and the publish mark do not count.
+   */
+  async changedSince(work, version) {
+    if (!version) return null;
+    try {
+      const head = (await git(work.root, ["rev-parse", "HEAD"])).trim();
+      if (head.startsWith(version)) return null;
+      const folder = path.relative(work.root, work.dir) || ".";
+      const names = (await git(work.root, ["diff", "--name-only", version, "HEAD", "--", folder]))
+        .split("\n")
+        .filter((name) => name && !/\.md$/i.test(name) && !/(^|\/)(production|public\/uploads)\//.test(name));
+      if (!names.length) return null;
+      if (names.length === 1 && names[0].endsWith("project.ts")) {
+        const diff = await git(work.root, ["diff", "-U0", version, "HEAD", "--", names[0]]);
+        const lines = diff.split("\n").filter((line) => /^[-+]/.test(line) && !/^(---|\+\+\+) /.test(line));
+        if (lines.every((line) => /^[-+]\s*(publishedAt|tags|notes|title)\s*:/.test(line))) return null;
+      }
+      return head.slice(0, 7);
+    } catch {
+      // A version this checkout does not have: nothing to compare.
+      return null;
+    }
+  }
+
   /** What a new post records unless told otherwise: the work's title, length and current version, and its exports. */
   async defaults(work) {
     const { works, exports } = this.services;
@@ -327,25 +364,31 @@ export class Reviews {
 
   /**
    * Read a platform's exports among the work's original files (paths under raw/, or a folder
-   * of them) and enter them as one snapshot of a post with its hourly series: the post of
-   * that platform (`post` when there are several; a new one when there is none, posted at
-   * `postedAt` or the first hour of the data), counted up to `at` (default: the last hour of
-   * the data). `dryRun` only says what it would do.
+   * of them; "2026-10-10" means raw/2026-10-10) and enter them as one snapshot of a post with
+   * its hourly series: the post of that platform (`post` when there are several; a new one
+   * when there is none, posted at `postedAt` or the first hour of the data), counted up to
+   * `at` (default: the last hour of the data). Files of two exports are not mixed into one
+   * snapshot. `dryRun` only says what it would do; the preview tells when nothing would change
+   * (the files were imported before).
    */
   async importExports(work, { files = [], folder, post: postId, at, postedAt, dryRun = false } = {}) {
     const dir = await this.existing(work.repo);
     const root = dir ? path.join(dir, work.id) : null;
-    const wanted = [...files];
+    const folders = () => (root && fs.existsSync(path.join(root, RAW)) ? tree(path.join(root, RAW)).filter((entry) => entry.type === "dir") : []);
+    if (!root || !fs.existsSync(path.join(root, RAW)))
+      throw notFound("这个作品的复盘资料里还没有原始文件：先在「复盘」上传平台后台导出的文件（外部 AI 用 upload_link 的 review: true 上传）");
+    const wanted = files.map(rawPath);
     if (folder) {
-      if (!root || !fs.existsSync(confined(root, folder))) throw notFound(`没有文件夹 ${folder}`);
-      for (const entry of tree(confined(root, folder)))
-        if (entry.type === "file" && TABLE_FILE.test(entry.path)) wanted.push(`${folder.replace(/\/+$/, "")}/${entry.path}`);
+      const named = rawPath(folder);
+      if (!fs.statSync(confined(root, named), { throwIfNoEntry: false })?.isDirectory())
+        throw notFound(`没有文件夹 ${named}（现有：${[RAW, ...folders().map((entry) => `${RAW}/${entry.path}`)].join("、")}）`);
+      for (const entry of tree(confined(root, named))) if (entry.type === "file" && TABLE_FILE.test(entry.path)) wanted.push(`${named}/${entry.path}`);
     }
-    if (!wanted.length) throw problem(400, "要导入哪些文件：files 写原始文件的路径（raw/…），或用 folder 指定一个文件夹");
+    if (!wanted.length) throw problem(400, "要导入哪些文件：files 写原始文件的路径（raw/…），或用 folder 指定一个文件夹（例如 raw/2026-10-10）");
     const list = [...new Set(wanted)].map((file) => {
-      if (!file.startsWith(`${RAW}/`)) throw problem(400, `只能导入 ${RAW}/ 里的原始文件：${file}`);
-      const full = root ? confined(root, file) : null;
-      if (!full || !fs.statSync(full, { throwIfNoEntry: false })?.isFile()) throw notFound(`没有这个原始文件：${file}`);
+      if (file.split("/").includes("..")) throw problem(400, `只能导入 ${RAW}/ 里的原始文件：${file}`);
+      const full = confined(root, file);
+      if (!fs.statSync(full, { throwIfNoEntry: false })?.isFile()) throw notFound(`没有这个原始文件：${file}`);
       return { path: file, file: full };
     });
     const parsed = readExports(list);
@@ -353,6 +396,14 @@ export class Reviews {
       throw problem(
         400,
         `没有认出平台后台导出的数据（目前认得抖音创作者中心的作品数据和评论导出）：${parsed.unrecognized.join("、")}。可以用 review_read 读出来，再用 review_write 录入。`,
+      );
+    if (parsed.conflicts.length)
+      throw problem(
+        409,
+        `这些文件不是同一次导出的（${parsed.conflicts.slice(0, 3).join("；")}），不能合成一次数据。用 files 只列同一次导出的文件，分几次导入：\n${parsed.recognized
+          .map((item) => `- ${item.path}：${item.parts.join("、")}${item.until ? `，每小时数据到 ${beijing(item.until)}` : ""}`)
+          .join("\n")}`,
+        "MIXED_EXPORTS",
       );
     const { review } = this.readFrom(dir, work.id);
     const candidates = review.posts.filter((item) => item.platform === parsed.platform);
@@ -373,21 +424,6 @@ export class Reviews {
     if (!when) throw problem(400, "认不出这些数据统计到什么时候：用 at 写导出时间（带时区）");
     const posted = post?.postedAt ?? postedAt ?? parsed.firstHour;
     if (!posted) throw problem(400, `还没有${parsed.platform}的发布记录，数据里也看不出发布时间：用 postedAt 写发布时间（带时区）`);
-    const preview = {
-      platform: parsed.platform,
-      post: post?.id ?? null,
-      postedAt: new Date(posted).toISOString(),
-      at: new Date(when).toISOString(),
-      recognized: parsed.recognized,
-      unrecognized: parsed.unrecognized,
-      metrics: Object.keys(parsed.metrics),
-      retention: Boolean(parsed.retention),
-      benchmark: Boolean(parsed.retentionBenchmark),
-      series: parsed.series.map((series) => series.key),
-      sources: parsed.sources?.length ?? 0,
-      comments: parsed.comments ? { threads: parsed.comments.threads, replies: parsed.comments.replies } : null,
-    };
-    if (dryRun) return { preview };
     const id = post?.id ?? `p${Math.max(0, ...review.posts.map((item) => Number(/^p(\d+)$/.exec(item.id)?.[1] ?? 0))) + 1}`;
     const operations = [
       ...(post
@@ -396,15 +432,16 @@ export class Reviews {
             postOperation.parse({
               op: "post",
               platform: parsed.platform,
-              postedAt: preview.postedAt,
+              postedAt: new Date(posted).toISOString(),
               ...(parsed.postTitle ? { title: parsed.postTitle } : {}),
             }),
           ]),
       snapshotOperation.parse({
         op: "snapshot",
         post: id,
-        at: preview.at,
-        source: list.map((item) => item.path).join("、"),
+        at: new Date(when).toISOString(),
+        // Copies of a file count as entered too; files nobody recognized stay waiting.
+        source: [...parsed.recognized, ...parsed.duplicates].map((item) => item.path).join("、"),
         metrics: parsed.metrics,
         ...(parsed.retention ? { retention: parsed.retention } : {}),
         ...(parsed.retentionBenchmark ? { retentionBenchmark: parsed.retentionBenchmark } : {}),
@@ -414,6 +451,27 @@ export class Reviews {
       }),
       ...parsed.series.map((series) => seriesOperation.parse({ op: "series", post: id, ...series })),
     ];
+    // The same files again change nothing: say so rather than "imported".
+    const trial = parseReview(formatReview(review), work.id);
+    applyOperations(trial, operations, { title: review.title });
+    const preview = {
+      platform: parsed.platform,
+      post: post?.id ?? null,
+      postedAt: new Date(posted).toISOString(),
+      at: new Date(when).toISOString(),
+      recognized: parsed.recognized,
+      unrecognized: parsed.unrecognized,
+      duplicates: parsed.duplicates,
+      metrics: Object.keys(parsed.metrics),
+      retention: Boolean(parsed.retention),
+      benchmark: Boolean(parsed.retentionBenchmark),
+      series: parsed.series.map((series) => series.key),
+      sources: parsed.sources?.length ?? 0,
+      comments: parsed.comments ? { threads: parsed.comments.threads, replies: parsed.comments.replies } : null,
+      replaces: Boolean(post && review.snapshots.some((item) => item.post === post.id && item.at === new Date(when).toISOString())),
+      unchanged: Boolean(post) && formatReview(trial) === formatReview(review),
+    };
+    if (dryRun || preview.unchanged) return { preview };
     const outcome = await this.apply(work, operations, { message: `导入${parsed.platform}后台数据（${list.length} 个文件，统计到 ${beijing(preview.at)}）` });
     const failed = outcome.results.filter((result) => result.status !== "ok");
     if (failed.length) throw problem(400, `导入没有完成：${failed.map((result) => result.message).join("；")}`);
@@ -621,8 +679,7 @@ export function reviewsPlugin(services) {
     postedAt: z.string().max(40).optional().describe("新建发布记录时的发布时间（带时区）；不写时取每小时数据的第一个小时"),
   };
   const times = (args) => {
-    for (const key of ["at", "postedAt"])
-      if (args[key] && Number.isNaN(Date.parse(args[key]))) throw problem(400, `无法识别的时间：${args[key]}（写 ISO 格式并带时区）`);
+    for (const key of ["at", "postedAt"]) if (args[key] && !isZonedTime(args[key])) throw problem(400, `${key}：${args[key]} 不行，${ZONED_HINT}`);
     return args;
   };
 
@@ -746,19 +803,33 @@ export function reviewsPlugin(services) {
     name: "review_read",
     title: "读取复盘",
     description:
-      "作品发布后的复盘资料：发布记录、最新数据（2 秒跳出、5 秒留存、结尾留存等和同类作品的值并列）、每小时流量（首 24/48/72 小时、按天、几波、各渠道）、流量来源（和账号近 7 天平均比）、观众留存——流失率是同类几倍最高的几秒（带前后两秒）、按图层/歌词/镜头等分段的倍数和“按同类走结尾会多多少”、关键时刻还剩多少人——以及评论概况、复盘文档和原始文件。传 file 读其中一个文件：平台导出的表格（xlsx、csv）读成文字表格，截图返回图片给你看，复盘文档返回全文。看那几秒的画面用 preview_frames。导入平台导出用 review_import，录入和写复盘用 review_write，和其他作品比较用 reviews_compare。",
+      "作品发布后的复盘资料：发布记录、最新数据（2 秒跳出、5 秒留存、结尾留存等和同类作品的值并列）、每小时流量（首 24/48/72 小时、按天、几波、各渠道）、流量来源（和账号近 7 天平均比）、观众留存——流失率是同类几倍最高的几秒（带前后两秒）、按图层/歌词/镜头等分段的倍数和“按同类走结尾会多多少”、关键时刻还剩多少人——以及评论概况、复盘文档和原始文件。seconds 看一段时间逐秒的留存。传 file 读其中一个文件：平台导出的表格（xlsx、csv）读成文字表格，截图返回图片给你看，复盘文档返回全文。看那几秒的画面用 preview_frames。导入平台导出用 review_import，录入和写复盘用 review_write，和其他作品比较用 reviews_compare。",
     readOnly: true,
     input: {
       work: workArg,
       file: z.string().min(1).max(300).optional().describe("复盘文件夹里的文件，例如 raw/2026-10-10/流量数据.xlsx、raw/后台截图.png、复盘.md"),
+      seconds: z
+        .tuple([z.number().min(0), z.number().positive()])
+        .optional()
+        .describe(
+          "看一段时间逐秒的留存：[开始秒, 结束秒]，例如 [16, 33]：每秒还在多少、这一秒走掉多少（和同类的、倍数）、那时的图层、歌词、镜头，以及整段按同类走看到结尾的人会多多少",
+        ),
+      post: z.string().max(20).optional().describe("seconds 看哪条发布记录（默认有留存曲线的最新一条）"),
     },
-    async run({ file }, ctx) {
+    async run({ file, seconds, post: postId }, ctx) {
       const work = await ctx.work();
+      if (file && seconds) throw problem(400, "file 和 seconds 一次只用一个");
       if (file) return readFile(work, file, ctx);
       const detail = await reviews.detail(work);
       const meta = works.meta(work).meta ?? {};
+      if (seconds) return secondsOf(work, detail, meta, seconds, postId);
       const kinds = {};
       for (const segment of detail.segments) kinds[segment.kind] = (kinds[segment.kind] ?? 0) + 1;
+      const changed = {};
+      for (const post of detail.review.posts) {
+        const now = await reviews.changedSince(work, post.version);
+        if (now) changed[post.id] = now;
+      }
       return {
         data: { review: detail.review, summary: detail.summary, documents: detail.documents, files: detail.files },
         text: reviewText({
@@ -769,10 +840,39 @@ export function reviewsPlugin(services) {
           documents: detail.documents,
           analyses: detail.analyses,
           segmentKinds: kinds,
+          changed,
         }),
       };
     },
   });
+
+  /** review_read's seconds: one post's retention over a stretch, second by second. */
+  function secondsOf(work, detail, meta, [from, to], postId) {
+    const { review } = detail;
+    if (!(to > from)) throw problem(400, "seconds 写 [开始秒, 结束秒]，结束要大于开始");
+    const duration = (post) => post.duration ?? meta.duration;
+    const post = postId
+      ? (review.posts.find((item) => item.id === postId) ??
+        fail404(`没有发布记录 ${postId}（现有：${review.posts.map((item) => item.id).join("、") || "无"}）`))
+      : review.posts.findLast((item) => latest(review, item, { duration: duration(item) })?.retention?.length);
+    const now = post && latest(review, post, { duration: duration(post) });
+    if (!now?.retention?.length) throw problem(400, "还没有留存曲线：先用 review_import 导入平台的留存分析，或用 review_write 的 snapshot 写 retention");
+    const text = secondsText({
+      retention: now.retention,
+      benchmark: now.retentionBenchmark,
+      duration: duration(post),
+      segments: detail.segments,
+      moments: review.moments,
+      from,
+      to,
+    });
+    if (!text) throw problem(400, `视频只有 ${duration(post) ?? now.retention.at(-1)[0]} 秒，${from}–${to} 秒不在里面`);
+    const at = snapshotsOf(review, post).findLast((snapshot) => snapshot.retention?.length)?.at ?? now.at;
+    return {
+      data: { post: post.id, from, to },
+      text: `复盘「${review.title || work.id}」${post.id} ${post.platform} 的留存（统计到 ${beijing(at)}，${ageLabel(ageDays(post, at))}${now.retentionBenchmark?.length ? "，和同类比" : ""}）\n${text}`,
+    };
+  }
 
   /** One file of the folder, in the form the AI can use. */
   async function readFile(work, file, ctx) {
@@ -786,7 +886,9 @@ export function reviewsPlugin(services) {
     }
     if (TABLE_FILE.test(full)) {
       const table = readTable(full);
-      return { data: { file, sheets: table.sheets.map((sheet) => ({ name: sheet.name, rows: sheet.total })) }, text: `${file}\n\n${tableText(table)}` };
+      // Signed links (a comments export has one per picture comment) are long and say nothing here.
+      const text = tableText(table).replace(/(https?:\/\/[^/\s,"]+)[^\s,"]{60,}/g, "$1/…");
+      return { data: { file, sheets: table.sheets.map((sheet) => ({ name: sheet.name, rows: sheet.total })) }, text: `${file}\n\n${text}` };
     }
     if (IMAGE.test(full)) {
       const image = await sharp(full, { animated: false })
@@ -814,18 +916,25 @@ export function reviewsPlugin(services) {
     published: true, // the reviews branch, not the work
     title: "导入平台数据",
     description:
-      "把作品复盘资料 raw/ 里平台后台导出的文件直接导入成一次数据记录，不用自己读表格：目前认得抖音创作者中心的作品数据导出（指标数据、逐秒留存和同类作品、每小时播放和涨粉及抖音精选、流量来源和对比 7 日、涨粉脱粉与不感兴趣、观众参与度）和全部评论导出，按表格内容识别，文件名随意。导入到这个平台的发布记录（只有一条时自动选；没有就新建，发布时间取数据的第一个小时，可以用 postedAt 写准确时间），统计时间取每小时数据的最后一个小时。每次调用自动保存一个版本。dryRun 只看会导入什么。",
+      "把作品复盘资料 raw/ 里平台后台导出的文件直接导入成一次数据记录，不用自己读表格：目前认得抖音创作者中心的作品数据导出（指标数据、逐秒留存和同类作品、每小时播放和涨粉及抖音精选、流量来源和对比 7 日、涨粉脱粉与不感兴趣、观众参与度）和全部评论导出，按表格内容识别，文件名随意。folder 导入一次导出的文件夹（例如 raw/2026-10-10），或用 files 列出文件；内容相同的文件只读一次，两次导出的文件不会混成一次数据（会提示分开导入）。导入到这个平台的发布记录（只有一条时自动选；没有就新建，发布时间取数据的第一个小时，可以用 postedAt 写准确时间），统计时间取每小时数据的最后一个小时（有评论导出时取它的导出时间）。导入过的再导入会说没有变化。每次调用自动保存一个版本。dryRun 只看会导入什么。",
     input: { work: workArg, ...importInput, dryRun: z.boolean().default(false) },
     async run(args, ctx) {
       const work = await ctx.work();
       const result = await reviews.importExports(work, times(args));
       const { preview } = result;
+      const target = `${preview.post ?? "新的发布记录"}（${preview.post ? "" : `发布时间 ${beijing(preview.postedAt)}，`}统计到 ${beijing(preview.at)}，北京时间）`;
+      const head = preview.unchanged
+        ? `这些文件之前已经导入过（${preview.post} 统计到 ${beijing(preview.at)} 的数据），${args.dryRun ? "再导入" : "这次"}没有变化。`
+        : `${args.dryRun ? "会导入" : "已导入"}${preview.platform}的数据到 ${target}${preview.replaces ? "，替换这个时间已有的数据" : ""}：`;
       const lines = [
-        `${args.dryRun ? "会导入" : "已导入"}${preview.platform}的数据到 ${preview.post ?? "新的发布记录"}（${preview.post ? "" : `发布时间 ${beijing(preview.postedAt)}，`}统计到 ${beijing(preview.at)}，北京时间）：`,
-        ...preview.recognized.map((item) => `- ${item.path}：${item.parts.join("、")}`),
-        preview.unrecognized.length ? `没认出的文件：${preview.unrecognized.join("、")}` : "",
-        `指标 ${preview.metrics.length} 项${preview.retention ? "，逐秒留存" : ""}${preview.benchmark ? "（含同类作品）" : ""}${preview.series.length ? `，每小时数据 ${preview.series.join("、")}` : ""}${preview.sources ? `，流量来源 ${preview.sources} 项` : ""}${preview.comments ? `，评论 ${preview.comments.threads} 条一级、${preview.comments.replies} 条回复` : ""}`,
-        args.dryRun ? "" : "用 review_read 看分析结果。",
+        head,
+        ...(preview.unchanged ? [] : preview.recognized.map((item) => `- ${item.path}：${item.parts.join("、")}`)),
+        preview.duplicates.length ? `内容相同的文件只读了一次：${preview.duplicates.map((item) => `${item.path}（= ${item.of}）`).join("、")}` : "",
+        preview.unrecognized.length ? `没认出的文件（可以用 review_read 读出来再用 review_write 录入）：${preview.unrecognized.join("、")}` : "",
+        preview.unchanged
+          ? ""
+          : `指标 ${preview.metrics.length} 项${preview.retention ? "，逐秒留存" : ""}${preview.benchmark ? "（含同类作品）" : ""}${preview.series.length ? `，每小时数据 ${preview.series.join("、")}` : ""}${preview.sources ? `，流量来源 ${preview.sources} 项` : ""}${preview.comments ? `，评论 ${preview.comments.threads} 条一级、${preview.comments.replies} 条回复` : ""}`,
+        args.dryRun || preview.unchanged ? "" : "用 review_read 看分析结果。",
       ];
       return { data: { preview }, text: lines.filter(Boolean).join("\n") };
     },
@@ -850,7 +959,7 @@ export function reviewsPlugin(services) {
       const icon = { ok: "✓", failed: "✗", skipped: "–" };
       const lines = results.map(
         (result) =>
-          `${icon[result.status]} ${result.index + 1}. ${result.op}${result.path ? ` ${result.path}` : ""}${result.status === "ok" ? "" : `：${result.message}`}`,
+          `${icon[result.status]} ${result.index + 1}. ${result.op}${result.path ? ` ${result.path}` : ""}${result.status === "ok" ? (result.note ? `（${result.note}）` : "") : `：${result.message}`}`,
       );
       const head = !changes.length ? "没有改动" : `已保存（${changes.join("；")}）`;
       const ids = review.posts.map((post) => `${post.id} ${post.platform} ${beijing(post.postedAt)}`).join("、");

@@ -160,14 +160,20 @@ export interface ImportPreview {
   post: string | null;
   postedAt: string;
   at: string;
-  recognized: { path: string; parts: string[] }[];
+  recognized: { path: string; parts: string[]; until?: string }[];
   unrecognized: string[];
+  /** Files with the same content as another one: read once. */
+  duplicates: { path: string; of: string }[];
   metrics: string[];
   retention: boolean;
   benchmark: boolean;
   series: string[];
   sources: number;
   comments: { threads: number; replies: number } | null;
+  /** The post already has numbers at this time: they are replaced. */
+  replaces: boolean;
+  /** The files were imported before: nothing would change. */
+  unchanged: boolean;
 }
 export interface CompareRow {
   repo: string;

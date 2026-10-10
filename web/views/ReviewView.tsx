@@ -60,7 +60,7 @@ import { ViewHeader } from "./ViewHeader";
 import "../reviews/reviews.css";
 
 const REVIEW_PROMPT =
-  "请复盘这个作品发布后的表现：先用 review_read 看现有的数据，有还没导入的平台导出文件就用 review_import 导入，其他原始文件读出来录入（看不清或拿不准的先问我）；用 reviews_compare 和同类作品在同一发布天数比较（同一首歌的作品加 lyrics: true）；流失率是同类几倍最高的几秒、倍数高的分段，用 preview_frames 看那几秒的画面，先对照前后两三秒再下结论；把结论写进复盘文档 复盘.md（先写结论，再写做得好的、问题和原因、下次怎么做）。最后列出值得写进经验库的经验，问我要不要写入。";
+  "请复盘这个作品发布后的表现：先用 review_read 看现有的数据，有还没导入的平台导出文件就用 review_import 导入，其他原始文件读出来录入（看不清或拿不准的先问我）；用 reviews_compare 和同类作品在同一发布天数比较（同一首歌的作品加 lyrics: true）；流失率是同类几倍最高的几秒、倍数高的分段，用 preview_frames 看那几秒的画面，需要时用 review_read 的 seconds 看逐秒的数字，先对照前后两三秒再下结论。复盘文档 复盘.md 已经有的先读：在原来的基础上更新结论，这次新的发现注明是发布后第几天的数据，不要删掉之前的分析；还没有就新写（先写结论，再写做得好的、问题和原因、下次怎么做）。最后列出值得写进经验库的经验，问我要不要写入。";
 const ENTER_PROMPT = (file: string) =>
   `请读取复盘原始文件 ${file}，把里面的数据录入（平台后台的导出用 review_import，其他的用 review_write，source 写这个文件；发布记录还没有的先问我发到了哪个平台、什么时候发的）。看不清或拿不准的数字先问我，不要猜。`;
 
@@ -214,7 +214,7 @@ export function ReviewView() {
     input.onchange = () => void upload([...(input.files ?? [])]);
     input.click();
   };
-  const runImport = (files: string[], options: { post?: string; postedAt?: string; at: string }) =>
+  const runImport = (files: string[], options: { post?: string; postedAt?: string; at?: string }) =>
     run(async () => {
       const next = await api<ReviewDetail>(`${workBase}/import`, { body: { files, ...options } });
       setDetail(next);

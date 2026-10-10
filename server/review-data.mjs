@@ -78,6 +78,38 @@ export function definition(key) {
   return { key, label: key, kind: /率|比例|占比/.test(key) ? "ratio" : "count" };
 }
 export const metricLabel = (key) => definition(key).label;
+
+/**
+ * What people and the platforms call the standard metrics (播放量、2s跳出率、人均观看时长…):
+ * a number entered under such a name is stored under the standard key, so it is compared.
+ */
+const plainName = (name) =>
+  String(name)
+    .replace(/（[^）]*）|\([^)]*\)/g, "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+const ALIASES = new Map();
+for (const item of [...METRICS, ...DERIVED]) {
+  const label = plainName(item.label);
+  for (const name of [item.key.toLowerCase(), label, `${label}量`, `${label}数`]) if (!ALIASES.has(name)) ALIASES.set(name, item.key);
+}
+for (const [names, key] of [
+  [["播放次数", "观看", "观看量", "观看次数", "观看数"], "views"],
+  [["展现", "展现量", "曝光次数"], "impressions"],
+  [["封面点击率"], "clickRate"],
+  [["转发", "转发量", "转发数"], "shares"],
+  [["新增粉丝", "净增粉丝", "粉丝增长"], "followers"],
+  [["取关", "掉粉"], "unfollows"],
+  [["2s跳出率", "2秒跳出率", "2s跳出"], "bounce2s"],
+  [["5s完播率", "5秒完播率", "5秒留存率", "5s留存"], "retention5s"],
+  [["3s留存", "3秒留存率"], "retention3s"],
+  [["完播"], "completionRate"],
+  [["平均观看时长", "人均观看时长", "人均播放时长"], "avgWatchTime"],
+  [["平均观看占比", "平均播放进度"], "watchRatio"],
+])
+  for (const name of names) ALIASES.set(plainName(name), key);
+/** The standard key for a metric's name (unknown names, the platform's own like 投币, stay). */
+export const metricKeyOf = (name) => ALIASES.get(plainName(name)) ?? String(name).trim();
 export const isBenchmarked = (key) => BENCHMARKED.has(key) || key.startsWith("moment:");
 
 // ---- the file -----------------------------------------------------------------------
@@ -199,10 +231,14 @@ export function formatReview(review) {
 
 // ---- changes ------------------------------------------------------------------------
 
+/** A time with its zone: without one, "2026-10-08 20:00" would be read in the server's zone (UTC in the container), not Beijing time. */
+const ZONED = /^\d{4}-\d{1,2}-\d{1,2}[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s*(?:Z|[+-]\d{2}:?\d{2})$/i;
+export const isZonedTime = (value) => typeof value === "string" && ZONED.test(value.trim()) && isTime(value);
+export const ZONED_HINT = "时间要写到分钟并带时区，例如 2026-10-08T20:00:00+08:00（北京时间）";
 const time = z
   .string()
   .max(40)
-  .refine(isTime, "无法识别的时间：写 ISO 格式并带时区，例如 2026-10-08T20:00:00+08:00")
+  .refine(isZonedTime, ZONED_HINT)
   .transform((value) => new Date(value).toISOString());
 const postId = z.string().min(1).max(20);
 const metricKey = z.string().trim().min(1).max(60);
@@ -220,7 +256,7 @@ export const postOperation = z.strictObject({
   postedAt: time.optional().describe("发布时间（新增时必填），带时区"),
   duration: z.number().positive().max(36000).optional().describe("发布的视频时长（秒），不写时取所选导出文件或作品的时长"),
   export: z.string().max(300).optional().describe("发布的是哪个导出文件（work_context 的 exports 里的 name），会记下它的作品版本和时长"),
-  version: z.string().max(64).optional(),
+  version: z.string().max(64).optional().describe("发布时的作品版本（commit）；写了 export 时取那个导出文件的"),
   goals: z.record(metricKey, z.number().finite()).optional().describe('目标，例如 { "views": 1000000, "likeRate": 0.05 }（比例写 0–1）'),
   notes: z.string().max(2000).optional().describe("备注：封面、投流等"),
 });
@@ -233,7 +269,7 @@ export const snapshotOperation = z.strictObject({
     .record(metricKey, z.number().finite())
     .optional()
     .describe(
-      `截至 at 的累计数值。标准指标：${METRICS.map((item) => `${item.key} ${item.label}`).join("、")}；比例写 0–1（31% 写 0.31），时长写秒。平台特有的指标用中文名作键，例如 "投币"`,
+      `截至 at 的累计数值。标准指标：${METRICS.map((item) => `${item.key} ${item.label}`).join("、")}；比例写 0–1（31% 写 0.31），时长写秒。平台上的常见叫法（播放量、2s跳出率、人均观看时长…）会记到对应的标准指标；平台特有的指标用中文名作键，例如 "投币"`,
     ),
   benchmark: z.record(metricKey, z.number().finite()).optional().describe("平台给的同类作品的值，键同 metrics（例如 bounce2s、retention5s）"),
   retention: curveSchema.optional().describe("观众留存曲线：[[视频第几秒, 还在看的比例 0–1], …]，按秒递增。平台给的是视频进度百分比时先换算成秒"),
@@ -300,9 +336,10 @@ export function applyOperations(review, operations, defaults = {}) {
   const results = [];
   const changes = [];
   for (const [index, item] of operations.entries()) {
+    const notes = [];
     try {
-      changes.push(applyOne(review, item, defaults));
-      results.push({ index, op: item.op, status: "ok" });
+      changes.push(applyOne(review, item, defaults, notes));
+      results.push({ index, op: item.op, status: "ok", ...(notes.length ? { note: notes.join("、") } : {}) });
     } catch (error) {
       results.push({ index, op: item.op, status: "failed", message: error.message });
     }
@@ -320,7 +357,19 @@ function checkValues(values, what) {
   }
 }
 
-function applyOne(review, item, defaults) {
+/** Metrics under their standard keys; each renaming noted for whoever wrote them. */
+function standardKeys(values, notes) {
+  if (!values) return values;
+  const out = {};
+  for (const [name, value] of Object.entries(values)) {
+    const key = metricKeyOf(name);
+    if (key !== name) notes.push(`${name} 记为 ${key}`);
+    out[key] = value;
+  }
+  return out;
+}
+
+function applyOne(review, item, defaults, notes = []) {
   const postOf = (id) =>
     review.posts.find((post) => post.id === id) ??
     fail(`没有发布记录 ${id}（现有：${review.posts.map((post) => `${post.id} ${post.platform}`).join("、") || "无"}）`);
@@ -333,7 +382,10 @@ function applyOne(review, item, defaults) {
       fields.duration ??= exported.duration;
       fields.version ??= exported.version;
     }
-    if (fields.goals) checkValues(fields.goals, "目标里的");
+    if (fields.goals) {
+      fields.goals = standardKeys(fields.goals, notes);
+      checkValues(fields.goals, "目标里的");
+    }
     if (id) {
       const post = postOf(id);
       Object.assign(post, cleanPost({ ...post, ...fields }));
@@ -352,6 +404,7 @@ function applyOne(review, item, defaults) {
     const post = postOf(item.post);
     const content = ["metrics", "benchmark", "retention", "retentionBenchmark", "sources", "comments"].filter((key) => item[key]);
     if (!content.length) fail("snapshot 要有 metrics、retention、sources 等数据");
+    item = { ...item, metrics: standardKeys(item.metrics, notes), benchmark: standardKeys(item.benchmark, notes) };
     checkValues(item.metrics, "");
     checkValues(item.benchmark, "同类的");
     if (Date.parse(item.at) < Date.parse(post.postedAt) - 3600000) fail(`统计时间 ${item.at} 早于发布时间 ${post.postedAt}：检查两个时间的时区`);
