@@ -5,7 +5,7 @@ import { workArg } from "./registry.mjs";
 import { problem } from "../util.mjs";
 import { appRoot } from "../config.mjs";
 
-const SCOPES = ["work", "used", "materials", "experience", "guide", "engine"];
+const SCOPES = ["work", "used", "materials", "experience", "reviews", "guide", "engine"];
 const FILE_LIMIT = 8 * 1024 * 1024; // larger files are skipped (and counted)
 const FILE_COUNT = 20000;
 const SHOWN = 300; // characters of a line shown; longer lines are cut around the match
@@ -81,6 +81,11 @@ export function registerSearchTools(registry) {
       if (scope === "work") await folder(scope, work.dir, (file) => file);
       if (scope === "materials" && services.materials) await folder(scope, await services.materials.dir(work.repo), (file) => `materials/${file}`);
       if (scope === "experience" && services.experience) await folder(scope, await services.experience.dir(work.repo), (file) => `经验库 ${file}`);
+      if (scope === "reviews" && services.reviews) {
+        // Every work's review of the repository (folders are work ids); none yet, nothing to search.
+        const dir = await services.reviews.existing(work.repo);
+        if (dir) await folder(scope, dir, (file) => `复盘 ${file}`);
+      }
       if (scope === "guide") await folder(scope, path.join(appRoot, "docs", "guide"), (file) => `frame_guide ${file.replace(/\.md$/, "")}`);
       if (scope === "engine") await folder(scope, path.join(appRoot, "src", "engine"), (file) => `src/engine/${file}`);
       if (scope === "used" && services.materials) {
@@ -120,7 +125,7 @@ export function registerSearchTools(registry) {
     name: "search",
     title: "搜索",
     description:
-      "搜索文字或正则，返回 文件:行号 和上下文（长行只显示匹配附近）。scope：work 作品、used 作品用到的素材库文件（按锁定的版本，即实际运行的代码）、materials 素材库当前版本、experience 经验库、guide 制作指南、engine 引擎源码，可以组合。几个关键词一起搜用 patterns（任一匹配）；wholeWord 整词；multiline 跨行匹配（正则里用 \\n）；glob / exclude 选文件。找定义、调用处、用法、相关经验时用它，不用逐个读文件。",
+      "搜索文字或正则，返回 文件:行号 和上下文（长行只显示匹配附近）。scope：work 作品、used 作品用到的素材库文件（按锁定的版本，即实际运行的代码）、materials 素材库当前版本、experience 经验库、reviews 各作品的复盘资料（数据和复盘文档）、guide 制作指南、engine 引擎源码，可以组合。几个关键词一起搜用 patterns（任一匹配）；wholeWord 整词；multiline 跨行匹配（正则里用 \\n）；glob / exclude 选文件。找定义、调用处、用法、相关经验时用它，不用逐个读文件。",
     readOnly: true,
     input: {
       work: workArg,

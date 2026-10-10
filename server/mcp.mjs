@@ -14,6 +14,7 @@ export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 
 用户在播放器里实时看到保存后的修改；work_context 的 userView 是用户正在看的时间点和选区。
 看用户给的图片、视频素材用 asset_view；配乐要对上节拍时用 preview_audio 的 src + beats: true。
 work_context 的 notes 是作品的需求与约定，experiences 是关联的经验库（可以有多个，各自的首页和文档目录）：动手前对照它们，相关文档用 experience_read 读全文；用户纠正你、确认了某种做法或解决了难题时，用 experience_write 整理进经验库（关联了多个时用 library 参数指定），用户认可后用 experience_commit 保存版本；用户要求时用 experience_link / materials_link 关联或取消关联经验库、素材库。用户要删除作品时用 work_delete（只做标记，由用户在作品列表中确认）。
+作品发布后的复盘：review_read 看发布记录、按发布天数的数据、留存和复盘文档（平台导出的表格读成文字，截图给你看），review_write 记录（每次自动保存版本），reviews_compare 和其他作品在同一发布天数对比；你电脑上的导出表格、截图用 upload_link 的 review: true 上传。
 混音：音效响时不要压低音乐（不加 duck）；只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求。
 图层用 layers_edit、混音用 audio_edit（update 只改给出的字段）/ audio_place、配音加字幕用 speech_synthesize（lines + place + subtitles）、字幕用 subtitles_edit；多个作品共用的素材和代码在素材库里（materials_list / materials_use，素材地址 materials/<库>/<文件>，代码用 import … from "@materials/<库>/<路径>" 导入；material_read / material_write 读改素材库）；参数格式不确定时先查 frame_guide 对应主题。
 素材库里声明的角色、物品、场景、界面、效果、转场、文字和音效用 resources_search 找、resource_view 看用法和预览图：画一个东西之前先找，有就导入复用（不合适就给素材库代码加参数，不要拷进作品），音效用 audio_place 的 sound 放到音轨。引擎在任何文件里都用 import … from "@frame/engine/<模块>"；配乐节拍写进 project.ts 的 tempo（work_update），代码用 @frame/engine/tempo 的 beatAt / barAt 卡点。`;

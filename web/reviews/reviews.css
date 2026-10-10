@@ -1,0 +1,510 @@
+/*
+ * Series colors: the first four slots of the validated categorical palette (blue, orange,
+ * aqua, yellow), stepped per theme and checked against the studio's surfaces with the
+ * palette validator. Light aqua and yellow sit under 3:1 on white: the charts always come
+ * with numbers in text (tiles, lists, the comparison table).
+ */
+:root {
+  --series-1: #3987e5;
+  --series-2: #d95926;
+  --series-3: #199e70;
+  --series-4: #c98500;
+}
+:root[data-theme="light"] {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+  }
+}
+
+/* ---- charts ---- */
+.line-chart {
+  position: relative;
+  width: 100%;
+  touch-action: pan-y;
+  outline: none;
+  user-select: none;
+}
+.line-chart:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-soft);
+  border-radius: 4px;
+}
+.line-chart.pickable {
+  cursor: crosshair;
+}
+.line-chart svg {
+  display: block;
+  overflow: visible;
+}
+.chart-grid {
+  stroke: var(--border);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.chart-baseline {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.chart-tick {
+  fill: var(--fg-faint);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.chart-line {
+  fill: none;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+.chart-area {
+  opacity: 0.1;
+  stroke: none;
+}
+.chart-dot {
+  stroke: var(--bg-elev);
+  stroke-width: 2;
+}
+.chart-marker {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.chart-marker-label {
+  fill: var(--fg-faint);
+  font-size: 10px;
+}
+.chart-band {
+  fill: var(--danger-soft);
+}
+.chart-cursor {
+  stroke: var(--accent);
+  stroke-width: 1.5;
+}
+.chart-crosshair {
+  stroke: var(--fg-muted);
+  stroke-width: 1;
+  shape-rendering: crispEdges;
+}
+.chart-tooltip {
+  position: absolute;
+  top: 0;
+  z-index: 3;
+  min-width: 96px;
+  max-width: 220px;
+  margin-left: 10px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-elev);
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  pointer-events: none;
+}
+.chart-tooltip.left {
+  transform: translateX(calc(-100% - 20px));
+}
+.chart-tooltip-head {
+  color: var(--fg-muted);
+  margin-bottom: 2px;
+}
+.chart-tooltip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.chart-tooltip-row strong {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.chart-tooltip-extra {
+  margin-top: 2px;
+}
+.chart-key {
+  flex: none;
+  width: 12px;
+  height: 2px;
+  border-radius: 1px;
+}
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* ---- the workbench view ---- */
+.review-posts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.review-post-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.review-post-chip.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--fg);
+}
+.review-post-chip .chart-key {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.review-post-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.review-post-head a {
+  color: var(--fg);
+  text-decoration: none;
+  font-weight: 600;
+}
+.review-post-head a:hover {
+  text-decoration: underline;
+}
+.review-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.review-stat {
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  min-width: 0;
+}
+.review-stat-label {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+.review-stat-value {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.review-stat-note {
+  font-size: 11px;
+  color: var(--fg-faint);
+}
+.review-chart-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 12px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.review-chart-head .select {
+  width: auto;
+  height: 24px;
+  margin-left: auto;
+  padding: 0 4px;
+  font-size: 12px;
+  font-weight: normal;
+}
+.review-stretch {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  width: 100%;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.review-stretch:hover {
+  background: var(--bg-hover);
+}
+.review-stretch svg {
+  flex: none;
+  margin-top: 2px;
+}
+.review-stretch.drop svg {
+  color: var(--danger);
+}
+.review-stretch.rise svg {
+  color: var(--ok);
+}
+.review-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 2px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.review-row:hover {
+  background: var(--bg-hover);
+}
+.review-row > svg {
+  flex: none;
+  color: var(--fg-muted);
+}
+.review-row .icon-btn {
+  opacity: 0;
+}
+.review-row:hover .icon-btn,
+.review-row .icon-btn:focus-visible {
+  opacity: 1;
+}
+.review-empty {
+  display: grid;
+  gap: 8px;
+  padding: 16px 14px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+
+/* ---- dialogs ---- */
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0 10px;
+}
+.metric-grid .field {
+  margin-bottom: 10px;
+}
+.input-suffix {
+  position: relative;
+}
+.input-suffix .input {
+  padding-right: 30px;
+}
+.input-suffix em {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--fg-faint);
+  font-style: normal;
+  font-size: 12px;
+  pointer-events: none;
+}
+.quick-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: -6px 0 12px;
+}
+
+/* ---- raw files in the editor ---- */
+.raw-table-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0 0 12px;
+}
+.raw-table {
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.raw-table td,
+.raw-table th {
+  max-width: 280px;
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.raw-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  color: var(--fg-faint);
+  font-weight: normal;
+}
+
+/* ---- the comparison page ---- */
+.compare-page {
+  height: 100%;
+  overflow: auto;
+}
+.compare-main {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 20px 24px 48px;
+}
+.compare-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+.compare-filters .select {
+  width: auto;
+  min-width: 120px;
+}
+.compare-filters .segmented {
+  max-width: 100%;
+  overflow-x: auto;
+}
+.compare-filters .segmented button {
+  flex: none;
+  white-space: nowrap;
+}
+.compare-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.compare-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elev);
+  min-width: 0;
+}
+.compare-card h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.compare-card h3 .select {
+  width: auto;
+  height: 24px;
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: normal;
+}
+.compare-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+.compare-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.compare-table th,
+.compare-table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.compare-table th {
+  position: sticky;
+  top: 0;
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  font-weight: 500;
+  font-size: 12px;
+  cursor: pointer;
+  user-select: none;
+}
+.compare-table th.sorted {
+  color: var(--fg);
+}
+.compare-table th:first-child,
+.compare-table td:first-child,
+.compare-table th.text,
+.compare-table td.text {
+  text-align: left;
+}
+.compare-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+.compare-table tr.current td {
+  background: var(--accent-soft);
+}
+.compare-table tr.no-data td {
+  color: var(--fg-faint);
+}
+.compare-table tfoot td {
+  color: var(--fg-muted);
+  border-bottom: 0;
+}
+.compare-work {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 180px;
+  max-width: 320px;
+}
+.compare-work button {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--fg);
+  cursor: pointer;
+  text-align: left;
+}
+.compare-work button:hover {
+  text-decoration: underline;
+}
+.compare-work .chart-key {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+.compare-hint {
+  margin: 8px 2px 0;
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+@media (max-width: 700px) {
+  .compare-main {
+    padding: 14px 16px 40px;
+  }
+  .compare-charts {
+    grid-template-columns: 1fr;
+  }
+}
+.raw-pdf {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--bg);
+}

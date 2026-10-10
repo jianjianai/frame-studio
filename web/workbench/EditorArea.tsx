@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useImperativeHandle, useState, type Ref } from "react";
-import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes } from "lucide-react";
+import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes, BarChart3 } from "lucide-react";
 import { api, formatTime, workPath, experiencePath, useServerEvent, materialsPath } from "../lib/api";
+import { reviewsPath } from "../lib/reviews";
+import { RawViewer } from "../reviews/RawViewer";
 import { Markdown } from "../chat/Markdown";
 import { useToast, useConfirm } from "../lib/ui";
 import { useWorkbench } from "./store";
@@ -17,17 +19,19 @@ export interface EditorHandle {
   openMaterial(ref: string, options?: { preview?: boolean }): void;
   /** A resource or sound of the material libraries (`<library>/<file>#<name>`), previewed. */
   openResource(id: string, options?: { preview?: boolean; title?: string }): void;
+  /** A file of a work's review (`<work id>/<path>`): documents are edited, original files viewed. */
+  openReview(path: string, options?: { preview?: boolean }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
   openDiff(title: string, query: string, options?: { preview?: boolean; source?: Source }): void;
 }
-type Source = "work" | "experience" | "materials" | "resource";
+type Source = "work" | "experience" | "materials" | "resource" | "reviews";
 interface Tab {
-  /** Unique key: the work file path, `exp:<path>` for experience documents, `mat:<ref>` for material files, `diff:…` for diffs. */
+  /** Unique key: the work file path, `exp:<path>` for experience documents, `mat:<ref>` for material files, `rev:<path>` for review files, `diff:…` for diffs. */
   path: string;
   /** Path inside its source (sent to the source's file API). */
   file: string;
   source: Source;
-  kind: "text" | "image" | "audio" | "video" | "file" | "diff" | "resource";
+  kind: "text" | "image" | "audio" | "video" | "file" | "diff" | "resource" | "raw";
   title?: string;
   diff?: string;
   content?: string;
@@ -79,7 +83,13 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   const confirm = useConfirm();
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
-  const apis: Record<Source, string> = { work: workPath(work.repo, work.id), experience: experiencePath(work.repo), materials: materialsPath(work.repo), resource: "" };
+  const apis: Record<Source, string> = {
+    work: workPath(work.repo, work.id),
+    experience: experiencePath(work.repo),
+    materials: materialsPath(work.repo),
+    resource: "",
+    reviews: reviewsPath(work.repo),
+  };
 
   const load = useCallback(
     async (tab: Pick<Tab, "file" | "source">) => {
@@ -87,7 +97,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       return { content: file.content, saved: file.content, hash: file.hash };
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [apis.work, apis.experience, apis.materials],
+    [apis.work, apis.experience, apis.materials, apis.reviews],
   );
 
   /** Show a tab: an open one is activated (and kept unless opened as preview); a new preview replaces the old one. */
@@ -148,6 +158,17 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       place({ path: `res:${id}`, file: id, source: "resource", kind: "resource", title: options.title, preview: Boolean(options.preview) }, options),
     [place],
   );
+  const openReview = useCallback(
+    (path: string, options: { preview?: boolean } = {}) => {
+      // Review documents open rendered like experience documents; original files in their viewer.
+      const document = /\.(md|txt)$/i.test(path) && !/^[^/]+\/raw\//.test(path);
+      return openTab(
+        { path: `rev:${path}`, file: path, source: "reviews", kind: document ? "text" : "raw", preview: Boolean(options.preview), rendered: /\.md$/i.test(path) },
+        options,
+      );
+    },
+    [openTab],
+  );
   const openDiff = useCallback(
     (title: string, query: string, options: { preview?: boolean; source?: Source } = {}) => {
       const preview = options.preview ?? true;
@@ -163,9 +184,10 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       openExperience: (path, options) => void openExperience(path, options),
       openMaterial: (ref, options) => void openMaterial(ref, options),
       openResource,
+      openReview: (path, options) => void openReview(path, options),
       openDiff,
     }),
-    [openFile, openExperience, openMaterial, openResource, openDiff],
+    [openFile, openExperience, openMaterial, openResource, openReview, openDiff],
   );
 
   // Files changed by the AI or other tools: refresh clean tabs, flag dirty ones.
@@ -207,6 +229,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         }
         const changed = event.files as string[];
         refresh((tab) => tab.source === "experience" && (!changed.length || changed.some((file) => tab.file === file || tab.file.startsWith(file + "/"))));
+      } else if ((event.type === "reviews" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `reviews-${work.repo}`)) {
+        refresh((tab) => tab.source === "reviews" && (!event.work || tab.file.startsWith(`${event.work}/`)));
       }
     },
     [tabs, work.id, work.repo],
@@ -243,13 +267,15 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         ? `素材库资源预览 ${current.file}`
         : current.source === "experience"
         ? `经验库文档 ${current.file.split("/").slice(1).join("/")}`
+        : current.source === "reviews"
+        ? `复盘资料 ${current.file.split("/").slice(1).join("/")}`
         : current.source === "materials"
           ? `素材库文件 materials/${current.file}`
           : current.file;
   useEffect(() => onActiveChange?.(activeLabel), [activeLabel, onActiveChange]);
   const update = (path: string, change: Partial<Tab>) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...change } : item)));
   const tooltip = (tab: Tab) =>
-    `${tab.kind === "diff" ? `改动：${tab.title}` : tab.kind === "resource" ? `资源：${tab.file}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
+    `${tab.kind === "diff" ? `改动：${tab.title}` : tab.kind === "resource" ? `资源：${tab.file}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "reviews" ? `复盘：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
 
   return (
     <div className="editor-area">
@@ -267,7 +293,17 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               onDoubleClick={() => update(tab.path, { preview: false })}
               onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
             >
-              {tab.kind === "diff" ? <FileDiff size={14} /> : tab.kind === "resource" ? <Shapes size={14} /> : tab.source === "experience" ? <BookOpen size={14} /> : fileIcon(tab.file)}
+              {tab.kind === "diff" ? (
+                <FileDiff size={14} />
+              ) : tab.kind === "resource" ? (
+                <Shapes size={14} />
+              ) : tab.source === "experience" ? (
+                <BookOpen size={14} />
+              ) : tab.source === "reviews" ? (
+                <BarChart3 size={14} />
+              ) : (
+                fileIcon(tab.file)
+              )}
               <span className="ellipsis">{tab.title ?? tab.file.split("/").pop()}</span>
               <button
                 className="tab-close"
@@ -301,7 +337,9 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               )}
               {current.kind === "text" && /\.md$/i.test(current.file) && current.content !== undefined && (
                 <div className="editor-toolbar">
-                  <span className="faint small-text ellipsis grow">{current.source === "experience" ? `经验库 · ${current.file}` : current.file}</span>
+                  <span className="faint small-text ellipsis grow">
+                    {current.source === "experience" ? `经验库 · ${current.file}` : current.source === "reviews" ? `复盘 · ${current.file}` : current.file}
+                  </span>
                   <div className="segmented">
                     <button className={current.rendered ? "" : "active"} onClick={() => update(current.path, { rendered: false })}>
                       <Pencil size={12} /> 编辑
@@ -314,6 +352,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               )}
               {current.kind === "resource" ? (
                 <ResourceViewer key={current.file} id={current.file} />
+              ) : current.kind === "raw" ? (
+                <RawViewer key={current.file} fileRef={current.file} />
               ) : current.kind === "diff" ? (
                 <DiffEditor query={current.diff!} source={current.source === "resource" ? "materials" : current.source} />
               ) : current.source === "materials" ? (
@@ -333,7 +373,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
                     line={current.line}
                     onChange={(content) => update(current.path, { content, preview: false })}
                     onSave={() => save(current.path)}
-                    readOnly={readOnly && current.source !== "experience"}
+                    // Published works keep their libraries and reviews editable: they are not the work.
+                    readOnly={readOnly && current.source === "work"}
                   />
                 )
               ) : (

@@ -124,6 +124,29 @@ export class Works {
     return result.sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
   }
 
+  /**
+   * What each work of a repository is (its metadata at the newest version, live when checked
+   * out), without list's comparisons with GitHub: for joining with data kept elsewhere
+   * (reviews). Works in the recycle bin are marked `trashed`.
+   */
+  async catalog(repo) {
+    const result = new Map();
+    for (const entry of await this.refs(repo)) {
+      const trashed = !entry.local && !entry.remote;
+      const [local, remote] = trashed ? [entry.trash, entry.remoteTrash] : [entry.local, entry.remote];
+      const head = local && remote ? (local.date >= remote.date ? local : remote) : local || remote;
+      if (!head) continue;
+      let summary = await this.metaAt(repo, head.ref, head.oid);
+      const root = this.root(repo, entry.id);
+      if (!trashed && summary.slug && fs.existsSync(path.join(root, ".git")))
+        try {
+          summary = metaSummary(summary.slug, readProjectDir(path.join(root, "projects", summary.slug)).meta);
+        } catch {}
+      result.set(entry.id, { id: entry.id, repo, ...summary, ...(trashed ? { trashed: true } : {}) });
+    }
+    return result;
+  }
+
   /** Find which repository holds a work id. */
   async locate(id, repo) {
     if (!validWorkId(id)) throw problem(400, `无效的作品 id：${id}`);
@@ -845,6 +868,8 @@ function metaSummary(slug, meta) {
     accent: meta.accent || "",
     status: meta.status || "draft",
     publishedAt: meta.publishedAt || "",
+    tags: Array.isArray(meta.tags) ? meta.tags.filter((tag) => typeof tag === "string") : [],
+    experiences: Array.isArray(meta.experiences) ? meta.experiences.filter((name) => typeof name === "string") : [],
   };
 }
 

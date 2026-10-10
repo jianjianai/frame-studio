@@ -14,7 +14,7 @@ const MATERIALS_README = `# FRAME 素材库
 const REPO_README = `# FRAME 作品库
 
 本仓库由 FRAME Studio 管理。每个作品是一个独立分支 \`works/<作品 id>\`，作品文件位于 \`projects/<名称>/\`；
-共享素材库位于 \`${MATERIALS_BRANCH}\` 分支。请在 FRAME Studio 中打开与编辑。
+共享素材库位于 \`${MATERIALS_BRANCH}\` 分支，经验库位于 \`frame/experience\` 分支，作品发布后的复盘数据位于 \`frame/reviews\` 分支。请在 FRAME Studio 中打开与编辑。
 `;
 
 const repoIdFrom = (fullName) =>
@@ -163,7 +163,8 @@ export class Repos {
     if (id === LOCAL_REPO) throw problem(400, "本地作品库不能移除");
     const repo = this.get(id);
     fs.rmSync(path.join(this.config.dirs.works, id), { recursive: true, force: true });
-    fs.rmSync(path.join(this.config.dirs.libraries, id), { recursive: true, force: true });
+    for (const shared of [this.config.dirs.libraries, this.config.dirs.experience, this.config.dirs.reviews])
+      fs.rmSync(path.join(shared, id), { recursive: true, force: true });
     fs.rmSync(repo.dir, { recursive: true, force: true });
     this.settings.update("repos", (repos) => repos.filter((item) => item.id !== id));
     this.events.emit({ type: "repos" });
@@ -175,27 +176,47 @@ export class Repos {
   }
 
   /** Worktree of the materials branch, created as an orphan branch on first use. */
-  async library(id) {
+  library(id) {
+    return this.branchWorktree(id, {
+      branch: MATERIALS_BRANCH,
+      dir: path.join(this.config.dirs.libraries, id),
+      files: { "README.md": MATERIALS_README, ".gitattributes": GIT_ATTRIBUTES },
+      message: "创建素材库分支",
+    });
+  }
+
+  /**
+   * The checkout of a branch the works of a repository share (materials, experience,
+   * reviews) at `dir`: on first use from the local branch, else from GitHub's, else a new
+   * branch with no history that starts with `files`.
+   */
+  async branchWorktree(id, { branch, dir, files, message }) {
     const repo = this.get(id);
-    const dir = path.join(this.config.dirs.libraries, id);
-    return this.locks.run("library:" + id, async () => {
+    return this.locks.run(`worktree:${id}:${branch}`, async () => {
       if (fs.existsSync(path.join(dir, ".git"))) return dir;
-      // Look for an existing remote library before starting a new one.
+      // Look for the branch on GitHub before starting a new one.
       if (repo.remote) await git(repo.dir, ["fetch", "--prune", "origin"], { env: this.env(repo) }).catch(() => {});
       fs.mkdirSync(path.dirname(dir), { recursive: true });
       await git(repo.dir, ["worktree", "prune"]);
-      const local = await gitOk(repo.dir, ["show-ref", "--verify", "--quiet", "refs/heads/" + MATERIALS_BRANCH]);
-      const remote = await gitOk(repo.dir, ["show-ref", "--verify", "--quiet", "refs/remotes/origin/" + MATERIALS_BRANCH]);
-      if (local) await git(repo.dir, ["worktree", "add", "--", dir, MATERIALS_BRANCH]);
-      else if (remote) await git(repo.dir, ["worktree", "add", "--track", "-b", MATERIALS_BRANCH, "--", dir, "origin/" + MATERIALS_BRANCH]);
+      if (await this.hasBranch(id, branch, "local")) await git(repo.dir, ["worktree", "add", "--", dir, branch]);
+      else if (await this.hasBranch(id, branch, "remote")) await git(repo.dir, ["worktree", "add", "--track", "-b", branch, "--", dir, "origin/" + branch]);
       else {
-        await addOrphanWorktree(repo.dir, MATERIALS_BRANCH, dir);
-        fs.writeFileSync(path.join(dir, "README.md"), MATERIALS_README);
-        fs.writeFileSync(path.join(dir, ".gitattributes"), GIT_ATTRIBUTES);
-        await git(dir, ["add", "--", "README.md", ".gitattributes"]);
-        await git(dir, ["commit", "-q", "-m", "创建素材库分支"]);
+        await addOrphanWorktree(repo.dir, branch, dir);
+        for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(dir, name), content);
+        await git(dir, ["add", "--", ...Object.keys(files)]);
+        await git(dir, ["commit", "-q", "-m", message]);
       }
       return dir;
     });
+  }
+
+  /** Whether the repository has a branch here (`local`), from GitHub (`remote`) or either. */
+  async hasBranch(id, branch, where = "any") {
+    const { dir } = this.get(id);
+    const refs = { local: [`refs/heads/${branch}`], remote: [`refs/remotes/origin/${branch}`], any: [`refs/heads/${branch}`, `refs/remotes/origin/${branch}`] }[
+      where
+    ];
+    for (const ref of refs) if (await gitOk(dir, ["show-ref", "--verify", "--quiet", ref])) return true;
+    return false;
   }
 }

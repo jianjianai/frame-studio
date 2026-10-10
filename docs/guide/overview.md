@@ -38,6 +38,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 复用素材库里的角色、场景、效果、转场、音效 | `resources_search` 找、`resource_view` 看详情和预览图，音效用 `audio_place` 的 `sound` 放到音轨（见 `resources`） |
 | 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身）；素材库 `materials_list`、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
 | 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status`（完成时返回下载地址） |
+| 发布后的复盘 | `review_read` / `review_write` 记录和查看平台数据、留存和复盘文档，`reviews_compare` 和其他作品在同一发布天数比较（见 `reviews`） |
 
 ## 选择做法
 

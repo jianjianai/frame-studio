@@ -19,6 +19,7 @@ import {
   Lock,
   Send,
   Copy,
+  BarChart3,
 } from "lucide-react";
 import { api, workPath, experiencePath, useServerEvent, sendEvent } from "../lib/api";
 import { Sash, usePersistent, useToast, Dialog, useConfirm, usePrompt } from "../lib/ui";
@@ -39,6 +40,7 @@ import { AssetsView } from "../views/AssetsView";
 import { AudioView } from "../views/AudioView";
 import { VersionsView } from "../views/VersionsView";
 import { ExportView } from "../views/ExportView";
+import { ReviewView } from "../views/ReviewView";
 import { ChatPanel, type ChatHandle } from "../chat/ChatPanel";
 import { SettingsView } from "../settings/SettingsView";
 import "./workbench.css";
@@ -52,6 +54,7 @@ const VIEWS = [
   { id: "audio", label: "音频与配音", icon: AudioLines, component: AudioView },
   { id: "versions", label: "版本与同步", icon: GitBranch, component: VersionsView },
   { id: "export", label: "导出", icon: Clapperboard, component: ExportView },
+  { id: "reviews", label: "复盘", icon: BarChart3, component: ReviewView },
 ] as const;
 
 export function Workbench({ repo, id, version }: { repo: string; id: string; version: string }) {
@@ -170,6 +173,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     openExperience: (path, options) => editor.current?.openExperience(path, options),
     openMaterial: (ref, options) => editor.current?.openMaterial(ref, options),
     openResource: (id, options) => editor.current?.openResource(id, options),
+    openReview: (path, options) => editor.current?.openReview(path, options),
     openDiff: (title, query, options) => editor.current?.openDiff(title, query, options),
     addToChat: (attachment: ChatAttachment, prompt?: string) => {
       setChat((value) => ({ ...value, visible: true }));
@@ -407,7 +411,7 @@ function PublishButton() {
         try {
           await api(`${workPath(work.repo, work.id)}/publish`, { method: "POST" });
           await reload();
-          toast("已发布，作品现在只能查看", "ok");
+          toast("已发布，作品现在只能查看。发到平台后，可以在左侧「复盘」里记录数据", "ok");
         } catch (error) {
           toast((error as Error).message, "error");
         }
@@ -418,9 +422,9 @@ function PublishButton() {
   );
 }
 
-/** Shown on a published work: view-only, with the ways to change it again. */
+/** Shown on a published work: view-only, with the ways to change it again, and its review. */
 function PublishedBar() {
-  const { work, reload } = useWorkbench();
+  const { work, reload, showView } = useWorkbench();
   const confirm = useConfirm();
   const prompt = usePrompt();
   const toast = useToast();
@@ -430,6 +434,9 @@ function PublishedBar() {
     <div className="published-bar" title="这个作品已发布，只能查看和导出。要修改，先取消发布，或者创建一个副本接着做。">
       <Lock size={14} />
       <span className="grow ellipsis">已发布，只能查看和导出</span>
+      <button className="btn small" title="记录发到了哪些平台和之后的数据，和其他作品对比" onClick={() => showView("reviews")}>
+        <BarChart3 size={13} /> 复盘
+      </button>
       <button
         className="btn small"
         onClick={async () => {

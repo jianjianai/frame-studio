@@ -132,6 +132,9 @@ export const mimeTypes = {
   ".mid": "audio/midi",
   ".srt": "text/plain; charset=utf-8",
   ".vtt": "text/vtt; charset=utf-8",
+  ".csv": "text/csv; charset=utf-8",
+  ".pdf": "application/pdf",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 };
 export const mimeType = (file) => mimeTypes[path.extname(file).toLowerCase()] || "application/octet-stream";
 export const mediaKind = (file) => {

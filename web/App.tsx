@@ -4,6 +4,7 @@ import { ToastProvider, ConfirmProvider, PromptProvider } from "./lib/ui";
 import { Login } from "./pages/Login";
 import { Welcome } from "./pages/Welcome";
 import { Workbench } from "./workbench/Workbench";
+import { ComparePage } from "./reviews/ComparePage";
 
 export function navigate(path: string) {
   history.pushState(null, "", path);
@@ -75,6 +76,8 @@ export function App() {
               <Login onDone={() => api<typeof state>("/api/state").then(setState)} />
             ) : work ? (
               <Workbench key={work[1] + "/" + work[2]} repo={decodeURIComponent(work[1])} id={decodeURIComponent(work[2])} version={state.version} />
+            ) : path === "/reviews" ? (
+              <ComparePage />
             ) : (
               <Welcome version={state.version} />
             )}

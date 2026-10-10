@@ -25,6 +25,7 @@ works/<库>/<作品>/                   作品工作目录 = works/<作品> 分�
    .materials/<素材库>/<路径>                        作品导入的素材库代码（@materials/…）在作品所用版本的副本（平台生成，不提交）
 libraries/<库>/                      frame/materials 分支的 worktree：素材库（每个文件夹一个库；作品在 project.ts 的 materials 中引用，用到的文件版本锁定在作品的 materials.lock.json）
 experience/<库>/                     frame/experience 分支的 worktree：经验库（每个文件夹一个库，作品在 project.ts 的 experiences 中关联）
+reviews/<库>/                        frame/reviews 分支的 worktree：作品发布后的复盘（每个作品一个文件夹 <作品 id>/：review.json、复盘文档、raw/ 原始文件）
 exports/<库>/<作品>/                  导出的视频
 models/speech/                       下载的语音模型
 models/beat-this/                    节拍分析模型（本机运行时第一次分析下载；Docker 镜像自带）
@@ -47,7 +48,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `documents.mjs` | `visual.json` / `audio.json` 的读取与原子编辑（UI 与 AI 共用） |
 | `preview.mjs` | Vite 中间件；拦截作品文件的热更新，改为向舞台发送 `preview-update` |
 | `render.mjs` | 无界面 Chromium：渲染帧、分镜、封面画面、响度分析、运行检查、MP4 导出（ffmpeg） |
-| `remote-sync.mjs` | 连接 GitHub 的作品库自动同步：保存版本后在后台推送（作品、经验库、素材库分支）；打开作品、手动刷新和推送被拒时只取这个分支和 GitHub 对比，能快进就自动更新，否则广播 `remote-state`（`behind` / `diverged` / `conflict` / `error`），工作台和 AI 的每条消息都会提示；用户选择更新、合并、采用 GitHub 或保留本机；启动后和每半小时补推只领先于 GitHub 的分支 |
+| `remote-sync.mjs` | 连接 GitHub 的作品库自动同步：保存版本后在后台推送（作品、经验库、素材库、复盘分支）；打开作品、手动刷新和推送被拒时只取这个分支和 GitHub 对比，能快进就自动更新，否则广播 `remote-state`（`behind` / `diverged` / `conflict` / `error`），工作台和 AI 的每条消息都会提示；用户选择更新、合并、采用 GitHub 或保留本机；启动后和每半小时补推只领先于 GitHub 的分支 |
 | `covers.mjs` | 首页封面：`project.ts` 的 `poster` 图片，或作品在 `posterTime`（不写时自动挑选）的画面。按作品文件的版本缓存；列出作品时在后台逐个重做过期的封面，完成后广播 `work-cover` |
 | `checks.mjs` | 作品检查：元数据、TypeScript、素材引用、真实加载 |
 | `tools/` | 工具注册表（zod 参数），MCP、CLI、内置 AI 共用 |
@@ -56,6 +57,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `speech/` | 语音引擎与模型下载 |
 | `audio-analysis.mjs` `beat-this/` | AI 的“听”：ffmpeg 解码后算响度；节拍和小节交给 [Beat This!](https://github.com/CPJKU/beat_this)（MIT）模型，由 `beat-this/analyze.py` 在独立的 Python 进程中运行（`FRAME_BEAT_PYTHON`），一次只跑一个 |
 | `resources.mjs` | 素材库代码里声明的资源（`defineResources` 的角色、场景、效果……，`defineSounds` 的音效）和导出的函数：不运行代码，用 Babel 静态读出字面量字段、zod 参数和注释，按 Git blob 缓存；`resources_search` / `resource_view` 工具、工作台的资源列表、缩略图（无界面浏览器在后台逐个渲染，最新的请求先画；没画好时接口返回 202，画好后广播 `resource-thumb`；按代码版本缓存在 `cache/resources/`，画不出来的按版本记住几分钟）；素材库概况（资源和音效数量、常用画布、README 第一段）给 `work_context` 和会话说明。预览和缩略图运行素材库现在的代码（`tmp/library/<库>/`，素材地址 `/files/<库>/-/`），不混用作品锁定的旧文件 |
+| `reviews.mjs` `review-data.mjs` `sheets.mjs` | 复盘：作品发到平台后的发布记录、按时间记录的累计数据和观众留存（`review.json`）、平台导出的原始文件（`raw/`，原样保存）和复盘文档，放在 `frame/reviews` 分支而不是作品分支（已发布的作品只读，数据却一直在增加；所有作品在一个文件夹里便于对比）。每次修改立即保存为一个版本并自动推送。比较时按发布后同一天数取数（`review-data.mjs`：检查点、比例、中位数、留存流失处对应的镜头和字幕）；`sheets.mjs` 不执行公式地把 xlsx / csv 读成文字表格（GB18030、UTF-16 编码的导出也能读）。工具 `review_read` / `review_write` / `reviews_compare`，工作台「复盘」视图和首页的复盘对比页 |
 | `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件，作品写 `-` 时取现在的版本：Git blob，LFS 内容按需下载；`@materials/...` 代码导入由 Vite 插件解析到作品根目录 `.materials/` 中的副本，锁定版本或素材库当前版本，锁定时沿导入关系一并锁定；保存版本和发布前锁定文件只保留作品用到的）、导出文件、后台任务 |
 
 ## 预览与热更新

@@ -46,6 +46,7 @@ AI 在作品目录中工作，拥有读写文件和运行命令的能力（与�
 - 平台规则：作品结构、工作流程、工具用法。
 - 作品自己的需求与约定：`projects/<名称>/AGENTS.md` 的原文（超过 6 KB 时只放开头）。
 - 关联的经验库（可以多个）：按作品里的顺序，预算（12 KB）够的放全部文档，其余的放 README 和其他文档的目录（标题 + 第一句），AI 按需用 `experience_read` 阅读全文。
+- 有复盘数据时一句话说明发到了哪些平台、有几次数据和哪些复盘文档；数字不放进来，需要时用 `review_read` / `reviews_compare` 读取。
 
 文档逐字放在代码块里，AI 可以直接复制原文做精确修改。整份说明不超过 Codex 读取 `AGENTS.md` 的 32 KiB 上限，代理压缩上下文后仍然保留。
 
@@ -61,7 +62,7 @@ AI 在作品目录中工作，拥有读写文件和运行命令的能力（与�
 
 **分支**：从某条 AI 回复分支或修改之前的消息时，新对话复制到那里为止的对话记录（和其中的图片），并用代理自己的 `session/fork` 在那条回复之后分叉 AI 的上下文（Claude 和 Codex 都支持）；修改消息则在分叉后发送新内容。分支点之后被丢弃的轮次改过的文件不会回退，分支的第一条消息会告诉 AI 这一点。
 
-**已发布的作品**：只能查看，但可以继续聊天（复盘、整理经验）。作品文件在磁盘上设为只读（`projects/` 和根目录的受版本管理文件），代理自己的编辑工具也改不了；FRAME 工具中会修改作品的都会被拒绝（导出和经验库工具除外）；每条消息的 `[FRAME]` 都会说明作品已发布。
+**已发布的作品**：只能查看，但可以继续聊天（复盘、整理经验）。作品文件在磁盘上设为只读（`projects/` 和根目录的受版本管理文件），代理自己的编辑工具也改不了；FRAME 工具中会修改作品的都会被拒绝（导出、经验库、素材库和复盘工具除外）；每条消息的 `[FRAME]` 都会说明作品已发布。
 
 **工具**：Claude Code 直接加载常用的 FRAME 工具（`CORE_TOOLS`），其余在需要时通过工具搜索加载。内置 AI 的会话只能操作当前作品，工具没有 `work` 参数；它用自己的工具读写作品文件，所以工具列表里没有 `files_list` / `files_batch`，MCP 说明也只是一句话（完整用法在会话说明里）。
 
@@ -116,10 +117,10 @@ frame export ab12cd34 --width 1920
 | `work_check` | 类型、素材引用、真实浏览器加载并渲染几帧和一段音频 |
 | `preview_frames` | 渲染画面：`times` 指定时刻，或 `count`（加 `start`/`end`）均匀取样；4 张以内分开返回，更多拼成一张带时间标注的总览图（`work_check` 的 `frames: true` 也会附上检查时渲染的 5 个时刻） |
 | `preview_audio` | 一段混音或一个音频文件（`src`）的响度、静音段、削波；`beats: true` 给出 BPM、拍号、每个节拍和每小节第一拍（ffmpeg 解码后交给 [Beat This!](https://github.com/CPJKU/beat_this) 模型，`server/beat-this/analyze.py`；一次只跑一个，约为音频长度的十分之一） |
-| `search` | 和 grep 一样按内容判断文本文件（8 MB 以内），整行都搜、长行只显示匹配附近；文字或正则、多个关键词、整词、跨行、区分大小写、glob / exclude、前后上下文、每文件上限；范围可选作品、作品用到的素材库文件（锁定的版本）、素材库当前版本、经验库、制作指南、引擎源码；返回 文件:行号 和上下文 |
+| `search` | 和 grep 一样按内容判断文本文件（8 MB 以内），整行都搜、长行只显示匹配附近；文字或正则、多个关键词、整词、跨行、区分大小写、glob / exclude、前后上下文、每文件上限；范围可选作品、作品用到的素材库文件（锁定的版本）、素材库当前版本、经验库、各作品的复盘资料、制作指南、引擎源码；返回 文件:行号 和上下文 |
 | `files_list` / `files_batch` | 作品文件（外部 AI 使用；内置 AI 的工具列表里没有它们，用自己的文件工具）：一次调用对一个或多个文件读、写、精确替换、删除、移动；默认能做的都做、失败的逐项说明（同一文件前面失败则后面跳过），`atomic` 时全部成功才写入；`check` / `frames` 改完直接检查并看画面 |
 | `asset_import` / `asset_view` | 作品自己的素材（public/，列表在 `work_context`）：导入网址、base64（小文件）、本机模式下的服务器文件，`items` 一次导入多个，服务器模式不能从内网地址导入；查看图片、视频素材本身（多个拼成带编号的总览图，视频按时间点抽帧） |
-| `upload_link` | AI 所在电脑上的文件：返回一次性上传地址（15 分钟、用一次）和写好本机路径的 curl 命令（`from`），AI 在自己的终端上传到作品 public/（默认 public/imports/）或素材库，文件不经过对话 |
+| `upload_link` | AI 所在电脑上的文件：返回一次性上传地址（15 分钟、用一次）和写好本机路径的 curl 命令（`from`），AI 在自己的终端上传到作品 public/（默认 public/imports/）、素材库，或作品复盘资料的 raw/（`review: true`），文件不经过对话 |
 | `materials_list` / `materials_link` / `materials_use` | 素材库：查看、关联或取消关联（也可新建）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
 | `material_read` / `material_write` | 读取素材库文件；修改素材库（`put` 放入网址、作品文件或文本内容，`edit` 精确修改文本，`move`、`delete`，一次可以多个操作），每次修改都是素材库的一个版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |
 | `layers_get` / `layers_edit` | visual.json 图层（读取时每层一行、省略默认值；`update` 嵌套对象逐项合并） |
@@ -127,6 +128,8 @@ frame export ab12cd34 --width 1920
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
 | `experience_read` / `experience_write` | 作品关联的经验库：照着做，过程中随时整理经验（`write` / `edit` / `delete` / `move`，一次可以改几篇；未保存状态） |
 | `experience_link` / `experience_commit` | 关联、取消关联或新建经验库；把经验库的修改保存为版本（可选推送到 GitHub） |
+| `review_read` / `review_write` | 作品发布后的复盘（`frame/reviews` 分支，不在作品里，已发布的作品也能写）：发布记录、按发布天数的数据、留存分析（流失处的镜头和字幕）、复盘文档和原始文件；`file` 把平台导出的 xlsx / csv 读成文字表格、截图返回图片；`review_write` 的 `post` / `snapshot` / `remove_*` 和文档的 `write` / `edit` / `delete` / `move`，每次调用自动保存一个版本 |
+| `reviews_compare` | 各作品的发布记录在同一发布天数（`checkpoint`）比较，附比例、中位数和本作品相对中位数的倍数；可按平台、标签、经验库、作品、时间筛选，`curves` 附按视频进度对齐的留存曲线 |
 | `subtitles_edit` | 字幕：整体替换、追加（替换重叠的旧字幕）、按时间段删除 |
 | `versions_list` / `version_save` / `version_diff` / `version_restore` | 版本 |
 | `export_video` / `task_status` | 导出 MP4（`wait` 秒数内等它完成）；完成时返回 1 小时有效的下载地址（`/api/downloads/<令牌>`，本机模式另给文件路径） |

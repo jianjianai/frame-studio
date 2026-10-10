@@ -1,10 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { git, gitOk, addOrphanWorktree } from "./git.mjs";
 import { tree, readText, writeText, removePath, movePath } from "./files.mjs";
 import { readJson } from "./http.mjs";
-import { problem, notFound, conflict, confined, Locks } from "./util.mjs";
+import { problem, notFound, conflict } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
 import { readLibrary, libraryBrief, experienceBrief, briefText } from "./ai/context.mjs";
@@ -54,31 +53,15 @@ const validId = (id) => typeof id === "string" && /^[^\\/:*?"<>|#%\x00-\x1f.][^\
 export class Experience {
   constructor(services) {
     this.services = services;
-    this.locks = new Locks();
   }
 
   /** The experience worktree of a repository, created (or checked out from GitHub) on first use. */
-  async dir(repoId) {
-    const { repos, config } = this.services;
-    const repo = repos.get(repoId);
-    const dir = path.join(config.dirs.experience, repoId);
-    return this.locks.run(repoId, async () => {
-      if (fs.existsSync(path.join(dir, ".git"))) return dir;
-      if (repo.remote) await git(repo.dir, ["fetch", "--prune", "origin"], { env: repos.env(repo) }).catch(() => {});
-      fs.mkdirSync(path.dirname(dir), { recursive: true });
-      await git(repo.dir, ["worktree", "prune"]);
-      const local = await gitOk(repo.dir, ["show-ref", "--verify", "--quiet", "refs/heads/" + EXPERIENCE_BRANCH]);
-      const remote = await gitOk(repo.dir, ["show-ref", "--verify", "--quiet", "refs/remotes/origin/" + EXPERIENCE_BRANCH]);
-      if (local) await git(repo.dir, ["worktree", "add", "--", dir, EXPERIENCE_BRANCH]);
-      else if (remote) await git(repo.dir, ["worktree", "add", "--track", "-b", EXPERIENCE_BRANCH, "--", dir, "origin/" + EXPERIENCE_BRANCH]);
-      else {
-        await addOrphanWorktree(repo.dir, EXPERIENCE_BRANCH, dir);
-        fs.writeFileSync(path.join(dir, "README.md"), ROOT_README);
-        fs.writeFileSync(path.join(dir, ".gitattributes"), GIT_ATTRIBUTES);
-        await git(dir, ["add", "--", "README.md", ".gitattributes"]);
-        await git(dir, ["commit", "-q", "-m", "创建经验库"]);
-      }
-      return dir;
+  dir(repoId) {
+    return this.services.repos.branchWorktree(repoId, {
+      branch: EXPERIENCE_BRANCH,
+      dir: path.join(this.services.config.dirs.experience, repoId),
+      files: { "README.md": ROOT_README, ".gitattributes": GIT_ATTRIBUTES },
+      message: "创建经验库",
     });
   }
 

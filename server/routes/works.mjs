@@ -93,10 +93,11 @@ export function workRoutes(services) {
     services.watcher.unwatch({ repo: params.repo, id: params.id });
     return works.freeLocal(params.id, params.repo);
   });
-  /** What a deleted work leaves behind outside its branch: exported videos, its cover, AI conversations. */
+  /** What a deleted work leaves behind outside its branch: exported videos, its cover, its review, AI conversations. */
   const forget = async (repo, id) => {
     fs.rmSync(path.join(services.config.dirs.exports, repo, id), { recursive: true, force: true });
     services.covers?.forget(repo, id);
+    await services.reviews?.forget(repo, id);
     for (const session of services.ai?.list({ work: id, repo }) ?? []) await services.ai.remove(session.id);
   };
   router.delete("/api/trash/:repo/:id", async ({ params }) => {

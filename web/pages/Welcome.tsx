@@ -18,6 +18,7 @@ import {
   Send,
   Lock,
   ImageUp,
+  BarChart3,
 } from "lucide-react";
 import { api, del, formatBytes, timeAgo, useServerEvent } from "../lib/api";
 import { coverUrl, uploadCover } from "../lib/covers";
@@ -308,6 +309,13 @@ export function Welcome({ version }: { version: string }) {
                   <small>登录 Claude / ChatGPT，或添加自定义 API</small>
                 </span>
               </button>
+              <button className="hero-card" onClick={() => navigate("/reviews")}>
+                <BarChart3 size={20} />
+                <span>
+                  <strong>复盘对比</strong>
+                  <small>把发布后的数据放在一起，看哪类作品表现更好</small>
+                </span>
+              </button>
             </div>
           </section>
 
@@ -445,7 +453,7 @@ function TrashDialog({ repos, onClose }: { repos: Repo[]; onClose: () => void })
   const freed = (bytes: number) => (bytes > 0 ? `，释放了 ${formatBytes(bytes)}` : "");
   const purge = async (work: WorkSummary) => {
     const where = work.location === "local" ? "本机上的分支" : work.location === "remote" ? "GitHub 上的分支" : "本机和 GitHub 上的分支";
-    if (!(await confirm(`永久删除「${work.title}」？${where}、导出的视频和 AI 对话都会删除，无法恢复。`, { confirm: "永久删除", danger: true }))) return;
+    if (!(await confirm(`永久删除「${work.title}」？${where}、导出的视频、复盘资料和 AI 对话都会删除，无法恢复。`, { confirm: "永久删除", danger: true }))) return;
     const result = await run(() => del<{ freed: number }>(`/api/trash/${work.repo}/${work.id}`));
     if (result) toast(`已永久删除「${work.title}」${freed(result.freed)}`, "ok");
   };

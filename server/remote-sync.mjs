@@ -232,13 +232,19 @@ export function remoteSyncPlugin(services) {
   later.unref?.();
   services.closers.push(() => (clearTimeout(first), clearInterval(later)));
 
-  // A work, and the repository's experience and material library branches.
+  // A work, and the repository's experience, material library and review branches.
   const scopes = {
     work: (params) => services.openWork(params.id, params.repo),
     experience: (params) => services.experience.scope(params.repo),
     materials: (params) => services.materials.scope(params.repo),
+    reviews: (params) => services.reviews.scope(params.repo),
   };
-  const bases = { work: "/api/works/:repo/:id/remote", experience: "/api/repos/:repo/experience/remote", materials: "/api/repos/:repo/materials/remote" };
+  const bases = {
+    work: "/api/works/:repo/:id/remote",
+    experience: "/api/repos/:repo/experience/remote",
+    materials: "/api/repos/:repo/materials/remote",
+    reviews: "/api/repos/:repo/reviews/remote",
+  };
   for (const [kind, base] of Object.entries(bases)) {
     router.get(base, async ({ params }) => sync.get(await scopes[kind](params)) ?? { state: "unknown" });
     router.post(`${base}/check`, async ({ params }) => sync.check(await scopes[kind](params)));

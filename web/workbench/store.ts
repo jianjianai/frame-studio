@@ -148,8 +148,10 @@ export interface WorkbenchContextValue {
   openMaterial: (ref: string, options?: { preview?: boolean }) => void;
   /** Preview a resource or sound of the material libraries (`<library>/<file>#<name>`) in a tab. */
   openResource: (id: string, options?: { preview?: boolean; title?: string }) => void;
+  /** Open a file of a work's review (`<work id>/<path>`): documents to edit, original files to view. */
+  openReview: (path: string, options?: { preview?: boolean }) => void;
   /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. */
-  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" | "materials" }) => void;
+  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" | "materials" | "reviews" }) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
   /** Put a prompt into the chat's input box (opening the chat). */

@@ -13,6 +13,7 @@ const LFS_EXTENSIONS = [
   ["字体", "ttf otf woff woff2"],
   ["三维与贴图", "glb fbx usdz hdr exr ktx2"],
   ["音色库与其他二进制", "sf2 sf3 bin zip onnx"],
+  ["表格与文档", "xlsx xlsm xls pdf docx pptx"],
 ];
 const anyCase = (ext) => [...ext].map((char) => (/[a-z]/.test(char) ? `[${char}${char.toUpperCase()}]` : char)).join("");
 export const GIT_ATTRIBUTES =
@@ -195,6 +196,7 @@ export function platformInstructions() {
 - \`resources_search\`、\`resource_view\`：素材库里可以直接复用的角色、物品、场景、界面、效果、转场、文字和音效（以及素材库代码导出的函数）。动手画一个东西之前先找；找到就 \`import … from "@materials/<库>/<路径>"\` 复用，音效用 \`audio_place\` 的 \`sound\`。不合适就给素材库里的代码加参数，不要拷进作品。新写的可复用东西放进素材库并声明成资源（见 frame_guide resources）。
 - \`asset_import\`、\`asset_view\`：作品自己的素材（public/，列表在 work_context 的 assets）：导入，和看图片、视频素材本身的样子（用户上传的素材先看一眼再用）。素材库是作品共用的素材：\`materials_list\` 查看，\`materials_link\` 关联或取消关联（用户要求时），\`materials_use\` 锁定版本后用 \`materials/<库>/<文件>\` 地址，\`material_write\` 往素材库里放、改、移动、删除文件。素材库里的代码用 \`import … from "@materials/<库>/<路径>"\` 直接导入（见 frame_guide assets）；\`.materials/\` 是 FRAME 生成的副本，不要改。
 - \`version_save\`、\`export_video\` 等：版本和导出（导出完成时返回下载地址）。
+- \`review_read\`、\`review_write\`、\`reviews_compare\`：作品发布后的复盘——发到了哪些平台、按发布天数记录的数据和观众留存、平台导出的原始文件和复盘文档。和其他作品比较时取发布后同一天数的数据。用户要复盘、录入数据或比较作品表现时用（方法见 \`frame_guide reviews\`）。
 - \`work_delete\`：用户要删除作品时用。只做标记，由用户在首页作品列表中确认删除或保留；你不能直接删除作品。
 
 ## 上下文

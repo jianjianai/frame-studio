@@ -226,6 +226,9 @@ importers:
       codemirror:
         specifier: 6.0.2
         version: 6.0.2
+      fflate:
+        specifier: 0.8.3
+        version: 0.8.3
       ffmpeg-static:
         specifier: 5.3.0
         version: 5.3.0(supports-color@8.1.1)

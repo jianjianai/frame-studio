@@ -111,7 +111,7 @@ export function registerWorkTools(registry) {
     name: "work_context",
     title: "作品现状",
     description:
-      "读取作品的元数据、文件、素材（地址、类型、时长、尺寸）、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果、最近的导出、作品需求和关联的经验库、作品库里的素材库（各有哪些资源和音效），以及是否已发布、和 GitHub 是否同步（warnings 里的情况要先处理）。外部 AI 开始工作前先调用。",
+      "读取作品的元数据、文件、素材（地址、类型、时长、尺寸）、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果、最近的导出、作品需求和关联的经验库、作品库里的素材库（各有哪些资源和音效）、发布后的复盘数据概要，以及是否已发布、和 GitHub 是否同步（warnings 里的情况要先处理）。外部 AI 开始工作前先调用。",
     readOnly: true,
     input: { work: workArg },
     async run(_, ctx) {
@@ -178,6 +178,8 @@ export function registerWorkTools(registry) {
         experiences: services.experience ? services.experience.summary(work, { inBrief: Boolean(ctx.scope.session) }) : null,
         // What the shared libraries hold (resources, sounds) and whether they fit this picture.
         materials: services.resources ? await services.resources.librariesFor(work).catch(() => null) : null,
+        // Where the work was posted and how it did (only when there is review data).
+        ...(services.reviews ? { reviews: await services.reviews.summary(work).catch(() => null) } : {}),
       };
       return asJson(result);
     },

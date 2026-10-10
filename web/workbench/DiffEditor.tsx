@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { FileCode2, WrapText } from "lucide-react";
 import { api, workPath, experiencePath, materialsPath, useServerEvent } from "../lib/api";
+import { reviewsPath } from "../lib/reviews";
 import { usePersistent } from "../lib/ui";
 import { useWorkbench } from "./store";
 import { parseDiff, type DiffLine } from "./diff";
@@ -8,17 +9,23 @@ import { parseDiff, type DiffLine } from "./diff";
 /**
  * A diff shown as an editor tab. `query` is the /diff query: `file=<path>` (uncommitted
  * changes of a file), empty (all uncommitted changes) or `commit=<sha>` (one version).
- * Uncommitted diffs follow the files as they change. `source` picks the work or the
- * repository's experience libraries.
+ * Uncommitted diffs follow the files as they change. `source` picks the work or one of the
+ * repository's shared branches (experience, materials, reviews).
  */
-export function DiffEditor({ query, source = "work" }: { query: string; source?: "work" | "experience" | "materials" }) {
-  const { work, openFile, openExperience } = useWorkbench();
+export function DiffEditor({ query, source = "work" }: { query: string; source?: "work" | "experience" | "materials" | "reviews" }) {
+  const { work, openFile, openExperience, openReview } = useWorkbench();
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
   // Long lines (prose, JSON) wrap by default, so a change is seen without scrolling sideways.
   const [wrap, setWrap] = usePersistent("diffWrap", true);
   const experience = source === "experience";
-  const base = experience ? experiencePath(work.repo) : source === "materials" ? materialsPath(work.repo) : workPath(work.repo, work.id);
+  const base = experience
+    ? experiencePath(work.repo)
+    : source === "materials"
+      ? materialsPath(work.repo)
+      : source === "reviews"
+        ? reviewsPath(work.repo)
+        : workPath(work.repo, work.id);
   const scope = source === "work" ? work.id : `${source}-${work.repo}`;
   const live = !query.startsWith("commit=");
   const load = () =>
@@ -39,7 +46,7 @@ export function DiffEditor({ query, source = "work" }: { query: string; source?:
   const files = useMemo(() => parseDiff(text ?? ""), [text]);
   const prefix = source === "work" ? `projects/${work.slug}/` : "";
   // Material library files are media: their changes show here, they do not open as text.
-  const open = (path: string) => (experience ? openExperience(path) : source === "work" ? openFile(path) : undefined);
+  const open = (path: string) => (experience ? openExperience(path) : source === "reviews" ? openReview(path) : source === "work" ? openFile(path) : undefined);
 
   if (error) return <div className="empty">{error}</div>;
   if (text === null) return <div className="empty">正在读取改动…</div>;

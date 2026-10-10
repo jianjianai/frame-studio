@@ -7,6 +7,7 @@ import { useWorkbench } from "../workbench/store";
 import { RepoDialog } from "../components/RepoDialog";
 import { ViewHeader } from "./ViewHeader";
 import { RemoteBar } from "../workbench/RemoteBar";
+import { reviewsPath } from "../lib/reviews";
 
 const statusLabel: Record<string, string> = { M: "修改", A: "新增", D: "删除", "?": "新增", R: "重命名", U: "冲突" };
 
@@ -39,10 +40,10 @@ export function VersionsView() {
 }
 
 /**
- * Save versions, unsaved changes, history and GitHub sync of the work or of the
- * repository's experience libraries (same API on a different branch).
+ * Save versions, unsaved changes, history and GitHub sync of the work or of one of the
+ * repository's shared branches: experience, materials, reviews (same API on another branch).
  */
-export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "experience" | "materials"; refresh?: number }) {
+export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "experience" | "materials" | "reviews"; refresh?: number }) {
   const { work, reload: reloadWork, openDiff, readOnly } = useWorkbench();
   // Experience and material libraries share the work's version UI on their own branches.
   const experience = source !== "work";
@@ -57,7 +58,15 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
   const [run, busy] = useAction();
   const confirm = useConfirm();
   const [openMenu, menu] = useContextMenu();
-  const base = source === "experience" ? experiencePath(work.repo) : source === "materials" ? materialsPath(work.repo) : workPath(work.repo, work.id);
+  const base =
+    source === "experience"
+      ? experiencePath(work.repo)
+      : source === "materials"
+        ? materialsPath(work.repo)
+        : source === "reviews"
+          ? reviewsPath(work.repo)
+          : workPath(work.repo, work.id);
+  const name = { work: "作品", experience: "经验库", materials: "素材库", reviews: "复盘资料" }[source];
   const prefix = experience ? "" : `projects/${work.slug}/`;
   const load = async () => {
     const [nextStatus, nextHistory] = await Promise.all([api<WorkStatus>(`${base}/status`), api<Version[]>(`${base}/history?limit=100`)]);
@@ -72,6 +81,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
     if ((event.type === "work-files" || event.type === "work-versions") && event.work === scope) void load();
     if (source === "experience" && event.type === "experience-files" && event.repo === work.repo) void load();
     if (source === "materials" && event.type === "materials" && event.repo === work.repo) void load();
+    if (source === "reviews" && event.type === "reviews" && event.repo === work.repo) void load();
   });
 
   const commit = () =>
@@ -85,12 +95,9 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
   const showDiff = (title: string, query: string, preview = true) => openDiff(title, query, { preview, source });
   const revert = async (version: Version) => {
     if (
-      !(await confirm(
-        `把${source === "experience" ? "经验库" : source === "materials" ? "素材库" : "作品"}恢复成「${version.message}」时的样子？\n当前内容会先自动保存，恢复本身也会成为一个新版本，随时可以再恢复回来。`,
-        {
-          confirm: "恢复",
-        },
-      ))
+      !(await confirm(`把${name}恢复成「${version.message}」时的样子？\n当前内容会先自动保存，恢复本身也会成为一个新版本，随时可以再恢复回来。`, {
+        confirm: "恢复",
+      }))
     )
       return;
     await run(async () => {
@@ -138,15 +145,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
   return (
     <>
       {/* The work's own warning sits above the editor; the shared libraries warn here. */}
-      {source !== "work" && (
-        <RemoteBar
-          base={`${base}/remote`}
-          repo={work.repo}
-          scope={`${source}-${work.repo}`}
-          what={source === "experience" ? "经验库" : "素材库"}
-          onSettled={() => void load()}
-        />
-      )}
+      {source !== "work" && <RemoteBar base={`${base}/remote`} repo={work.repo} scope={`${source}-${work.repo}`} what={name} onSettled={() => void load()} />}
       {busy && <div className="view-progress" />}
       <section className="view-section">
         {!locked && (
