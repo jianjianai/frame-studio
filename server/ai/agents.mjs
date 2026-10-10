@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
@@ -60,6 +61,38 @@ export function agentEnv(config, extra = {}) {
   env.NO_BROWSER = "1";
   env.BROWSER = process.platform === "win32" ? "" : "true";
   return { ...env, ...extra };
+}
+
+/** Claude's answer when another part of it is refreshing the login (or died doing so). */
+export const CLAUDE_REFRESH_BUSY = /another Claude Code process is refreshing|exited mid-refresh/i;
+
+/**
+ * Wait out a Claude login refresh in progress: until its lock in ~/.claude is released, or
+ * stale by the CLI's own rule (not touched for 60 s: the holder died mid-refresh, and the
+ * next attempt takes it over). Resolves to "free", "stale", "timeout" or "aborted".
+ */
+export async function waitForClaudeRefresh({ signal, timeoutMs = 75000, intervalMs = 2000, settleMs = 1500 } = {}) {
+  const env = agentEnv();
+  const lock = path.join(env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), ".claude"), ".oauth_refresh.lock");
+  const until = Date.now() + timeoutMs;
+  const pause = (ms) =>
+    new Promise((resolve) => {
+      const timer = setTimeout(resolve, ms);
+      signal?.addEventListener("abort", () => (clearTimeout(timer), resolve()), { once: true });
+    });
+  await pause(settleMs); // a refresh that is just finishing
+  for (;;) {
+    if (signal?.aborted) return "aborted";
+    let touched;
+    try {
+      touched = fs.statSync(lock).mtimeMs;
+    } catch {
+      return "free";
+    }
+    if (Date.now() - touched > 61000) return "stale";
+    if (Date.now() >= until) return "timeout";
+    await pause(intervalMs);
+  }
 }
 
 function runCli(agent, args, env, { input, timeoutMs = 20000 } = {}) {

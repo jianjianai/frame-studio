@@ -125,4 +125,64 @@ describe("agent errors", () => {
     expect(busy.message).not.toContain("登录 Claude 账号");
     expect(authHint(new Error("Authentication required"), account).message).toContain("请在 设置 → AI 中登录 Claude 账号");
   });
+
+  it("waits out a login refresh: released, stale (its holder died), or stopped by the user", async () => {
+    const { waitForClaudeRefresh } = await import("../server/ai/agents.mjs");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-agent-home-"));
+    const before = process.env.FRAME_AGENT_HOME;
+    process.env.FRAME_AGENT_HOME = home;
+    try {
+      const fast = { settleMs: 0, intervalMs: 50 };
+      expect(await waitForClaudeRefresh(fast)).toBe("free");
+      const lock = path.join(home, ".claude", ".oauth_refresh.lock");
+      fs.mkdirSync(lock, { recursive: true });
+      const old = new Date(Date.now() - 120000);
+      fs.utimesSync(lock, old, old);
+      expect(await waitForClaudeRefresh(fast)).toBe("stale");
+      fs.utimesSync(lock, new Date(), new Date());
+      setTimeout(() => fs.rmSync(lock, { recursive: true, force: true }), 200);
+      expect(await waitForClaudeRefresh(fast)).toBe("free");
+      fs.mkdirSync(lock, { recursive: true });
+      const stop = new AbortController();
+      setTimeout(() => stop.abort(), 100);
+      expect(await waitForClaudeRefresh({ ...fast, signal: stop.signal })).toBe("aborted");
+    } finally {
+      if (before === undefined) delete process.env.FRAME_AGENT_HOME;
+      else process.env.FRAME_AGENT_HOME = before;
+    }
+  });
+
+  it("sends the message again once when Claude was busy refreshing its login", async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-retry-"));
+    const app = await createApp({ env: { FRAME_HOME: home, FRAME_PORT: "0" }, plugins });
+    const before = process.env.FRAME_AGENT_HOME;
+    process.env.FRAME_AGENT_HOME = path.join(home, "agent-home"); // no refresh lock there
+    try {
+      const ai = app.services.ai;
+      const work = await app.services.works.create({ title: "重试" });
+      const calls = [];
+      const process_ = {
+        agent: "claude",
+        connection: {
+          prompt: async (request) => {
+            calls.push(request);
+            if (calls.length === 1) throw new Error("Internal error: Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh.");
+            return { stopReason: "end_turn" };
+          },
+        },
+      };
+      const meta = { id: "retry-1", work: work.id, repo: "local", profile: "claude-account", profileName: "Claude", agent: "claude", model: "", title: "新对话", createdAt: "", updatedAt: "", status: "idle", queue: [], choices: {}, acpSessionId: "acp-r" };
+      const session = { meta, process: process_, attached: true };
+      ai.sessions.set(meta.id, session);
+      await ai.runTurn(session, { id: "m1", text: "你好", attachments: [], view: null });
+      expect(calls).toHaveLength(2);
+      const kinds = ai.transcript(meta.id).map((entry) => entry.kind);
+      expect(kinds).toEqual(["user", "notice", "turn_end"]);
+      expect(ai.transcript(meta.id)[1].message).toContain("自动重发");
+    } finally {
+      if (before === undefined) delete process.env.FRAME_AGENT_HOME;
+      else process.env.FRAME_AGENT_HOME = before;
+      await app.close();
+    }
+  }, 30000);
 });

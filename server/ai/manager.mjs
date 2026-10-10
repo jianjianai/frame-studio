@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { Writable, Readable } from "node:stream";
 import { randomUUID, createHash } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
-import { AGENTS, agentEnv } from "./agents.mjs";
+import { AGENTS, agentEnv, CLAUDE_REFRESH_BUSY, waitForClaudeRefresh } from "./agents.mjs";
 import { Profiles } from "./profiles.mjs";
 import { appVersion } from "../config.mjs";
 import { problem, notFound, writeFileAtomic } from "../util.mjs";
@@ -504,7 +504,26 @@ export class AiManager {
     try {
       await this.attach(session, work);
       const prompt = this.turnPrompt(session, message, work);
-      const response = await session.process.connection.prompt({ sessionId: session.meta.acpSessionId, prompt });
+      let response;
+      for (let attempt = 1; ; attempt++) {
+        try {
+          response = await session.process.connection.prompt({ sessionId: session.meta.acpSessionId, prompt });
+          break;
+        } catch (error) {
+          // A starting Claude refreshes an expired login from several places at once: the ones that
+          // lose fail at once, and one that dies mid-refresh leaves the lock until it is stale (60 s).
+          // Wait that out once and send the message again, instead of making the user retry by hand.
+          if (attempt > 1 || session.process?.agent !== "claude" || !CLAUDE_REFRESH_BUSY.test(error?.message || "")) throw error;
+          this.append(session, { kind: "notice", message: "Claude 正在刷新登录，完成后会自动重发这条消息（最多等一分钟左右）" });
+          this.publish(session);
+          session.waiting = new AbortController();
+          const outcome = await waitForClaudeRefresh({ signal: session.waiting.signal }).finally(() => (session.waiting = null));
+          if (outcome === "aborted") {
+            response = { stopReason: "cancelled" };
+            break;
+          }
+        }
+      }
       this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null });
     } catch (error) {
       this.append(session, { kind: "error", message: authHint(error, session.process).message });
@@ -530,6 +549,7 @@ export class AiManager {
   async cancel(id) {
     const session = this.get(id);
     session.meta.queue = [];
+    session.waiting?.abort(); // waiting for a login refresh: stop instead of sending again
     if (session.meta.status !== "idle" && session.process) await session.process.connection.cancel({ sessionId: session.meta.acpSessionId });
     this.publish(session);
   }
@@ -889,7 +909,7 @@ const userAttachments = (message) => message.attachments.map((item) => (item.dat
 export function authHint(error, process) {
   const message = error?.message || String(error);
   // Another Claude Code on this computer refreshing the same login: it passes, signing in again is not the cure.
-  if (/another Claude Code process is refreshing|usually transient/i.test(message)) return new Error(`${message}。这是暂时的（同一台电脑上另一个 Claude Code 正在刷新登录），稍等一分钟再发`);
+  if (CLAUDE_REFRESH_BUSY.test(message)) return new Error(`${message}。这是暂时的（Claude 正在刷新登录，或者上次刷新中途中断），稍等一分钟再发`);
   if (/auth/i.test(message) || error?.code === -32000) {
     const how = process?.profile?.kind === "account" ? `请在 设置 → AI 中登录 ${process.profile.name}` : "请检查 API Key 和接口地址";
     return new Error(`${message}。${how}`);
