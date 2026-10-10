@@ -109,6 +109,22 @@ describe("material libraries", () => {
     expect((await call(`/files/local/${work.id}/materials/${encodeURIComponent("品牌")}/bg.svg`)).body).toBe("<svg>bg</svg>");
     const check = await app.services.checks.get?.(`local/${work.id}`);
     expect(check ?? null).toBeNull(); // no check stored yet: nothing to assert here
+
+    // A version keeps the locks of what the work uses: an address built at run time keeps those it may name…
+    const sceneFile = path.join(work.dir, "scene.ts");
+    const dynamic = "// assetUrl(`materials/品牌/${name}.svg`)";
+    fs.writeFileSync(sceneFile, fs.readFileSync(sceneFile, "utf8").replace('// assetUrl("materials/品牌/bg.svg")', dynamic));
+    await works.commit(work, "动态地址");
+    expect(Object.keys(materials.readLocks(work.dir))).toEqual(["品牌/bg.svg", "品牌/logo.svg"]);
+    // …and the others go.
+    fs.writeFileSync(sceneFile, fs.readFileSync(sceneFile, "utf8").replace(dynamic, ""));
+    await works.commit(work, "不用背景");
+    expect(Object.keys(materials.readLocks(work.dir))).toEqual(["品牌/logo.svg"]);
+    // Nothing used any more: the lock file goes with the version.
+    await call(`${route}/layers`, { method: "POST", body: { operations: [{ op: "remove", id: "logo" }] } });
+    await works.commit(work, "不用素材");
+    expect(fs.existsSync(path.join(work.dir, "materials.lock.json"))).toBe(false);
+    expect((await works.status(work)).files).toEqual([]);
   });
 
   it("lets the AI link libraries, add files and use them", async () => {

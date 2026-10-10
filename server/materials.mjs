@@ -49,6 +49,8 @@ export const MATERIALIZED = ".materials";
 /** Library files a work may import (text). Scripts are also followed for their own imports. */
 const IMPORTABLE = /\.(m?[jt]sx?|cjs|json|glsl|frag|vert|wgsl|css|txt|svg)$/i;
 const SCRIPT = /\.(m?[jt]sx?|cjs)$/i;
+/** An address built at run time (`materials/lib/fonts/${name}.ttf`, "materials/lib/fonts/" + name): the part known in advance; null for a plain address. */
+const prefixOf = (ref) => (ref.includes("${") ? ref.slice(0, ref.indexOf("${")) : ref.endsWith("/") ? ref : null);
 const IMPORT_SPEC = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g;
 const SPEC_ENDINGS = ["", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".json", "/index.ts", "/index.tsx", "/index.js"];
 /** Module specifiers in code (static, side-effect and dynamic imports, re-exports). */
@@ -256,9 +258,16 @@ export class Materials {
       return {};
     }
   }
-  writeLocks(work, locks) {
+  /** Write the lock file (none when nothing is locked) and let the copies and the preview follow. */
+  async saveLocks(work, locks) {
+    const file = path.join(work.dir, LOCK_FILE);
     const sorted = Object.fromEntries(Object.entries(locks).sort(([a], [b]) => a.localeCompare(b)));
-    writeFileAtomic(path.join(work.dir, LOCK_FILE), JSON.stringify(sorted, null, 2) + "\n");
+    if (Object.keys(sorted).length) writeFileAtomic(file, JSON.stringify(sorted, null, 2) + "\n");
+    else fs.rmSync(file, { force: true });
+    await this.refreshCopies({ root: work.root, repo: work.repo, dir: work.dir });
+    this.services.events.emit({ type: "work-materials", work: work.id, repo: work.repo });
+    // Same addresses, other content: the preview reloads the media.
+    this.services.preview?.assetsChanged?.(work, [file]);
   }
   /** The work's own source files (not its media, exports or notes). */
   sourceFiles(work) {
@@ -287,23 +296,29 @@ export class Materials {
   /**
    * Every library file the work uses: materials/<ref> in its code and documents, the library
    * code it imports (@materials/…) with that code's own imports, and the materials that code
-   * uses. `unresolved`: imports that lead to no library file.
+   * uses. `unresolved`: imports that lead to no library file. `prefixes`: the known start of
+   * addresses built at run time (any file under one may be used).
    */
   async usage(work) {
     const refs = new Set();
+    const prefixes = new Set();
     // Library code named by a document (a sound module in audio.json) runs like an import.
     const named = [];
     for (const file of this.sourceFiles(work))
-      for (const match of fs.readFileSync(file, "utf8").matchAll(MATERIAL_REF))
-        if (!match[1].includes("${") && validRef(match[1])) {
+      for (const match of fs.readFileSync(file, "utf8").matchAll(MATERIAL_REF)) {
+        const prefix = prefixOf(match[1]);
+        if (prefix !== null) prefixes.add(prefix);
+        else if (validRef(match[1])) {
           refs.add(match[1]);
           if (SCRIPT.test(match[1])) named.push({ spec: match[1], from: path.relative(work.dir, file).split(path.sep).join("/") });
         }
+      }
     const imports = [...this.imports(work), ...named];
-    if (!imports.length) return { refs, unresolved: [] };
+    if (!imports.length) return { refs, unresolved: [], prefixes: [...prefixes] };
     const code = await this.follow(work.repo, this.readLocks(work.dir), imports);
     for (const ref of code.refs) refs.add(ref);
-    return { refs, unresolved: code.unresolved };
+    for (const prefix of code.prefixes) prefixes.add(prefix);
+    return { refs, unresolved: code.unresolved, prefixes: [...prefixes] };
   }
   async references(work) {
     return (await this.usage(work)).refs;
@@ -318,6 +333,7 @@ export class Materials {
     const head = await this.headOf(repo);
     const exists = (ref) => Boolean(locks[ref] || head.has(ref));
     const refs = new Set();
+    const prefixes = new Set();
     const unresolved = [];
     const queue = [];
     const visit = (spec, from) => {
@@ -333,7 +349,11 @@ export class Materials {
       const ref = queue.shift();
       if (!SCRIPT.test(ref)) continue;
       const text = await this.text(repo, locks[ref] ?? head.get(ref)).catch(() => "");
-      for (const match of text.matchAll(MATERIAL_REF)) if (!match[1].includes("${") && validRef(match[1])) refs.add(match[1]);
+      for (const match of text.matchAll(MATERIAL_REF)) {
+        const prefix = prefixOf(match[1]);
+        if (prefix !== null) prefixes.add(prefix);
+        else if (validRef(match[1])) refs.add(match[1]);
+      }
       for (const spec of importSpecs(text)) {
         if (spec.startsWith("@materials/")) visit(spec.slice(11), `materials/${ref}`);
         else if (/^\.\.?\//.test(spec)) {
@@ -343,7 +363,7 @@ export class Materials {
         }
       }
     }
-    return { refs, unresolved };
+    return { refs, unresolved, prefixes: [...prefixes] };
   }
 
   /** The branch's current files (cached until the libraries change). */
@@ -404,13 +424,7 @@ export class Materials {
         locked.push(ref);
       }
     }
-    if (locked.length) {
-      this.writeLocks(work, locks);
-      await this.refreshCopies({ root: work.root, repo: work.repo, dir: work.dir });
-      this.services.events.emit({ type: "work-materials", work: work.id, repo: work.repo });
-      // Same addresses, other content: the preview reloads the media.
-      this.services.preview?.assetsChanged?.(work, [path.join(work.dir, LOCK_FILE)]);
-    }
+    if (locked.length) await this.saveLocks(work, locks);
     return { locked, missing };
   }
   /** Lock what the work uses and has not locked yet (after placing a material, before a version). */
@@ -421,6 +435,23 @@ export class Materials {
       work,
       [...(await this.references(work))].filter((ref) => !locks[ref]),
     );
+  }
+  /**
+   * Before a version (and a publication): the lock file holds what the work uses. New references
+   * are locked; locks of files it no longer uses are dropped (a file taken up again later is
+   * locked at that day's version). Addresses built at run time keep every lock they may name.
+   */
+  async syncLocks(work) {
+    if (this.services.works.published(work)) return { locked: [], missing: [], dropped: [] };
+    const result = await this.lockReferenced(work);
+    const locks = this.readLocks(work.dir);
+    const { refs, prefixes } = await this.usage(work);
+    const dropped = Object.keys(locks).filter((ref) => !refs.has(ref) && !prefixes.some((prefix) => ref.startsWith(prefix)));
+    if (dropped.length) {
+      for (const ref of dropped) delete locks[ref];
+      await this.saveLocks(work, locks);
+    }
+    return { ...result, dropped };
   }
 
   // ---- .materials: the library code a work (or export snapshot) runs ---------------------
@@ -624,11 +655,11 @@ export class Materials {
     const dir = await this.dir(work.repo);
     const head = await this.head(dir);
     const locks = this.readLocks(work.dir);
-    const { refs: used, unresolved } = await this.usage(work);
+    const { refs: used, unresolved, prefixes } = await this.usage(work);
     const files = [...new Set([...Object.keys(locks), ...used])].sort().map((ref) => ({
       ref,
       url: `materials/${ref}`,
-      used: used.has(ref),
+      used: used.has(ref) || prefixes.some((prefix) => ref.startsWith(prefix)),
       locked: locks[ref] ?? null,
       current: head.get(ref) ?? null,
       outdated: Boolean(locks[ref] && head.get(ref) && locks[ref] !== head.get(ref)),
@@ -679,8 +710,8 @@ export class Materials {
 export function materialsPlugin(services) {
   const { router, tools, works } = services;
   const materials = (services.materials = new Materials(services));
-  // A version of a work (and its publication) records the material versions it uses.
-  works.beforeSave.push((work) => materials.lockReferenced(work));
+  // A version of a work (and its publication) records the material versions it uses, and only those.
+  works.beforeSave.push((work) => materials.syncLocks(work));
   // Library code: the preview resolves @materials/… to copies at the versions each work uses,
   // which follow the libraries (unlocked files) and the works' lock files (pull, revert, edits).
   services.preview?.importResolvers?.push((source, importer) => materials.resolveImport(source, importer));
@@ -847,7 +878,7 @@ export function materialsPlugin(services) {
     name: "materials_use",
     title: "使用素材",
     description:
-      "在作品中使用素材库里的文件前调用：锁定这些文件当前的版本（之后素材库里的改动不会影响作品），作品还没关联的素材库会自动关联。返回用法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。",
+      "在作品中使用素材库里的文件前调用：锁定这些文件当前的版本（之后素材库里的改动不会影响作品），作品还没关联的素材库会自动关联。返回用法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。保存版本时只保留作品用到的文件的锁定。",
     input: { work: workArg, files: z.array(refArg).min(1).max(100), update: z.boolean().default(false) },
     async run({ files, update }, ctx) {
       const work = await ctx.work();

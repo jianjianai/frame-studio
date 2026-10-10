@@ -59,7 +59,8 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
   const base = materialsPath(work.repo);
   const linked = new Set(status.libraries.map((item) => item.id));
   const locks = new Map(status.files.map((item) => [item.ref, item]));
-  const outdated = status.files.filter((item) => item.outdated);
+  // Locks of files the work no longer uses go when it saves a version: not worth updating.
+  const outdated = status.files.filter((item) => item.outdated && item.used);
   const enc = encodeURIComponent;
 
   const loadFiles = (id: string) => api<MaterialFile[]>(`${base}/libraries/${enc(id)}/files`).then((list) => setFiles((map) => ({ ...map, [id]: list })), () => {});
