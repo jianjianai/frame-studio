@@ -214,6 +214,8 @@ export function createCompositionScene(
               : clip.blend;
             paint.translate(x + w / 2, y + h / 2);
             paint.rotate((sampleValue(p.rotation, t, 0) * Math.PI) / 180);
+            const zoom = Math.max(0, sampleValue(p.scale, t, 1));
+            paint.scale(zoom, zoom);
             paint.beginPath();
             paint.rect(-w / 2, -h / 2, w, h);
             paint.clip();

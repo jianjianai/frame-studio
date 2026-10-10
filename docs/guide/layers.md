@@ -37,7 +37,8 @@ export function createScene(options: SceneOptions) {
 
 - `source.kind`：`image`、`video`、`lottie`（`src` 为 Lottie JSON）、`sequence`（`frames` 图片数组 + `fps`）、`color`（`color: "#rrggbb"`）、`scene`（`module` + `engine`，engine 取 canvas/pixi/three/babylon/composition）。
 - 时间：`start`、`duration`（作品时间，秒）；`offset` 素材内起点；`rate` 速度；`loop` 循环长度；`phase`。
-- `transform`：`x, y, width, height` 是相对画面的 0–1 比例（默认铺满），`rotation` 度，`opacity` 0–1。每项可以是数字或关键帧数组 `[{ at, value, easing }]`，`at` 是图层内时间，easing 为 `linear`/`hold`/`smooth`。
+- `transform`：`x, y, width, height` 是相对画面的 0–1 比例（默认铺满），`rotation` 度，`scale` 以图层中心缩放（图层框和内容一起，1 是原大小，超出画面的部分被裁掉），`opacity` 0–1。每项可以是数字或关键帧数组 `[{ at, value, easing }]`，`at` 是图层内时间，easing 为 `linear`/`hold`/`smooth`。
+- 推近（照片慢慢放大）：`"transform": { "scale": [{ "at": 0, "value": 1 }, { "at": 4, "value": 1.12, "easing": "smooth" }] }`；弹出：`scale` 从 0.8 到 1 配合 `fadeIn`。不要用改 `width`/`height` 再挪 `x`/`y` 的办法做缩放。
 - `fit`：`contain`/`cover`/`fill`；`crop`：0–1 比例裁剪；`blend`：混合模式；`fadeIn`/`fadeOut` 秒；`hidden` 隐藏。
 - 视频图层 `audio: { enabled: true, gain }` 会把视频原声加入混音。
 - 数组顺序就是叠放顺序：越靠后越在上层。图层不能超过作品时长；`id` 唯一，字母开头。

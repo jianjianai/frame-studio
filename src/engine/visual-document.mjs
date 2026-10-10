@@ -79,6 +79,8 @@ export const visualClipSchema = z
         width: animated.optional(),
         height: animated.optional(),
         rotation: animated.optional(),
+        // Around the layer's center, box and content together (1 = as placed): push-ins, pop-ups.
+        scale: animated.optional(),
         opacity: animated.optional(),
       })
       .optional(),
@@ -165,7 +167,7 @@ export function sampleValue(value, time, fallback) {
 }
 /** `{ opacity: 0.5 }` instead of `{ transform: { opacity: 0.5 } }` is the usual slip. */
 const misplacedTransform = (issue) => {
-  const keys = issue.code === "unrecognized_keys" ? issue.keys.filter((key) => ["x", "y", "width", "height", "rotation", "opacity"].includes(key)) : [];
+  const keys = issue.code === "unrecognized_keys" ? issue.keys.filter((key) => ["x", "y", "width", "height", "rotation", "scale", "opacity"].includes(key)) : [];
   return keys.length ? `${keys.join("、")} 要写在 transform 里，例如 {"transform":{"${keys[0]}":…}}` : undefined;
 };
 const UNSETTABLE = ["name", "offset", "phase", "rate", "loop", "audio", "hidden", "transform", "fit", "blend", "crop", "fadeIn", "fadeOut", "fadeOffset", "fadeDuration"];

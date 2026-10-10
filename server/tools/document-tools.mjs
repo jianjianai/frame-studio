@@ -62,7 +62,7 @@ export function registerDocumentTools(registry) {
     name: "layers_edit",
     title: "编辑图层",
     description:
-      "原子地编辑 visual.json：add（加图层）、update（只改给出的字段：嵌套对象逐项合并，例如 patch {transform:{opacity:0.5}} 保留原来的 x/y；数组整体替换；unset 删除字段，可写 transform.opacity）、remove、reorder（图层顺序：越靠后越在上面）、split（在某时间切开）、replace（整体替换）。transform 的 x/y/width/height 是相对画面的 0..1 比例，可以是数字或关键帧数组 [{at,value,easing}]。",
+      "原子地编辑 visual.json：add（加图层）、update（只改给出的字段：嵌套对象逐项合并，例如 patch {transform:{opacity:0.5}} 保留原来的 x/y；数组整体替换；unset 删除字段，可写 transform.opacity）、remove、reorder（图层顺序：越靠后越在上面）、split（在某时间切开）、replace（整体替换）。transform 的 x/y/width/height 是相对画面的 0..1 比例，scale 以图层中心缩放（推近、弹出用它），都可以是数字或关键帧数组 [{at,value,easing}]。",
     guide: "layers",
     destructive: true,
     input: {

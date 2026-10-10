@@ -8,7 +8,7 @@ import sharp from "sharp";
 import { createExportPlan } from "../src/engine/export-plan.mjs";
 import { frameDimensions, fitComposition } from "../src/engine/dimensions.mjs";
 import { appRoot } from "./config.mjs";
-import { problem } from "./util.mjs";
+import { problem, sha256 } from "./util.mjs";
 import { cleanBrowserError, mergeTimedErrors } from "./stack.mjs";
 
 const require = createRequire(import.meta.url);
@@ -51,6 +51,7 @@ export class Renderer {
   constructor(services) {
     this.services = services;
     this.pages = new Map();
+    this.stamps = new Map(); // "repo/id" → the work's files when its compiled modules were last known fresh
     this.browserPromise = null;
     this.openPages = 0; // every page from openPage (warm, check, export) until closed
     this.lastUse = 0;
@@ -198,8 +199,9 @@ export class Renderer {
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
     width = width || fitComposition(meta.meta, 1280).width;
     const key = `${work.repo}/${work.id}`;
+    const stamp = this.freshen(work);
     const existing = this.pages.get(key);
-    if (existing && existing.width === width && !existing.stale) {
+    if (existing && existing.width === width && !existing.stale && existing.stamp === stamp) {
       existing.usedAt = Date.now();
       return existing.handle;
     }
@@ -210,13 +212,49 @@ export class Renderer {
         () => {},
       );
     }
-    const entry = { width, usedAt: Date.now(), stale: false };
+    const entry = { width, usedAt: Date.now(), stale: false, stamp };
     entry.handle = this.openPage(this.sourceOf(work), { width, project: meta.meta });
     this.pages.set(key, entry);
     entry.handle.catch(() => this.pages.get(key) === entry && this.pages.delete(key));
     const handle = await entry.handle;
     handle.project = meta.meta;
     return handle;
+  }
+
+  /**
+   * A tool that renders right after a change (the AI's own write, a document edit) must not
+   * see the work as it was: the file watcher reports changes a moment later. Every file of
+   * the work by size and time; when that moved, the work's compiled modules are dropped now.
+   * Returns the stamp a warm page is valid for.
+   */
+  freshen(work) {
+    const parts = [];
+    const walk = (dir) => {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entry of entries) {
+        if (["exports", ".cache", "node_modules"].includes(entry.name)) continue;
+        const file = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(file);
+        else if (entry.isFile())
+          try {
+            const stat = fs.statSync(file);
+            parts.push(`${file}\0${stat.size}\0${stat.mtimeMs}`);
+          } catch {}
+      }
+    };
+    walk(work.dir);
+    const stamp = sha256(parts.join("\n"));
+    const key = `${work.repo}/${work.id}`;
+    if (this.stamps.get(key) !== stamp) {
+      this.stamps.set(key, stamp);
+      this.services.preview?.invalidateWork?.(work);
+    }
+    return stamp;
   }
 
   invalidate(key) {
@@ -330,7 +368,8 @@ export class Renderer {
   }
 
   /** A segment of the work's mix as stereo float PCM (48 kHz), rendered offline in the page. */
-  async audioPcm(work, { start = 0, duration = 10 }) {
+  /** The work's mix as PCM (or one track alone: `track` is an audio.json track id or a layer's "visual:<id>"). */
+  async audioPcm(work, { start = 0, duration = 10, track }) {
     this.lastUse = Date.now();
     const handle = await this.warmPage(work);
     const total = handle.project.duration;
@@ -339,7 +378,7 @@ export class Renderer {
     const chunks = [];
     for (let offset = 0; offset < duration - 1e-6; offset += 10) {
       const chunk = Math.min(10, duration - offset);
-      const data = await handle.page.evaluate(({ start, chunk }) => window.__FRAME_STUDIO__.audioChunk(start, chunk), { start: start + offset, chunk });
+      const data = await handle.page.evaluate(({ start, chunk, track }) => window.__FRAME_STUDIO__.audioChunk(start, chunk, track), { start: start + offset, chunk, track });
       const pcm = Buffer.from(data, "base64");
       chunks.push(new Int16Array(pcm.buffer, pcm.byteOffset, pcm.length / 2));
     }
@@ -369,6 +408,7 @@ export class Renderer {
     if (!meta.ok) return { ok: false, errors: ["project.ts：" + meta.error], console: [] };
     let handle;
     try {
+      this.freshen(work);
       handle = await this.openPage(this.sourceOf(work), { width: 640, project: meta.meta, timeoutMs: 60000 });
       const duration = meta.meta.duration;
       const times = [0, duration * 0.25, duration * 0.5, duration * 0.75, Math.max(0, duration - 0.05)];

@@ -41,6 +41,9 @@ describe("partial updates", () => {
     const update = (patch, unset) => editVisual(work, { operations: [{ op: "update", id: "title", patch, ...(unset ? { unset } : {}) }] }).document.clips[0];
     update({ transform: { x: 0.1, opacity: [{ at: 0, value: 0 }, { at: 1, value: 1 }] } });
     expect(update({ transform: { opacity: 0.5 } }).transform).toEqual({ x: 0.1, opacity: 0.5 });
+    // Scale around the layer's center, animated like the others.
+    expect(update({ transform: { scale: [{ at: 0, value: 1 }, { at: 4, value: 1.2, easing: "smooth" }] } }).transform.scale).toHaveLength(2);
+    expect(update({}, ["transform.scale"]).transform).toEqual({ x: 0.1, opacity: 0.5 });
     expect(update({ source: { parameters: { speed: 2 } } }).source).toMatchObject({ kind: "scene", module: "title", parameters: { speed: 2 } });
     expect(update({}, ["transform.x", "transform.opacity"]).transform).toBeUndefined();
     // A source of another kind replaces the old one.

@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
 import { importFromUrl } from "../server/tools/asset-tools.mjs";
+import { browserExecutable } from "../server/render.mjs";
 
 describe("tools that save the AI calls", () => {
   let app, base, works, work, files;
@@ -268,6 +269,54 @@ describe("tools that save the AI calls", () => {
     expect(describeRhythm([], [])).toMatchObject({ bpm: null, beatsPerBar: null });
   });
 
+  it("tells which tracks are heard and whether the voice stands out", async () => {
+    const { voiceBalance } = await import("../server/audio-analysis.mjs");
+    const { audibleTracks } = await import("../server/tools/preview-tools.mjs");
+    // Tracks heard in 0–10 s: the music, and speech by its files (public/voice/) though its name says nothing.
+    const meta = {
+      visual: { clips: [] },
+      audioDocument: {
+        schemaVersion: 1,
+        sources: [
+          { id: "m", kind: "file", src: "films/x/music/a.mp3" },
+          { id: "v", kind: "file", src: "films/x/voice/b.mp3" },
+          { id: "e", kind: "file", src: "films/x/rain.mp3" },
+        ],
+        tracks: [{ id: "t1", name: "音乐" }, { id: "t2", name: "Track 2" }, { id: "t3", name: "环境" }],
+        clips: [
+          { id: "c1", track: "t1", source: "m", start: 0, duration: 10 },
+          { id: "c2", track: "t2", source: "v", start: 2, duration: 3 },
+          { id: "c3", track: "t3", source: "e", start: 20, duration: 5 },
+        ],
+      },
+    };
+    expect(audibleTracks(meta, 0, 10)).toEqual([
+      { id: "t1", name: "音乐", voice: false },
+      { id: "t2", name: "Track 2", voice: true },
+    ]);
+    const windows = (...levels) => levels.map((rmsDb, index) => ({ time: index, rmsDb }));
+    // Voice 12 dB over the music where it speaks; silent windows do not count.
+    expect(voiceBalance([{ voice: true, windows: windows(-80, -12, -12) }, { voice: false, windows: windows(-24, -24, -24) }], 0.5)).toEqual({ seconds: 1, differenceDb: 12 });
+    expect(voiceBalance([{ voice: false, windows: windows(-10) }], 0.5)).toBeNull();
+  });
+
+  it.skipIf(!browserExecutable())("measures each track of the mix, and a change counts at once", async () => {
+    const src = `films/${work.slug}/look/drums.wav`;
+    await tool("audio_place", { work: work.id, src, track: "音乐", start: 0, duration: 2 });
+    await tool("audio_place", { work: work.id, src, track: "配音", start: 0, duration: 2, gain: 0.1 });
+    const first = await tool("preview_audio", { work: work.id, start: 0, duration: 2 });
+    expect(first.body.text).toContain("「配音」（人声）");
+    expect(first.body.text).toMatch(/人声比其他声音还低 \d+(\.\d+)? dB，会被盖住/);
+    // Lower the music and measure straight away: the new mix, not the old one of a warm page.
+    const audio = JSON.parse(fs.readFileSync(path.join(work.dir, "audio.json"), "utf8"));
+    const musicTrack = audio.tracks.find((track) => track.name === "音乐").id;
+    const music = audio.clips.find((clip) => clip.track === musicTrack);
+    await tool("audio_edit", { work: work.id, operations: [{ op: "update", collection: "clips", id: music.id, patch: { gain: 0.01 } }] });
+    const second = await tool("preview_audio", { work: work.id, start: 0, duration: 2 });
+    expect(second.body.text).toMatch(/人声比其他声音响 \d+(\.\d+)? dB，听得清/);
+    expect(second.body.data.overall.rmsDb).toBeLessThan(first.body.data.overall.rmsDb);
+  }, 120000);
+
   it("shows the file's own text when an edit misses by quotes or whitespace", async () => {
     const { nearMiss } = await import("../server/tools/file-ops.mjs");
     const code = 'export function createScene(options) {\n  return make(options, {\n    title: () => import("./title"),\n  });\n}\n';
@@ -285,8 +334,8 @@ describe("tools that save the AI calls", () => {
     });
     const parsed = schema.safeParse({ operations: [{ op: "add", clip: { transform: { scale: 2 } } }] });
     expect(describeIssues(parsed.error.issues, schema)).toBe("operations.0.clip.transform: 不认识的字段 scale（可用：x、opacity）");
-    const layers = await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "title", patch: { transform: { scale: 1.2 } } }] });
-    expect(layers.body.error.message).toMatch(/不认识的字段 scale（可用：x、y、width、height/);
+    const layers = await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "title", patch: { transform: { skew: 1.2 } } }] });
+    expect(layers.body.error.message).toMatch(/不认识的字段 skew（可用：x、y、width、height、rotation、scale、opacity）/);
   });
 
   it("finds the exact tempo of each steady stretch from beats on the model's 20 ms grid", async () => {

@@ -102,6 +102,33 @@ export function loudnessStretches(windows, window) {
   return stretches.map(({ start, end, sum, n, peakDb, silent }) => ({ start, end, rmsDb: Math.round((sum / n) * 10) / 10, peakDb, silent }));
 }
 
+/** Speech by its track name or where its files are (speech_synthesize writes public/voice/). */
+export const VOICE_TRACK = /配音|旁白|人声|解说|对白|朗读|voice|vocal|narrat|dialog/i;
+
+/**
+ * How the voice stands against everything else while it speaks, from each track rendered
+ * alone (`tracks`: { voice, windows } with the same windows): the power-averaged level
+ * difference over the windows where the voice is audible. Null without both.
+ */
+export function voiceBalance(tracks, window) {
+  const voices = tracks.filter((track) => track.voice);
+  const others = tracks.filter((track) => !track.voice);
+  if (!voices.length || !others.length) return null;
+  const power = (rmsDb) => (rmsDb <= -120 ? 0 : 10 ** (rmsDb / 10));
+  let voice = 0;
+  let rest = 0;
+  let windows = 0;
+  for (let index = 0; index < voices[0].windows.length; index++) {
+    const v = voices.reduce((sum, track) => sum + power(track.windows[index]?.rmsDb ?? -120), 0);
+    if (v < power(-45)) continue; // the voice is not speaking here
+    voice += v;
+    rest += others.reduce((sum, track) => sum + power(track.windows[index]?.rmsDb ?? -120), 0);
+    windows++;
+  }
+  if (!windows) return null;
+  return { seconds: Math.round(windows * window * 10) / 10, differenceDb: rest ? Math.round(10 * Math.log10(voice / rest) * 10) / 10 : null };
+}
+
 let queue = Promise.resolve(); // one model run at a time: each takes several cores
 
 /**

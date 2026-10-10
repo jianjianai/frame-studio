@@ -6,7 +6,8 @@ import { resolveAsset } from "./asset-tools.mjs";
 import { formatTime } from "../render.mjs";
 import { problem } from "../util.mjs";
 import { probe } from "../media.mjs";
-import { decodeAudio, loudness, loudnessStretches, beatThis, mixDown } from "../audio-analysis.mjs";
+import { decodeAudio, loudness, loudnessStretches, beatThis, mixDown, voiceBalance, VOICE_TRACK } from "../audio-analysis.mjs";
+import { projectAudioTracks } from "../../src/engine/types.ts";
 
 const seconds = z.number().finite().nonnegative();
 const SEPARATE_MAX = 8;
@@ -48,6 +49,46 @@ export function rhythmText(rhythm, { file }) {
       (file ? `firstBeat 是第一小节第一拍在作品里的时间：文件内 ${first} 秒，放到音轨上后 = 片段 start + ${first} − 片段 offset（从作品 0 秒起放、offset 0 时就是 ${first}）。` : "") +
       (segments.length > 1 ? `tempo 只有一个速度：${formatTime(main.start)}–${formatTime(main.end)} 以外的剪辑点用上面列出的节拍时间，不要用 beatAt。` : ""),
   );
+  return lines;
+}
+
+/**
+ * The tracks heard between `from` and `to`, to render one by one: audio.json tracks (all their
+ * clips) and video layers with sound. `voice` by name or by files from public/voice/.
+ */
+export function audibleTracks(meta, from, to) {
+  const names = new Map((meta.audioDocument?.tracks ?? []).map((track) => [track.id, track.name]));
+  const groups = new Map();
+  for (const entry of projectAudioTracks(meta)) {
+    if (entry.muted || entry.start >= to || entry.start + (entry.duration ?? Infinity) <= from) continue;
+    const id = entry.channel ?? entry.id;
+    const group = groups.get(id) ?? { id, name: names.get(entry.channel) ?? entry.name ?? id, files: [] };
+    if (entry.src) group.files.push(entry.src);
+    groups.set(id, group);
+  }
+  return [...groups.values()].map(({ id, name, files }) => ({ id, name, voice: VOICE_TRACK.test(name) || (files.length > 0 && files.every((src) => /\/voice\//.test(src))) }));
+}
+
+/** Each track alone, and whether the voice stands out. */
+function trackLines(solo, window) {
+  const power = (rmsDb) => 10 ** (rmsDb / 10);
+  const lines = ["各音轨单独的响度："];
+  for (const track of solo) {
+    const heard = track.windows.filter((item) => item.rmsDb > -60);
+    const rms = heard.length ? Math.round(10 * Math.log10(heard.reduce((sum, item) => sum + power(item.rmsDb), 0) / heard.length) * 10) / 10 : null;
+    lines.push(`- 「${track.name}」${track.voice ? "（人声）" : ""}：${rms === null ? "这段没有声音" : `rms ${rms} / peak ${track.overall.peakDb}，有声 ${Math.round(heard.length * window * 10) / 10} 秒`}`);
+  }
+  const balance = voiceBalance(solo, window);
+  if (balance?.differenceDb != null) {
+    const { seconds, differenceDb } = balance;
+    if (differenceDb >= 6) lines.push(`人声段（${seconds} 秒）：人声比其他声音响 ${differenceDb} dB，听得清。`);
+    else {
+      const factor = Math.round(10 ** (-(8 - differenceDb) / 20) * 100) / 100;
+      lines.push(
+        `人声段（${seconds} 秒）：人声${differenceDb >= 0 ? `只比其他声音响 ${differenceDb} dB` : `比其他声音还低 ${-differenceDb} dB`}，会被盖住。人声一般要比配乐响 6 dB 以上：用 audio_edit 把其他音轨的 gain 乘以约 ${factor}（或调高人声）；只在人声出现时压低配乐（duck）要用户明确同意。`,
+      );
+    }
+  }
   return lines;
 }
 
@@ -115,7 +156,7 @@ export function registerPreviewTools(registry) {
     name: "preview_audio",
     title: "分析声音",
     description:
-      "听不到声音时用数字确认：响度（RMS/峰值 dBFS，响度相近的时间合并成一段）、静音段和削波。默认分析作品混音（start 起 duration 秒，最多 60 秒）；src 分析单个音频或视频文件（films/…、materials/<库>/…，默认整个文件，最多 300 秒）。beats: true 再用 Beat This! 模型给出准确的速度（中途变速时分段）、拍号、每小节第一拍的时间和写进 project.ts 的 tempo，用来把剪辑点、画面变化对上音乐（耗时约为音频长度的十分之一）。",
+      "听不到声音时用数字确认：响度（RMS/峰值 dBFS，响度相近的时间合并成一段）、静音段和削波。默认分析作品混音（start 起 duration 秒，最多 60 秒）；src 分析单个音频或视频文件（films/…、materials/<库>/…，默认整个文件，最多 300 秒）。分析混音时（有两条以上音轨）还会单独渲染每条音轨，给出各自的响度，有人声时说明人声是否被盖住。beats: true 再用 Beat This! 模型给出准确的速度（中途变速时分段）、拍号、每小节第一拍的时间和写进 project.ts 的 tempo，用来把剪辑点、画面变化对上音乐（耗时约为音频长度的十分之一）。",
     readOnly: true,
     input: {
       work: workArg,
@@ -124,8 +165,9 @@ export function registerPreviewTools(registry) {
       duration: z.number().positive().max(300).optional().describe("秒数；混音默认 10（最多 60），文件默认到结尾（最多 300）"),
       window: z.number().min(0.05).max(10).optional().describe("响度窗口秒数；默认 0.5，长音频自动加大到不超过 60 个窗口"),
       beats: z.boolean().default(false).describe("同时分析节拍和小节"),
+      tracks: z.boolean().default(true).describe("分析混音时单独渲染各音轨（最多 8 条），给出各自的响度和人声是否被盖住"),
     },
-    async run({ src, start, duration, window, beats }, ctx) {
+    async run({ src, start, duration, window, beats, tracks }, ctx) {
       const work = await ctx.work();
       let left, right, rate, from, length, label;
       if (src) {
@@ -153,6 +195,18 @@ export function registerPreviewTools(registry) {
         `响度（${step} 秒一窗，相差 2 dB 以内的合并）：`,
         ...loudnessStretches(stats.windows, step).map((item) => `${formatTime(item.start)}–${formatTime(item.end)} ${item.silent ? "静音" : `rms ${item.rmsDb} / peak ${item.peakDb}`}`),
       ];
+      const meta = src || !tracks ? null : services.works.meta(work);
+      const audible = meta?.ok ? audibleTracks(meta.meta, from, from + length) : [];
+      if (audible.length >= 2 && audible.length <= 8) {
+        const solo = [];
+        for (const track of audible) {
+          const pcm = await services.renderer.audioPcm(work, { start: from, duration: length, track: track.id });
+          const level = loudness(pcm.left, pcm.right, pcm.rate, { start: from, window: step });
+          solo.push({ ...track, windows: level.windows, overall: level.overall });
+        }
+        stats.tracks = solo.map(({ windows: _windows, ...track }) => track);
+        lines.push("", ...trackLines(solo, step));
+      }
       if (beats) {
         const rhythm = await beatThis(mixDown(left, right), rate, { start: from, modelsDir: path.join(services.config.dirs.models, "beat-this") });
         stats.rhythm = rhythm;

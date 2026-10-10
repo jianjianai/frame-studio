@@ -168,6 +168,9 @@ export function PropertiesView() {
           <Prop label="旋转">
             <AnimatedField value={transform.rotation} fallback={0} unit="°" step={1} onCommit={(value) => setTransform("rotation", value)} />
           </Prop>
+          <Prop label="缩放">
+            <AnimatedField value={transform.scale} fallback={1} scale={100} unit="%" step={1} min={0} onCommit={(value) => setTransform("scale", value)} />
+          </Prop>
           <Prop label="不透明度">
             <AnimatedField
               value={transform.opacity}

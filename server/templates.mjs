@@ -189,7 +189,7 @@ export function platformInstructions() {
 - \`work_context\`：作品现状：文件、素材、图层与音轨、未保存的修改、最近一次检查结果。
 - \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误（位置是作品源码的 文件:行:列）。加 \`frames: true\` 同时返回开头、1/4、1/2、3/4、结尾的分镜图。
 - \`preview_frames\`：渲染画面给你看：\`times\` 看指定时刻，或用 \`count\`（可加 \`start\`/\`end\`）均匀取样看整体节奏，多张时拼成一张总览图。改完画面后务必用它确认效果。
-- \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载；\`src\` + \`beats: true\` 给出配乐的节奏、每个节拍和每小节第一拍（Beat This! 模型），让剪辑点和画面变化对上音乐。
+- \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载；分析混音时分别给出各音轨的响度和人声是否被盖住；\`src\` + \`beats: true\` 给出配乐的节奏、每个节拍和每小节第一拍（Beat This! 模型），让剪辑点和画面变化对上音乐。
 - \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改，\`update\` 只改给出的字段（格式见 frame_guide layers / audio）。
 - \`speech_synthesize\`：整段旁白用 \`lines\` + \`place\` + \`subtitles: true\` 一次生成配音、排上音轨并写字幕；\`subtitles_edit\` 改字幕，\`work_update\` 改时长和镜头标记。
 - \`resources_search\`、\`resource_view\`：素材库里可以直接复用的角色、物品、场景、界面、效果、转场、文字和音效（以及素材库代码导出的函数）。动手画一个东西之前先找；找到就 \`import … from "@materials/<库>/<路径>"\` 复用，音效用 \`audio_place\` 的 \`sound\`。不合适就给素材库里的代码加参数，不要拷进作品。新写的可复用东西放进素材库并声明成资源（见 frame_guide resources）。
