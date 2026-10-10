@@ -36,6 +36,27 @@ export function writeFileAtomic(file, content) {
   fs.renameSync(temp, file);
 }
 
+/** A Map that forgets the least recently used entries beyond `limit` (which may be raised as the working set grows). */
+export class Lru extends Map {
+  constructor(limit) {
+    super();
+    this.limit = limit;
+  }
+  get(key) {
+    if (!super.has(key)) return undefined;
+    const value = super.get(key);
+    super.delete(key);
+    super.set(key, value);
+    return value;
+  }
+  set(key, value) {
+    super.delete(key);
+    super.set(key, value);
+    while (this.size > this.limit) super.delete(this.keys().next().value);
+    return this;
+  }
+}
+
 /** Serialize async work per key (one git/write operation per work at a time). */
 export class Locks {
   constructor() {

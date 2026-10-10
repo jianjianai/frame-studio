@@ -4,7 +4,7 @@ import { z } from "zod";
 import { git, gitOk, gitToFile } from "./git.mjs";
 import { tree, writeText, writeStream, removePath, movePath, uniquePath, TEXT_LIMIT } from "./files.mjs";
 import { readJson, sendFile } from "./http.mjs";
-import { problem, notFound, conflict, confined, inside, sha256, Locks, writeFileAtomic } from "./util.mjs";
+import { problem, notFound, conflict, confined, inside, sha256, Locks, Lru, writeFileAtomic } from "./util.mjs";
 import { MATERIALS_BRANCH } from "./repos.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
 import { importFromUrl, decodeData } from "./tools/asset-tools.mjs";
@@ -86,7 +86,8 @@ export class Materials {
     this.services = services;
     this.locks = new Locks();
     this.heads = new Map(); // repo → Promise<Map path → blob>, dropped when the branch changes
-    this.blobs = new Map(); // blob → text of library code (blobs never change)
+    this.blobs = new Lru(500); // blob → text of library code (blobs never change)
+    this.links = new Lru(20000); // blob → what library code names: imports, materials/… addresses (small; follow() runs per listing and thumbnail)
     this.manifests = new Map(); // root → { ref: blob } of its .materials copies
     this.excluded = new Set(); // repositories whose worktrees ignore .materials
   }
@@ -348,13 +349,10 @@ export class Materials {
     while (queue.length) {
       const ref = queue.shift();
       if (!SCRIPT.test(ref)) continue;
-      const text = await this.text(repo, locks[ref] ?? head.get(ref)).catch(() => "");
-      for (const match of text.matchAll(MATERIAL_REF)) {
-        const prefix = prefixOf(match[1]);
-        if (prefix !== null) prefixes.add(prefix);
-        else if (validRef(match[1])) refs.add(match[1]);
-      }
-      for (const spec of importSpecs(text)) {
+      const links = await this.linksOf(repo, locks[ref] ?? head.get(ref));
+      for (const item of links.refs) refs.add(item);
+      for (const prefix of links.prefixes) prefixes.add(prefix);
+      for (const spec of links.specs) {
         if (spec.startsWith("@materials/")) visit(spec.slice(11), `materials/${ref}`);
         else if (/^\.\.?\//.test(spec)) {
           // Relative imports stay in the libraries; ../../src/engine/… leaves them (the engine).
@@ -364,6 +362,26 @@ export class Materials {
       }
     }
     return { refs, unresolved, prefixes: [...prefixes] };
+  }
+
+  /** What one version of library code names: its import specifiers and materials/… addresses. */
+  async linksOf(repo, blob) {
+    let links = this.links.get(blob);
+    if (links) return links;
+    let text;
+    try {
+      text = await this.text(repo, blob);
+    } catch {
+      return { refs: [], prefixes: [], specs: [] };
+    }
+    links = { refs: [], prefixes: [], specs: importSpecs(text) };
+    for (const match of text.matchAll(MATERIAL_REF)) {
+      const prefix = prefixOf(match[1]);
+      if (prefix !== null) links.prefixes.push(prefix);
+      else if (validRef(match[1])) links.refs.push(match[1]);
+    }
+    this.links.set(blob, links);
+    return links;
   }
 
   /** The branch's current files (cached until the libraries change). */
@@ -378,12 +396,12 @@ export class Materials {
   /** Text of a library code file by blob. */
   async text(repo, blob) {
     if (!blob || !/^[0-9a-f]{40,64}$/.test(blob)) throw notFound("没有这个版本");
-    if (!this.blobs.has(blob)) {
-      const text = await git(await this.dir(repo), ["cat-file", "blob", blob]);
+    let text = this.blobs.get(blob);
+    if (text === undefined) {
+      text = await git(await this.dir(repo), ["cat-file", "blob", blob]);
       this.blobs.set(blob, text);
-      if (this.blobs.size > 2000) this.blobs.delete(this.blobs.keys().next().value);
     }
-    return this.blobs.get(blob);
+    return text;
   }
 
   /**

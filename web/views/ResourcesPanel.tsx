@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { AudioLines, ChevronDown, ChevronRight, Copy, Eye, FileCode2, Music, Search, Shapes, Sparkles } from "lucide-react";
 import { api, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useContextMenu, useToast } from "../lib/ui";
@@ -54,7 +54,6 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
   const toast = useToast();
   const [openMenu, menu] = useContextMenu();
   const base = workPath(work.repo, work.id);
-  const enc = encodeURIComponent;
 
   const load = () =>
     run(async () => {
@@ -176,10 +175,9 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
                             onContextMenu={(event) => menuOf(event, item)}
                             title={`${item.title}\n${item.id}${item.description ? "\n" + item.description : ""}\n单击预览（可调参数），右键更多操作`}
                           >
-                            <div className="asset-thumb">
-                              <ResourceThumb src={`${base}/resources/thumb?id=${enc(item.id)}&v=${item.version}`} />
+                            <ResourceThumb base={base} repo={work.repo} item={item}>
                               {item.preview?.duration ? <span className="asset-duration">{formatTime(item.preview.duration, false)}</span> : null}
-                            </div>
+                            </ResourceThumb>
                             <div className="asset-name ellipsis">{item.title}</div>
                             <button className="icon-btn asset-more" onClick={(event) => (event.stopPropagation(), menuOf(event, item))} aria-label="更多">
                               ⋯
@@ -210,9 +208,61 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
   );
 }
 
-/** A thumbnail rendered by the studio on first request (it may take a moment). */
-function ResourceThumb({ src }: { src: string }) {
+/**
+ * A thumbnail the studio renders: asked for when it comes into view (the studio draws the latest
+ * requests first), shown when the `resource-thumb` event says it is there.
+ */
+function ResourceThumb({ base, repo, item, children }: { base: string; repo: string; item: ResourceItem; children?: ReactNode }) {
+  const src = `${base}/resources/thumb?id=${encodeURIComponent(item.id)}&v=${item.version}`;
+  const box = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(false);
+  const [image, setImage] = useState("");
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
-  return failed ? <Shapes size={24} /> : <img src={src} alt="" loading="lazy" onError={() => setFailed(true)} />;
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { rootMargin: "120px" });
+    if (box.current) observer.observe(box.current);
+    return () => observer.disconnect();
+  }, []);
+  useEffect(() => {
+    setImage("");
+    setFailed(false);
+  }, [src]);
+  useEffect(() => {
+    if (!visible || image || failed) return;
+    let alive = true;
+    let timer = 0;
+    fetch(src).then(
+      async (response) => {
+        // Still in the queue: the event comes when it is drawn (asking again now and then in case it got lost).
+        if (response.status === 202) timer = window.setTimeout(() => alive && setAttempt((n) => n + 1), 30000);
+        else if (!response.ok) alive && setFailed(true);
+        else {
+          const url = URL.createObjectURL(await response.blob());
+          if (alive) setImage(url);
+          else URL.revokeObjectURL(url);
+        }
+      },
+      () => alive && setFailed(true),
+    );
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [visible, src, image, failed, attempt]);
+  useEffect(() => () => void (image && URL.revokeObjectURL(image)), [image]);
+  useServerEvent(
+    (event) => {
+      if (event.type !== "resource-thumb" || event.repo !== repo || event.id !== item.id || event.version !== item.version) return;
+      if (event.error) setFailed(true);
+      else setAttempt((n) => n + 1);
+    },
+    [repo, item.id, item.version],
+  );
+  return (
+    <div ref={box} className="asset-thumb" title={failed ? "缩略图画不出来，单击打开预览看原因" : undefined}>
+      {failed ? <Shapes size={24} /> : image ? <img src={image} alt="" /> : null}
+      {children}
+    </div>
+  );
 }

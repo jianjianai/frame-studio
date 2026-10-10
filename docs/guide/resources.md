@@ -4,7 +4,7 @@
 
 ## 找和用
 
-- `resources_search`：`query` 写关键词（「下雨 街道」「手机 聊天」「甩镜」），`kind` 限定类别（`character` 角色、`prop` 物品、`set` 场景、`ui` 界面、`effect` 效果、`transition` 转场、`text` 文字、`sound` 音效、`code` 素材库代码导出的函数和类型）。不给 `query` 列出全部资源的目录。
+- `resources_search`：`query` 写关键词（「下雨 街道」「手机 聊天」「甩镜」），`kind` 限定类别（`character` 角色、`prop` 物品、`set` 场景、`ui` 界面、`effect` 效果、`transition` 转场、`text` 文字、`sound` 音效、`code` 素材库代码导出的函数和类型）。不给 `query` 列出目录；资源多时每类只列前几个，再用 `kind` 列出一类或用 `query` 搜。
 - `resource_view`：`id` 是 `<素材库>/<文件>#<名称>`，例如 `s0rrow/code/kid.ts#kid`。返回用法、导入语句、参数（类型、取值、默认值、说明）、预设，并按作品的节拍渲染预览图；`preset` / `params` 换参数，`times` 看动画的几个时刻。只写 `<素材库>/<文件>` 看整个模块：说明、全部资源和导出的函数。
 - 在作品代码里导入后调用，写法看资源的「用法」：
 

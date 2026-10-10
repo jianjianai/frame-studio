@@ -235,6 +235,48 @@ describe("resources of the material libraries", () => {
     expect(view.body.text).toContain("本作品锁定了另一个版本");
   });
 
+  it("renders thumbnails in the background, the latest request first", async () => {
+    const catalog = app.services.resources;
+    const original = catalog.renderThumbnail;
+    const order = [];
+    let release;
+    const gate = new Promise((resolve) => (release = resolve));
+    const events = [];
+    const unsubscribe = app.services.events.subscribe((event) => event.type === "resource-thumb" && events.push(event));
+    catalog.renderThumbnail = async ({ key }, file) => {
+      order.push(key);
+      if (key === "ball") await gate;
+      if (key === "hill") throw new Error("画不出来");
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, "webp");
+    };
+    try {
+      await put(
+        "code/scenery.ts",
+        'import { defineResources, resource } from "@frame/engine/resources";\nexport const resources = defineResources({ hill: resource({ kind: "set", title: "山", preview: { width: 10, height: 10, draw() {} } }), lake: resource({ kind: "set", title: "湖", preview: { width: 10, height: 10, draw() {} } }) });\n',
+      );
+      const thumb = (id) => call(`/api/works/local/${work.id}/resources/thumb?id=${encodeURIComponent(id)}`);
+      const first = await thumb("测试/code/shapes.ts#ball");
+      expect(first.status).toBe(202);
+      await thumb("测试/code/scenery.ts#hill");
+      await thumb("测试/code/scenery.ts#lake");
+      release();
+      for (let i = 0; events.length < 3 && i < 100; i++) await new Promise((resolve) => setTimeout(resolve, 20));
+      // ball was being drawn; then the latest request (lake) before the earlier one (hill).
+      expect(order).toEqual(["ball", "lake", "hill"]);
+      expect(events.find((event) => event.id === "测试/code/scenery.ts#hill")).toMatchObject({ repo: "local", error: "画不出来" });
+      expect((await thumb("测试/code/shapes.ts#ball")).status).toBe(200);
+      // A failure is remembered for that version instead of being drawn again on every request.
+      const failed = await thumb("测试/code/scenery.ts#hill");
+      expect([failed.status, failed.body.error.message]).toEqual([422, "画不出来"]);
+      expect(order).toHaveLength(3);
+    } finally {
+      catalog.renderThumbnail = original;
+      unsubscribe();
+      for (const item of fs.readdirSync(catalog.dir)) fs.rmSync(path.join(catalog.dir, item), { force: true });
+    }
+  });
+
   it("type-checks works and library code that import the engine by its alias", async () => {
     const scene = path.join(work.dir, "scenes", "balls.ts");
     fs.writeFileSync(
@@ -264,7 +306,13 @@ describe("resources of the material libraries", () => {
     expect(a.equals(b)).toBe(false);
     const view = await tool("resource_view", { work: work.id, id: "测试/code/shapes.ts#sky" });
     expect(view.body.images).toHaveLength(1);
-    const thumb = await call(`/api/works/local/${work.id}/resources/thumb?id=${encodeURIComponent("测试/code/shapes.ts#sky")}`);
+    // The first request queues it (202); the image is there once rendered.
+    const route = `/api/works/local/${work.id}/resources/thumb?id=${encodeURIComponent("测试/code/shapes.ts#sky")}`;
+    let thumb = await call(route);
+    for (let i = 0; thumb.status === 202 && i < 300; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      thumb = await call(route);
+    }
     expect(thumb.status).toBe(200);
     const pixel = await sharp(thumb.body).raw().toBuffer();
     // The set's background (#123456), give or take the WebP compression.
@@ -283,4 +331,16 @@ describe("resources of the material libraries", () => {
     expect([...pixels.subarray(0, 3)]).toEqual([0x12, 0x34, 0x56]);
     expect([...pixels.subarray(90 * 100 * 3, 90 * 100 * 3 + 3)]).toEqual([0x65, 0x43, 0x21]);
   }, 120000);
+
+  it("lists a summary instead of the whole directory when the libraries hold many resources", async () => {
+    const items = Array.from({ length: 300 }, (_, i) => `  item${i}: resource({ kind: "prop", title: "道具 ${i}", preview: { width: 10, height: 10, draw() {} } }),`).join("\n");
+    await put("code/many.ts", `import { defineResources, resource } from "@frame/engine/resources";\nexport const resources = defineResources({\n${items}\n});\n`);
+    const all = await tool("resources_search", { work: work.id });
+    expect(all.body.text).toContain("资源较多，每类只列出前几个");
+    expect(all.body.text).toMatch(/物品（30\d）：[^\n]*……（kind: "prop"）/);
+    expect(all.body.text.length).toBeLessThan(2000);
+    const props = await tool("resources_search", { work: work.id, kind: "prop" });
+    expect(props.body.text).toContain("用 query 搜索这一类");
+    expect((await tool("resources_search", { work: work.id, query: "道具 299" })).body.data.items[0].id).toBe("测试/code/many.ts#item299");
+  });
 });

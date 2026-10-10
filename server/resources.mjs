@@ -3,8 +3,8 @@ import path from "node:path";
 import { parse } from "@babel/parser";
 import { z } from "zod";
 import sharp from "sharp";
-import { problem, notFound, sha256, writeFileAtomic } from "./util.mjs";
-import { sendFile } from "./http.mjs";
+import { problem, notFound, sha256, writeFileAtomic, Lru } from "./util.mjs";
+import { sendFile, sendJson } from "./http.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
 import { contactSheet } from "./render.mjs";
 
@@ -466,10 +466,12 @@ const firstLine = (text) => String(text || "").split(/\n|(?<=[。.!?！？])\s/)
 export class ResourceCatalog {
   constructor(services) {
     this.services = services;
-    this.parsed = new Map(); // blob → what the file declares (blobs never change)
+    this.parsed = new Lru(1000); // blob → what the file declares (blobs never change); the limit grows with the libraries
     this.dir = path.join(services.config.dirs.cache, "resources");
-    this.rendering = new Map(); // thumbnail key → pending render
-    this.queue = Promise.resolve(); // thumbnails render one at a time
+    this.jobs = new Map(); // thumbnail file → { work, ref, key, id, version }, waiting or being rendered
+    this.waiting = []; // thumbnail files not started yet, latest request last
+    this.rendering = null; // the thumbnail file being rendered (one at a time)
+    this.failed = new Lru(2000); // thumbnail file → { message, at }: not retried for a while
   }
   get materials() {
     return this.services.materials;
@@ -480,7 +482,6 @@ export class ResourceCatalog {
     if (!parsed) {
       parsed = extractModule(await this.materials.text(repo, blob), ref);
       this.parsed.set(blob, parsed);
-      if (this.parsed.size > 1000) this.parsed.delete(this.parsed.keys().next().value);
     }
     return { ...parsed, ref, library: ref.split("/")[0], blob };
   }
@@ -493,7 +494,10 @@ export class ResourceCatalog {
     const head = await this.materials.headOf(work.repo);
     const locks = this.materials.readLocks(work.dir);
     const result = [];
-    for (const ref of [...head.keys()].filter((ref) => CODE_FILE.test(ref) && (!library || ref.startsWith(library + "/"))).sort()) {
+    const refs = [...head.keys()].filter((ref) => CODE_FILE.test(ref) && (!library || ref.startsWith(library + "/"))).sort();
+    // Every module of the libraries stays parsed, however many there are.
+    this.parsed.limit = Math.max(this.parsed.limit, refs.length * 2);
+    for (const ref of refs) {
       try {
         const mod = await this.module(work.repo, ref, head.get(ref));
         result.push({ ...mod, outdated: Boolean(locks[ref] && locks[ref] !== head.get(ref)) });
@@ -594,26 +598,64 @@ export class ResourceCatalog {
     return sha256(JSON.stringify([FORMAT, parts, meta.ok ? (meta.meta.tempo ?? null) : null])).slice(0, 24);
   }
 
-  /** A small picture of a resource (cached by version), rendered in the background one at a time. */
+  /**
+   * A small picture of a resource, cached by version: `{ file }`, `{ error }`, or `{ pending }`
+   * — then it is rendered in the background, one at a time, the latest request first (what
+   * the panel shows now), and a `resource-thumb` event says when it is there.
+   */
   async thumbnail(work, id) {
-    const [ref, key] = id.split("#");
+    const [ref, key] = String(id).split("#");
+    if (!ref || !key || !CODE_FILE.test(ref)) throw problem(400, `资源地址应为 <素材库>/<路径>.ts#<名称>（收到 ${id}）`);
     const version = await this.version(work, ref);
     const file = path.join(this.dir, `${sha256(`${version}|${key}`).slice(0, 32)}.webp`);
     if (fs.existsSync(file)) return { file, version };
-    if (!this.rendering.has(file)) {
-      const run = async () => {
-        const { frames } = await this.services.renderer.resourceFrames(work, { ref, key, width: 360 });
-        fs.mkdirSync(this.dir, { recursive: true });
-        const image = await sharp(frames[0].png).resize({ width: 240, height: 240, fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
-        writeFileAtomic(file, image);
-      };
-      const pending = (this.queue = this.queue.catch(() => {}).then(run)).finally(() => this.rendering.delete(file));
-      this.rendering.set(file, pending);
+    const failed = this.failed.get(file);
+    if (failed && Date.now() - failed.at < FAILED_FOR) return { error: failed.message, version };
+    if (!this.jobs.has(file)) this.jobs.set(file, { work, ref, key, id, version });
+    if (this.rendering !== file) {
+      const index = this.waiting.indexOf(file);
+      if (index >= 0) this.waiting.splice(index, 1);
+      this.waiting.push(file);
+      this.next();
     }
-    await this.rendering.get(file);
-    return { file, version };
+    return { pending: true, version };
+  }
+  next() {
+    if (this.rendering || !this.waiting.length) return;
+    const file = (this.rendering = this.waiting.pop());
+    const job = this.jobs.get(file);
+    const done = (error) => {
+      if (error) this.failed.set(file, { message: error.message, at: Date.now() });
+      else this.failed.delete(file);
+      this.services.events.emit({ type: "resource-thumb", repo: job.work.repo, id: job.id, version: job.version, ...(error ? { error: error.message } : {}) });
+    };
+    this.renderThumbnail(job, file)
+      .then(() => done(), done)
+      .finally(() => {
+        this.jobs.delete(file);
+        this.rendering = null;
+        this.next();
+      });
+  }
+  async renderThumbnail({ work, ref, key }, file) {
+    const { frames } = await this.services.renderer.resourceFrames(work, { ref, key, width: 360 });
+    fs.mkdirSync(this.dir, { recursive: true });
+    const image = await sharp(frames[0].png).resize({ width: 240, height: 240, fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
+    writeFileAtomic(file, image);
+  }
+  /** The libraries changed: thumbnails waiting for versions that are gone are not wanted any more. */
+  async dropOutdated(repo) {
+    for (const file of [...this.waiting]) {
+      const job = this.jobs.get(file);
+      if (job?.work.repo !== repo || (await this.version(job.work, job.ref).catch(() => "")) === job.version) continue;
+      const index = this.waiting.indexOf(file);
+      if (index >= 0) this.waiting.splice(index, 1);
+      this.jobs.delete(file);
+    }
   }
 }
+
+const FAILED_FOR = 5 * 60 * 1000; // a resource that fails to render is tried again after this (or as soon as its code changes)
 
 const kindArg = z.enum([...Object.keys(RESOURCE_KINDS), "code"]);
 const OUTDATED = "（这里是素材库现在的版本；本作品锁定了另一个版本，运行时用锁定的，要改用这个版本：materials_use 加 update: true）";
@@ -678,6 +720,32 @@ function describeEntry(entry) {
   return lines.join("\n");
 }
 
+const DIRECTORY_LIMIT = 8000; // characters of the full directory before resources_search lists a summary instead
+
+/** resources_search without a query: every entry by library and kind, or (summary) counts and the first few titles. */
+function directory(entries, linked, summary) {
+  const libraries = new Map();
+  for (const entry of entries) libraries.set(entry.library, [...(libraries.get(entry.library) ?? []), entry]);
+  return [...libraries]
+    .map(([name, list]) => {
+      const kinds = new Map();
+      for (const entry of list) kinds.set(entry.kind, [...(kinds.get(entry.kind) ?? []), entry]);
+      const lines = [`## 素材库「${name}」${linked.has(name) ? "（本作品已关联）" : "（本作品未关联，materials_use 时会自动关联）"}`];
+      const order = (kind) => (Object.keys(RESOURCE_KINDS).indexOf(kind) + 100) % 100; // known kinds in their order, others after
+      for (const [kind, group] of [...kinds].sort(([a], [b]) => order(a) - order(b))) {
+        const label = `${group[0].kindLabel}（${group.length}）`;
+        if (summary) {
+          const shown = group.slice(0, kind === "sound" ? 12 : 8).map((entry) => entry.title);
+          lines.push(`${label}：${shown.join("、")}${group.length > shown.length ? `……（kind: "${kind}"）` : ""}`);
+        } else if (kind === "sound")
+          lines.push(`${label}：${[...new Set(group.map((entry) => entry.ref))].map((ref) => `${ref}#…：${group.filter((entry) => entry.ref === ref).map((entry) => `${entry.key} ${entry.title}`).join("、")}`).join("\n")}`);
+        else lines.push(`${label}：${group.map((entry) => `${entry.id} ${entry.title}`).join("；")}`);
+      }
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
 export function resourcesPlugin(services) {
   const { router, tools } = services;
   const catalog = (services.resources = new ResourceCatalog(services));
@@ -699,17 +767,23 @@ export function resourcesPlugin(services) {
     const { module, entry } = await catalog.get(work, String(query.id || ""));
     return { module: { ref: module.ref, doc: module.doc, exports: module.exports, outdated: module.outdated }, entry: entry ?? null };
   });
+  // Never held open while rendering (a browser has only a few connections per server): 202 means "wait for resource-thumb".
   router.get("/api/works/:repo/:id/resources/thumb", async ({ params, query, req, res }) => {
     const work = await open(params);
-    const { file, version } = await catalog.thumbnail(work, String(query.id || ""));
-    sendFile(req, res, file, { cache: query.v === version ? "private, max-age=31536000, immutable" : "no-cache" });
+    const thumb = await catalog.thumbnail(work, String(query.id || ""));
+    if (thumb.error) throw problem(422, thumb.error, "RENDER_FAILED");
+    if (thumb.pending) return sendJson(res, 202, { pending: true, version: thumb.version });
+    sendFile(req, res, thumb.file, { cache: query.v === thumb.version ? "private, max-age=31536000, immutable" : "no-cache" });
+  });
+  services.events.subscribe((event) => {
+    if (event.type === "materials" && event.repo) void catalog.dropOutdated(event.repo).catch(() => {});
   });
 
   tools.add({
     name: "resources_search",
     title: "找可复用资源",
     description:
-      "在素材库里找可以直接复用的资源：角色、物品、场景、界面、效果、转场、文字（歌词等）、音效，以及素材库代码导出的函数和类型。query 用中文或英文关键词（例如「下雨 街道」「手机 聊天」「甩镜」）；不给 query 列出全部资源的目录。kind 限定类别（code 只找函数和类型）。动手画一个东西之前先找，有就导入复用，不要重画。看详情和预览图用 resource_view。",
+      "在素材库里找可以直接复用的资源：角色、物品、场景、界面、效果、转场、文字（歌词等）、音效，以及素材库代码导出的函数和类型。query 用中文或英文关键词（例如「下雨 街道」「手机 聊天」「甩镜」）；不给 query 列出目录（资源多时每类只列前几个，再用 kind 列出一类）。kind 限定类别（code 只找函数和类型）。动手画一个东西之前先找，有就导入复用，不要重画。看详情和预览图用 resource_view。",
     readOnly: true,
     input: {
       work: workArg,
@@ -730,27 +804,13 @@ export function resourcesPlugin(services) {
       let text;
       if (query) text = `找到 ${found.length} 个：\n${found.map(line).join("\n")}`;
       else {
-        // The directory: by library, then by kind.
-        const groups = new Map();
-        for (const entry of found) {
-          const key = entry.library;
-          if (!groups.has(key)) groups.set(key, []);
-          groups.get(key).push(entry);
-        }
-        text = [...groups]
-          .map(([name, entries]) => {
-            const kinds = new Map();
-            for (const entry of entries) kinds.set(entry.kindLabel, [...(kinds.get(entry.kindLabel) ?? []), entry]);
-            const sounds = entries.filter((entry) => entry.type === "sound");
-            const visual = [...kinds].filter(([label]) => label !== RESOURCE_KINDS.sound);
-            return [
-              `## 素材库「${name}」${linked.has(name) ? "（本作品已关联）" : "（本作品未关联，materials_use 时会自动关联）"}`,
-              ...visual.map(([label, list]) => `${label}（${list.length}）：${list.map((entry) => `${entry.id} ${entry.title}`).join("；")}`),
-              ...(sounds.length ? [`音效（${sounds.length}）：${[...new Set(sounds.map((entry) => entry.ref))].map((ref) => `${ref}#…：${sounds.filter((entry) => entry.ref === ref).map((entry) => `${entry.key} ${entry.title}`).join("、")}`).join("\n")}`] : []),
-            ].join("\n");
-          })
-          .join("\n\n");
-        text += "\n\n地址写法 <素材库>/<文件>#<名称>；resource_view 看详情和预览图，音效用 audio_place 的 sound 放到音轨。";
+        // The directory, by library and kind; once it gets long, only the first few of each kind.
+        text = directory(found, linked, false);
+        const summary = text.length > DIRECTORY_LIMIT;
+        if (summary) text = directory(found, linked, true);
+        text += summary
+          ? `\n\n资源较多，每类只列出前几个：${kind ? "用 query 搜索这一类" : "用 kind 列出一类，或用 query 搜索"}，拿到地址后用 resource_view 看详情。`
+          : "\n\n地址写法 <素材库>/<文件>#<名称>；resource_view 看详情和预览图，音效用 audio_place 的 sound 放到音轨。";
       }
       return asJson({ items: found.map(({ text: _text, ...entry }) => entry) }, text);
     },
@@ -760,7 +820,7 @@ export function resourcesPlugin(services) {
     name: "resource_view",
     title: "查看资源",
     description:
-      "看素材库里一个资源的详情和预览图：用法、导入语句、参数（类型、取值、默认值、说明）、预设，并在浏览器里按作品的节拍和素材版本渲染出来。id 是 resources_search 给出的地址：资源或音效 <素材库>/<文件>#<名称>，函数和类型同样写法；只写 <素材库>/<文件> 看整个模块（文档、全部资源和导出）。params / preset 按给定参数渲染，times 看动画的几个时刻。",
+      "看素材库里一个资源的详情和预览图：用法、导入语句、参数（类型、取值、默认值、说明）、预设，并按作品的节拍渲染出来（素材库现在的版本）。id 是 resources_search 给出的地址：资源或音效 <素材库>/<文件>#<名称>，函数和类型同样写法；只写 <素材库>/<文件> 看整个模块（文档、全部资源和导出）。params / preset 按给定参数渲染，times 看动画的几个时刻。",
     readOnly: true,
     input: {
       work: workArg,
