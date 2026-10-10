@@ -485,17 +485,18 @@ export class ResourceCatalog {
     return { ...parsed, ref, library: ref.split("/")[0], blob };
   }
 
-  /** The library code modules at the versions the work uses (locked, else current). */
+  /**
+   * The library code modules as the libraries have them now — what previews and thumbnails
+   * run too. `outdated`: the work locked another version of the file (it runs that one).
+   */
   async modules(work, { library } = {}) {
     const head = await this.materials.headOf(work.repo);
     const locks = this.materials.readLocks(work.dir);
-    const refs = new Set([...head.keys(), ...Object.keys(locks)].filter((ref) => CODE_FILE.test(ref) && (!library || ref.startsWith(library + "/"))));
     const result = [];
-    for (const ref of [...refs].sort()) {
-      const blob = locks[ref] ?? head.get(ref);
+    for (const ref of [...head.keys()].filter((ref) => CODE_FILE.test(ref) && (!library || ref.startsWith(library + "/"))).sort()) {
       try {
-        const mod = await this.module(work.repo, ref, blob);
-        result.push({ ...mod, outdated: Boolean(locks[ref] && head.get(ref) && locks[ref] !== head.get(ref)) });
+        const mod = await this.module(work.repo, ref, head.get(ref));
+        result.push({ ...mod, outdated: Boolean(locks[ref] && locks[ref] !== head.get(ref)) });
       } catch {}
     }
     return result;
@@ -559,9 +560,9 @@ export class ResourceCatalog {
     if (!ref || !CODE_FILE.test(ref)) throw problem(400, `资源地址应为 <素材库>/<路径>.ts#<名称>，例如 s0rrow/code/kid.ts#kid（收到 ${id}）`);
     const head = await this.materials.headOf(work.repo);
     const locks = this.materials.readLocks(work.dir);
-    const blob = locks[ref] ?? head.get(ref);
+    const blob = head.get(ref);
     if (!blob) throw notFound(`素材库里没有 materials/${ref}`);
-    const mod = { ...(await this.module(work.repo, ref, blob)), outdated: Boolean(locks[ref] && head.get(ref) && locks[ref] !== head.get(ref)) };
+    const mod = { ...(await this.module(work.repo, ref, blob)), outdated: Boolean(locks[ref] && locks[ref] !== blob) };
     if (!key) return { module: mod };
     const resource = mod.resources.find((item) => item.key === key);
     if (resource) return { module: mod, entry: this.resourceEntry(mod, resource) };
@@ -584,13 +585,12 @@ export class ResourceCatalog {
     return { module: entry.module, id: entry.key, duration: entry.duration, title: entry.title };
   }
 
-  /** What a module's pictures depend on: its code and everything it reaches, at the work's versions, and the tempo. */
+  /** What a module's pictures depend on: its code and everything it reaches (as the libraries have them now), and the work's tempo. */
   async version(work, ref) {
     const head = await this.materials.headOf(work.repo);
-    const locks = this.materials.readLocks(work.dir);
-    const { refs } = await this.materials.follow(work.repo, locks, [{ spec: ref, from: "" }]);
+    const { refs } = await this.materials.follow(work.repo, {}, [{ spec: ref, from: "" }]);
     const meta = this.services.works.meta(work);
-    const parts = [...refs].sort().map((item) => `${item}:${locks[item] ?? head.get(item) ?? ""}`);
+    const parts = [...refs].sort().map((item) => `${item}:${head.get(item) ?? ""}`);
     return sha256(JSON.stringify([FORMAT, parts, meta.ok ? (meta.meta.tempo ?? null) : null])).slice(0, 24);
   }
 
@@ -616,9 +616,10 @@ export class ResourceCatalog {
 }
 
 const kindArg = z.enum([...Object.keys(RESOURCE_KINDS), "code"]);
+const OUTDATED = "（这里是素材库现在的版本；本作品锁定了另一个版本，运行时用锁定的，要改用这个版本：materials_use 加 update: true）";
 
 function describeModule(mod) {
-  const lines = [`materials/${mod.ref}${mod.outdated ? "（本作品锁定的是旧版本，下面按锁定的版本）" : ""}`, `导入：import { … } from "${importOf(mod.ref)}"`];
+  const lines = [`materials/${mod.ref}${mod.outdated ? OUTDATED : ""}`, `导入：import { … } from "${importOf(mod.ref)}"`];
   if (mod.doc) lines.push("", mod.doc);
   if (mod.resources.length) {
     lines.push("", `资源（${mod.resources.length}）：`);
@@ -657,7 +658,7 @@ function describeEntry(entry) {
       .filter(Boolean)
       .join("\n");
   }
-  const lines = [`[${entry.kindLabel}] ${entry.id} ${entry.title}${entry.outdated ? "（本作品锁定的是旧版本）" : ""}`];
+  const lines = [`[${entry.kindLabel}] ${entry.id} ${entry.title}${entry.outdated ? OUTDATED : ""}`];
   if (entry.description) lines.push(entry.description);
   if (entry.tags?.length) lines.push(`标签：${entry.tags.join("、")}`);
   lines.push("", `导入：import { … } from "${entry.import}"`);

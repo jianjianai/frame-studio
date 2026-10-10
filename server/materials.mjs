@@ -12,6 +12,7 @@ import { eachSettled, summarize, errorOf } from "./tools/batch.mjs";
 import { Readable } from "node:stream";
 import { editList, applyEdits } from "./tools/file-ops.mjs";
 import { probe } from "./media.mjs";
+import { appRoot } from "./config.mjs";
 
 /**
  * Material libraries: media shared by the works of a content repository (images, video,
@@ -247,6 +248,7 @@ export class Materials {
     };
   }
   readLocks(dir) {
+    if (!dir) return {}; // the library root: no work, no locks
     try {
       const value = JSON.parse(fs.readFileSync(path.join(dir, LOCK_FILE), "utf8"));
       return value && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -423,9 +425,50 @@ export class Materials {
 
   // ---- .materials: the library code a work (or export snapshot) runs ---------------------
 
-  /** The work or export snapshot a file belongs to: its root, repository and lock file folder. */
+  /**
+   * Where library code runs as the library has it now, outside any work (resource previews
+   * and thumbnails): <tmp>/library/<repo>/ with its own .materials copies, never a work's
+   * locked versions — a work may hold old locks of some files, and mixing those with the
+   * current ones breaks the code.
+   */
+  libraryRoot(repo) {
+    this.services.repos.get(repo);
+    const root = path.join(this.services.config.dirs.tmp, "library", repo);
+    fs.mkdirSync(root, { recursive: true });
+    for (const name of ["src", "node_modules"]) {
+      const link = path.join(root, name);
+      const target = path.join(appRoot, name);
+      try {
+        if (fs.readlinkSync(link) === target) continue;
+        fs.unlinkSync(link);
+      } catch (error) {
+        if (error.code !== "ENOENT" && error.code !== "EINVAL") throw error;
+      }
+      fs.symlinkSync(target, link, process.platform === "win32" ? "junction" : "dir");
+    }
+    return root;
+  }
+
+  /** Where pages load library code and files from as the library has them now (resource previews). */
+  libraryBases(repo) {
+    return {
+      materialBase: this.services.preview.moduleUrl(path.join(this.libraryRoot(repo), MATERIALIZED)) + "/",
+      assetBase: `/files/${repo}/-/`,
+    };
+  }
+
+  /** The work, export snapshot or library root a file belongs to: its root, repository and lock file folder. */
   rootOf(file) {
     const { works: worksDir, tmp } = this.services.config.dirs;
+    const library = path.join(tmp, "library");
+    if (inside(library, file)) {
+      const [repo] = path.relative(library, file).split(path.sep);
+      try {
+        return { root: this.libraryRoot(repo), repo, dir: null };
+      } catch {
+        return null;
+      }
+    }
     if (inside(worksDir, file)) {
       const [repo, id] = path.relative(worksDir, file).split(path.sep);
       if (!repo || !id) return null;
@@ -517,6 +560,7 @@ export class Materials {
       writeFileAtomic(file, await this.text(place.repo, blob));
       manifest[ref] = blob;
       this.saveManifest(place.root);
+      this.services.preview?.invalidateFile?.(file); // a page reloading right now must not get the old compiled code
       return file;
     });
   }
@@ -561,9 +605,11 @@ export class Materials {
         });
     }
   }
-  /** After the libraries changed: works running copies of their code follow (where not locked). */
+  /** After the libraries changed: works running copies of their code follow (where not locked), and so does the library root. */
   async refreshRepo(repo) {
     this.heads.delete(repo);
+    const library = path.join(this.services.config.dirs.tmp, "library", repo);
+    if (fs.existsSync(path.join(library, MATERIALIZED, ".manifest.json"))) await this.refreshCopies({ root: library, repo, dir: null }).catch(() => {});
     const base = path.join(this.services.config.dirs.works, repo);
     if (!fs.existsSync(base)) return;
     for (const id of fs.readdirSync(base)) {

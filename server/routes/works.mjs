@@ -59,6 +59,8 @@ export function workRoutes(services) {
       preview: {
         module: preview.moduleUrl(work.dir + "/project.ts"),
         assetBase: `/files/${work.repo}/${work.id}/`,
+        // Resource previews run the libraries as they are now, outside the work.
+        library: services.materials?.libraryBases(work.repo) ?? null,
       },
     };
   }

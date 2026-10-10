@@ -143,7 +143,7 @@ describe("resources of the material libraries", () => {
   };
   const tool = (name, args) => call(`/api/tools/${name}`, { method: "POST", body: args });
   const lib = "/api/repos/local/materials";
-  const put = (file, content) => call(`${lib}/libraries/${encodeURIComponent("测试")}/upload?path=${encodeURIComponent(file)}`, { method: "POST", raw: content });
+  const put = (file, content) => call(`${lib}/libraries/${encodeURIComponent("测试")}/upload?path=${encodeURIComponent(file)}&replace=1`, { method: "POST", raw: content });
 
   beforeAll(async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-resources-"));
@@ -217,6 +217,24 @@ describe("resources of the material libraries", () => {
     expect(engine).toBe(path.join(process.cwd(), "src", "engine", "resources.ts"));
   });
 
+  it("runs library code for previews as the library has it now, not at the work's locked versions", async () => {
+    await put("code/paint.ts", 'export const SKY = "#aa0000";\n');
+    await app.services.materials.lock(work, ["测试/code/paint.ts"]);
+    await put("code/paint.ts", 'export const SKY = "#123456";\nexport const GROUND = "#654321";\n');
+    const { pluginContainer } = app.services.preview.vite.environments.client;
+    const { materialBase, assetBase } = app.services.materials.libraryBases("local");
+    const copy = (await pluginContainer.resolveId(`${materialBase}${encodeURIComponent("测试")}/code/paint.ts`, path.join(process.cwd(), "index.html"))).id;
+    expect(fs.readFileSync(copy, "utf8")).toContain("GROUND");
+    // Bare imports in the copies find the studio's packages.
+    expect((await pluginContainer.resolveId("zod", copy))?.id).toMatch(/zod/);
+    const file = `materials/${encodeURIComponent("测试")}/code/paint.ts`;
+    expect((await call(`${assetBase}${file}`)).body.toString()).toContain("GROUND");
+    // The work keeps running the version it locked; the catalog says so.
+    expect((await call(`/files/local/${work.id}/${file}`)).body.toString()).toContain("#aa0000");
+    const view = await tool("resource_view", { work: work.id, id: "测试/code/paint.ts" });
+    expect(view.body.text).toContain("本作品锁定了另一个版本");
+  });
+
   it("type-checks works and library code that import the engine by its alias", async () => {
     const scene = path.join(work.dir, "scenes", "balls.ts");
     fs.writeFileSync(
@@ -251,5 +269,18 @@ describe("resources of the material libraries", () => {
     const pixel = await sharp(thumb.body).raw().toBuffer();
     // The set's background (#123456), give or take the WebP compression.
     [0x12, 0x34, 0x56].forEach((value, index) => expect(Math.abs(pixel[index] - value)).toBeLessThan(6));
+  }, 120000);
+
+  it.skipIf(!browserExecutable())("previews code whose imports changed since the work locked them", async () => {
+    // The work locked paint.ts before GROUND existed; the preview must not mix that copy in.
+    await put(
+      "code/scenery.ts",
+      'import { defineResources, resource } from "@frame/engine/resources";\nimport { SKY, GROUND } from "./paint";\n' +
+        'export const resources = defineResources({ hill: resource({ kind: "set", title: "山", preview: { width: 100, height: 100, draw(ctx) { ctx.fillStyle = SKY; ctx.fillRect(0, 0, 100, 50); ctx.fillStyle = GROUND; ctx.fillRect(0, 50, 100, 50); } } }) });\n',
+    );
+    const { frames } = await app.services.renderer.resourceFrames(work, { ref: "测试/code/scenery.ts", key: "hill", width: 100 });
+    const pixels = await sharp(frames[0].png).removeAlpha().raw().toBuffer();
+    expect([...pixels.subarray(0, 3)]).toEqual([0x12, 0x34, 0x56]);
+    expect([...pixels.subarray(90 * 100 * 3, 90 * 100 * 3 + 3)]).toEqual([0x65, 0x43, 0x21]);
   }, 120000);
 });

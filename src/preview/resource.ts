@@ -4,8 +4,8 @@ import { importMaterial, setMaterialBase } from "../engine/materials";
 import type { Resource, SoundLibrary } from "../engine/resources";
 
 /**
- * Preview of one material library module's resources and sounds, in the context of a work
- * (its asset base, tempo and library versions). The workbench shows it in an editor tab and
+ * Preview of one material library module's resources and sounds, as the library has it now
+ * (never a work's locked versions), with a work's tempo. The workbench shows it in an editor tab and
  * drives it through `window.__FRAME_RESOURCE__` (same origin); the server renders frames of
  * it headlessly for thumbnails and for the AI.
  */
@@ -88,6 +88,7 @@ const api: ResourcePageApi = {
   sounds: [],
   async show(key, options) {
     const resource = find(key);
+    shown = () => api.show(key, options);
     const ratio = devicePixelRatio || 1;
     const fit = Math.min(view.clientWidth / resource.preview.width, view.clientHeight / resource.preview.height);
     const width = Math.max(1, Math.round(resource.preview.width * fit));
@@ -108,6 +109,7 @@ const api: ResourcePageApi = {
   },
   async showSound(key) {
     const sound = soundOf(key);
+    shown = () => api.showSound(key);
     const [left, right] = await samples(key);
     const ratio = devicePixelRatio || 1;
     const width = Math.max(320, Math.min(view.clientWidth - 24, 1200));
@@ -163,6 +165,14 @@ const api: ResourcePageApi = {
 };
 let audio: AudioContext | null = null;
 let playing: AudioBufferSourceNode | null = null;
+
+// The editor panel or the window changed size: fit what is shown again.
+let shown: (() => Promise<void>) | null = null;
+let refit = 0;
+addEventListener("resize", () => {
+  cancelAnimationFrame(refit);
+  refit = requestAnimationFrame(() => void shown?.().catch(() => {}));
+});
 
 function find(key: string) {
   const resource = resources[key];

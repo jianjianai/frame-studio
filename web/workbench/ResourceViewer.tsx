@@ -54,12 +54,9 @@ interface JsonSchema {
 
 const KIND_LABELS: Record<string, string> = { character: "角色", prop: "物品", set: "场景", ui: "界面", effect: "效果", transition: "转场", text: "文字" };
 
-/** `/@fs/<root>/projects/<slug>/project.ts` → `/@fs/<root>/.materials/` (where the work's library code copies live). */
-const materialBase = (module: string) => module.replace(/projects\/[^/]+\/project\.tsx?(\?.*)?$/, ".materials/");
-
 /**
- * A resource of the material libraries in an editor tab: drawn by the library's own code in
- * the work's context (tempo, library versions), with its parameters as controls, its presets,
+ * A resource of the material libraries in an editor tab: drawn by the library's own code as
+ * the library has it now (with the work's tempo), with its parameters as controls, its presets,
  * and a time slider for animated ones. A sound module shows its sounds: listen, see the
  * waveform, drag onto an audio track.
  */
@@ -81,8 +78,7 @@ export function ResourceViewer({ id }: { id: string }) {
 
   const src = `/preview/resource.html?${new URLSearchParams({
     material: ref,
-    assetBase: work.preview.assetBase,
-    materialBase: materialBase(work.preview.module),
+    ...work.preview.library,
     tempo,
     stamp: String(stamp),
   })}`;
@@ -109,13 +105,12 @@ export function ResourceViewer({ id }: { id: string }) {
   }, []);
   useEffect(() => () => page?.stop(), [page]);
 
-  // Library code or the work's versions changed: load the page anew.
+  // Library code changed: load the page anew.
   useServerEvent(
     (event) => {
       if (event.type === "materials" && event.repo === work.repo) setStamp(Date.now());
-      if (event.type === "work-materials" && event.work === work.id) setStamp(Date.now());
     },
-    [work.repo, work.id],
+    [work.repo],
   );
 
   const info = page?.resources.find((item) => item.key === key) ?? null;

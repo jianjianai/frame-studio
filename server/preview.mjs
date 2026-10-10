@@ -14,6 +14,7 @@ import { inside } from "./util.mjs";
  */
 export async function createPreview({ config, httpServer, events }) {
   const roots = [config.dirs.works, config.dirs.tmp];
+  const library = path.join(config.dirs.tmp, "library"); // library code run outside works (resource previews)
   const pending = new Map();
   const workOf = (file) => {
     for (const base of roots) {
@@ -58,7 +59,8 @@ export async function createPreview({ config, httpServer, events }) {
       if (!work) return;
       const seen = new Set();
       for (const mod of modules) this.environment.moduleGraph.invalidateModule(mod, seen, timestamp, true);
-      queue(work, file, timestamp);
+      // No stage runs library code outside works: its pages reload on the materials event.
+      if (!inside(library, file)) queue(work, file, timestamp);
       return [];
     },
   };
@@ -117,6 +119,14 @@ export async function createPreview({ config, httpServer, events }) {
         const seen = new Set();
         for (const mod of environment.moduleGraph.idToModuleMap.values())
           if (mod.file && inside(work.root, mod.file)) environment.moduleGraph.invalidateModule(mod, seen, timestamp, true);
+      }
+    },
+    /** A file was rewritten under a page that may load it next: drop its compiled module now, not when the watcher notices. */
+    invalidateFile(file) {
+      const timestamp = Date.now();
+      for (const environment of Object.values(vite.environments)) {
+        const seen = new Set();
+        for (const mod of environment.moduleGraph.getModulesByFile(file) ?? []) environment.moduleGraph.invalidateModule(mod, seen, timestamp, true);
       }
     },
     /** Asset changes are not in the module graph; the work watcher reports them here. */

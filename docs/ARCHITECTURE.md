@@ -29,7 +29,7 @@ exports/<库>/<作品>/                  导出的视频
 models/speech/                       下载的语音模型
 models/beat-this/                    节拍分析模型（本机运行时第一次分析下载；Docker 镜像自带）
 ai/sessions/                         AI 对话记录（JSONL）、图片、AI 上一轮结束时的作品文件快照
-tmp/                                 导出快照、Vite 缓存
+tmp/                                 导出快照、Vite 缓存；library/<库>/.materials/ 是资源预览运行的素材库代码副本（素材库现在的版本，不属于任何作品）
 cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图片的缩略图）及其来源版本
 ```
 
@@ -55,8 +55,8 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `ai/` | ACP 客户端：代理进程池、会话、权限、登录、自定义 API |
 | `speech/` | 语音引擎与模型下载 |
 | `audio-analysis.mjs` `beat-this/` | AI 的“听”：ffmpeg 解码后算响度；节拍和小节交给 [Beat This!](https://github.com/CPJKU/beat_this)（MIT）模型，由 `beat-this/analyze.py` 在独立的 Python 进程中运行（`FRAME_BEAT_PYTHON`），一次只跑一个 |
-| `resources.mjs` | 素材库代码里声明的资源（`defineResources` 的角色、场景、效果……，`defineSounds` 的音效）和导出的函数：不运行代码，用 Babel 静态读出字面量字段、zod 参数和注释，按 Git blob 缓存；`resources_search` / `resource_view` 工具、工作台的资源列表、缩略图（无界面浏览器渲染，按代码版本缓存在 `cache/resources/`） |
-| `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件：Git blob，LFS 内容按需下载；`@materials/...` 代码导入由 Vite 插件解析到作品根目录 `.materials/` 中的副本，锁定版本或素材库当前版本，锁定时沿导入关系一并锁定）、导出文件、后台任务 |
+| `resources.mjs` | 素材库代码里声明的资源（`defineResources` 的角色、场景、效果……，`defineSounds` 的音效）和导出的函数：不运行代码，用 Babel 静态读出字面量字段、zod 参数和注释，按 Git blob 缓存；`resources_search` / `resource_view` 工具、工作台的资源列表、缩略图（无界面浏览器渲染，按代码版本缓存在 `cache/resources/`）。预览和缩略图运行素材库现在的代码（`tmp/library/<库>/`，素材地址 `/files/<库>/-/`），不混用作品锁定的旧文件 |
+| `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件，作品写 `-` 时取现在的版本：Git blob，LFS 内容按需下载；`@materials/...` 代码导入由 Vite 插件解析到作品根目录 `.materials/` 中的副本，锁定版本或素材库当前版本，锁定时沿导入关系一并锁定）、导出文件、后台任务 |
 
 ## 预览与热更新
 

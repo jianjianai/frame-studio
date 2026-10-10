@@ -5,7 +5,7 @@
 ## 找和用
 
 - `resources_search`：`query` 写关键词（「下雨 街道」「手机 聊天」「甩镜」），`kind` 限定类别（`character` 角色、`prop` 物品、`set` 场景、`ui` 界面、`effect` 效果、`transition` 转场、`text` 文字、`sound` 音效、`code` 素材库代码导出的函数和类型）。不给 `query` 列出全部资源的目录。
-- `resource_view`：`id` 是 `<素材库>/<文件>#<名称>`，例如 `s0rrow/code/kid.ts#kid`。返回用法、导入语句、参数（类型、取值、默认值、说明）、预设，并按作品的节拍和素材版本渲染预览图；`preset` / `params` 换参数，`times` 看动画的几个时刻。只写 `<素材库>/<文件>` 看整个模块：说明、全部资源和导出的函数。
+- `resource_view`：`id` 是 `<素材库>/<文件>#<名称>`，例如 `s0rrow/code/kid.ts#kid`。返回用法、导入语句、参数（类型、取值、默认值、说明）、预设，并按作品的节拍渲染预览图；`preset` / `params` 换参数，`times` 看动画的几个时刻。只写 `<素材库>/<文件>` 看整个模块：说明、全部资源和导出的函数。
 - 在作品代码里导入后调用，写法看资源的「用法」：
 
 ```ts
@@ -14,7 +14,7 @@ import { bedroom } from "@materials/s0rrow/code/sets";
 ```
 
 - 音效用 `audio_place` 的 `sound: "<素材库>/<文件>#<名称>"` 放到音轨（见 `audio`）。
-- 导入的代码和用到的素材在保存版本时按文件锁定（见 `assets`），`resource_view` 显示作品实际用的版本。
+- 导入的代码和用到的素材在保存版本时按文件锁定（见 `assets`），作品运行时用锁定的版本。资源目录、预览和 `resource_view` 都是素材库现在的版本；作品锁定了另一个版本时会注明，要改用现在的版本用 `materials_use` 加 `update: true`。
 - 资源不完全合适时，给素材库里的函数加参数（带默认值，不影响已有的作品），用 `material_write` 修改；不要把文件拷进作品再改。
 
 ## 声明资源
@@ -60,7 +60,7 @@ export const resources = defineResources({
 - `params` 是 zod 对象：每个字段写 `.describe("…")`（预览里的说明，也给 AI 看），数值写 `.min()` / `.max()`（预览里是滑块），可选值用 `z.enum`，默认值用 `.default()`。函数的参数类型写成 `z.input<typeof 选项>`，参数说明和类型只有一份。
 - `preview.draw(ctx, time, params)` 在 `width`×`height`（`draw` 用的单位）的画布上画这个资源，`params` 已经合并了预设和默认值；有 `duration` 时预览带时间轴可以播放，`time` 是缩略图用的时刻（默认 `duration` 的一半）；`background` 是底色；`prepare()` 在第一帧前加载字体、图片。
 - 角色画一个有代表性的姿势，预设放常用的造型和表情；场景画整幅；效果画在一张示例画面上；转场在 `duration` 里从一个示例画面转到另一个；文字（歌词）用示例数据。
-- 预览和作品用同一段代码：预览在作品的环境里运行（作品的 `tempo`、作品锁定的素材版本），所以跟着节拍动的资源在不同作品里各自对上拍子。
+- 预览和作品用同一段代码：预览用作品的 `tempo` 运行素材库现在的代码，所以跟着节拍动的资源在不同作品里各自对上拍子。
 - 节拍、时间都在画的时候读（`beatAt()`、`pulse()`），不要在模块加载时算成常量，也不要写死某首歌、某个作品的东西（字体目录、文案、BPM）：这些从作品传进来，或者作为参数。
 - 字体放在素材库里，放完整的字体文件，在 `prepare()` 里用 `FontFace` + `assetUrl("materials/<库>/fonts/<文件>")` 加载。
 

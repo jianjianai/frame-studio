@@ -56,10 +56,7 @@ export class Renderer {
     this.lastUse = 0;
     this.token = services.auth.issueInternal({ purpose: "render" });
     services.events.subscribe((event) => {
-      if (event.type === "preview-update") {
-        this.invalidate(`${event.repo}/${event.work}`);
-        this.invalidateResources(event.repo, event.work);
-      }
+      if (event.type === "preview-update") this.invalidate(`${event.repo}/${event.work}`);
       if (event.type === "materials" && event.repo) this.invalidateResources(event.repo);
     });
     this.sweeper = setInterval(() => this.sweep(), 30000);
@@ -500,11 +497,13 @@ export class Renderer {
   }
 
   /**
-   * The preview page of a library code module (src/preview/resource.ts) in a work's context:
-   * its asset base, tempo and the library versions it uses. Kept warm per work and module.
+   * The preview page of a library code module (src/preview/resource.ts): the library as it is
+   * now (not a work's locked versions), with the work's tempo. Kept warm per module and tempo.
    */
   async resourcePage(work, ref) {
-    const key = `resource:${work.repo}/${work.id}|${ref}`;
+    const meta = this.services.works.meta(work);
+    const tempo = JSON.stringify((meta.ok && meta.meta.tempo) || null);
+    const key = `resource:${work.repo}|${tempo}|${ref}`;
     const existing = this.pages.get(key);
     if (existing && !existing.stale) {
       existing.usedAt = Date.now();
@@ -517,13 +516,7 @@ export class Renderer {
         () => {},
       );
     }
-    const meta = this.services.works.meta(work);
-    const query = new URLSearchParams({
-      material: ref,
-      assetBase: `/files/${work.repo}/${work.id}/`,
-      materialBase: this.services.preview.moduleUrl(path.join(work.root, ".materials")) + "/",
-      tempo: JSON.stringify((meta.ok && meta.meta.tempo) || null),
-    });
+    const query = new URLSearchParams({ material: ref, ...this.services.materials.libraryBases(work.repo), tempo });
     const entry = { usedAt: Date.now(), stale: false };
     entry.handle = this.openResourcePage(`${this.services.baseUrl}/preview/resource.html?${query}`);
     this.pages.set(key, entry);
@@ -601,10 +594,9 @@ export class Renderer {
     return { frames, info };
   }
 
-  /** Library code changed or the work's versions moved: drop warm resource pages of the repository. */
-  invalidateResources(repo, work) {
-    for (const [key, entry] of this.pages)
-      if (key.startsWith(`resource:${repo}/${work ? work + "|" : ""}`)) entry.stale = true;
+  /** Library code changed: drop warm resource pages of the repository. */
+  invalidateResources(repo) {
+    for (const [key, entry] of this.pages) if (key.startsWith(`resource:${repo}|`)) entry.stale = true;
   }
 
   async close() {

@@ -151,13 +151,16 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
 
   /**
    * /files/<repo>/<work>/films/<slug>/x → work public file; materials/<library>/<path> →
-   * that file at the version the work locked (else as it is now); other paths → engine public/.
+   * that file at the version the work locked (else as it is now; always for work "-");
+   * other paths → engine public/.
    */
   async function serveWorkFile(req, res, pathname) {
     const [, , repo, id, ...rest] = pathname.split("/");
     const relative = decodeURIComponent(rest.join("/"));
     const material = /^materials\/(.+)$/.exec(relative);
     if (material && services.materials) {
+      // "-" is no work: library files as they are now (resource previews run there).
+      if (id === "-") return sendFile(req, res, await services.materials.file(repo, {}, material[1]), { cache: "no-cache" });
       // A snapshot (export) carries the work's lock file and says which repository it came from.
       const snapshot = repo === "snapshot" ? path.join(config.dirs.tmp, "snapshots", id) : null;
       const source = snapshot ? JSON.parse(fs.readFileSync(path.join(snapshot, ".frame-snapshot.json"), "utf8")) : { repo };
