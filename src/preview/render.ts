@@ -7,12 +7,14 @@ import { importWork, workSourceFromQuery } from "./load-work";
  */
 (window as unknown as { __FRAME_RENDER_ERRORS__: string[] }).__FRAME_RENDER_ERRORS__ = [];
 const errors = (window as unknown as { __FRAME_RENDER_ERRORS__: string[] }).__FRAME_RENDER_ERRORS__;
-addEventListener("error", (event) => errors.push(event.message));
-addEventListener("unhandledrejection", (event) => errors.push(String(event.reason?.message ?? event.reason)));
+// With the stack: the server maps it back to file:line:column in the work and its library code.
+const describe = (error: unknown) => (error instanceof Error ? error.stack || error.message : String(error));
+addEventListener("error", (event) => errors.push(event.error ? describe(event.error) : event.message));
+addEventListener("unhandledrejection", (event) => errors.push(describe(event.reason)));
 try {
   await installOffline(await importWork(workSourceFromQuery()));
 } catch (error) {
-  errors.push(error instanceof Error ? error.message : String(error));
+  errors.push(describe(error));
   if (!document.querySelector('[role="alert"]')) {
     const alert = document.createElement("p");
     alert.role = "alert";

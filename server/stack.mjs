@@ -4,8 +4,9 @@ import { appRoot } from "./config.mjs";
 /**
  * Browser errors from the preview page are hard to act on as-is: long origins, /@fs/
  * absolute paths, ?t= cache busters and positions in Vite's transformed output. This
- * rewrites stack frames to work-relative files at their original TypeScript lines and
- * drops frames that are not the work's or the engine's.
+ * rewrites stack frames to work-relative files (library code as materials/<library>/<path>)
+ * at their original TypeScript lines and drops frames that are not the work's, its library
+ * code's or the engine's.
  */
 export function cleanBrowserError(text, { work, vite } = {}) {
   const lines = String(text)
@@ -13,6 +14,8 @@ export function cleanBrowserError(text, { work, vite } = {}) {
     .split("\n");
   const out = [];
   let engineFrames = 0;
+  let libraryFrames = 0;
+  const copies = `${path.sep}.materials${path.sep}`; // library code runs from copies in <root>/.materials/
   for (const line of lines) {
     const frame = /^\s*at (?:(.*?) \()?(https?:\/\/[^/\s)]+)(\/[^\s)?]+)(?:\?[^\s):]*)?:(\d+):(\d+)\)?\s*$/.exec(line);
     if (!frame) {
@@ -24,7 +27,11 @@ export function cleanBrowserError(text, { work, vite } = {}) {
     const file = urlPath.startsWith("/@fs/") ? decodeURIComponent(urlPath.slice(4)) : path.join(appRoot, decodeURIComponent(urlPath));
     const position = originalPosition(vite, file, Number(rawLine), Number(rawColumn)) ?? { line: Number(rawLine), column: Number(rawColumn) };
     let shown;
-    if (work && inside(work.dir, file)) shown = path.relative(work.dir, file).split(path.sep).join("/");
+    if (file.includes(copies)) {
+      // A few frames of library code: where it failed and how the work got there.
+      if (libraryFrames++ >= 3) continue;
+      shown = "materials/" + file.slice(file.lastIndexOf(copies) + copies.length).split(path.sep).join("/");
+    } else if (work && inside(work.dir, file)) shown = path.relative(work.dir, file).split(path.sep).join("/");
     else if (inside(path.join(appRoot, "src", "engine"), file)) {
       // One engine frame is enough context; the rest is the engine's own plumbing.
       if (engineFrames++ >= 1) continue;

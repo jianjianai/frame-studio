@@ -49,6 +49,8 @@ export const MATERIALIZED = ".materials";
 /** Library files a work may import (text). Scripts are also followed for their own imports. */
 const IMPORTABLE = /\.(m?[jt]sx?|cjs|json|glsl|frag|vert|wgsl|css|txt|svg)$/i;
 const SCRIPT = /\.(m?[jt]sx?|cjs)$/i;
+/** Library files material_read returns as text: code, data, notes, subtitles and lyrics. */
+const TEXT = /\.(m?[jt]sx?|cjs|json|glsl|frag|vert|wgsl|css|txt|svg|md|markdown|csv|tsv|ya?ml|toml|html?|xml|srt|vtt|lrc)$/i;
 /** An address built at run time (`materials/lib/fonts/${name}.ttf`, "materials/lib/fonts/" + name): the part known in advance; null for a plain address. */
 const prefixOf = (ref) => (ref.includes("${") ? ref.slice(0, ref.indexOf("${")) : ref.endsWith("/") ? ref : null);
 const IMPORT_SPEC = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g;
@@ -445,14 +447,23 @@ export class Materials {
     if (locked.length) await this.saveLocks(work, locks);
     return { locked, missing };
   }
-  /** Lock what the work uses and has not locked yet (after placing a material, before a version). */
+  /**
+   * Lock what the work uses and has not locked yet (after placing a material, before a
+   * version), and link the libraries those files are in, as materials_use does.
+   */
   async lockReferenced(work) {
     if (this.services.works.published(work)) return { locked: [], missing: [] };
     const locks = this.readLocks(work.dir);
-    return this.lock(
+    const refs = await this.references(work);
+    const result = await this.lock(
       work,
-      [...(await this.references(work))].filter((ref) => !locks[ref]),
+      [...refs].filter((ref) => !locks[ref]),
     );
+    const names = this.names(work);
+    const dir = await this.dir(work.repo);
+    const unlinked = [...new Set([...refs].map((ref) => ref.split("/")[0]))].filter((id) => !names.includes(id) && fs.existsSync(path.join(dir, id)));
+    if (unlinked.length) await this.services.works.update(work, { materials: [...names, ...unlinked] });
+    return result;
   }
   /**
    * Before a version (and a publication): the lock file holds what the work uses. New references
@@ -925,7 +936,7 @@ export function materialsPlugin(services) {
     if (!validRef(ref)) throw problem(400, "无效的路径");
     const versions = locked ? materials.readLocks(work.dir) : {};
     if (locked && !versions[ref]) throw problem(404, `本作品没有锁定 materials/${ref}`);
-    if (!IMPORTABLE.test(ref)) {
+    if (!TEXT.test(ref)) {
       const info = await probe(await materials.file(work.repo, versions, ref)).catch(() => null);
       if (!info) throw notFound(`素材不存在：materials/${ref}`);
       return { ref, info, text: null };
@@ -941,7 +952,7 @@ export function materialsPlugin(services) {
     readOnly: true,
     title: "阅读素材库文件",
     description:
-      "读取素材库里的文本文件（代码、JSON、SVG、说明等）。默认是素材库现在的版本；locked: true 读本作品锁定的版本（作品实际运行的那个）。一次读多个用 paths（\"<库>/<路径>\"）。媒体文件只返回信息。",
+      "读取素材库里的文本文件（代码、JSON、SVG、Markdown 说明如 README.md、CSV、字幕和歌词等）。默认是素材库现在的版本；locked: true 读本作品锁定的版本（作品实际运行的那个）。一次读多个用 paths（\"<库>/<路径>\"）。媒体文件只返回信息。",
     input: {
       work: workArg,
       library: libraryArg.optional(),

@@ -20,6 +20,17 @@ describe("browser error cleanup", () => {
       ].join("\n"),
     );
   });
+  it("shows library code as materials/<library>/<path>", () => {
+    const root = "/data/works/local/ab12";
+    const raw = [
+      "TypeError: Cannot read properties of undefined (reading 'call')",
+      `    at street (http://127.0.0.1:4310/@fs${root}/.materials/s0rrow/code/places.ts?t=1:40:9)`,
+      `    at draw (http://127.0.0.1:4310/@fs${work.dir}/scenes/street.ts:9:5)`,
+    ].join("\n");
+    expect(cleanBrowserError(raw, { work })).toBe(
+      ["TypeError: Cannot read properties of undefined (reading 'call')", "    at street materials/s0rrow/code/places.ts:40:9", "    at draw scenes/street.ts:9:5"].join("\n"),
+    );
+  });
   it("maps positions through the module's source map", () => {
     const file = `${work.dir}/scene.ts`;
     // Generated line 2 col 0 → original line 5 col 2 (segment "AAIE" after a blank first line).

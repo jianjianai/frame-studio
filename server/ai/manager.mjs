@@ -392,6 +392,7 @@ export class AiManager {
     const process = await this.process(session.meta.profile, session.meta.model);
     // The agent loads the brief (AGENTS.md) as the session starts or resumes: it is the baseline.
     await this.services.experience?.prepare(work);
+    await this.services.resources?.overview(work.repo).catch(() => {}); // the brief's section on the material libraries
     const brief = this.services.works.writeBrief(work);
     let result;
     // The work root holds the platform AGENTS.md/CLAUDE.md and the engine links; the work itself is projects/<name>/.

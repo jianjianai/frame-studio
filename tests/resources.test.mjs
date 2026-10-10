@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
-import { extractModule, paramLine, score } from "../server/resources.mjs";
+import { canvasNote, extractModule, paramLine, score } from "../server/resources.mjs";
 import { browserExecutable } from "../server/render.mjs";
 
 const SHAPES = `/** 测试用的形状。 */
@@ -129,8 +129,15 @@ export const resources = defineResources({
   it("ranks matches by where the words appear", () => {
     const entry = { title: "弹跳的球", key: "ball", tags: ["节拍"], description: "跟着节拍弹起", kindLabel: "物品" };
     expect(score(entry, "球")).toBeGreaterThan(score(entry, "弹起"));
-    expect(score(entry, "球 节拍")).toBeGreaterThan(0);
-    expect(score(entry, "球 下雨")).toBe(0);
+    // Several words: matching more of them ranks higher, matching one is enough to be found.
+    expect(score(entry, "球 节拍")).toBeGreaterThan(score(entry, "球 下雨"));
+    expect(score(entry, "球 下雨")).toBeGreaterThan(0);
+    expect(score(entry, "下雨 街道")).toBe(0);
+  });
+  it("says when a library canvas does not fit the work's picture", () => {
+    const landscape = { composition: { width: 1920, height: 1080 } };
+    expect(canvasNote("1080×1920", landscape)).toContain("1080×1920（竖屏）的画布设计，本作品画面是 1920×1080（横屏）");
+    expect(canvasNote("1280×720", landscape)).toBe("");
   });
 });
 
@@ -233,6 +240,30 @@ describe("resources of the material libraries", () => {
     expect((await call(`/files/local/${work.id}/${file}`)).body.toString()).toContain("#aa0000");
     const view = await tool("resource_view", { work: work.id, id: "测试/code/paint.ts" });
     expect(view.body.text).toContain("本作品锁定了另一个版本");
+  });
+
+  it("tells the AI what the libraries hold and links the ones a work uses", async () => {
+    await put("code/tools.ts", '/** 两个工具 */\nexport { half, ball } from "./shapes";\n');
+    const other = await works.create({ title: "用素材库代码" });
+    // README and other text files read as text.
+    expect((await tool("material_read", { work: other.id, library: "测试", path: "README.md" })).body.text).toContain("素材库「测试」。引用了它的作品可以直接使用其中的文件");
+    // One line per re-export statement.
+    expect((await tool("resource_view", { work: other.id, id: "测试/code/tools.ts", image: false })).body.text).toContain("- 从 ./shapes 导出 half、ball  // 两个工具");
+    // work_context: the libraries, what they hold, whether they fit the picture (the ball's 400×300 does not fit 16:9).
+    const context = JSON.parse((await tool("work_context", { work: other.id })).body.text);
+    expect(context.materials.libraries).toEqual([
+      expect.objectContaining({ id: "测试", linked: false, sounds: 2, kinds: expect.objectContaining({ 物品: 1, 场景: 1 }), about: expect.stringContaining("素材库「测试」。"), canvasNote: expect.stringContaining("400×300") }),
+    ]);
+    expect((await tool("resource_view", { work: other.id, id: "测试/code/shapes.ts#ball", image: false })).body.text).toContain("注意：按 400×300（横屏）的画布设计");
+    // The session brief has them too.
+    await app.services.resources.overview("local");
+    works.writeBrief(other);
+    expect(fs.readFileSync(path.join(other.root, "AGENTS.md"), "utf8")).toMatch(/## 素材库[\s\S]*「测试」：资源 \d+ 个/);
+    // Code that imports a library links it when locked (as materials_use does).
+    fs.writeFileSync(path.join(other.dir, "scenes", "use.ts"), 'import { half } from "@materials/测试/code/shapes";\nexport const x: number = half(2);\n');
+    await works.commit(other, "用形状");
+    expect(app.services.materials.names(works.describe("local", other.id))).toEqual(["测试"]);
+    expect(Object.keys(app.services.materials.readLocks(other.dir))).toEqual(["测试/code/shapes.ts"]);
   });
 
   it("renders thumbnails in the background, the latest request first", async () => {

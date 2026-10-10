@@ -447,14 +447,17 @@ export function score(entry, query) {
     [entry.description ?? entry.doc, 2],
     [entry.text, 1],
   ];
+  // Several words name several things ("小狗 雨夜 街道"): an entry matching more of them ranks
+  // first, one matching any of them is still found.
   let total = 0;
+  let matched = 0;
   for (const term of wanted) {
     let best = 0;
     for (const [text, weight] of fields) if (text && String(text).toLowerCase().includes(term)) best = Math.max(best, weight);
-    if (!best) return 0;
+    if (best) matched++;
     total += best;
   }
-  return total;
+  return matched ? matched * 100 + total : 0;
 }
 
 // ---- the catalog of a repository's libraries, routes and AI tools ------------------------
@@ -472,6 +475,8 @@ export class ResourceCatalog {
     this.waiting = []; // thumbnail files not started yet, latest request last
     this.rendering = null; // the thumbnail file being rendered (one at a time)
     this.failed = new Lru(2000); // thumbnail file → { message, at }: not retried for a while
+    this.overviews = new Map(); // repo → Promise of overview(), until the libraries change
+    this.overviewed = new Map(); // repo → its last overview, for the (synchronous) session brief
   }
   get materials() {
     return this.services.materials;
@@ -643,6 +648,83 @@ export class ResourceCatalog {
     const image = await sharp(frames[0].png).resize({ width: 240, height: 240, fit: "inside", withoutEnlargement: true }).webp({ quality: 82 }).toBuffer();
     writeFileAtomic(file, image);
   }
+  /**
+   * What each library of a repository holds, for an AI starting on a work: resources by kind,
+   * sounds, files, the canvas most of its resources are drawn on, and the lead of its README.
+   * Cached until the libraries change.
+   */
+  overview(repo) {
+    if (!this.overviews.has(repo)) {
+      const pending = this.computeOverview(repo).then((value) => (this.overviewed.set(repo, value), value));
+      pending.catch(() => this.overviews.delete(repo));
+      this.overviews.set(repo, pending);
+    }
+    return this.overviews.get(repo);
+  }
+  async computeOverview(repo) {
+    const head = await this.materials.headOf(repo);
+    const dir = await this.materials.dir(repo);
+    const result = [];
+    for (const library of await this.materials.libraries(repo)) {
+      const kinds = new Map();
+      const canvases = new Map();
+      let resources = 0;
+      let sounds = 0;
+      for (const ref of [...head.keys()].filter((ref) => CODE_FILE.test(ref) && ref.startsWith(library.id + "/"))) {
+        let mod;
+        try {
+          mod = await this.module(repo, ref, head.get(ref));
+        } catch {
+          continue;
+        }
+        sounds += mod.sounds.length;
+        for (const item of mod.resources) {
+          resources++;
+          const label = RESOURCE_KINDS[item.kind] ?? item.kind;
+          kinds.set(label, (kinds.get(label) ?? 0) + 1);
+          const { width, height } = item.preview ?? {};
+          if (width > 0 && height > 0) canvases.set(`${width}×${height}`, (canvases.get(`${width}×${height}`) ?? 0) + 1);
+        }
+      }
+      const canvas = [...canvases].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
+      const order = (label) => (Object.values(RESOURCE_KINDS).indexOf(label) + 100) % 100;
+      const sorted = Object.fromEntries([...kinds].sort(([a], [b]) => order(a) - order(b)));
+      result.push({ id: library.id, title: library.title, files: library.files, resources, sounds, kinds: sorted, canvas, about: readmeLead(path.join(dir, library.id, "README.md")) });
+    }
+    return result;
+  }
+  /** work_context's view of the libraries: all of them, which the work links, and how they fit its picture. */
+  async librariesFor(work) {
+    const linked = new Set(this.materials.names(work));
+    const meta = this.services.works.meta(work);
+    const libraries = (await this.overview(work.repo)).map((library) => {
+      const note = library.canvas && meta.ok ? canvasNote(library.canvas, meta.meta) : "";
+      return { ...library, linked: linked.has(library.id), ...(note ? { canvasNote: note } : {}) };
+    });
+    return {
+      libraries,
+      hint: libraries.some((library) => library.resources || library.sounds)
+        ? "画角色、场景、道具、效果，配音效之前先用 resources_search 找现成的，resource_view 看用法、参数和预览图；第一次用一个素材库先读它的 README（material_read）。"
+        : "素材库里还没有声明资源；共用的文件用 materials_list 查看。",
+    };
+  }
+  /** The session brief's section on the libraries (from the last overview; the agent manager prepares it). */
+  brief(work) {
+    const overview = this.overviewed.get(work.repo);
+    if (!overview?.length) return null;
+    const linked = new Set(this.materials.names(work));
+    const meta = this.services.works.meta(work);
+    const lines = overview.map((library) => {
+      const kinds = Object.entries(library.kinds).map(([label, count]) => `${label} ${count}`).join("、");
+      const holds = [library.resources ? `资源 ${library.resources} 个（${kinds}）` : "", library.sounds ? `音效 ${library.sounds} 个` : "", `文件 ${library.files} 个`].filter(Boolean).join("、");
+      const note = library.canvas && meta.ok ? canvasNote(library.canvas, meta.meta) : "";
+      return `- 「${library.title}」${linked.has(library.id) ? "（本作品已关联）" : ""}：${holds}。${library.about ? library.about + " " : ""}${note}`.trim();
+    });
+    return {
+      text: `## 素材库\n\n多个作品共用的角色、场景、道具、效果、转场、文字、音效和代码。画一个东西、配一个音效之前先用 resources_search 找，有就导入复用（不合适就给素材库代码加参数）；resource_view 看用法、参数和预览图；第一次用一个素材库先读它的 README（material_read）。\n\n${lines.join("\n")}`,
+    };
+  }
+
   /** The libraries changed: thumbnails waiting for versions that are gone are not wanted any more. */
   async dropOutdated(repo) {
     for (const file of [...this.waiting]) {
@@ -674,7 +756,22 @@ function describeModule(mod) {
   const exported = mod.exports.filter((item) => item.kind !== "reexport" || item.doc);
   if (exported.length) {
     lines.push("", `导出（${exported.length}）：`);
-    for (const item of exported) lines.push(`- ${item.signature}${item.doc ? `  // ${firstLine(item.doc)}` : ""}`);
+    // The names of one `export { … }` statement share a line (and its comment).
+    const rows = [];
+    const statements = new Map();
+    for (const item of exported) {
+      if (item.kind !== "reexport") rows.push({ item });
+      else if (statements.has(item.line)) statements.get(item.line).names.push(item.name);
+      else {
+        const row = { item, names: [item.name] };
+        statements.set(item.line, row);
+        rows.push(row);
+      }
+    }
+    for (const { item, names } of rows) {
+      const signature = names ? `${item.signature.startsWith("从 ") ? item.signature : "导出"} ${names.join("、")}` : item.signature;
+      lines.push(`- ${signature}${item.doc ? `  // ${firstLine(item.doc)}` : ""}`);
+    }
   }
   if (mod.errors.length) lines.push("", "解析问题：" + mod.errors.join("；"));
   return lines.join("\n");
@@ -720,6 +817,30 @@ function describeEntry(entry) {
   return lines.join("\n");
 }
 
+/**
+ * A library canvas ("1080×1920") of another shape than the work's picture: said plainly, since
+ * drawn whole it is cropped or letterboxed and nothing reports that. Empty when they fit.
+ */
+export function canvasNote(canvas, meta) {
+  const [width, height] = String(canvas).split("×").map(Number);
+  const { width: W, height: H } = meta.composition ?? { width: 1920, height: 1080 };
+  if (!(width > 0 && height > 0 && W > 0 && H > 0) || Math.abs(Math.log(width / height / (W / H))) < 0.08) return "";
+  const shape = (w, h) => (w > h * 1.05 ? "横屏" : h > w * 1.05 ? "竖屏" : "方形");
+  return `按 ${width}×${height}（${shape(width, height)}）的画布设计，本作品画面是 ${W}×${H}（${shape(W, H)}）：整幅铺满会被裁切或留边，先按素材库 README 的说明安排，或只取其中一部分。`;
+}
+
+/** The lead paragraph of a library README (the line under its title), shortened. */
+function readmeLead(file) {
+  let text = "";
+  try {
+    text = fs.readFileSync(file, "utf8");
+  } catch {
+    return "";
+  }
+  const line = text.split("\n").find((item) => item.trim() && !item.startsWith("#")) ?? "";
+  return line.length > 160 ? line.slice(0, 159) + "…" : line.trim();
+}
+
 const DIRECTORY_LIMIT = 8000; // characters of the full directory before resources_search lists a summary instead
 
 /** resources_search without a query: every entry by library and kind, or (summary) counts and the first few titles. */
@@ -749,6 +870,7 @@ function directory(entries, linked, summary) {
 export function resourcesPlugin(services) {
   const { router, tools } = services;
   const catalog = (services.resources = new ResourceCatalog(services));
+  services.works.briefProviders.push((work) => catalog.brief(work));
   const open = (params) => services.openWork(params.id, params.repo);
 
   /** The libraries' resources and sounds for the workbench (all libraries, marked when the work links them). */
@@ -776,7 +898,10 @@ export function resourcesPlugin(services) {
     sendFile(req, res, thumb.file, { cache: query.v === thumb.version ? "private, max-age=31536000, immutable" : "no-cache" });
   });
   services.events.subscribe((event) => {
-    if (event.type === "materials" && event.repo) void catalog.dropOutdated(event.repo).catch(() => {});
+    if (event.type === "materials" && event.repo) {
+      catalog.overviews.delete(event.repo);
+      void catalog.dropOutdated(event.repo).catch(() => {});
+    }
   });
 
   tools.add({
@@ -854,7 +979,9 @@ export function resourcesPlugin(services) {
           ...(sheet ? { images: [{ data: sheet, mimeType: "image/jpeg" }] } : {}),
         };
       }
-      const text = describeEntry(entry);
+      const meta = services.works.meta(work);
+      const note = entry.type === "resource" && meta.ok ? canvasNote(`${entry.preview.width}×${entry.preview.height}`, meta.meta) : "";
+      const text = describeEntry(entry) + (note ? `\n\n注意：${note}` : "");
       if (entry.type !== "resource" || !image) return asJson({ id: entry.id, type: entry.type }, text);
       const { frames } = await services.renderer.resourceFrames(work, { ref: entry.ref, key: entry.key, preset, values: params, times, width });
       const images =
