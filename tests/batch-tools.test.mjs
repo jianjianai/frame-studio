@@ -105,7 +105,7 @@ describe("tools that save the AI calls", () => {
     expect(link.status).toBe(404); // the library does not exist yet
     await app.services.materials.create("local", "上传库");
     const links = (await tool("upload_link", { work: work.id, files: [{ path: "public/up/clip.bin", license: "CC0" }, { path: "logo.svg", library: "上传库" }] })).body.data.uploads;
-    expect(links[0].command).toMatch(/^curl -fsS -T '<本机文件>' 'http:\/\/127\.0\.0\.1:\d+\/api\/uploads\/[\w-]+'$/);
+    expect(links[0].command).toMatch(/^curl -fsS -T '<本机文件路径>' 'http:\/\/127\.0\.0\.1:\d+\/api\/uploads\/[\w-]+'$/);
     const put = (address, body) => fetch(address, { method: "PUT", body }).then(async (response) => ({ status: response.status, body: await response.json() }));
     const first = await put(links[0].url, "bytes");
     expect(first.body).toMatchObject({ ok: true, path: "public/up/clip.bin", url: `films/${work.slug}/up/clip.bin`, size: 5 });
@@ -113,6 +113,14 @@ describe("tools that save the AI calls", () => {
     expect((await put(links[0].url, "again")).status).toBe(404); // used up
     expect((await put(links[1].url, "<svg/>")).body).toMatchObject({ ok: true, ref: "上传库/logo.svg" });
     expect((await tool("upload_link", { work: work.id, files: [{ path: "scene.ts" }] })).status).toBe(400);
+    // The file on the AI's computer goes into the command; an absolute `path` is taken as that file.
+    const named = (await tool("upload_link", { work: work.id, files: [{ from: "/home/me/图 1.png" }, { path: "/Users/me/it's.mp3" }, { from: "~/a.png", library: "上传库" }] })).body;
+    expect(named.data.uploads.map((item) => [item.target, /^curl -fsS -T (.+) 'http/.exec(item.command)[1]])).toEqual([
+      ["public/imports/图 1.png", "'/home/me/图 1.png'"],
+      ["public/imports/it's.mp3", "'/Users/me/it'\\''s.mp3'"],
+      ["素材库「上传库」的 a.png", "~/'a.png'"],
+    ]);
+    expect(named.text).not.toContain("<本机文件路径>");
   });
 
   it("reads several guide topics, experience documents and library files in one call", async () => {

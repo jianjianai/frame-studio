@@ -135,7 +135,8 @@ export function registerWorkTools(registry) {
       ].filter(Boolean);
       const result = {
         ...(warnings.length ? { warnings } : {}),
-        work: { id: work.id, repo: work.repo, slug: work.slug, dir: work.dir, branch: work.branch, published: Boolean(publishedAt), github: github && github.state },
+        // The folder only helps an AI on the studio's own computer (a server's path leads an outside AI astray).
+        work: { id: work.id, repo: work.repo, slug: work.slug, ...(services.auth.required && !ctx.scope.session ? {} : { dir: work.dir }), branch: work.branch, published: Boolean(publishedAt), github: github && github.state },
         meta: meta.ok ? summarizeMeta(meta.meta) : { error: meta.error },
         entry: meta.ok ? meta.loads : null,
         layers:

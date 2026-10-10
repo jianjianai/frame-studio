@@ -171,6 +171,8 @@ describe("resources of the material libraries", () => {
     expect(all.body.text).toContain("beep 嘀");
     const found = await tool("resources_search", { work: work.id, query: "球" });
     expect(found.body.data.items[0]).toMatchObject({ id: "测试/code/shapes.ts#ball", type: "resource", kindLabel: "物品" });
+    // Nothing has both words: the list says it holds partial matches.
+    expect((await tool("resources_search", { work: work.id, query: "球 下雨" })).body.text).toMatch(/^没有同时符合「球」「下雨」的；下面是符合其中一部分的 \d+ 个/);
     const sounds = await tool("resources_search", { work: work.id, kind: "sound" });
     expect(sounds.body.data.items.map((item) => item.id)).toEqual(["测试/code/sfx.ts#beep", "测试/code/sfx.ts#boop"]);
     const code = await tool("resources_search", { work: work.id, query: "bounces", kind: "code" });

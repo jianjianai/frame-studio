@@ -161,6 +161,13 @@ describe("studio API (password mode)", () => {
     expect((await server.call("/api/tools/works_list", { method: "POST", body: {}, headers: auth })).status).toBe(200);
     expect((await server.call("/api/tools/work_create", { method: "POST", body: { title: "x" }, headers: auth })).status).toBe(403);
   });
+
+  it("does not hand outside AIs the server's own folder", async () => {
+    const work = await server.app.services.works.create({ title: "外部" });
+    const context = JSON.parse((await server.app.services.tools.call("work_context", { work: work.id })).text);
+    expect(context.work).toMatchObject({ id: work.id, slug: work.slug });
+    expect(context.work.dir).toBeUndefined();
+  });
 });
 
 describe("websocket access", () => {

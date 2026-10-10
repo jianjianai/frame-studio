@@ -34,13 +34,14 @@ export function uploadsPlugin(services) {
     published: true, // material libraries take uploads for a published work; its own files are checked below
     title: "上传本机文件",
     description:
-      "需要把你所在电脑上的文件（图片、音频、视频、字体、模型等）放进作品的 public/ 或素材库时用：为每个文件返回一次性上传地址和 curl 命令，在你的终端执行即可，文件内容不经过对话（2 GB 以内）。地址 15 分钟内有效、只能用一次；上传成功的响应里有引用地址。网上的文件直接用 asset_import / material_write 的 url。",
+      "需要把你所在电脑上的文件（图片、音频、视频、字体、模型等）放进作品的 public/ 或素材库时用：为每个文件返回一次性上传地址和 curl 命令（from 写你电脑上的文件路径，命令里就是它），在你的终端执行即可，文件内容不经过对话（2 GB 以内）。地址 15 分钟内有效、只能用一次；上传成功的响应里有引用地址。网上的文件直接用 asset_import / material_write 的 url。",
     input: {
       work: workArg,
       files: z
         .array(
           z.strictObject({
-            path: z.string().min(1).max(300).describe("放到哪里：作品里写 public/…（例如 public/img/logo.png）；素材库里写库内路径"),
+            from: z.string().max(1000).optional().describe("你电脑上的这个文件（绝对路径），写进返回的 curl 命令"),
+            path: z.string().min(1).max(300).optional().describe("放到哪里：作品里写 public/…（例如 public/img/logo.png）；素材库里写库内路径。不写时作品里放 public/imports/<文件名>，素材库里放库的根目录"),
             library: z.string().max(60).optional().describe("放进这个素材库（不写则放进作品）"),
             replace: z.boolean().default(false).describe("同名文件已存在时替换（默认另起名字）"),
             source: z.string().max(300).optional(),
@@ -55,7 +56,14 @@ export function uploadsPlugin(services) {
       sweep();
       const lines = [];
       const data = [];
-      for (const file of files) {
+      for (const given of files) {
+        // An absolute path in `path` is the file on the AI's computer (the usual slip), not a place in the work.
+        const local = given.from ?? (given.path && /^(\/|~|[A-Za-z]:[\\/])/.test(given.path) ? given.path : undefined);
+        const name = local ? local.split(/[\\/]/).pop() : "";
+        const file = { ...given, path: local && given.path === local ? undefined : given.path };
+        file.path ??= name ? (file.library ? name : `public/imports/${name}`) : undefined;
+        delete file.from;
+        if (!file.path) throw problem(400, "每个文件要写 from（你电脑上的文件）或 path（放到作品或素材库的哪里）");
         if (file.library) {
           const dir = await services.materials.dir(work.repo);
           services.materials.libraryOf(dir, file.library);
@@ -69,12 +77,14 @@ export function uploadsPlugin(services) {
         links.set(token, { ...file, repo: work.repo, id: work.id, expires: Date.now() + LIFETIME_MS });
         const url = `${base()}/api/uploads/${token}`;
         const where = file.library ? `素材库「${file.library}」的 ${file.path}` : file.path;
-        data.push({ target: where, url, command: `curl -fsS -T '<本机文件>' '${url}'` });
-        lines.push(`${where}：\ncurl -fsS -T '<本机文件路径>' '${url}'`);
+        const quote = (text) => `'${text.replace(/'/g, `'\\''`)}'`;
+        const source = !local ? "'<本机文件路径>'" : local.startsWith("~/") ? "~/" + quote(local.slice(2)) : quote(local); // ~ only expands unquoted
+        data.push({ target: where, url, command: `curl -fsS -T ${source} '${url}'` });
+        lines.push(`${where}：\ncurl -fsS -T ${source} '${url}'`);
       }
       return {
         data: { uploads: data, expiresInMinutes: LIFETIME_MS / 60000 },
-        text: `在你的终端执行（把 <本机文件路径> 换成文件的位置），15 分钟内有效、每个地址只能用一次：\n\n${lines.join("\n\n")}`,
+        text: `在你的终端执行${data.some((item) => item.command.includes("<本机文件路径>")) ? "（把 <本机文件路径> 换成文件的位置）" : ""}，15 分钟内有效、每个地址只能用一次：\n\n${lines.join("\n\n")}`,
       };
     },
   });

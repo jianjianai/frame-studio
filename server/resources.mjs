@@ -927,7 +927,10 @@ export function resourcesPlugin(services) {
           : `- [${entry.kindLabel}] ${entry.id} ${entry.title}${entry.type === "sound" && entry.duration && !/\d\s*秒/.test(entry.title) ? `（${entry.duration} 秒）` : ""}${entry.description ? " — " + firstLine(entry.description) : ""}`;
       if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源。可以换个说法，或不给 query 看全部目录。` : "素材库里还没有声明资源（见 frame_guide resources）。");
       let text;
-      if (query) text = `找到 ${found.length} 个：\n${found.map(line).join("\n")}`;
+      // Several words that nothing matches together: say the list is the partial matches.
+      const words = terms(query ?? "");
+      const partial = words.length > 1 && !found.some((entry) => score(entry, query) >= 100 * words.length);
+      if (query) text = `${partial ? `没有同时符合「${words.join("」「")}」的；下面是符合其中一部分的 ` : "找到 "}${found.length} 个：\n${found.map(line).join("\n")}`;
       else {
         // The directory, by library and kind; once it gets long, only the first few of each kind.
         text = directory(found, linked, false);
