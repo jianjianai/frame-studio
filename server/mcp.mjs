@@ -68,7 +68,10 @@ export function createMcpServer(registry, scope = {}, { confirm } = {}) {
         title: tool.title,
         description: tool.description,
         inputSchema,
-        annotations: { title: tool.title, readOnlyHint: Boolean(tool.readOnly), destructiveHint: Boolean(tool.destructive), openWorldHint: false },
+        // Built-in agents: FRAME asks the user itself when the session's mode wants it (confirm
+        // below), and every change is in the work's versions; a destructive hint would make
+        // Codex ask again on each layers_edit / audio_edit / files_batch, even in auto-edit mode.
+        annotations: { title: tool.title, readOnlyHint: Boolean(tool.readOnly), destructiveHint: Boolean(tool.destructive) && !scope.agent, openWorldHint: false },
         ...(CORE_TOOLS.has(tool.name) ? { _meta: { "anthropic/alwaysLoad": true } } : {}),
       },
       async (args, ctx) => {

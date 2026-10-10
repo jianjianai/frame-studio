@@ -94,7 +94,7 @@ function ensureGeneratorLoader(work, document) {
  * module (`sound: { module: "materials/<library>/<file>.ts", id }`) on a track.
  * Creates the track when `trackName` does not exist yet.
  */
-export function placeAudio(work, { src, sound, start = 0, duration, trackName = "录音", name, gain = 1 }) {
+export function placeAudio(work, { src, sound, start = 0, duration, trackName = "录音", name, gain = 1, fadeIn, fadeOut }) {
   const current = ensureAudioDocument(work);
   const doc = current.document;
   let track = doc.tracks.find((item) => item.name === trackName);
@@ -110,7 +110,7 @@ export function placeAudio(work, { src, sound, start = 0, duration, trackName = 
     operations.push({ op: "put", collection: "sources", value: sound ? { id: sourceId, kind: "generated", module: sound.module, trackId: sound.id } : { id: sourceId, kind: "file", src } });
   const length = Math.min(duration ?? current.duration - start, current.duration - start);
   if (length <= 0) throw problem(400, `开始时间 ${start} 秒超出了作品时长 ${current.duration} 秒；需要更长的作品时先用 work_update 修改 duration`);
-  const clip = { id: "clip_" + shortId(), track: track.id, source: sourceId, name: name || undefined, start, duration: length, gain };
+  const clip = { id: "clip_" + shortId(), track: track.id, source: sourceId, name: name || undefined, start, duration: length, gain, ...(fadeIn ? { fadeIn } : {}), ...(fadeOut ? { fadeOut } : {}) };
   operations.push({ op: "put", collection: "clips", value: clip });
   const result = editAudio(work, { operations, expectedSha256: current.sha256 });
   return { ...result, clip, track };

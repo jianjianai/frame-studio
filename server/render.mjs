@@ -193,32 +193,53 @@ export class Renderer {
     return { page, context, size, errors, logs, close: closeContext };
   }
 
-  /** Warm page for interactive tools (frames, contact sheets, audio analysis). */
-  async warmPage(work, width) {
+  /**
+   * Warm page for interactive tools (frames, contact sheets, audio analysis), leased: an AI
+   * calls several tools at once, and a page one of them replaces (the work changed) stays
+   * open until the others are done with it. Call `release()` when done.
+   */
+  async lease(work, width) {
     const meta = this.services.works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
     width = width || fitComposition(meta.meta, 1280).width;
     const key = `${work.repo}/${work.id}`;
     const stamp = this.freshen(work);
     const existing = this.pages.get(key);
-    if (existing && existing.width === width && !existing.stale && existing.stamp === stamp) {
-      existing.usedAt = Date.now();
-      return existing.handle;
+    let entry = existing;
+    if (!(existing && existing.width === width && !existing.stale && existing.stamp === stamp)) {
+      if (existing) {
+        this.pages.delete(key);
+        this.retire(existing);
+      }
+      entry = { width, usedAt: Date.now(), stale: false, stamp, users: 0 };
+      entry.handle = this.openPage(this.sourceOf(work), { width, project: meta.meta });
+      this.pages.set(key, entry);
+      entry.handle.catch(() => this.pages.get(key) === entry && this.pages.delete(key));
     }
-    if (existing) {
-      this.pages.delete(key);
-      existing.handle.then(
-        (handle) => handle.close(),
-        () => {},
-      );
+    entry.usedAt = Date.now();
+    entry.users = (entry.users ?? 0) + 1;
+    const release = () => {
+      entry.users--;
+      if (entry.retired && !entry.users) this.retire(entry);
+    };
+    try {
+      const handle = await entry.handle;
+      handle.project = meta.meta;
+      return { handle, release };
+    } catch (error) {
+      release();
+      throw error;
     }
-    const entry = { width, usedAt: Date.now(), stale: false, stamp };
-    entry.handle = this.openPage(this.sourceOf(work), { width, project: meta.meta });
-    this.pages.set(key, entry);
-    entry.handle.catch(() => this.pages.get(key) === entry && this.pages.delete(key));
-    const handle = await entry.handle;
-    handle.project = meta.meta;
-    return handle;
+  }
+
+  /** Close a page no longer wanted, once nobody is using it (else when the last user releases it). */
+  retire(entry) {
+    entry.retired = true;
+    if (entry.users) return;
+    entry.handle.then(
+      (handle) => handle.close(),
+      () => {},
+    );
   }
 
   /**
@@ -237,7 +258,8 @@ export class Renderer {
         return;
       }
       for (const entry of entries) {
-        if (["exports", ".cache", "node_modules"].includes(entry.name)) continue;
+        // Notes (AGENTS.md…) are not part of the picture: the AI writing them must not reload the page.
+        if (["exports", ".cache", "node_modules"].includes(entry.name) || entry.name.endsWith(".md")) continue;
         const file = path.join(dir, entry.name);
         if (entry.isDirectory()) walk(file);
         else if (entry.isFile())
@@ -265,12 +287,9 @@ export class Renderer {
 
   sweep() {
     for (const [key, entry] of this.pages)
-      if (Date.now() - entry.usedAt > 120000) {
+      if (Date.now() - entry.usedAt > 120000 && !entry.users) {
         this.pages.delete(key);
-        entry.handle.then(
-          (handle) => handle.close(),
-          () => {},
-        );
+        this.retire(entry);
       }
     // Close the idle browser only when no page at all is open (checks and exports hold pages too).
     if (!this.pages.size && !this.openPages && this.browserPromise && Date.now() - this.lastUse > 300000) {
@@ -286,13 +305,20 @@ export class Renderer {
   /** Render frames at absolute times. Returns PNG buffers. */
   async frames(work, { times, width, subtitles = true }) {
     this.lastUse = Date.now();
-    let handle;
+    let lease;
     try {
-      handle = await this.warmPage(work, width);
+      lease = await this.lease(work, width);
     } catch (error) {
       error.message = this.clean(work, error.message);
       throw error;
     }
+    try {
+      return await this.framesOn(work, lease.handle, { times, subtitles });
+    } finally {
+      lease.release();
+    }
+  }
+  async framesOn(work, handle, { times, subtitles }) {
     const duration = handle.project.duration;
     const errorsBefore = handle.errors.length;
     const result = [];
@@ -371,7 +397,14 @@ export class Renderer {
   /** The work's mix as PCM (or one track alone: `track` is an audio.json track id or a layer's "visual:<id>"). */
   async audioPcm(work, { start = 0, duration = 10, track }) {
     this.lastUse = Date.now();
-    const handle = await this.warmPage(work);
+    const lease = await this.lease(work);
+    try {
+      return await this.pcmOn(lease.handle, { start, duration, track });
+    } finally {
+      lease.release();
+    }
+  }
+  async pcmOn(handle, { start, duration, track }) {
     const total = handle.project.duration;
     start = Math.max(0, Math.min(total, start));
     duration = Math.max(0.05, Math.min(total - start, duration, 60));

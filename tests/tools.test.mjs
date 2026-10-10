@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { ToolRegistry } from "../server/tools/registry.mjs";
-import { toMcpResult } from "../server/mcp.mjs";
+import { createMcpServer, toMcpResult } from "../server/mcp.mjs";
 
 const registry = new ToolRegistry({ openWork: async (id, repo) => ({ id, repo: repo ?? "local" }) });
 registry.add({
@@ -54,6 +54,13 @@ describe("tool registry", () => {
     const error = await registry.call("edit", { ops: [{ op: "drop", id: "a" }] }).catch((error) => error);
     expect(error.status).toBe(400);
     expect(error.message).toMatch(/^内容无效：id: .*；size: /);
+  });
+  it("marks destructive tools for other clients, not for the studio's own agents (FRAME asks them itself)", () => {
+    const tools = new ToolRegistry({});
+    tools.add({ name: "cut", title: "", description: "", destructive: true, input: { work: z.string().optional() }, run: async () => ({ data: 1 }) });
+    expect(createMcpServer(tools, {})._registeredTools.cut.annotations.destructiveHint).toBe(true);
+    // Codex would otherwise ask about every layers_edit / audio_edit, even in auto-edit mode.
+    expect(createMcpServer(tools, { work: "ab12", agent: true })._registeredTools.cut.annotations.destructiveHint).toBe(false);
   });
   it("sends meta to MCP clients next to a custom text", () => {
     const result = toMcpResult({ text: "body", data: { sha256: "x", big: 1 }, meta: { sha256: "x" } });

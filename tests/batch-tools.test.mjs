@@ -269,6 +269,20 @@ describe("tools that save the AI calls", () => {
     expect(describeRhythm([], [])).toMatchObject({ bpm: null, beatsPerBar: null });
   });
 
+  it("keeps a replaced render page open until the tools using it are done", async () => {
+    const renderer = app.services.renderer;
+    let closed = 0;
+    const entry = { users: 2, handle: Promise.resolve({ close: () => closed++ }) };
+    renderer.retire(entry);
+    await entry.handle;
+    expect(closed).toBe(0);
+    // The last user releases it (what lease().release does).
+    entry.users = 0;
+    renderer.retire(entry);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closed).toBe(1);
+  });
+
   it("tells which tracks are heard and whether the voice stands out", async () => {
     const { voiceBalance } = await import("../server/audio-analysis.mjs");
     const { audibleTracks } = await import("../server/tools/preview-tools.mjs");
@@ -302,7 +316,8 @@ describe("tools that save the AI calls", () => {
 
   it.skipIf(!browserExecutable())("measures each track of the mix, and a change counts at once", async () => {
     const src = `films/${work.slug}/look/drums.wav`;
-    await tool("audio_place", { work: work.id, src, track: "音乐", start: 0, duration: 2 });
+    const placed = await tool("audio_place", { work: work.id, src, track: "音乐", start: 0, duration: 2, fadeIn: 0.2, fadeOut: 0.5 });
+    expect(placed.body.data.clip).toMatchObject({ fadeIn: 0.2, fadeOut: 0.5 });
     await tool("audio_place", { work: work.id, src, track: "配音", start: 0, duration: 2, gain: 0.1 });
     const first = await tool("preview_audio", { work: work.id, start: 0, duration: 2 });
     expect(first.body.text).toContain("「配音」（人声）");

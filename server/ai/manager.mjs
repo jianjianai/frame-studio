@@ -886,8 +886,10 @@ function isCommand(session, text) {
 
 const userAttachments = (message) => message.attachments.map((item) => (item.data ? { ...item, type: "image", kind: item.type } : item));
 
-function authHint(error, process) {
+export function authHint(error, process) {
   const message = error?.message || String(error);
+  // Another Claude Code on this computer refreshing the same login: it passes, signing in again is not the cure.
+  if (/another Claude Code process is refreshing|usually transient/i.test(message)) return new Error(`${message}。这是暂时的（同一台电脑上另一个 Claude Code 正在刷新登录），稍等一分钟再发`);
   if (/auth/i.test(message) || error?.code === -32000) {
     const how = process?.profile?.kind === "account" ? `请在 设置 → AI 中登录 ${process.profile.name}` : "请检查 API Key 和接口地址";
     return new Error(`${message}。${how}`);

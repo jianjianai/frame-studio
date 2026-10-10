@@ -115,3 +115,14 @@ describe("conversation branches", () => {
     expect(ai.turnPrompt(session, { text: "再继续", attachments: [], view: null }, opened).at(-1).text).not.toContain("分支点");
   });
 });
+
+describe("agent errors", () => {
+  it("does not send the user to sign in again when a login refresh is only busy", async () => {
+    const { authHint } = await import("../server/ai/manager.mjs");
+    const account = { profile: { kind: "account", name: "Claude 账号" } };
+    const busy = authHint(new Error("Internal error: Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient"), account);
+    expect(busy.message).toContain("稍等一分钟再发");
+    expect(busy.message).not.toContain("登录 Claude 账号");
+    expect(authHint(new Error("Authentication required"), account).message).toContain("请在 设置 → AI 中登录 Claude 账号");
+  });
+});

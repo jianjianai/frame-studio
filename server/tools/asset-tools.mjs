@@ -308,13 +308,15 @@ export function registerAssetTools(registry) {
       track: z.string().max(60).default("音效").describe("音轨名称"),
       name: z.string().max(100).optional(),
       gain: z.number().min(0).max(4).default(1),
+      fadeIn: z.number().min(0).max(60).optional().describe("淡入秒数"),
+      fadeOut: z.number().min(0).max(60).optional().describe("淡出秒数"),
     },
-    async run({ src, sound, start, duration, track, name, gain }, ctx) {
+    async run({ src, sound, start, duration, track, name, gain, fadeIn, fadeOut }, ctx) {
       const work = await ctx.work();
       if (Boolean(src) === Boolean(sound)) throw problem(400, "src 和 sound 必须且只能提供一个");
       if (sound) {
         const found = await services.resources.sound(work, sound);
-        const result = placeAudio(work, { sound: found, start, duration: duration ?? found.duration, trackName: track, name: name ?? found.title, gain });
+        const result = placeAudio(work, { sound: found, start, duration: duration ?? found.duration, trackName: track, name: name ?? found.title, gain, fadeIn, fadeOut });
         await services.materials?.lockReferenced(work);
         return asJson(
           { clip: result.clip, track: result.track.name, sha256: result.sha256 },
@@ -323,7 +325,7 @@ export function registerAssetTools(registry) {
       }
       const info = await probe(await resolveAsset(services, work, src));
       if (src.startsWith("public/")) src = `films/${work.slug}/${src.slice(7)}`;
-      const result = placeAudio(work, { src, start, duration: duration ?? info.duration, trackName: track, name, gain });
+      const result = placeAudio(work, { src, start, duration: duration ?? info.duration, trackName: track, name, gain, fadeIn, fadeOut });
       await services.materials?.lockReferenced(work);
       return asJson(
         { clip: result.clip, track: result.track.name, sha256: result.sha256 },
