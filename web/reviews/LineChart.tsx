@@ -11,6 +11,8 @@ export interface ChartSeries {
   area?: boolean;
   /** A marker on every point: measured values, not a continuous curve. */
   dots?: boolean;
+  /** Columns from the baseline instead of a line (amounts per hour). */
+  bars?: boolean;
 }
 
 interface Props {
@@ -18,7 +20,8 @@ interface Props {
   /** Plot plus axes, in pixels. */
   height?: number;
   x: { domain: [number, number]; format: (value: number) => string; ticks?: number[] };
-  y: { domain?: [number, number]; format: (value: number) => string };
+  /** `reference`: a value drawn as a labelled hairline (similar videos' level). */
+  y: { domain?: [number, number]; format: (value: number) => string; reference?: { value: number; label: string } };
   /** Vertical hairlines with a label (the work's shots). */
   markers?: { at: number; label: string }[];
   /** Shaded stretches of x (where viewers leave). */
@@ -70,14 +73,14 @@ export function LineChart({ series, height = 160, x, y, markers = [], bands = []
 
   const yDomain = useMemo<[number, number]>(() => {
     if (y.domain) return y.domain;
-    const values = series.flatMap((item) => item.points.map(([, value]) => value));
+    const values = [...series.flatMap((item) => item.points.map(([, value]) => value)), ...(y.reference ? [y.reference.value] : [])];
     // From zero (or below it, for values that can be negative), out to round ticks.
     const min = Math.min(0, ...values);
     const max = Math.max(0, ...values);
     if (!(max > min)) return [0, 1];
     const step = niceStep(min, max, 4);
     return [Math.floor(min / step + 1e-9) * step, Math.ceil(max / step - 1e-9) * step];
-  }, [series, y.domain]);
+  }, [series, y.domain, y.reference]);
   const yTicks = niceTicks(yDomain[0], yDomain[1], height < 140 ? 3 : 4);
   const left = Math.max(28, ...yTicks.map((tick) => y.format(tick).length * 6.5 + 8));
   const plotWidth = Math.max(10, width - left - MARGIN.right);
@@ -217,11 +220,40 @@ export function LineChart({ series, height = 160, x, y, markers = [], bands = []
               />
             ) : null,
           )}
-          {series.map((item) => (
-            <path key={item.id} d={path(item.points)} stroke={item.color} className="chart-line" />
-          ))}
+          {series.map((item) => {
+            if (!item.bars) return <path key={item.id} d={path(item.points)} stroke={item.color} className="chart-line" />;
+            // Thin columns with a rounded top, a gap between neighbours.
+            const gap = item.points.length > 1 ? sx(item.points[1][0]) - sx(item.points[0][0]) : plotWidth;
+            const barWidth = Math.max(1, Math.min(24, gap - 1));
+            return (
+              <g key={item.id}>
+                {item.points.map(([at, value]) => {
+                  const barTop = Math.min(sy(value), sy(0) - 0.5);
+                  return (
+                    <rect
+                      key={at}
+                      x={sx(at) - barWidth / 2}
+                      y={barTop}
+                      width={barWidth}
+                      height={Math.max(0.5, sy(0) - barTop)}
+                      rx={Math.min(2, barWidth / 2)}
+                      fill={item.color}
+                    />
+                  );
+                })}
+              </g>
+            );
+          })}
+          {y.reference && (
+            <g>
+              <line className="chart-reference" x1={left} x2={left + plotWidth} y1={sy(y.reference.value)} y2={sy(y.reference.value)} />
+              <text className="chart-reference-label" x={left + plotWidth} y={sy(y.reference.value) - 3} textAnchor="end">
+                {y.reference.label}
+              </text>
+            </g>
+          )}
           {series.map((item) =>
-            item.dots || item.points.length === 1
+            !item.bars && (item.dots || item.points.length === 1)
               ? item.points.map(([at, value]) => <circle key={`${item.id}-${at}`} className="chart-dot" cx={sx(at)} cy={sy(value)} r={4} fill={item.color} />)
               : null,
           )}

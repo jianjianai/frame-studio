@@ -1,12 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import sharp from "sharp";
-import { git } from "./git.mjs";
+import { git, gitOk } from "./git.mjs";
 import { tree, readText, writeText, writeStream, removePath, uniquePath } from "./files.mjs";
 import { readJson, sendFile } from "./http.mjs";
 import { problem, notFound, confined, writeFileAtomic, mediaKind } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
+import { readProjectSource, validSlug } from "./project-meta.mjs";
 import { workArg, describeIssues } from "./tools/registry.mjs";
 import { editList, runFileOperations } from "./tools/file-ops.mjs";
 import { readTable, tableText, TABLE_FILE } from "./sheets.mjs";
@@ -23,19 +25,25 @@ import {
   applyOperations,
   postOperation,
   snapshotOperation,
+  seriesOperation,
+  momentOperation,
+  segmentsOperation,
   removePostOperation,
   removeSnapshotOperation,
+  removeMomentOperation,
   latest,
   snapshotsOf,
   derive,
-  retentionStats,
-  reviewText,
   compareRows,
-  compareText,
+  defaultCheckpoint,
   formatPercent,
   ageLabel,
   ageDays,
+  beijing,
 } from "./review-data.mjs";
+import { retentionAnalysis, flowAnalysis, reviewText, compareText, lyricsText, momentColumns } from "./review-analysis.mjs";
+import { readExports } from "./review-import.mjs";
+import { workSegments } from "./review-segments.mjs";
 
 /**
  * Reviews of posted videos: for each work, where it was posted, the platforms' numbers over
@@ -53,7 +61,7 @@ const ROOT_README = `# FRAME 复盘
 
 每个文件夹是一个作品（文件夹名是作品 id）发布后的复盘资料，在 FRAME Studio 的「复盘」中查看和对比：
 
-- \`review.json\`：发到了哪些平台、各次统计的数据和观众留存曲线
+- \`review.json\`：发到了哪些平台、各次统计的数据、观众留存（和同类作品的）、每小时数据、流量来源、关键时刻
 - \`raw/\`：平台后台导出的表格、截图等原始文件，原样保存
 - 其他 \`.md\`：复盘文档
 `;
@@ -73,6 +81,11 @@ const docTitle = (folder, file) => {
   } catch {
     return "";
   }
+};
+const sha256Of = async (file) => {
+  const hash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+  return hash.digest("hex");
 };
 
 export class Reviews {
@@ -102,7 +115,14 @@ export class Reviews {
   }
   /** A work-like handle, so the works' version functions (history, push, pull…) apply. */
   async scope(repo) {
-    const root = await this.dir(repo);
+    return this.handle(repo, await this.dir(repo));
+  }
+  /** The same, or null while the repository has no reviews (looking at versions starts nothing). */
+  async scopeIfAny(repo) {
+    const dir = await this.existing(repo);
+    return dir ? this.handle(repo, dir) : null;
+  }
+  handle(repo, root) {
     return { id: `reviews-${repo}`, repo, root, dir: root, branch: REVIEWS_BRANCH };
   }
 
@@ -132,29 +152,90 @@ export class Reviews {
   }
 
   /**
-   * Everything the studio shows of a work's review: also per post the newest numbers, every
-   * snapshot with the derived rates (charts) and the retention analysis.
+   * The text of a work's files (under projects/<slug>/): from its checkout, or from its branch
+   * when it is not checked out (comparing many works opens none of them). Null when unknown.
+   */
+  async workFiles(repo, id) {
+    const { works, repos } = this.services;
+    if (fs.existsSync(path.join(works.root(repo, id), ".git")))
+      try {
+        const work = works.describe(repo, id);
+        const read = async (relative) => {
+          const file = confined(work.dir, relative);
+          return fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+        };
+        return { meta: works.meta(work).meta ?? {}, read };
+      } catch {}
+    const { dir } = repos.get(repo);
+    const ref = (await gitOk(dir, ["rev-parse", "--verify", "--quiet", `refs/heads/works/${id}`]))
+      ? `refs/heads/works/${id}`
+      : `refs/remotes/origin/works/${id}`;
+    const slug = (await git(dir, ["ls-tree", "--name-only", ref, "projects/"]).catch(() => ""))
+      .split("\n")
+      .map((name) => name.slice(9))
+      .find((name) => validSlug(name));
+    if (!slug) return null;
+    const read = (relative) => git(dir, ["show", `${ref}:projects/${slug}/${relative}`]).catch(() => null);
+    try {
+      return { meta: readProjectSource(await read("project.ts")).meta, read };
+    } catch {
+      return null;
+    }
+  }
+
+  /** The stretches retention is measured over: the work's own (layers, shots, subtitles, lyrics) and the review's, which replace the same kind. */
+  async segments(files, review) {
+    const auto = files ? await workSegments(files) : [];
+    const custom = new Set(review.segments.map((segment) => segment.kind));
+    return [...auto.filter((segment) => !custom.has(segment.kind)), ...review.segments];
+  }
+
+  /**
+   * Everything the studio shows of a work's review: per post the newest numbers (and the same
+   * for similar videos), every snapshot with the derived rates (charts), the retention and
+   * hourly analyses; the segments.
    */
   async detail(work) {
     const { review, files, documents } = await this.read(work);
     const meta = this.services.works.meta(work).meta ?? {};
+    const segments = await this.segments(await this.workFiles(work.repo, work.id), review);
     const summary = {};
     const history = {};
     const analyses = {};
     for (const post of review.posts) {
       const duration = post.duration ?? meta.duration;
       const now = latest(review, post, { duration });
+      const flow = flowAnalysis(review, post);
+      if (flow) analyses[post.id] = { flow };
       if (!now) continue;
       const ages = Object.fromEntries(Object.entries(now.from).map(([key, at]) => [key, ageDays(post, at)]));
-      summary[post.id] = { at: now.at, age: ageDays(post, now.at), metrics: now.metrics, ages };
+      summary[post.id] = {
+        at: now.at,
+        age: ageDays(post, now.at),
+        metrics: now.metrics,
+        benchmark: now.benchmark,
+        ages,
+        sources: now.sources,
+        comments: now.comments,
+      };
       history[post.id] = snapshotsOf(review, post).map((snapshot) => ({
         at: snapshot.at,
         age: ageDays(post, snapshot.at),
-        metrics: derive(snapshot.metrics, { duration, retention: snapshot.retention }),
+        metrics: derive(snapshot.metrics, { duration, retention: snapshot.retention, moments: review.moments }),
       }));
-      if (now.retention?.length) analyses[post.id] = retentionStats(now.retention, duration, { beats: meta.beats, subtitles: meta.subtitles });
+      const retention = retentionAnalysis({ retention: now.retention, benchmark: now.retentionBenchmark, duration, segments, moments: review.moments });
+      if (retention) analyses[post.id] = { ...analyses[post.id], retention };
     }
-    return { review: { ...review, title: meta.title ?? review.title }, files, documents, summary, history, analyses, definitions: DEFINITIONS };
+    return {
+      review: { ...review, title: meta.title ?? review.title },
+      files,
+      documents,
+      summary,
+      history,
+      analyses,
+      segments,
+      definitions: DEFINITIONS,
+    };
   }
 
   /**
@@ -167,7 +248,7 @@ export class Reviews {
     const dir = await this.dir(work.repo);
     const folder = path.join(dir, work.id);
     const title = works.meta(work).meta?.title || work.id;
-    const scope = await this.scope(work.repo);
+    const scope = this.handle(work.repo, dir);
     return works.locks.run(`${scope.repo}/${scope.id}`, async () => {
       const { message, result } = await change({ folder, title });
       // The folder names its work (by id); review.json keeps the title for people browsing the branch and after the work is gone.
@@ -201,8 +282,8 @@ export class Reviews {
   }
 
   /**
-   * Data operations (post, snapshot, remove_post, remove_snapshot) and document operations
-   * (write, edit, delete, move of .md/.txt in the folder), in one version.
+   * Data operations (post, snapshot, series, moment, segments, remove_*) and document
+   * operations (write, edit, delete, move of .md/.txt in the folder), in one version.
    */
   async apply(work, operations, { message } = {}) {
     const defaults = await this.defaults(work);
@@ -244,14 +325,116 @@ export class Reviews {
     });
   }
 
-  /** An original file (spreadsheet, screenshot…) into raw/, kept as it is. */
-  async putRaw(work, name, stream, { replace = false } = {}) {
-    return this.save(work, async ({ folder }) => {
-      const wanted = `${RAW}/${cleanName(name)}`;
-      confined(folder, wanted);
-      const target = replace ? wanted : uniquePath(folder, wanted);
-      const saved = await writeStream(folder, target, stream, { overwrite: replace, limit: RAW_LIMIT });
-      return { message: `上传原始文件 ${target.slice(RAW.length + 1)}`, result: { path: target, size: saved.size } };
+  /**
+   * Read a platform's exports among the work's original files (paths under raw/, or a folder
+   * of them) and enter them as one snapshot of a post with its hourly series: the post of
+   * that platform (`post` when there are several; a new one when there is none, posted at
+   * `postedAt` or the first hour of the data), counted up to `at` (default: the last hour of
+   * the data). `dryRun` only says what it would do.
+   */
+  async importExports(work, { files = [], folder, post: postId, at, postedAt, dryRun = false } = {}) {
+    const dir = await this.existing(work.repo);
+    const root = dir ? path.join(dir, work.id) : null;
+    const wanted = [...files];
+    if (folder) {
+      if (!root || !fs.existsSync(confined(root, folder))) throw notFound(`没有文件夹 ${folder}`);
+      for (const entry of tree(confined(root, folder)))
+        if (entry.type === "file" && TABLE_FILE.test(entry.path)) wanted.push(`${folder.replace(/\/+$/, "")}/${entry.path}`);
+    }
+    if (!wanted.length) throw problem(400, "要导入哪些文件：files 写原始文件的路径（raw/…），或用 folder 指定一个文件夹");
+    const list = [...new Set(wanted)].map((file) => {
+      if (!file.startsWith(`${RAW}/`)) throw problem(400, `只能导入 ${RAW}/ 里的原始文件：${file}`);
+      const full = root ? confined(root, file) : null;
+      if (!full || !fs.statSync(full, { throwIfNoEntry: false })?.isFile()) throw notFound(`没有这个原始文件：${file}`);
+      return { path: file, file: full };
+    });
+    const parsed = readExports(list);
+    if (!parsed.platform)
+      throw problem(
+        400,
+        `没有认出平台后台导出的数据（目前认得抖音创作者中心的作品数据和评论导出）：${parsed.unrecognized.join("、")}。可以用 review_read 读出来，再用 review_write 录入。`,
+      );
+    const { review } = this.readFrom(dir, work.id);
+    const candidates = review.posts.filter((item) => item.platform === parsed.platform);
+    const post = postId
+      ? (review.posts.find((item) => item.id === postId) ?? fail404(`没有发布记录 ${postId}`))
+      : candidates.length === 1
+        ? candidates[0]
+        : null;
+    if (!post && candidates.length > 1)
+      throw problem(
+        409,
+        `作品在${parsed.platform}有 ${candidates.length} 条发布记录（${candidates.map((item) => `${item.id} ${beijing(item.postedAt)}`).join("、")}），用 post 指定导入到哪一条`,
+        "POST_REQUIRED",
+      );
+    // A comments export made in the hourly data's last (unfinished) hour says to the minute when the numbers were counted.
+    const lead = parsed.commentsAt && parsed.dataEnd ? Date.parse(parsed.commentsAt) - Date.parse(parsed.dataEnd) : -1;
+    const when = at ?? (lead >= 0 && lead < 3600000 ? parsed.commentsAt : (parsed.dataEnd ?? parsed.commentsAt));
+    if (!when) throw problem(400, "认不出这些数据统计到什么时候：用 at 写导出时间（带时区）");
+    const posted = post?.postedAt ?? postedAt ?? parsed.firstHour;
+    if (!posted) throw problem(400, `还没有${parsed.platform}的发布记录，数据里也看不出发布时间：用 postedAt 写发布时间（带时区）`);
+    const preview = {
+      platform: parsed.platform,
+      post: post?.id ?? null,
+      postedAt: new Date(posted).toISOString(),
+      at: new Date(when).toISOString(),
+      recognized: parsed.recognized,
+      unrecognized: parsed.unrecognized,
+      metrics: Object.keys(parsed.metrics),
+      retention: Boolean(parsed.retention),
+      benchmark: Boolean(parsed.retentionBenchmark),
+      series: parsed.series.map((series) => series.key),
+      sources: parsed.sources?.length ?? 0,
+      comments: parsed.comments ? { threads: parsed.comments.threads, replies: parsed.comments.replies } : null,
+    };
+    if (dryRun) return { preview };
+    const id = post?.id ?? `p${Math.max(0, ...review.posts.map((item) => Number(/^p(\d+)$/.exec(item.id)?.[1] ?? 0))) + 1}`;
+    const operations = [
+      ...(post
+        ? []
+        : [
+            postOperation.parse({
+              op: "post",
+              platform: parsed.platform,
+              postedAt: preview.postedAt,
+              ...(parsed.postTitle ? { title: parsed.postTitle } : {}),
+            }),
+          ]),
+      snapshotOperation.parse({
+        op: "snapshot",
+        post: id,
+        at: preview.at,
+        source: list.map((item) => item.path).join("、"),
+        metrics: parsed.metrics,
+        ...(parsed.retention ? { retention: parsed.retention } : {}),
+        ...(parsed.retentionBenchmark ? { retentionBenchmark: parsed.retentionBenchmark } : {}),
+        ...(parsed.sources ? { sources: parsed.sources } : {}),
+        ...(parsed.comments ? { comments: parsed.comments } : {}),
+        replace: true,
+      }),
+      ...parsed.series.map((series) => seriesOperation.parse({ op: "series", post: id, ...series })),
+    ];
+    const outcome = await this.apply(work, operations, { message: `导入${parsed.platform}后台数据（${list.length} 个文件，统计到 ${beijing(preview.at)}）` });
+    const failed = outcome.results.filter((result) => result.status !== "ok");
+    if (failed.length) throw problem(400, `导入没有完成：${failed.map((result) => result.message).join("；")}`);
+    return { preview: { ...preview, post: id }, ...outcome };
+  }
+
+  /** An original file (spreadsheet, screenshot…) into raw/ (or raw/<folder>/), kept as it is. */
+  async putRaw(work, name, stream, { replace = false, folder = "" } = {}) {
+    const sub = String(folder || "")
+      .split(/[\\/]+/)
+      .map(cleanName)
+      .filter((part) => part && part !== "file")
+      .join("/");
+    return this.save(work, async ({ folder: root }) => {
+      const wanted = `${RAW}/${sub ? `${sub}/` : ""}${cleanName(name)}`;
+      confined(root, wanted);
+      const target = replace ? wanted : uniquePath(root, wanted);
+      const saved = await writeStream(root, target, stream, { overwrite: replace, limit: RAW_LIMIT });
+      // The hash lets whoever uploaded check the file arrived whole.
+      const sha256 = await sha256Of(path.join(root, target));
+      return { message: `上传原始文件 ${target.slice(RAW.length + 1)}`, result: { path: target, size: saved.size, sha256 } };
     });
   }
 
@@ -277,7 +460,7 @@ export class Reviews {
     const dir = this.existingSync(repo);
     if (!dir || !validWorkId(id) || !fs.existsSync(path.join(dir, id))) return;
     const { review } = this.readFrom(dir, id);
-    const scope = await this.scope(repo);
+    const scope = this.handle(repo, dir);
     const saved = await this.services.works.locks.run(`${scope.repo}/${scope.id}`, async () => {
       const tracked = (await git(dir, ["ls-files", "--", id])).trim();
       fs.rmSync(path.join(dir, id), { recursive: true, force: true });
@@ -295,8 +478,10 @@ export class Reviews {
   /**
    * One row per post of the works in `repos` that have review data (see compareRows), filtered
    * by what the works are like: `tags` (any of them), a linked experience library, given ids.
+   * With `lyrics`, rows of works with lyrics carry each line's multiplier (lyricsText). Returns
+   * { rows, checkpoint }: without a `checkpoint`, the age most of the posts have reached.
    */
-  async compare({ repos, works: ids, tags, experience, ...options }) {
+  async compare({ repos, works: ids, tags, experience, lyrics = false, ...options }) {
     const entries = [];
     for (const repo of repos) {
       const dir = await this.existing(repo);
@@ -319,7 +504,25 @@ export class Reviews {
         });
       }
     }
-    return compareRows(entries, options);
+    const checkpoint = options.checkpoint in CHECKPOINTS ? options.checkpoint : defaultCheckpoint(entries, options);
+    const rows = compareRows(entries, { ...options, checkpoint });
+    if (lyrics)
+      for (const { repo, review, work } of entries) {
+        const segments = (await this.segments(await this.workFiles(repo, review.work), review)).filter((segment) => segment.kind === "歌词");
+        if (!segments.length) continue;
+        for (const row of rows.filter((item) => item.repo === repo && item.work === review.work)) {
+          const post = review.posts.find((item) => item.id === row.post);
+          const now = latest(review, post, { duration: row.duration });
+          const analysis = retentionAnalysis({
+            retention: now?.retention,
+            benchmark: now?.retentionBenchmark,
+            duration: row.duration || work.duration,
+            segments,
+          });
+          row.lyrics = (analysis?.segments["歌词"] ?? []).map(({ songTime, label, multiplier }) => ({ songTime, label, multiplier }));
+        }
+      }
+    return { rows, checkpoint };
   }
 
   // ---- for the AI's context -------------------------------------------------------------
@@ -327,12 +530,21 @@ export class Reviews {
   /** The session brief says that the work has review data (the numbers are read on demand). */
   brief(work) {
     const dir = this.existingSync(work.repo);
-    if (!dir || !fs.existsSync(path.join(dir, work.id, DATA_FILE))) return null;
-    const { review, documents } = this.readFrom(dir, work.id);
-    if (!review.posts.length) return null;
+    if (!dir || !fs.existsSync(path.join(dir, work.id))) return null;
+    const { review, documents, files } = this.readFrom(dir, work.id);
+    const waiting = files.filter((file) => !file.used);
+    if (!review.posts.length && !waiting.length) return null;
     const platforms = [...new Set(review.posts.map((post) => post.platform))].join("、");
     return {
-      text: `## 复盘\n\n这个作品已经发布到${platforms}，记录了 ${review.snapshots.length} 次数据${documents.length ? `，复盘文档：${documents.map((doc) => doc.path).join("、")}` : ""}。用户问起作品的表现、要复盘或和其他作品比较时，用 review_read 看数据和留存，reviews_compare 对比；复盘得出的可复用结论，征得用户同意后整理进经验库。`,
+      text: [
+        "## 复盘",
+        "",
+        `${review.posts.length ? `这个作品已经发布到${platforms}，记录了 ${review.snapshots.length} 次数据` : "这个作品还没有发布记录"}${documents.length ? `，复盘文档：${documents.map((doc) => doc.path).join("、")}` : ""}。`,
+        waiting.length ? `还没导入的原始文件：${waiting.map((file) => file.path).join("、")}（平台后台的导出用 review_import 导入）。` : "",
+        "用户问起作品的表现、要复盘或和其他作品比较时，用 review_read 看数据、留存（和同类作品比的倍数）和流量，reviews_compare 对比；复盘得出的可复用结论，征得用户同意后整理进经验库。",
+      ]
+        .filter(Boolean)
+        .join("\n"),
       state: {},
     };
   }
@@ -350,16 +562,19 @@ export class Reviews {
           id: post.id,
           platform: post.platform,
           postedAt: post.postedAt,
-          ...(now
-            ? { latest: { age: ageLabel(ageDays(post, now.at)), views: now.metrics.views ?? null, completionRate: now.metrics.completionRate ?? null } }
-            : {}),
+          ...(now ? { latest: { age: ageLabel(ageDays(post, now.at)), views: now.metrics.views ?? null, retention5s: now.metrics.retention5s ?? null } } : {}),
         };
       }),
       documents: documents.map((doc) => doc.path),
       files: files.length,
-      hint: "详情用 review_read，对比其他作品用 reviews_compare",
+      notImported: files.filter((file) => !file.used).map((file) => file.path),
+      hint: "详情用 review_read，导入平台导出用 review_import，对比其他作品用 reviews_compare",
     };
   }
+}
+
+function fail404(message) {
+  throw notFound(message);
 }
 
 const DEFINITIONS = { metrics: METRICS, derived: DERIVED, platforms: PLATFORMS, checkpoints: Object.keys(CHECKPOINTS), columns: DEFAULT_COLUMNS };
@@ -387,13 +602,29 @@ export function reviewsPlugin(services) {
   const operation = z.discriminatedUnion("op", [
     postOperation,
     snapshotOperation,
+    seriesOperation,
+    momentOperation,
+    segmentsOperation,
     removePostOperation,
     removeSnapshotOperation,
+    removeMomentOperation,
     z.strictObject({ op: z.literal("write"), path: docPath, content: z.string().max(512 * 1024), expectedSha256: z.string().optional() }),
     z.strictObject({ op: z.literal("edit"), path: docPath, edits: editList }),
     z.strictObject({ op: z.literal("delete"), path: docPath }),
     z.strictObject({ op: z.literal("move"), from: docPath, to: docPath }),
   ]);
+  const importInput = {
+    files: z.array(z.string().min(1).max(300)).max(50).optional().describe("原始文件的路径（raw/…）"),
+    folder: z.string().max(200).optional().describe("导入这个文件夹里的全部表格，例如 raw/2026-10-10"),
+    post: z.string().max(20).optional().describe("导入到哪条发布记录；这个平台只有一条时不用写，一条也没有时新建"),
+    at: z.string().max(40).optional().describe("数据统计到的时间（带时区）；不写时取每小时数据的最后一个小时"),
+    postedAt: z.string().max(40).optional().describe("新建发布记录时的发布时间（带时区）；不写时取每小时数据的第一个小时"),
+  };
+  const times = (args) => {
+    for (const key of ["at", "postedAt"])
+      if (args[key] && Number.isNaN(Date.parse(args[key]))) throw problem(400, `无法识别的时间：${args[key]}（写 ISO 格式并带时区）`);
+    return args;
+  };
 
   // ---- a work's review ------------------------------------------------------------------
   router.get(`${base}/works/:work`, async ({ params }) => reviews.detail(await workOf(params)));
@@ -407,7 +638,24 @@ export function reviewsPlugin(services) {
     if (failed.length === results.length) throw problem(400, failed.map((result) => result.message).join("；"));
     return { ...(await reviews.detail(work)), results };
   });
-  router.post(`${base}/works/:work/upload`, async ({ params, req, query }) => reviews.putRaw(await workOf(params), query.name, req), { raw: true });
+  router.post(
+    `${base}/works/:work/upload`,
+    async ({ params, req, query }) => reviews.putRaw(await workOf(params), query.name, req, { folder: query.folder, replace: query.replace === "1" }),
+    { raw: true },
+  );
+  router.post(`${base}/works/:work/import`, async ({ params, req }) => {
+    const body = times(await readJson(req));
+    const work = await workOf(params);
+    const result = await reviews.importExports(work, {
+      files: body.files,
+      folder: body.folder,
+      post: body.post,
+      at: body.at,
+      postedAt: body.postedAt,
+      dryRun: Boolean(body.dryRun),
+    });
+    return body.dryRun ? result : { ...(await reviews.detail(work)), preview: result.preview };
+  });
   /** An original file: as it is, or (table=1) a spreadsheet read as rows. */
   router.get(`${base}/works/:work/raw`, async ({ params, query, req, res }) => {
     const file = await folderFile(params, query.path);
@@ -429,12 +677,32 @@ export function reviewsPlugin(services) {
   });
 
   // ---- versions: every change is one already; history and sync like a work's --------------
-  router.get(`${base}/status`, async ({ params }) => works.status(await scope(params)));
-  router.get(`${base}/history`, async ({ params, query }) =>
-    works.history(await scope(params), { limit: Number(query.limit || 50), skip: Number(query.skip || 0) }),
-  );
-  router.get(`${base}/changes`, async ({ params, query }) => works.changes(await scope(params), query.commit));
-  router.get(`${base}/diff`, async ({ params, query }) => ({ diff: await works.diff(await scope(params), { commit: query.commit, file: query.file }) }));
+  // Looking at them starts no branch: a repository without reviews has no versions yet.
+  const unborn = (params) => ({
+    branch: REVIEWS_BRANCH,
+    upstream: "",
+    ahead: 0,
+    behind: 0,
+    files: [],
+    head: null,
+    remote: Boolean(services.repos.get(params.repo).remote),
+  });
+  router.get(`${base}/status`, async ({ params }) => {
+    const handle = await reviews.scopeIfAny(params.repo);
+    return handle ? works.status(handle) : unborn(params);
+  });
+  router.get(`${base}/history`, async ({ params, query }) => {
+    const handle = await reviews.scopeIfAny(params.repo);
+    return handle ? works.history(handle, { limit: Number(query.limit || 50), skip: Number(query.skip || 0) }) : [];
+  });
+  router.get(`${base}/changes`, async ({ params, query }) => {
+    const handle = await reviews.scopeIfAny(params.repo);
+    return handle ? works.changes(handle, query.commit) : [];
+  });
+  router.get(`${base}/diff`, async ({ params, query }) => {
+    const handle = await reviews.scopeIfAny(params.repo);
+    return { diff: handle ? await works.diff(handle, { commit: query.commit, file: query.file }) : "" };
+  });
   const changedAll = (params) => services.events.emit({ type: "reviews", repo: params.repo });
   router.post(`${base}/revert`, async ({ params, req }) => {
     const result = { commit: await works.revert(await scope(params), (await readJson(req)).commit) };
@@ -464,9 +732,13 @@ export function reviewsPlugin(services) {
       .map((repo) => repo.id);
     if (query.repo && !ready.includes(query.repo)) throw notFound(`作品库不存在：${query.repo}`);
     const repos = query.repo ? [query.repo] : ready;
-    const checkpoint = query.checkpoint in CHECKPOINTS ? query.checkpoint : "7d";
-    const rows = await reviews.compare({ repos, checkpoint, platform: query.platform || undefined, curves: query.curves === "1" });
-    return { rows, checkpoint, definitions: DEFINITIONS };
+    const { rows, checkpoint } = await reviews.compare({
+      repos,
+      checkpoint: query.checkpoint,
+      platform: query.platform || undefined,
+      curves: query.curves === "1",
+    });
+    return { rows, checkpoint, columns: [...DEFAULT_COLUMNS, ...momentColumns(rows)], definitions: DEFINITIONS };
   });
 
   // ---- AI tools ---------------------------------------------------------------------------
@@ -474,19 +746,21 @@ export function reviewsPlugin(services) {
     name: "review_read",
     title: "读取复盘",
     description:
-      "作品发布后的复盘资料：发到了哪些平台（发布记录）、各次统计的数据（按发布后的天数）、观众留存和流失明显的地方（对应的镜头和字幕，可以用 preview_frames 看那几秒的画面）、复盘文档和原始文件。传 file 读其中一个文件：平台导出的表格（xlsx、csv）读成文字表格，截图返回图片给你看，复盘文档返回全文。录入数据、写复盘用 review_write；和其他作品比较用 reviews_compare。",
+      "作品发布后的复盘资料：发布记录、最新数据（2 秒跳出、5 秒留存、结尾留存等和同类作品的值并列）、每小时流量（首 24/48/72 小时、按天、几波、各渠道）、流量来源（和账号近 7 天平均比）、观众留存——流失率是同类几倍最高的几秒（带前后两秒）、按图层/歌词/镜头等分段的倍数和“按同类走结尾会多多少”、关键时刻还剩多少人——以及评论概况、复盘文档和原始文件。传 file 读其中一个文件：平台导出的表格（xlsx、csv）读成文字表格，截图返回图片给你看，复盘文档返回全文。看那几秒的画面用 preview_frames。导入平台导出用 review_import，录入和写复盘用 review_write，和其他作品比较用 reviews_compare。",
     readOnly: true,
     input: {
       work: workArg,
-      file: z.string().min(1).max(300).optional().describe("复盘文件夹里的文件，例如 raw/抖音-近7天.xlsx、raw/后台截图.png、复盘.md"),
+      file: z.string().min(1).max(300).optional().describe("复盘文件夹里的文件，例如 raw/2026-10-10/流量数据.xlsx、raw/后台截图.png、复盘.md"),
     },
     async run({ file }, ctx) {
       const work = await ctx.work();
       if (file) return readFile(work, file, ctx);
       const detail = await reviews.detail(work);
       const meta = works.meta(work).meta ?? {};
+      const kinds = {};
+      for (const segment of detail.segments) kinds[segment.kind] = (kinds[segment.kind] ?? 0) + 1;
       return {
-        data: { review: detail.review, summary: detail.summary, analyses: detail.analyses, documents: detail.documents, files: detail.files },
+        data: { review: detail.review, summary: detail.summary, documents: detail.documents, files: detail.files },
         text: reviewText({
           review: detail.review,
           title: detail.review.title || work.id,
@@ -494,6 +768,7 @@ export function reviewsPlugin(services) {
           files: detail.files,
           documents: detail.documents,
           analyses: detail.analyses,
+          segmentKinds: kinds,
         }),
       };
     },
@@ -535,12 +810,34 @@ export function reviewsPlugin(services) {
   }
 
   tools.add({
+    name: "review_import",
+    published: true, // the reviews branch, not the work
+    title: "导入平台数据",
+    description:
+      "把作品复盘资料 raw/ 里平台后台导出的文件直接导入成一次数据记录，不用自己读表格：目前认得抖音创作者中心的作品数据导出（指标数据、逐秒留存和同类作品、每小时播放和涨粉及抖音精选、流量来源和对比 7 日、涨粉脱粉与不感兴趣、观众参与度）和全部评论导出，按表格内容识别，文件名随意。导入到这个平台的发布记录（只有一条时自动选；没有就新建，发布时间取数据的第一个小时，可以用 postedAt 写准确时间），统计时间取每小时数据的最后一个小时。每次调用自动保存一个版本。dryRun 只看会导入什么。",
+    input: { work: workArg, ...importInput, dryRun: z.boolean().default(false) },
+    async run(args, ctx) {
+      const work = await ctx.work();
+      const result = await reviews.importExports(work, times(args));
+      const { preview } = result;
+      const lines = [
+        `${args.dryRun ? "会导入" : "已导入"}${preview.platform}的数据到 ${preview.post ?? "新的发布记录"}（${preview.post ? "" : `发布时间 ${beijing(preview.postedAt)}，`}统计到 ${beijing(preview.at)}，北京时间）：`,
+        ...preview.recognized.map((item) => `- ${item.path}：${item.parts.join("、")}`),
+        preview.unrecognized.length ? `没认出的文件：${preview.unrecognized.join("、")}` : "",
+        `指标 ${preview.metrics.length} 项${preview.retention ? "，逐秒留存" : ""}${preview.benchmark ? "（含同类作品）" : ""}${preview.series.length ? `，每小时数据 ${preview.series.join("、")}` : ""}${preview.sources ? `，流量来源 ${preview.sources} 项` : ""}${preview.comments ? `，评论 ${preview.comments.threads} 条一级、${preview.comments.replies} 条回复` : ""}`,
+        args.dryRun ? "" : "用 review_read 看分析结果。",
+      ];
+      return { data: { preview }, text: lines.filter(Boolean).join("\n") };
+    },
+  });
+
+  tools.add({
     name: "review_write",
     published: true, // the reviews branch, not the work: allowed on a published work
     title: "记录复盘",
     destructive: true,
     description:
-      "记录作品发布后的复盘资料，每次调用自动保存为一个版本。operations 按顺序执行：post 新增或修改发布记录（平台、发布时间、链接、发布的是哪个导出文件）；snapshot 录入一条发布记录截至某个时间的累计数据和留存曲线（同一时间已有的合并，source 写数据来自哪个原始文件）；remove_post、remove_snapshot 删除；write / edit / delete / move 修改复盘文档（.md，路径相对作品的复盘文件夹，例如 复盘.md）。raw/ 里的原始文件保持原样，不能改。失败的逐项说明原因，只需重试失败的。格式和复盘方法见 frame_guide reviews。",
+      "记录作品发布后的复盘资料，每次调用自动保存为一个版本。operations 按顺序执行：post 新增或修改发布记录（平台、发布时间、标题和话题、置顶评论、链接、发布的是哪个导出文件、目标）；snapshot 录入一条发布记录截至某个时间的累计数据（metrics、同类作品的值 benchmark、留存曲线 retention 和同类的 retentionBenchmark、流量来源 sources、评论概况；同一时间已有的合并）；series 每小时新增的播放、涨粉等（views、followers，分渠道写 views:抖音精选）；moment 关键时刻（例如反转在第几秒，比较时会看那一刻还剩多少人）；segments 自定义分段（例如画在代码里的镜头、歌词），同种类整体替换；remove_post、remove_snapshot、remove_moment 删除；write / edit / delete / move 修改复盘文档（.md，路径相对作品的复盘文件夹，例如 复盘.md）。平台后台导出的文件优先用 review_import 导入。raw/ 里的原始文件保持原样，不能改。失败的逐项说明原因，只需重试失败的。格式和复盘方法见 frame_guide reviews。",
     input: {
       work: workArg,
       operations: z.array(operation).min(1).max(50),
@@ -556,7 +853,7 @@ export function reviewsPlugin(services) {
           `${icon[result.status]} ${result.index + 1}. ${result.op}${result.path ? ` ${result.path}` : ""}${result.status === "ok" ? "" : `：${result.message}`}`,
       );
       const head = !changes.length ? "没有改动" : `已保存（${changes.join("；")}）`;
-      const ids = review.posts.map((post) => `${post.id} ${post.platform} ${post.postedAt.slice(0, 10)}`).join("、");
+      const ids = review.posts.map((post) => `${post.id} ${post.platform} ${beijing(post.postedAt)}`).join("、");
       return {
         data: { results, posts: review.posts.map(({ id, platform, postedAt }) => ({ id, platform, postedAt })) },
         text: `${head}${failed.length ? `，${failed.length} 项没有完成（只需重试这些）` : ""}：\n${lines.join("\n")}${ids ? `\n发布记录：${ids}` : ""}`,
@@ -568,11 +865,14 @@ export function reviewsPlugin(services) {
   tools.add({
     name: "reviews_compare",
     title: "对比作品数据",
-    description: `把作品发布后的数据放在一起比较：每条发布记录一行，都取发布后同一天数的数据（checkpoint，默认第 7 天；总数会一直涨，不同天数的不能直接比），算出点赞率、评论率、分享率、完播率、3 秒留存等比例和中位数，标出本作品（▶）比中位数高还是低。可以按平台、作品标签、关联的经验库、发布时间筛选。用户想知道作品表现如何、和其他作品比、哪类做法效果更好时用。指标：${metricKeys.join("、")}，以及平台特有指标的中文名。`,
+    description: `把作品发布后的数据放在一起比较：每条发布记录一行，都取发布后同一天数的数据（checkpoint，不写时取大多数发布记录都到了的最大天数；总数会一直涨，不同天数的不能直接比；有每小时数据的播放、涨粉正好算到那一天），比例和留存点旁边并列同类作品的值，作品标了关键时刻的（例如反转）会多一列那一刻还剩多少人，最后给中位数和本作品（▶）是中位数的几倍。可以按平台、作品标签、关联的经验库、发布时间筛选。lyrics: true 时，用同一首歌的作品按歌词对齐比较每一句的倍数（分开歌的影响和画面的影响）。用户想知道作品表现如何、和其他作品比、哪类做法效果更好时用。指标：${metricKeys.join("、")}、moment:<关键时刻>，以及平台特有指标的中文名。`,
     readOnly: true,
     input: {
       work: workArg,
-      checkpoint: z.enum(Object.keys(CHECKPOINTS)).default("7d").describe("发布后第几天：1d、3d、7d、14d、30d，或 latest（各自最新的数据，天数不同只能粗看）"),
+      checkpoint: z
+        .enum(Object.keys(CHECKPOINTS))
+        .optional()
+        .describe("发布后第几天：1d、2d、3d、7d、14d、30d，或 latest（各自最新的数据，天数不同只能粗看）。不写时取大多数发布记录都到了的最大天数"),
       platform: z.string().max(40).optional().describe("只看这个平台"),
       tags: z.array(z.string().max(60)).max(10).optional().describe("只看带这些标签之一的作品（project.ts 的 tags）"),
       experience: z.string().max(60).optional().describe("只看关联了这个经验库的作品（同类作品）"),
@@ -580,13 +880,14 @@ export function reviewsPlugin(services) {
       since: z.string().max(40).optional().describe("发布时间不早于（ISO 日期）"),
       until: z.string().max(40).optional().describe("发布时间不晚于（ISO 日期）"),
       columns: z
-        .array(z.string().max(40))
+        .array(z.string().max(60))
         .min(1)
-        .max(16)
+        .max(20)
         .optional()
-        .describe(`表格里的指标，默认 ${DEFAULT_COLUMNS.join("、")}`),
-      sort: z.string().max(40).default("views").describe("按这个指标从高到低排"),
-      curves: z.boolean().default(false).describe("同时给出各条发布记录的留存曲线（按视频进度 0–100% 对齐，长短不同的视频也能比）"),
+        .describe(`表格里的指标，默认 ${DEFAULT_COLUMNS.join("、")} 加上关键时刻`),
+      sort: z.string().max(60).default("views").describe("按这个指标从高到低排"),
+      curves: z.boolean().default(false).describe("同时给出各条发布记录的留存曲线和同类的（按视频进度 0–100% 对齐，长短不同的视频也能比）"),
+      lyrics: z.boolean().default(false).describe("用同一首歌的作品，按歌词逐句对齐比较倍数"),
       repo: z.string().max(80).optional().describe("作品库；默认是当前作品所在的库，没有当前作品时是全部"),
     },
     async run(args, ctx) {
@@ -602,25 +903,28 @@ export function reviewsPlugin(services) {
               .filter((repo) => repo.ready)
               .map((repo) => repo.id);
       for (const since of [args.since, args.until]) if (since && Number.isNaN(Date.parse(since))) throw problem(400, `无法识别的日期：${since}`);
-      const rows = await reviews.compare({ repos, ...args });
+      const { rows, checkpoint } = await reviews.compare({ repos, ...args });
       const value = (row) => row.metrics[args.sort];
       rows.sort((a, b) => (Number.isFinite(value(b)) ? value(b) : -Infinity) - (Number.isFinite(value(a)) ? value(a) : -Infinity));
-      let text = compareText(rows, { checkpoint: args.checkpoint, columns: args.columns ?? DEFAULT_COLUMNS, current: work?.id });
-      const curved = rows.filter((row) => row.curve);
-      if (args.curves)
+      let text = compareText(rows, { checkpoint, columns: args.columns, current: work?.id });
+      if (args.curves) {
+        const curved = rows.filter((row) => row.curve);
+        const at = (points) =>
+          points
+            .filter((_, index) => index % 5 === 0)
+            .map(([progress, kept]) => `${Math.round(progress * 100)}% ${formatPercent(kept)}`)
+            .join("，");
         text += curved.length
           ? `\n\n留存曲线（视频进度 → 还在看的比例）：\n${curved
-              .map(
-                (row) =>
-                  `${row.title}·${row.platform}：${row.curve
-                    .filter((_, index) => index % 5 === 0)
-                    .map(([at, kept]) => `${Math.round(at * 100)}% ${formatPercent(kept)}`)
-                    .join("，")}`,
-              )
+              .map((row) => `${row.title}·${row.platform}：${at(row.curve)}${row.curveBenchmark ? `\n  同类：${at(row.curveBenchmark)}` : ""}`)
               .join("\n")}`
           : "\n\n这些发布记录都没有留存曲线。";
-      if (!rows.length) text = `没有符合条件的发布记录${work ? "（只看了当前作品所在的作品库）" : ""}。先用 review_write 记下发布记录和数据。`;
-      return { data: { checkpoint: args.checkpoint, rows }, text };
+      }
+      if (args.lyrics)
+        text += `\n\n${lyricsText(rows) || "没有两个以上作品用到同一首歌的歌词（需要作品里的 .lrc 歌词或复盘里写的歌词分段，以及留存和同类曲线）。"}`;
+      if (!rows.length)
+        text = `没有符合条件的发布记录${work ? "（只看了当前作品所在的作品库）" : ""}。先用 review_import 导入平台数据，或用 review_write 记下发布记录和数据。`;
+      return { data: { checkpoint, rows: rows.map(({ curve, curveBenchmark, history, hourly, ...row }) => row) }, text };
     },
   });
 }

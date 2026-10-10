@@ -128,8 +128,9 @@ frame export ab12cd34 --width 1920
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
 | `experience_read` / `experience_write` | 作品关联的经验库：照着做，过程中随时整理经验（`write` / `edit` / `delete` / `move`，一次可以改几篇；未保存状态） |
 | `experience_link` / `experience_commit` | 关联、取消关联或新建经验库；把经验库的修改保存为版本（可选推送到 GitHub） |
-| `review_read` / `review_write` | 作品发布后的复盘（`frame/reviews` 分支，不在作品里，已发布的作品也能写）：发布记录、按发布天数的数据、留存分析（流失处的镜头和字幕）、复盘文档和原始文件；`file` 把平台导出的 xlsx / csv 读成文字表格、截图返回图片；`review_write` 的 `post` / `snapshot` / `remove_*` 和文档的 `write` / `edit` / `delete` / `move`，每次调用自动保存一个版本 |
-| `reviews_compare` | 各作品的发布记录在同一发布天数（`checkpoint`）比较，附比例、中位数和本作品相对中位数的倍数；可按平台、标签、经验库、作品、时间筛选，`curves` 附按视频进度对齐的留存曲线 |
+| `review_import` | 把复盘资料 `raw/` 里平台后台的导出直接导入成一次数据（不经过 AI 读表格）：抖音创作者中心的作品数据（指标、逐秒留存和同类作品、每小时播放和涨粉分渠道、流量来源和对比 7 日）和全部评论导出，按表格内容识别（`server/review-import.mjs`）；没有发布记录时新建一条；`dryRun` 只说会导入什么 |
+| `review_read` / `review_write` | 作品发布后的复盘（`frame/reviews` 分支，不在作品里，已发布的作品也能写）：发布记录（标题、置顶评论、目标）、按发布天数的数据（和同类并列）、每小时流量（首 24/48/72 小时、几波）、流量来源、留存分析（每秒流失率是同类的几倍、按图层 / 歌词 / 镜头 / 字幕分段的倍数和“按同类走结尾多多少”、关键时刻还剩多少人）、评论、复盘文档和原始文件；`file` 把平台导出的 xlsx / csv 读成文字表格、截图返回图片；`review_write` 的 `post` / `snapshot` / `series` / `moment` / `segments` / `remove_*` 和文档的 `write` / `edit` / `delete` / `move`，每次调用自动保存一个版本 |
+| `reviews_compare` | 各作品的发布记录在同一发布天数（`checkpoint`，不写时取大多数发布记录都到了的最大天数）比较，有每小时数据的播放、涨粉正好算到那一天；附同类值、关键时刻列、中位数和本作品相对中位数的倍数；可按平台、标签、经验库、作品、时间筛选，`curves` 附按视频进度对齐的留存曲线（和同类的），`lyrics` 按歌词对齐同一首歌的作品 |
 | `subtitles_edit` | 字幕：整体替换、追加（替换重叠的旧字幕）、按时间段删除 |
 | `versions_list` / `version_save` / `version_diff` / `version_restore` | 版本 |
 | `export_video` / `task_status` | 导出 MP4（`wait` 秒数内等它完成）；完成时返回 1 小时有效的下载地址（`/api/downloads/<令牌>`，本机模式另给文件路径） |

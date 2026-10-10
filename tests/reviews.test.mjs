@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { zipSync, strToU8 } from "fflate";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
@@ -11,15 +12,18 @@ import {
   applyOperations,
   atCheckpoint,
   compareRows,
-  compareText,
+  defaultCheckpoint,
   derive,
   emptyReview,
   formatReview,
   parseReview,
-  retentionStats,
   snapshotOperation,
+  seriesOperation,
   postOperation,
 } from "../server/review-data.mjs";
+import { retentionAnalysis, flowAnalysis, compareText, lyricsText } from "../server/review-analysis.mjs";
+import { readExports, parsePercent, parseSeconds, beijingTime } from "../server/review-import.mjs";
+import { workSegments, parseLrc } from "../server/review-segments.mjs";
 
 const xlsx = (sheets, { styles = "", shared = [] } = {}) =>
   zipSync({
@@ -35,6 +39,62 @@ const xlsx = (sheets, { styles = "", shared = [] } = {}) =>
       sheets.map((sheet, index) => [`xl/worksheets/sheet${index + 1}.xml`, strToU8(`<worksheet><sheetData>${sheet.xml}</sheetData></worksheet>`)]),
     ),
   });
+/** A sheet of text cells, the way the creator center writes them. */
+const rowsXml = (rows) => rows.map((row) => `<row>${row.map((cell) => `<c t="inlineStr"><is><t>${cell}</t></is></c>`).join("")}</row>`).join("");
+const workbook = (sheets) => xlsx(Object.entries(sheets).map(([name, rows]) => ({ name, xml: rowsXml(rows) })));
+
+// A 15-second video posted 2026-10-07 23:00 Beijing time, exported 30 hours later.
+const retention = [100, 86, 70, 62, 55, 50, 46, 30, 27, 25, 23, 22, 21, 20, 19, 18];
+const similar = [100, 87, 71, 63, 57, 53, 50, 48, 46, 44, 42, 41, 40, 39, 38, 37];
+const hourly = Array.from({ length: 30 }, (_, hour) => (hour < 17 ? 10 : hour < 24 ? 400 : 100));
+const time = (hour) => {
+  const at = new Date(Date.UTC(2026, 9, 7, 23 + hour));
+  return `${at.toISOString().slice(0, 10)} ${at.toISOString().slice(11, 16)}`;
+};
+const exports = {
+  "内容吸引力数据.xlsx": workbook({
+    指标数据: [
+      ["完播率", "平均播放时长", "2s跳出率", "5s完播率", "平均播放占比"],
+      ["16.93%", "4秒", "30.79%", "46.46%", "26.67%"],
+    ],
+    留存分析: [
+      ["时间", "留存", "同类作品"],
+      ...retention.map((value, second) => [`00:${String(second).padStart(2, "0")}`, `${value}%`, `${similar[second]}%`]),
+    ],
+  }),
+  "流量数据.xlsx": workbook({
+    指标数据: [
+      ["播放量", "点赞量", "评论量", "分享量", "收藏量", "弹幕量", "完播率", "2s跳出率"],
+      ["5000", "350", "20", "60", "40", "3", "16.93%", "30.79%"],
+    ],
+    "播放量-新增-每小时趋势数据": [["日期", "播放量", "抖音", "抖音精选"], ...hourly.map((value, hour) => [time(hour), `${value}`, `${value - 1}`, "1"])],
+  }),
+  "流量来源.xlsx": workbook({
+    抖音: [
+      ["来源", "来源占比", "对比7日"],
+      ["推荐页", "89.8%", "-2.4%"],
+      ["个人主页", "5.9%", "+1.5%"],
+    ],
+  }),
+  "粉丝数据.xlsx": workbook({
+    指标数据: [
+      ["涨粉量", "脱粉量", "粉丝播放占比"],
+      ["30", "2", "0.78%"],
+    ],
+    "涨粉量-新增-每小时趋势数据": [["日期", "涨粉量", "抖音", "抖音精选"], ...hourly.map((_, hour) => [time(hour), "1", "1", "0"])],
+  }),
+  "全部评论.xlsx": workbook({
+    全部评论: [
+      ["抖音作品全部评论"],
+      ["17岁生日 #生日 #s0rrow"],
+      ["导出时间：2026-10-09 05:41:34（北京时间）；2 条一级评论，1 条回复。"],
+      ["序号", "评论层级", "所属一级评论序号", "评论者昵称", "评论内容", "点赞数", "已导出回复数"],
+      ["1", "一级评论", "", "a", "生日快乐", "3", "1"],
+      ["2", "二级评论", "1", "b", "谢谢", "0", "0"],
+      ["3", "一级评论", "", "c", "开飞行模式干嘛", "9", "0"],
+    ],
+  }),
+};
 
 describe("spreadsheets from creator centers", () => {
   it("reads xlsx values, shared and inline strings, dates and percentages", () => {
@@ -78,6 +138,56 @@ describe("spreadsheets from creator centers", () => {
     expect(decodeText(Buffer.from([0xff, 0xfe, ...Buffer.from("播放", "utf16le")]))).toBe("播放");
     expect(decodeText(Buffer.from([0xb2, 0xa5, 0xb7, 0xc5]))).toBe("播放");
   });
+
+  it("recognizes the Douyin creator center's exports by their sheets", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "frame-douyin-"));
+    const files = Object.entries(exports).map(([name, data]) => {
+      fs.writeFileSync(path.join(dir, name), data);
+      return { path: `raw/${name}`, file: path.join(dir, name) };
+    });
+    fs.writeFileSync(path.join(dir, "别的.xlsx"), workbook({ Sheet1: [["a", "b"]] }));
+    const parsed = readExports([...files, { path: "raw/别的.xlsx", file: path.join(dir, "别的.xlsx") }]);
+    expect(parsed.platform).toBe("抖音");
+    expect(parsed.unrecognized).toEqual(["raw/别的.xlsx"]);
+    expect(parsed.recognized.find((item) => item.path === "raw/内容吸引力数据.xlsx").parts).toEqual(["指标", "逐秒留存（含同类作品）"]);
+    expect(parsed.metrics).toMatchObject({
+      views: 5000,
+      likes: 350,
+      bounce2s: 0.3079,
+      retention5s: 0.4646,
+      avgWatchTime: 4,
+      watchRatio: 0.2667,
+      followers: 30,
+      unfollows: 2,
+      fanViewShare: 0.0078,
+    });
+    expect(parsed.retention[3]).toEqual([3, 0.62]);
+    expect(parsed.retentionBenchmark[3]).toEqual([3, 0.63]);
+    expect(parsed.series.map((series) => series.key)).toEqual(["views", "views:抖音", "views:抖音精选", "followers", "followers:抖音", "followers:抖音精选"]);
+    expect(parsed.series[0]).toMatchObject({ start: "2026-10-07T15:00:00.000Z", step: 3600 });
+    expect(parsed.firstHour).toBe("2026-10-07T15:00:00.000Z");
+    expect(parsed.dataEnd).toBe("2026-10-08T20:00:00.000Z");
+    expect(parsed.sources).toEqual([
+      { name: "推荐页", share: 0.898, vsAccount: -0.024 },
+      { name: "个人主页", share: 0.059, vsAccount: 0.015 },
+    ]);
+    expect(parsed.comments).toEqual({
+      threads: 2,
+      replies: 1,
+      top: [
+        { text: "开飞行模式干嘛", likes: 9, replies: 0 },
+        { text: "生日快乐", likes: 3, replies: 1 },
+      ],
+    });
+    expect(parsed.commentsAt).toBe("2026-10-08T21:41:34.000Z");
+    expect(parsed.postTitle).toBe("17岁生日 #生日 #s0rrow");
+    expect([parsePercent("+1.5%"), parseSeconds("1分2秒"), parseSeconds("01:02"), beijingTime("2026-10-07 23:00")]).toEqual([
+      0.015,
+      62,
+      62,
+      "2026-10-07T15:00:00.000Z",
+    ]);
+  });
 });
 
 describe("review data", () => {
@@ -103,26 +213,35 @@ describe("review data", () => {
       snapshotOperation.parse({ op: "snapshot", post: "p1", at: day(7), metrics: { completionRate: 31 } }),
       snapshotOperation.parse({ op: "snapshot", post: "p1", at: day(-1), metrics: { views: 1 } }),
       snapshotOperation.parse({ op: "snapshot", post: "p9", at: day(1), metrics: { views: 1 } }),
-      postOperation.parse({ op: "post", id: "p1", url: "https://example.com/v/1" }),
+      postOperation.parse({ op: "post", id: "p1", url: "https://example.com/v/1", pinnedComment: "回看第 1 秒", goals: { views: 1000000 } }),
+      { op: "moment", label: "反转", at: 7.5 },
+      { op: "segments", kind: "镜头", items: [{ start: 0, end: 5, label: "开场" }] },
     ]);
-    expect(results.map((result) => result.status)).toEqual(["ok", "failed", "failed", "failed", "ok"]);
+    expect(results.map((result) => result.status)).toEqual(["ok", "failed", "failed", "failed", "ok", "ok", "ok"]);
     expect(results[1].message).toContain("写 0–1");
     expect(results[2].message).toContain("时区");
     expect(results[3].message).toContain("没有发布记录 p9");
     expect(value.snapshots[1]).toMatchObject({ metrics: { views: 5000, likes: 300, completionRate: 0.3, comments: 12 }, source: "raw/a.xlsx" });
-    expect(value.posts[0].url).toBe("https://example.com/v/1");
-    // The file keeps a retention point per line and reads back the same.
+    expect(value.posts[0]).toMatchObject({ url: "https://example.com/v/1", pinnedComment: "回看第 1 秒", goals: { views: 1000000 } });
+    // Hourly series merge by time: the newer values win where they overlap.
+    applyOperations(value, [
+      seriesOperation.parse({ op: "series", post: "p1", key: "views", start: posted, values: [1, 2, 3] }),
+      seriesOperation.parse({ op: "series", post: "p1", key: "views", start: day(2 / 24), values: [30, 40] }),
+    ]);
+    expect(value.series[0]).toMatchObject({ start: posted, step: 3600, values: [1, 2, 30, 40] });
+    // The file keeps a curve point per line, a list of numbers on one line, and reads back the same.
     value.snapshots[1].retention = [
       [0, 1],
       [3, 0.6],
     ];
     const text = formatReview(value);
     expect(text).toContain("[0, 1],\n");
+    expect(text).toContain('"values": [1, 2, 30, 40]');
     expect(parseReview(text, "w1")).toEqual(value);
     expect(parseReview("{broken", "w1")).toEqual(emptyReview("w1"));
   });
 
-  it("compares at the same age, with rates per view", () => {
+  it("compares at the same age, with rates per view and hourly views exact at the checkpoint", () => {
     const value = review();
     expect(atCheckpoint(value, value.posts[0], "7d").metrics.views).toBe(5000);
     expect(atCheckpoint(value, value.posts[0], "1d").metrics.views).toBe(1000);
@@ -134,62 +253,157 @@ describe("review data", () => {
       likeRate: 0.06,
       engagementRate: 0.06,
     });
-    // A metric only an earlier snapshot has keeps that snapshot's rate and time.
-    applyOperations(value, [snapshotOperation.parse({ op: "snapshot", post: "p1", at: day(8), metrics: { views: 6000 } })]);
-    const newest = atCheckpoint(value, value.posts[0], "latest");
-    expect(newest.metrics).toMatchObject({ views: 6000, likes: 300, likeRate: 0.06 });
-    expect(newest.from).toMatchObject({ views: day(8), likes: day(6.5) });
-    expect(derive({ views: 1000, likes: 50, comments: 10, avgWatchTime: 6 }, { duration: 12 })).toMatchObject({
+    expect(derive({ views: 1000, likes: 50, comments: 10, followers: 3, avgWatchTime: 6 }, { duration: 12 })).toMatchObject({
       likeRate: 0.05,
       commentRate: 0.01,
       engagementRate: 0.06,
       watchRatio: 0.5,
+      followsPerThousand: 3,
     });
+    // The platform's own number stays as given.
+    expect(derive({ views: 100, watchRatio: 0.4, avgWatchTime: 6 }, { duration: 12 }).watchRatio).toBe(0.4);
+    // 72 hourly values: the first three days are exact, without a snapshot there.
+    applyOperations(value, [seriesOperation.parse({ op: "series", post: "p1", key: "views", start: posted, values: Array(72).fill(10) })]);
+    expect(atCheckpoint(value, value.posts[0], "3d")).toMatchObject({ metrics: { views: 720 }, exact: ["views"] });
+    expect(atCheckpoint(value, value.posts[0], "1d")).toMatchObject({ metrics: { views: 240, likes: 50 }, exact: ["views"] });
 
     const other = emptyReview("w2", "秋天");
     applyOperations(other, [
       postOperation.parse({ op: "post", platform: "抖音", postedAt: posted }),
       snapshotOperation.parse({ op: "snapshot", post: "p1", at: day(7.2), metrics: { views: 2000, likes: 200 } }),
+      { op: "moment", label: "反转", at: 5 },
     ]);
-    const rows = compareRows(
-      [
-        { repo: "local", review: value, work: { title: "夏日", duration: 15, width: 1080, height: 1920 } },
-        { repo: "local", review: other, work: { title: "秋天", duration: 20, width: 1920, height: 1080 } },
-      ],
-      { checkpoint: "7d" },
-    );
+    value.moments.push({ at: 7.5, label: "反转" });
+    const entries = [
+      { repo: "local", review: value, work: { title: "夏日", duration: 15, width: 1080, height: 1920 } },
+      { repo: "local", review: other, work: { title: "秋天", duration: 20, width: 1920, height: 1080 } },
+    ];
+    const rows = compareRows(entries, { checkpoint: "7d" });
     expect(rows.map((row) => [row.title, row.shape, row.metrics.views, row.metrics.likeRate])).toEqual([
       ["夏日", "竖屏", 5000, 0.06],
       ["秋天", "横屏", 2000, 0.1],
     ]);
     const text = compareText(rows, { checkpoint: "7d", columns: ["views", "likeRate"], current: "w1" });
-    expect(text).toContain("| ▶ 夏日 w1 | 抖音 | 2026-10-01 | 5,000 | 6% |");
+    expect(text).toContain("| ▶ 夏日 w1 | 抖音 | 2026-10-01 20:00 | 5,000 | 6% |");
     expect(text).toContain("中位数（2 条）：播放 3,500｜点赞率 8%");
     expect(text).toContain("本作品（抖音）：播放 5,000，是中位数的 1.43 倍");
+    // Both works mark the reversal: it becomes a column of its own.
+    expect(compareText(rows, { checkpoint: "7d" })).toContain("反转时还在");
+
+    // Without a day asked for: the latest one most posts have reached.
+    expect(defaultCheckpoint(entries)).toBe("7d");
+    const young = emptyReview("w3", "冬天");
+    applyOperations(young, [
+      postOperation.parse({ op: "post", platform: "抖音", postedAt: posted }),
+      snapshotOperation.parse({ op: "snapshot", post: "p1", at: day(1.1), metrics: { views: 300 } }),
+    ]);
+    expect(defaultCheckpoint([entries[0], { repo: "local", review: young, work: {} }])).toBe("1d");
+    expect(defaultCheckpoint([entries[1], { repo: "local", review: young, work: {} }])).toBe("latest");
   });
 
-  it("finds where viewers leave and names the shot and subtitle there", () => {
-    const curve = [
-      [0, 1],
-      [3, 0.7],
-      [6, 0.65],
-      [7, 0.45],
-      [12, 0.4],
-      [13, 0.48],
-      [20, 0.3],
-    ];
-    const stats = retentionStats(curve, 20, {
-      beats: [
-        { at: 0, title: "开场" },
-        { at: 6, title: "产品特写" },
+  it("measures leaving against similar videos, per second and per segment", () => {
+    const mine = retention.map((value, second) => [second, value / 100]);
+    const theirs = similar.map((value, second) => [second, value / 100]);
+    const analysis = retentionAnalysis({
+      retention: mine,
+      benchmark: theirs,
+      duration: 15,
+      segments: [
+        { kind: "镜头", start: 0, end: 6, label: "开场" },
+        { kind: "镜头", start: 6, end: 8, label: "转折" },
+        { kind: "镜头", start: 8, end: 15, label: "结尾" },
       ],
-      subtitles: [{ start: 5.5, end: 8, text: "看这里" }],
+      moments: [{ label: "反转", at: 7 }],
     });
-    expect(stats.opening).toEqual({ seconds: 3, kept: 0.7, lost: 0.3 });
-    expect(stats.drops[0]).toMatchObject({ shot: { at: 6, title: "产品特写" }, subtitle: "看这里" });
-    expect(stats.drops[0].start).toBeGreaterThanOrEqual(5.4);
-    expect(stats.drops[0].start).toBeLessThanOrEqual(6.1);
-    expect(stats.rises[0].start).toBeGreaterThan(11);
+    // 6→7 s: 46 % → 30 % is a churn of 34.8 %, similar videos lose 4 %: × 8.7.
+    expect(analysis.peaks[0]).toMatchObject({ t: 6, multiplier: 8.7, labels: { 镜头: "转折" } });
+    expect(analysis.peaks[0].around).toEqual([1.3, 1.41, 2.4, 1.7]);
+    const turn = analysis.segments["镜头"][1];
+    // 46 % → 27 % loses 41.3 %, similar videos 50 % → 46 % lose 8 %.
+    expect(turn).toMatchObject({ label: "转折", multiplier: 5.16 });
+    // Had it lost people like similar videos, everyone after it would be that many more.
+    expect(turn.gain).toBeCloseTo((0.46 * (0.46 / 0.5)) / 0.27 - 1, 3);
+    expect(analysis.moments[0]).toMatchObject({ label: "反转", kept: 0.3, keptBenchmark: 0.48 });
+    expect(analysis.keptVsBenchmark).toBe(0.49);
+  });
+
+  it("reads hourly views into totals by age, by day and in waves", () => {
+    const value = emptyReview("w");
+    applyOperations(value, [
+      postOperation.parse({ op: "post", platform: "抖音", postedAt: "2026-10-07T15:00:00Z" }),
+      seriesOperation.parse({ op: "series", post: "p1", key: "views", start: "2026-10-07T15:00:00Z", values: hourly }),
+      seriesOperation.parse({ op: "series", post: "p1", key: "views:抖音精选", start: "2026-10-07T15:00:00Z", values: hourly.map(() => 1) }),
+    ]);
+    const flow = flowAnalysis(value, value.posts[0]);
+    expect(flow.firstHours).toEqual([{ hours: 24, views: 17 * 10 + 7 * 400 }]);
+    expect(flow.daily.map((item) => item.date)).toEqual(["2026-10-07", "2026-10-08", "2026-10-09"]);
+    expect(flow.waves).toHaveLength(1);
+    expect(flow.waves[0]).toMatchObject({ views: 7 * 400, peak: { views: 400 } });
+    expect(flow.channels).toEqual([{ name: "抖音精选", views: 30, share: 30 / flow.total }]);
+  });
+
+  it("takes segments from the work: layers, shots and lyrics of a cut song", async () => {
+    expect(parseLrc("[ar:x]\n[00:01.00]one\n[00:03.50][00:09.00]two\n[00:05]")).toEqual([
+      { time: 1, text: "one" },
+      { time: 3.5, text: "two" },
+      { time: 9, text: "two" },
+    ]);
+    const files = {
+      "visual.json": JSON.stringify({
+        clips: [
+          { id: "a", name: "第一幕", start: 0, duration: 6 },
+          { id: "lyrics", start: 0, duration: 15 },
+        ],
+      }),
+      "audio.json": JSON.stringify({
+        sources: [{ id: "song", kind: "file", src: "films/work-x/music/song.flac" }],
+        // The song from 0 s, then cut to its 8th second at 5 s; a muffled copy on another track.
+        clips: [
+          { id: "c1", track: "music", source: "song", start: 0, duration: 5, offset: 0 },
+          { id: "c2", track: "music", source: "song", start: 5, duration: 10, offset: 8 },
+          { id: "c3", track: "muffled", source: "song", start: 4, duration: 1, offset: 4 },
+        ],
+      }),
+      "public/music/song.lrc": "[00:01.00]one\n[00:03.50]two\n[00:07.00]three\n[00:09.00]four",
+    };
+    const segments = await workSegments({
+      meta: {
+        duration: 15,
+        beats: [
+          { at: 0, title: "开场" },
+          { at: 6, title: "转折" },
+        ],
+      },
+      read: async (file) => files[file] ?? null,
+    });
+    expect(segments.filter((item) => item.kind === "图层")).toEqual([{ kind: "图层", start: 0, end: 6, label: "第一幕" }]);
+    expect(segments.filter((item) => item.kind === "镜头").map((item) => [item.start, item.end, item.label])).toEqual([
+      [0, 6, "开场"],
+      [6, 15, "转折"],
+    ]);
+    expect(segments.filter((item) => item.kind === "歌词").map((item) => [item.start, item.end, item.label, item.songTime])).toEqual([
+      [1, 3.5, "one", 1],
+      [3.5, 5, "two", 3.5],
+      [5, 6, "three", 7],
+      [6, 11, "four", 9],
+    ]);
+    // Two works with the same song, line by line.
+    const row = (work, multipliers) => ({
+      work,
+      post: "p1",
+      title: work,
+      platform: "抖音",
+      lyrics: multipliers.map(([songTime, label, multiplier]) => ({ songTime, label, multiplier })),
+    });
+    const table = lyricsText([
+      row("原版", [
+        [1, "one", 1.2],
+        [9, "four", 3.3],
+      ]),
+      row("重置版", [[9, "four", 3.47]]),
+    ]);
+    expect(table).toContain("| 9 | four | ×3.3 | ×3.47 |");
+    expect(table).not.toContain("| one |");
   });
 });
 
@@ -204,6 +418,7 @@ describe("reviews in the studio and for the AI", () => {
     return { status: response.status, body: await response.json().catch(() => null) };
   };
   const tool = (name, args) => call(`/api/tools/${name}`, { method: "POST", body: args });
+  const branches = async () => (await git(app.services.repos.dir("local"), ["branch", "--list", "frame/reviews"])).trim();
 
   beforeAll(async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-reviews-"));
@@ -225,15 +440,16 @@ describe("reviews in the studio and for the AI", () => {
       },
     });
     expect((await call(`/api/works/local/${work.id}/publish`, { method: "POST" })).status).toBe(200);
-    // Reading creates nothing: there is no reviews branch yet.
+    // Reading, also the versions, creates nothing: there is no reviews branch yet.
     expect((await tool("review_read", { work: work.id })).body.text).toContain("还没有发布记录");
-    expect((await git(app.services.repos.dir("local"), ["branch", "--list", "frame/reviews"])).trim()).toBe("");
+    expect((await call("/api/repos/local/reviews/history")).body).toEqual([]);
+    expect((await call("/api/repos/local/reviews/status")).body.files).toEqual([]);
+    expect((await call("/api/repos/local/reviews/remote")).body).toEqual({ state: "unknown" });
+    expect(await branches()).toBe("");
 
-    const uploaded = await call(`/api/repos/local/reviews/works/${work.id}/upload?name=${encodeURIComponent("抖音 近7天.csv")}`, {
-      method: "POST",
-      raw: Buffer.from("﻿日期,播放量,点赞\n2026-10-15,12034,830\n"),
-    });
-    expect(uploaded.body).toEqual({ path: "raw/抖音 近7天.csv", size: expect.any(Number) });
+    const csv = Buffer.from("﻿日期,播放量,点赞\n2026-10-15,12034,830\n");
+    const uploaded = await call(`/api/repos/local/reviews/works/${work.id}/upload?name=${encodeURIComponent("抖音 近7天.csv")}`, { method: "POST", raw: csv });
+    expect(uploaded.body).toEqual({ path: "raw/抖音 近7天.csv", size: csv.length, sha256: createHash("sha256").update(csv).digest("hex") });
     expect((await tool("review_read", { work: work.id, file: "raw/抖音 近7天.csv" })).body.text).toContain("2026-10-15,12034,830");
 
     const written = await tool("review_write", {
@@ -263,9 +479,9 @@ describe("reviews in the studio and for the AI", () => {
     expect(written.body.text).toContain("原始文件保持原样");
 
     const read = await tool("review_read", { work: work.id });
-    expect(read.body.text).toContain("p1 抖音「夏日海报」2026-10-08 发布");
-    expect(read.body.text).toContain("播放 12,034｜点赞 830（6.9%）");
-    expect(read.body.text).toContain("开头 3 秒流失 38%");
+    expect(read.body.text).toContain("p1 抖音「夏日海报」2026-10-08 20:00（北京时间）发布");
+    expect(read.body.text).toContain("播放 1.2 万｜点赞 830（6.9%）");
+    expect(read.body.text).toContain("开头 3 秒还在 62%");
     expect(read.body.text).toContain("（镜头「产品特写」）");
     expect(read.body.text).toContain("raw/抖音 近7天.csv（已录入）");
     expect(read.body.text).toContain("复盘.md（夏日海报复盘）");
@@ -295,7 +511,8 @@ describe("reviews in the studio and for the AI", () => {
     // The studio's view of it, and the AI's other places.
     const detail = (await call(`/api/repos/local/reviews/works/${work.id}`)).body;
     expect(detail.summary.p1.metrics).toMatchObject({ views: 12034, likeRate: 830 / 12034 });
-    expect(detail.analyses.p1.opening.lost).toBe(0.38);
+    expect(detail.analyses.p1.retention.opening.lost).toBe(0.38);
+    expect(detail.segments.map((segment) => segment.label)).toEqual(["开场", "产品特写"]);
     expect((await tool("work_context", { work: work.id })).body.data.reviews.posts[0]).toMatchObject({ id: "p1", platform: "抖音" });
     const opened = await app.services.openWork(work.id, "local");
     expect(fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8")).toContain("这个作品已经发布到抖音，记录了 1 次数据");
@@ -313,8 +530,8 @@ describe("reviews in the studio and for the AI", () => {
       ],
     });
     const compared = await tool("reviews_compare", { work: work.id, tags: ["促销"], columns: ["views", "likeRate"] });
-    expect(compared.body.text).toContain(`| ▶ 夏日海报 ${work.id} | 抖音 | 2026-10-08 | 12,034 | 6.9% |`);
-    expect(compared.body.text).toContain(`| 秋日海报 ${other.id} | 抖音 | 2026-09-01 | 6,000 | 5% |`);
+    expect(compared.body.text).toContain(`| ▶ 夏日海报 ${work.id} | 抖音 | 2026-10-08 20:00 | 12,034 | 6.9% |`);
+    expect(compared.body.text).toContain(`| 秋日海报 ${other.id} | 抖音 | 2026-09-01 20:00 | 6,000 | 5% |`);
     expect(compared.body.text).toContain("本作品（抖音）：播放 12,034，是中位数的 1.33 倍");
     expect((await tool("reviews_compare", { work: work.id, tags: ["别的"] })).body.text).toContain("没有符合条件的发布记录");
     const latestRows = (await call("/api/reviews/compare?checkpoint=latest&curves=1")).body.rows;
@@ -322,10 +539,69 @@ describe("reviews in the studio and for the AI", () => {
     expect(latestRows.find((row) => row.work === work.id).curve).toHaveLength(51);
   });
 
+  it("imports a Douyin export: retention against similar videos, hourly views, sources, comments", async () => {
+    const work = (await call("/api/works", { method: "POST", body: { title: "生日", duration: 15 } })).body;
+    await call(`/api/works/local/${work.id}`, {
+      method: "PATCH",
+      body: {
+        beats: [
+          { at: 0, title: "开场", detail: "" },
+          { at: 6, title: "转折", detail: "" },
+          { at: 8, title: "结尾", detail: "" },
+        ],
+      },
+    });
+    for (const [name, data] of Object.entries(exports))
+      expect(
+        (
+          await call(`/api/repos/local/reviews/works/${work.id}/upload?name=${encodeURIComponent(name)}&folder=2026-10-09`, {
+            method: "POST",
+            raw: Buffer.from(data),
+          })
+        ).body.path,
+      ).toBe(`raw/2026-10-09/${name}`);
+    const preview = await tool("review_import", { work: work.id, folder: "raw/2026-10-09", dryRun: true });
+    expect(preview.body.text).toContain("会导入抖音的数据到 新的发布记录（发布时间 2026-10-07 23:00，统计到 2026-10-09 04:00，北京时间）");
+    expect(preview.body.text).toContain("- raw/2026-10-09/全部评论.xlsx：全部评论");
+    expect(await tool("review_import", { work: work.id, folder: "raw/2026-10-09" })).toMatchObject({ status: 200 });
+    await tool("review_write", {
+      work: work.id,
+      operations: [
+        { op: "moment", label: "反转", at: 7 },
+        { op: "post", id: "p1", goals: { views: 10000 } },
+      ],
+    });
+
+    const text = (await tool("review_read", { work: work.id })).body.text;
+    expect(text).toContain("p1 抖音「17岁生日 #生日 #s0rrow」2026-10-07 23:00（北京时间）发布");
+    expect(text).toContain("2 秒跳出 30.79%（同类 29%）");
+    expect(text).toContain("5 秒留存 46.46%（同类 53%）");
+    expect(text).toContain("目标：播放 1 万（完成 50%）");
+    expect(text).toContain("首 24 小时 2,970");
+    expect(text).toContain("几波：10-08 16:00–23:00 共 2,800（最高 16:00 400）");
+    expect(text).toContain("抖音精选 30");
+    expect(text).toContain("推荐页 89.8%（92.2%）｜个人主页 5.9%（4.4%）");
+    expect(text).toContain("反转（7 秒）还在 30%（同类 48%）");
+    expect(text).toContain("6–7 秒 ×8.7");
+    expect(text).toContain("按镜头（流失率 ÷ 同类）：0–6 秒 开场");
+    expect(text).toContain("6–8 秒 转折 ×5.16（按同类走结尾多 56.7%）");
+    expect(text).toContain("评论导出：一级评论 2 条、回复 1 条；赞最多：「开飞行模式干嘛」（9 赞）");
+    expect(text).toContain("raw/2026-10-09/流量数据.xlsx（已录入）");
+
+    // At day 1 the hourly data gives exact views, though the only snapshot is at 29 hours.
+    const day1 = await tool("reviews_compare", { work: work.id, checkpoint: "1d", works: [work.id] });
+    expect(day1.body.text).toContain("| 2,970* |");
+    const day2 = (await call("/api/reviews/compare?checkpoint=2d")).body;
+    expect(day2.columns).toContain("moment:反转");
+  });
+
   it("takes original files from an outside AI's computer and forgets a deleted work", async () => {
     const work = (await call("/api/works", { method: "POST", body: { title: "临时作品" } })).body;
-    const link = await tool("upload_link", { work: work.id, files: [{ from: "/Users/me/Downloads/后台截图.png", review: true }] });
-    expect(link.body.text).toContain("复盘资料的 raw/后台截图.png");
+    const link = await tool("upload_link", {
+      work: work.id,
+      files: [{ from: "/Users/me/Downloads/后台截图.png", review: true, path: "raw/2026-10-10/后台截图.png" }],
+    });
+    expect(link.body.text).toContain("复盘资料的 raw/2026-10-10/后台截图.png");
     const png = await (
       await import("sharp")
     )
@@ -333,8 +609,8 @@ describe("reviews in the studio and for the AI", () => {
       .png()
       .toBuffer();
     const put = await fetch(link.body.data.uploads[0].url, { method: "PUT", body: png });
-    expect(await put.json()).toMatchObject({ ok: true, path: "raw/后台截图.png" });
-    const image = await tool("review_read", { work: work.id, file: "raw/后台截图.png" });
+    expect(await put.json()).toMatchObject({ ok: true, path: "raw/2026-10-10/后台截图.png", sha256: createHash("sha256").update(png).digest("hex") });
+    const image = await tool("review_read", { work: work.id, file: "raw/2026-10-10/后台截图.png" });
     expect(image.body.images[0].mimeType).toBe("image/jpeg");
 
     const dir = path.join(app.services.config.dirs.reviews, "local", work.id);

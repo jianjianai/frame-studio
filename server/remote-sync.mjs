@@ -68,7 +68,9 @@ export class RemoteSync {
   async fetch(scope) {
     const repo = this.services.repos.get(scope.repo);
     try {
-      await git(repo.dir, ["fetch", "--quiet", "origin", `+refs/heads/${scope.branch}:refs/remotes/origin/${scope.branch}`], { env: this.services.repos.env(repo) });
+      await git(repo.dir, ["fetch", "--quiet", "origin", `+refs/heads/${scope.branch}:refs/remotes/origin/${scope.branch}`], {
+        env: this.services.repos.env(repo),
+      });
       return true;
     } catch (error) {
       if (/couldn't find remote ref|not our ref/i.test(error.stderr || error.message)) return false;
@@ -83,7 +85,10 @@ export class RemoteSync {
       const ahead = Number((await git(repo.dir, ["rev-list", "--count", `refs/heads/${scope.branch}`]).catch(() => "0")).trim());
       return { ahead, behind: 0, onGitHub: false };
     }
-    const [ahead, behind] = (await git(repo.dir, ["rev-list", "--left-right", "--count", `refs/heads/${scope.branch}...${remote}`])).trim().split(/\s+/).map(Number);
+    const [ahead, behind] = (await git(repo.dir, ["rev-list", "--left-right", "--count", `refs/heads/${scope.branch}...${remote}`]))
+      .trim()
+      .split(/\s+/)
+      .map(Number);
     return { ahead, behind, onGitHub: true };
   }
 
@@ -99,7 +104,13 @@ export class RemoteSync {
         return this.set(scope, { state: "synced", ahead: 0, behind: 0 });
       } catch (error) {
         if (/rejected|non-fast-forward|fetch first/i.test(error.stderr || error.message)) return this.compare(scope, { bringIn: false });
-        return this.set(scope, { state: "error", message: `自动推送到 GitHub 失败：${String(error.stderr || error.message).trim().split("\n").pop()}` });
+        return this.set(scope, {
+          state: "error",
+          message: `自动推送到 GitHub 失败：${String(error.stderr || error.message)
+            .trim()
+            .split("\n")
+            .pop()}`,
+        });
       }
     });
   }
@@ -138,7 +149,13 @@ export class RemoteSync {
       }
       return this.set(scope, { state: "behind", ahead, behind });
     } catch (error) {
-      return this.set(scope, { state: "error", message: `无法连接 GitHub：${String(error.stderr || error.message).trim().split("\n").pop()}` });
+      return this.set(scope, {
+        state: "error",
+        message: `无法连接 GitHub：${String(error.stderr || error.message)
+          .trim()
+          .split("\n")
+          .pop()}`,
+      });
     }
   }
 
@@ -153,7 +170,9 @@ export class RemoteSync {
       const repo = repos.get(id);
       try {
         await repos.fetch(id);
-        const heads = (await git(repo.dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads/works/", "refs/heads/frame/"])).split("\n").filter(Boolean);
+        const heads = (await git(repo.dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads/works/", "refs/heads/frame/"]))
+          .split("\n")
+          .filter(Boolean);
         for (const branch of heads) {
           const scope = { repo: id, branch };
           const { ahead, behind } = await this.counts(scope);
@@ -184,7 +203,9 @@ export class RemoteSync {
         return { ok: true };
       } catch (error) {
         // "Your local changes to the following files would be overwritten": name them.
-        const files = [...String(error.stderr || "").matchAll(/^\s+(\S.*)$/gm)].map((match) => match[1].trim()).filter((file) => !/^(Please|Aborting)/.test(file));
+        const files = [...String(error.stderr || "").matchAll(/^\s+(\S.*)$/gm)]
+          .map((match) => match[1].trim())
+          .filter((file) => !/^(Please|Aborting)/.test(file));
         return { ok: false, files };
       } finally {
         if (scope.slug && works.published(scope)) works.lockFiles(scope.root, true);
@@ -232,12 +253,12 @@ export function remoteSyncPlugin(services) {
   later.unref?.();
   services.closers.push(() => (clearTimeout(first), clearInterval(later)));
 
-  // A work, and the repository's experience, material library and review branches.
+  // A work, and the repository's experience, material library and review branches (null: no reviews yet).
   const scopes = {
     work: (params) => services.openWork(params.id, params.repo),
     experience: (params) => services.experience.scope(params.repo),
     materials: (params) => services.materials.scope(params.repo),
-    reviews: (params) => services.reviews.scope(params.repo),
+    reviews: (params) => services.reviews.scopeIfAny(params.repo),
   };
   const bases = {
     work: "/api/works/:repo/:id/remote",
@@ -246,8 +267,18 @@ export function remoteSyncPlugin(services) {
     reviews: "/api/repos/:repo/reviews/remote",
   };
   for (const [kind, base] of Object.entries(bases)) {
-    router.get(base, async ({ params }) => sync.get(await scopes[kind](params)) ?? { state: "unknown" });
-    router.post(`${base}/check`, async ({ params }) => sync.check(await scopes[kind](params)));
-    router.post(`${base}/settle`, async ({ params, req }) => sync.settle(await scopes[kind](params), (await readJson(req)).strategy));
+    router.get(base, async ({ params }) => {
+      const scope = await scopes[kind](params);
+      return (scope && sync.get(scope)) ?? { state: "unknown" };
+    });
+    router.post(`${base}/check`, async ({ params }) => {
+      const scope = await scopes[kind](params);
+      return scope ? sync.check(scope) : { state: "unknown" };
+    });
+    router.post(`${base}/settle`, async ({ params, req }) => {
+      const scope = await scopes[kind](params);
+      if (!scope) throw problem(404, "还没有这个分支", "NOT_FOUND");
+      return sync.settle(scope, (await readJson(req)).strategy);
+    });
   }
 }

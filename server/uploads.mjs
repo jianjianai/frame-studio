@@ -41,9 +41,21 @@ export function uploadsPlugin(services) {
         .array(
           z.strictObject({
             from: z.string().max(1000).optional().describe("你电脑上的这个文件（绝对路径），写进返回的 curl 命令"),
-            path: z.string().min(1).max(300).optional().describe("放到哪里：作品里写 public/…（例如 public/img/logo.png）；素材库里写库内路径。不写时作品里放 public/imports/<文件名>，素材库里放库的根目录"),
+            path: z
+              .string()
+              .min(1)
+              .max(300)
+              .optional()
+              .describe(
+                "放到哪里：作品里写 public/…（例如 public/img/logo.png）；素材库里写库内路径。不写时作品里放 public/imports/<文件名>，素材库里放库的根目录",
+              ),
             library: z.string().max(60).optional().describe("放进这个素材库（不写则放进作品）"),
-            review: z.boolean().default(false).describe("放进作品复盘资料的 raw/（平台导出的表格、后台截图），之后用 review_read 读取"),
+            review: z
+              .boolean()
+              .default(false)
+              .describe(
+                "放进作品复盘资料的 raw/（平台导出的表格、后台截图；同一次导出的放进同一个文件夹，path 写 raw/<导出日期>/<文件名>），之后用 review_import 导入或 review_read 读取",
+              ),
             replace: z.boolean().default(false).describe("同名文件已存在时替换（默认另起名字）"),
             source: z.string().max(300).optional(),
             license: z.string().max(300).optional(),
@@ -67,8 +79,8 @@ export function uploadsPlugin(services) {
         if (!file.path) throw problem(400, "每个文件要写 from（你电脑上的文件）或 path（放到作品或素材库的哪里）");
         if (file.review) {
           if (file.library) throw problem(400, "review 和 library 只能选一个");
-          // Original files sit directly in raw/ under their own name.
-          file.path = `raw/${file.path.split("/").pop()}`;
+          // Original files sit in raw/ (an export's files together in a folder) under their own name.
+          file.path = file.path.startsWith("raw/") ? file.path : `raw/${file.path.split("/").pop()}`;
         } else if (file.library) {
           const dir = await services.materials.dir(work.repo);
           services.materials.libraryOf(dir, file.library);
@@ -102,10 +114,18 @@ export function uploadsPlugin(services) {
     links.delete(params.token);
     if (link.review) {
       const work = await services.openWork(link.id, link.repo);
-      return { ok: true, ...(await services.reviews.putRaw(work, link.path.slice(4), req, { replace: link.replace })) };
+      const parts = link.path.slice(4).split("/");
+      const saved = await services.reviews.putRaw(work, parts.pop(), req, { replace: link.replace, folder: parts.join("/") });
+      return { ok: true, ...saved };
     }
     if (link.library) {
-      const saved = await services.materials.put(link.repo, link.library, link.path, { stream: req }, { source: link.source, license: link.license, replace: link.replace });
+      const saved = await services.materials.put(
+        link.repo,
+        link.library,
+        link.path,
+        { stream: req },
+        { source: link.source, license: link.license, replace: link.replace },
+      );
       const info = await probe(await services.materials.file(link.repo, {}, saved.ref)).catch(() => ({}));
       return { ok: true, ...saved, ...info };
     }
