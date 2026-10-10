@@ -643,6 +643,12 @@ describe("reviews in the studio and for the AI", () => {
       raw: Buffer.from(exports["流量数据.xlsx"]),
     });
     expect(twice.body).toMatchObject({ path: "raw/2026-10-09/流量数据.xlsx", duplicate: true });
+    const elsewhere = await call(`/api/repos/local/reviews/works/${work.id}/upload?name=x.xlsx&folder=2026-10-30`, {
+      method: "POST",
+      raw: Buffer.from(exports["流量来源.xlsx"]),
+    });
+    expect(elsewhere.body).toMatchObject({ path: "raw/2026-10-09/流量来源.xlsx", duplicate: true });
+    expect(fs.existsSync(path.join(app.services.config.dirs.reviews, "local", work.id, "raw", "2026-10-30"))).toBe(false);
     expect((await tool("review_import", { work: work.id, files: ["2026-10-09/流量数据.xlsx"] })).body.text).toContain("这次没有变化");
     expect((await tool("review_read", { work: work.id })).body.text).toContain("反转（7 秒）还在 30%（同类 48%）");
     // The next export dropped into the same folder is not mixed in.

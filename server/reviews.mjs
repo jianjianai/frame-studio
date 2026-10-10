@@ -497,6 +497,9 @@ export class Reviews {
           const other = `${RAW}/${entry.path}`;
           if (entry.type !== "file" || other === target || entry.size !== saved.size || (await sha256Of(path.join(root, other))) !== sha256) continue;
           fs.rmSync(path.join(root, target));
+          // And the folder made for it, when that was all it held.
+          for (let dir = path.dirname(path.join(root, target)); dir !== path.join(root, RAW) && !fs.readdirSync(dir).length; dir = path.dirname(dir))
+            fs.rmdirSync(dir);
           return { message: null, result: { path: other, size: saved.size, sha256, duplicate: true } };
         }
       return { message: `上传原始文件 ${target.slice(RAW.length + 1)}`, result: { path: target, size: saved.size, sha256 } };
