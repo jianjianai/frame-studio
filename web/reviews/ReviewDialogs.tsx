@@ -461,7 +461,7 @@ export function ImportDialog({
     >
       <p className="small-text">认出了：{parts.join("、")}。</p>
       {preview.unchanged && <p className="small-text">这些文件之前已经导入过，再导入不会有变化。</p>}
-      {!preview.unchanged && preview.replaces && <p className="small-text">这条发布记录在这个时间已经有数据，导入会替换它。</p>}
+      {!preview.unchanged && preview.updates && <p className="small-text">这条发布记录在这个时间已经有数据，导入会用这些文件里的数更新它。</p>}
       <div className="import-files">
         {preview.recognized.map((item) => (
           <div key={item.path} className="small-text">

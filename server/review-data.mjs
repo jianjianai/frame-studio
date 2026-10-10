@@ -421,8 +421,10 @@ function applyOne(review, item, defaults, notes = []) {
     if (existing && !item.replace) {
       for (const [key, value] of Object.entries(given))
         existing[key] = key === "metrics" || key === "benchmark" ? { ...(existing[key] ?? {}), ...value } : value;
-      if (item.source && !(existing.source ?? "").split("、").includes(item.source))
-        existing.source = [existing.source, item.source].filter(Boolean).join("、");
+      // Sources are lists of files: add the ones not named yet.
+      const known = (existing.source ?? "").split("、").filter(Boolean);
+      const added = (item.source ?? "").split("、").filter((entry) => entry && !known.includes(entry));
+      if (added.length) existing.source = [...known, ...added].join("、");
     } else {
       if (existing) review.snapshots.splice(review.snapshots.indexOf(existing), 1);
       review.snapshots.push(cleanSnapshot({ post: post.id, at: item.at, source: item.source, metrics: {}, ...given }));

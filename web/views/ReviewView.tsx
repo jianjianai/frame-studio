@@ -190,15 +190,16 @@ export function ReviewView() {
         // An upload's files stay together: one folder per day, like one export from the creator center.
         const folder = today();
         const saved: string[] = [];
-        for (const file of files)
-          saved.push(
-            (
-              await api<{ path: string }>(`${workBase}/upload?name=${encodeURIComponent(file.name)}&folder=${folder}`, {
-                raw: file,
-                contentType: file.type || "application/octet-stream",
-              })
-            ).path,
-          );
+        const known: string[] = [];
+        for (const file of files) {
+          const result = await api<{ path: string; duplicate?: boolean }>(`${workBase}/upload?name=${encodeURIComponent(file.name)}&folder=${folder}`, {
+            raw: file,
+            contentType: file.type || "application/octet-stream",
+          });
+          saved.push(result.path);
+          if (result.duplicate) known.push(`${file.name}（和 ${result.path.replace(/^raw\//, "")} 相同）`);
+        }
+        if (known.length) toast(`已经有这些文件，没有重复保存：${known.join("、")}`, "info");
         await load();
         const tables = saved.filter((path) => /\.(xlsx|xlsm|csv|tsv)$/i.test(path));
         if (tables.length) await offerImport(tables, true);

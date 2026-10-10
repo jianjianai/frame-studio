@@ -170,8 +170,8 @@ export interface ImportPreview {
   series: string[];
   sources: number;
   comments: { threads: number; replies: number } | null;
-  /** The post already has numbers at this time: they are replaced. */
-  replaces: boolean;
+  /** The post already has numbers at this time: these files update them. */
+  updates: boolean;
   /** The files were imported before: nothing would change. */
   unchanged: boolean;
 }

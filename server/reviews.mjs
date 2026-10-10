@@ -447,7 +447,6 @@ export class Reviews {
         ...(parsed.retentionBenchmark ? { retentionBenchmark: parsed.retentionBenchmark } : {}),
         ...(parsed.sources ? { sources: parsed.sources } : {}),
         ...(parsed.comments ? { comments: parsed.comments } : {}),
-        replace: true,
       }),
       ...parsed.series.map((series) => seriesOperation.parse({ op: "series", post: id, ...series })),
     ];
@@ -468,7 +467,7 @@ export class Reviews {
       series: parsed.series.map((series) => series.key),
       sources: parsed.sources?.length ?? 0,
       comments: parsed.comments ? { threads: parsed.comments.threads, replies: parsed.comments.replies } : null,
-      replaces: Boolean(post && review.snapshots.some((item) => item.post === post.id && item.at === new Date(when).toISOString())),
+      updates: Boolean(post && review.snapshots.some((item) => item.post === post.id && item.at === new Date(when).toISOString())),
       unchanged: Boolean(post) && formatReview(trial) === formatReview(review),
     };
     if (dryRun || preview.unchanged) return { preview };
@@ -492,6 +491,14 @@ export class Reviews {
       const saved = await writeStream(root, target, stream, { overwrite: replace, limit: RAW_LIMIT });
       // The hash lets whoever uploaded check the file arrived whole.
       const sha256 = await sha256Of(path.join(root, target));
+      // The same file uploaded again (people export twice, drop twice): keep the one there, with its import.
+      if (!replace)
+        for (const entry of tree(path.join(root, RAW))) {
+          const other = `${RAW}/${entry.path}`;
+          if (entry.type !== "file" || other === target || entry.size !== saved.size || (await sha256Of(path.join(root, other))) !== sha256) continue;
+          fs.rmSync(path.join(root, target));
+          return { message: null, result: { path: other, size: saved.size, sha256, duplicate: true } };
+        }
       return { message: `上传原始文件 ${target.slice(RAW.length + 1)}`, result: { path: target, size: saved.size, sha256 } };
     });
   }
@@ -925,7 +932,7 @@ export function reviewsPlugin(services) {
       const target = `${preview.post ?? "新的发布记录"}（${preview.post ? "" : `发布时间 ${beijing(preview.postedAt)}，`}统计到 ${beijing(preview.at)}，北京时间）`;
       const head = preview.unchanged
         ? `这些文件之前已经导入过（${preview.post} 统计到 ${beijing(preview.at)} 的数据），${args.dryRun ? "再导入" : "这次"}没有变化。`
-        : `${args.dryRun ? "会导入" : "已导入"}${preview.platform}的数据到 ${target}${preview.replaces ? "，替换这个时间已有的数据" : ""}：`;
+        : `${args.dryRun ? "会导入" : "已导入"}${preview.platform}的数据到 ${target}${preview.updates ? "，这个时间已有的数据用这些文件里的数更新" : ""}：`;
       const lines = [
         head,
         ...(preview.unchanged ? [] : preview.recognized.map((item) => `- ${item.path}：${item.parts.join("、")}`)),

@@ -637,6 +637,14 @@ describe("reviews in the studio and for the AI", () => {
     expect((await tool("review_import", { work: work.id, folder: "2026-10-09" })).body.text).toContain(
       "这些文件之前已经导入过（p1 统计到 2026-10-09 04:00 的数据），这次没有变化。",
     );
+    // A file uploaded again is the one already there; importing it alone keeps the rest of its export.
+    const twice = await call(`/api/repos/local/reviews/works/${work.id}/upload?name=${encodeURIComponent("流量数据.xlsx")}&folder=2026-10-09`, {
+      method: "POST",
+      raw: Buffer.from(exports["流量数据.xlsx"]),
+    });
+    expect(twice.body).toMatchObject({ path: "raw/2026-10-09/流量数据.xlsx", duplicate: true });
+    expect((await tool("review_import", { work: work.id, files: ["2026-10-09/流量数据.xlsx"] })).body.text).toContain("这次没有变化");
+    expect((await tool("review_read", { work: work.id })).body.text).toContain("反转（7 秒）还在 30%（同类 48%）");
     // The next export dropped into the same folder is not mixed in.
     await call(`/api/repos/local/reviews/works/${work.id}/upload?name=${encodeURIComponent("流量数据.xlsx")}&folder=2026-10-09`, {
       method: "POST",
