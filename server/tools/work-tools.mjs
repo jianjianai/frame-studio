@@ -380,7 +380,10 @@ export function registerWorkTools(registry) {
         changes.posterTime = posterTime;
       }
       const meta = works.meta(work);
-      const after = meta.ok ? `。现在：${meta.meta.title}，${meta.meta.duration} 秒，${meta.meta.fps} fps` : "";
+      const tempo = meta.ok && meta.meta.tempo;
+      const after = meta.ok
+        ? `。现在：${meta.meta.title}，${meta.meta.duration} 秒，${meta.meta.fps} fps${tempo ? `，节拍 ${tempo.bpm} BPM（第一小节第一拍 ${tempo.firstBeat} 秒，每小节 ${tempo.beatsPerBar} 拍）` : ""}`
+        : "";
       return asJson(changes, `已更新 ${Object.keys(changes).join("、") || "（无改动）"}${after}`);
     },
   });

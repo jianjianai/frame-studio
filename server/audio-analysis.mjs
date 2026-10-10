@@ -83,6 +83,25 @@ export function loudness(left, right, rate, { start = 0, window = 0.5 }) {
   };
 }
 
+/**
+ * Windows merged into stretches of similar loudness (within 2 dB of the stretch's first
+ * window), for reading: a steady song is a few lines, a fade or a drop still shows.
+ */
+export function loudnessStretches(windows, window) {
+  const stretches = [];
+  for (const item of windows) {
+    const silent = item.rmsDb < -60;
+    const last = stretches.at(-1);
+    if (last && last.silent === silent && (silent || Math.abs(item.rmsDb - last.first) <= 2)) {
+      last.end = round(item.time + window);
+      last.peakDb = Math.max(last.peakDb, item.peakDb);
+      last.sum += item.rmsDb;
+      last.n++;
+    } else stretches.push({ start: item.time, end: round(item.time + window), first: item.rmsDb, sum: item.rmsDb, n: 1, peakDb: item.peakDb, silent });
+  }
+  return stretches.map(({ start, end, sum, n, peakDb, silent }) => ({ start, end, rmsDb: Math.round((sum / n) * 10) / 10, peakDb, silent }));
+}
+
 let queue = Promise.resolve(); // one model run at a time: each takes several cores
 
 /**
@@ -144,15 +163,67 @@ function runBeatThis(mono, rate, modelsDir) {
   });
 }
 
-/** Tempo from the median beat interval; beats per bar from the beats between downbeats. */
+const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
+
+/**
+ * Stretches of steady tempo, each fit by least squares (beat k at `first` + k × `interval`):
+ * the model's beats are on a 20 ms grid, so single intervals (and their median) are too coarse
+ * for a BPM that stays in step for a minute. A local tempo more than 3 % off starts a new
+ * stretch; a missed beat counts as two intervals, not as a change.
+ */
+export function tempoSegments(beats) {
+  if (beats.length < 4) return [];
+  const raw = beats.slice(1).map((time, index) => time - beats[index]);
+  // A missed beat is one interval twice as long, not a slower tempo.
+  const typical = median(raw);
+  const intervals = raw.map((value) => value / Math.max(1, Math.round(value / typical)));
+  // Tempo before and after each beat: means of 8 intervals average out the model's 20 ms steps.
+  const mean = (values) => values.reduce((a, b) => a + b, 0) / values.length;
+  const change = intervals.map((_, index) =>
+    index < 8 || index > intervals.length - 8 ? 0 : Math.abs(Math.log(mean(intervals.slice(index, index + 8)) / mean(intervals.slice(index - 8, index)))),
+  );
+  const cuts = [0];
+  for (let index = 0; index < change.length; index++) {
+    if (change[index] <= 0.03) continue;
+    // A run of changed values: the tempo turns where the change is largest.
+    let last = index;
+    while (last + 1 < change.length && change[last + 1] > 0.03) last++;
+    let turn = index;
+    for (let k = index; k <= last; k++) if (change[k] > change[turn]) turn = k;
+    if (turn - cuts.at(-1) >= 4) cuts.push(turn);
+    index = last;
+  }
+  const bounds = cuts.map((from, index) => [from, cuts[index + 1] ?? beats.length - 1]);
+  return bounds
+    .filter(([from, to]) => to - from >= 3)
+    .map(([from, to]) => {
+      const part = beats.slice(from, to + 1);
+      const step = median(part.slice(1).map((time, index) => time - part[index]));
+      // Beat numbers counted interval by interval (a missed beat skips one): rounding whole
+      // spans by the coarse step would drift over a long stretch.
+      const ks = [0];
+      for (let index = 1; index < part.length; index++) ks.push(ks[index - 1] + Math.max(1, Math.round((part[index] - part[index - 1]) / step)));
+      const n = part.length;
+      const mk = ks.reduce((a, b) => a + b, 0) / n;
+      const mt = part.reduce((a, b) => a + b, 0) / n;
+      const slope = ks.reduce((sum, k, index) => sum + (k - mk) * (part[index] - mt), 0) / ks.reduce((sum, k) => sum + (k - mk) ** 2, 0);
+      const first = mt - slope * mk;
+      const maxError = Math.max(...part.map((time, index) => Math.abs(time - (first + ks[index] * slope))));
+      return { start: part[0], end: part.at(-1), count: n, interval: slope, bpm: Math.round((60 / slope) * 100) / 100, first, maxError: Math.round(maxError * 1000) / 1000 };
+    });
+}
+
+/** Tempo (of the longest steady stretch) and its stretches; beats per bar from the beats between downbeats. */
 export function describeRhythm(beats, downbeats) {
-  const median = (values) => [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
   const intervals = beats.slice(1).map((time, index) => time - beats[index]);
+  const segments = tempoSegments(beats);
+  const main = [...segments].sort((a, b) => b.count - a.count)[0];
   const counts = downbeats.slice(1).map((end, index) => beats.filter((time) => time >= downbeats[index] - 0.03 && time < end - 0.03).length);
   const tally = new Map();
   for (const count of counts) tally.set(count, (tally.get(count) ?? 0) + 1);
   const beatsPerBar = [...tally].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
-  return { bpm: intervals.length ? Math.round((60 / median(intervals)) * 10) / 10 : null, beatsPerBar, beats, downbeats };
+  const bpm = main ? main.bpm : intervals.length ? Math.round((60 / median(intervals)) * 100) / 100 : null;
+  return { bpm, beatsPerBar, segments, beats, downbeats };
 }
 
 /** Average the two channels. */

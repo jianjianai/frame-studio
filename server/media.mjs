@@ -14,7 +14,8 @@ export async function probe(file) {
   const kind = mediaKind(file);
   const info = { kind, mime: mimeType(file), size: stat.size };
   try {
-    if (kind === "image" && path.extname(file).toLowerCase() !== ".svg") {
+    if (kind === "image" && path.extname(file).toLowerCase() === ".svg") Object.assign(info, svgSize(file));
+    else if (kind === "image") {
       const meta = await sharp(file, { animated: true }).metadata();
       Object.assign(info, { width: meta.width, height: meta.pageHeight || meta.height, frames: meta.pages || 1 });
     } else if (kind === "audio" || kind === "video") {
@@ -37,4 +38,33 @@ export async function probe(file) {
   cache.set(key, info);
   if (cache.size > 5000) cache.delete(cache.keys().next().value);
   return info;
+}
+
+/**
+ * An SVG's own size from its root element (width/height, else the viewBox), read as text:
+ * not rendered, so a hostile file costs nothing. Empty when it does not say.
+ */
+export function svgSize(file) {
+  let head = "";
+  try {
+    const fd = fs.openSync(file, "r");
+    const buffer = Buffer.alloc(8192);
+    head = buffer.subarray(0, fs.readSync(fd, buffer, 0, buffer.length, 0)).toString("utf8");
+    fs.closeSync(fd);
+  } catch {
+    return {};
+  }
+  const root = /<svg\b[^>]*>/i.exec(head)?.[0];
+  if (!root) return {};
+  const attribute = (name) => new RegExp(`\\s${name}\\s*=\\s*["']([^"']*)["']`, "i").exec(root)?.[1];
+  const length = (value) => (value && /^\s*[\d.]+\s*(px)?\s*$/.test(value) ? parseFloat(value) : null);
+  let width = length(attribute("width"));
+  let height = length(attribute("height"));
+  const box = attribute("viewBox")?.trim().split(/[\s,]+/).map(Number);
+  if ((!width || !height) && box?.length === 4 && box[2] > 0 && box[3] > 0) {
+    if (width) height = (width * box[3]) / box[2];
+    else if (height) width = (height * box[2]) / box[3];
+    else [width, height] = [box[2], box[3]];
+  }
+  return width > 0 && height > 0 ? { width: Math.round(width), height: Math.round(height) } : {};
 }

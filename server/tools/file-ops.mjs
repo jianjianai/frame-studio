@@ -15,17 +15,30 @@ export const editList = z
   .min(1)
   .max(50);
 
-/** Explain why an exact replacement missed: usually indentation or a stale copy of the file. */
+/**
+ * Explain why an exact replacement missed, showing the file's actual text when it is the same
+ * but for whitespace or quotes (the usual slip), or where the first line is, so the next try
+ * can be right without reading the file again.
+ */
 export function nearMiss(content, oldText, reader) {
-  const squash = (text) => text.replace(/\s+/g, " ").trim();
-  if (squash(content).includes(squash(oldText))) return "忽略空白后能找到：请按文件中的缩进和换行逐字复制。";
-  const first = oldText
-    .split("\n")
-    .find((line) => line.trim())
-    ?.trim();
+  const lineOf = (offset) => content.slice(0, offset).split("\n").length;
+  const show = (text) => (text.length > 600 ? text.slice(0, 600) + "…" : text);
+  // Same words, other whitespace or quote marks.
+  const tokens = oldText.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length) {
+    const pattern = tokens.map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/["'`]/g, "[\"'`]")).join("\\s+");
+    const match = new RegExp(pattern).exec(content);
+    if (match) {
+      const exact = match[0].replace(/\s+/g, " ") === tokens.join(" ");
+      return `${exact ? "空白（缩进、换行）" : "引号或空白"}和文件不一样。文件第 ${lineOf(match.index)} 行起实际是：\n${show(match[0])}\n逐字复制它作为 oldText。`;
+    }
+  }
+  const wanted = oldText.split("\n").filter((line) => line.trim());
   const lines = content.split("\n");
+  const first = wanted[0]?.trim();
   const at = first ? lines.findIndex((line) => line.includes(first)) : -1;
-  if (at >= 0) return `第一行出现在第 ${at + 1} 行，但后面的内容不同；先用 ${reader} 读取最新内容。`;
+  if (at >= 0)
+    return `第一行出现在第 ${at + 1} 行，但后面的内容不同。文件第 ${at + 1}–${Math.min(lines.length, at + wanted.length)} 行是：\n${show(lines.slice(at, at + Math.max(1, wanted.length)).join("\n"))}`;
   return `文件可能已经改变，先用 ${reader} 读取最新内容。`;
 }
 

@@ -268,6 +268,56 @@ describe("tools that save the AI calls", () => {
     expect(describeRhythm([], [])).toMatchObject({ bpm: null, beatsPerBar: null });
   });
 
+  it("shows the file's own text when an edit misses by quotes or whitespace", async () => {
+    const { nearMiss } = await import("../server/tools/file-ops.mjs");
+    const code = 'export function createScene(options) {\n  return make(options, {\n    title: () => import("./title"),\n  });\n}\n';
+    expect(nearMiss(code, "title: () => import('./title'),", "files_batch")).toContain('引号或空白和文件不一样。文件第 3 行起实际是：\ntitle: () => import("./title"),');
+    expect(nearMiss(code, "return make(options, {\ntitle", "files_batch")).toContain("空白（缩进、换行）和文件不一样。文件第 2 行起实际是：\nreturn make(options, {\n    title");
+    expect(nearMiss(code, "return make(options, {\n    subtitle", "files_batch")).toContain("第一行出现在第 2 行，但后面的内容不同。文件第 2–3 行是：");
+    expect(nearMiss(code, "nothing like it", "files_batch")).toContain("先用 files_batch 读取最新内容");
+  });
+
+  it("names the allowed fields when a call has an unknown one", async () => {
+    const { describeIssues } = await import("../server/tools/registry.mjs");
+    const { z } = await import("zod");
+    const schema = z.strictObject({
+      operations: z.array(z.union([z.strictObject({ op: z.literal("add"), clip: z.strictObject({ transform: z.strictObject({ x: z.number().optional(), opacity: z.number().optional() }).optional() }) }), z.strictObject({ op: z.literal("remove"), id: z.string() })])),
+    });
+    const parsed = schema.safeParse({ operations: [{ op: "add", clip: { transform: { scale: 2 } } }] });
+    expect(describeIssues(parsed.error.issues, schema)).toBe("operations.0.clip.transform: 不认识的字段 scale（可用：x、opacity）");
+    const layers = await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "title", patch: { transform: { scale: 1.2 } } }] });
+    expect(layers.body.error.message).toMatch(/不认识的字段 scale（可用：x、y、width、height/);
+  });
+
+  it("finds the exact tempo of each steady stretch from beats on the model's 20 ms grid", async () => {
+    const { tempoSegments, loudnessStretches } = await import("../server/audio-analysis.mjs");
+    const { rhythmText } = await import("../server/tools/preview-tools.mjs");
+    const on20ms = (time) => Math.round(time * 50) / 50;
+    // 118 BPM for 120 beats (one missed), then 98 BPM.
+    const slow = Array.from({ length: 120 }, (_, k) => on20ms(0.04 + k * (60 / 118))).filter((_, k) => k !== 50);
+    const end = 0.04 + 119 * (60 / 118);
+    const beats = [...slow, ...Array.from({ length: 30 }, (_, k) => on20ms(end + (k + 1) * (60 / 98)))];
+    const segments = tempoSegments(beats);
+    expect(segments).toHaveLength(2);
+    expect(Math.abs(segments[0].bpm - 118)).toBeLessThan(0.1);
+    expect(Math.abs(segments[1].bpm - 98)).toBeLessThan(0.3);
+    expect(segments[0].maxError).toBeLessThan(0.03);
+    const text = rhythmText({ beats, downbeats: [0.04, 2.07], beatsPerBar: 4, segments }, { file: false }).join("\n");
+    expect(text).toContain("中途变速，分 2 段");
+    expect(text).toMatch(/tempo: \{ bpm: 11[78](\.\d+)?, firstBeat: 0\.0\d, beatsPerBar: 4 \}/);
+    expect(text).toContain("主段以外的节拍 30 个");
+    // A steady song: the grid, no list of every beat.
+    const steady = tempoSegments(slow.slice(0, 60));
+    expect(rhythmText({ beats: slow.slice(0, 60), downbeats: [0.04], beatsPerBar: 4, segments: steady }, { file: true }).join("\n")).not.toContain("节拍 59 个");
+    // Loudness: similar windows merge, a drop starts a new stretch, silence is its own.
+    const windows = [-8, -8.5, -7.9, -12, -12.4, -80, -80].map((rmsDb, index) => ({ time: index, rmsDb, peakDb: rmsDb + 6 }));
+    expect(loudnessStretches(windows, 1).map((item) => [item.start, item.end, item.silent])).toEqual([
+      [0, 3, false],
+      [3, 5, false],
+      [5, 7, true],
+    ]);
+  });
+
   it("reads documents compactly, edits parts and says where things are", async () => {
     const layers = await tool("layers_get", { work: work.id });
     expect(layers.body.text).toMatch(/\n {2}\{"id":"title"/);

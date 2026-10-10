@@ -45,7 +45,7 @@ export class ToolRegistry {
     if (scope.readOnly && !tool.readOnly) throw problem(403, `只读模式不能调用 ${name}`, "FORBIDDEN");
     const hint = tool.guide ? `。格式见 frame_guide ${tool.guide}` : "";
     const parsed = tool.schema.safeParse(args ?? {});
-    if (!parsed.success) throw problem(400, "参数无效：" + describeIssues(parsed.error.issues) + hint, "INVALID_ARGUMENTS");
+    if (!parsed.success) throw problem(400, "参数无效：" + describeIssues(parsed.error.issues, tool.schema) + hint, "INVALID_ARGUMENTS");
     const ctx = {
       services: this.services,
       scope,
@@ -69,8 +69,12 @@ export class ToolRegistry {
   }
 }
 
-/** Zod issues as one readable line: "operations.0.clip.start: 应为数字；…" (unions report their closest branch). */
-export function describeIssues(issues) {
+/**
+ * Zod issues as one readable line: "operations.0.clip.start: 应为数字；…" (unions report their
+ * closest branch). With the `schema`, an unknown field comes with the fields that are allowed
+ * there, so the next call can be right without looking anything up.
+ */
+export function describeIssues(issues, schema) {
   const lines = [];
   const walk = (list, prefix) => {
     for (const issue of list) {
@@ -79,11 +83,49 @@ export function describeIssues(issues) {
         // The branch with the fewest problems is almost always the one that was meant.
         const best = issue.errors.reduce((a, b) => (b.length < a.length ? b : a));
         walk(best, at);
+      } else if (issue.code === "unrecognized_keys" && schema) {
+        const allowed = fieldsAt(schema, at);
+        lines.push(`${at.join(".") || "(参数)"}: 不认识的字段 ${issue.keys.join("、")}${allowed.length ? `（可用：${allowed.join("、")}）` : ""}`);
       } else lines.push(`${at.join(".") || "(参数)"}: ${issue.message}`);
     }
   };
   walk(issues, []);
   return [...new Set(lines)].slice(0, 12).join("；");
+}
+
+/** The fields of the object a zod schema expects at `path` (through arrays, optionals, unions). */
+export function fieldsAt(schema, path) {
+  const unwrap = (value) => {
+    for (let guard = 0; value && guard < 20; guard++) {
+      const def = value._zod?.def;
+      if (def?.innerType) value = def.innerType;
+      else if (def?.type === "pipe") value = def.in;
+      else if (def?.type === "lazy") value = def.getter();
+      else break;
+    }
+    return value;
+  };
+  const step = (value, key) => {
+    const def = unwrap(value)?._zod?.def;
+    if (!def) return null;
+    if (def.type === "object") return def.shape[key] ?? null;
+    if (def.type === "array") return typeof key === "number" ? def.element : null;
+    if (def.type === "record") return def.valueType;
+    if (def.type === "tuple") return def.items?.[key] ?? null;
+    // A union: the branch that has this key (an object with the field, or an array for an index).
+    if (def.type === "union")
+      for (const option of def.options) {
+        const found = step(option, key);
+        if (found) return found;
+      }
+    return null;
+  };
+  let current = schema;
+  for (const key of path) if (!(current = step(current, key))) return [];
+  const def = unwrap(current)?._zod?.def;
+  if (def?.type === "object") return Object.keys(def.shape);
+  if (def?.type === "union") return [...new Set(def.options.flatMap((option) => (unwrap(option)?._zod?.def?.type === "object" ? Object.keys(unwrap(option)._zod.def.shape) : [])))];
+  return [];
 }
 
 /**
