@@ -4,12 +4,13 @@ import { api, workPath, useServerEvent } from "../lib/api";
 import { useToast } from "../lib/ui";
 import { useWorkbench } from "./store";
 import { assetDrag } from "./assetDrag";
-import { seconds, soundAsset } from "../views/ResourcesPanel";
+import { ENGINE_TAGS, seconds, soundAsset } from "../views/ResourcesPanel";
 
 /** What src/preview/resource.ts exposes (same origin). */
 interface ResourceInfo {
   key: string;
   kind: string;
+  engine: string;
   title: string;
   description?: string;
   usage?: string;
@@ -172,7 +173,8 @@ export function ResourceViewer({ id }: { id: string }) {
           <strong>{info?.title ?? (isSound ? sounds.find((item) => item.key === sound)?.title : key)}</strong>
           <span className="faint">
             {" "}
-            · {info ? KIND_LABELS[info.kind] ?? info.kind : isSound ? "音效" : "资源"} · materials/{ref}
+            · {info ? KIND_LABELS[info.kind] ?? info.kind : isSound ? "音效" : "资源"}
+            {info && ENGINE_TAGS[info.engine] ? ` · ${ENGINE_TAGS[info.engine]}` : ""} · materials/{ref}
           </span>
         </span>
         {info && Object.keys(info.presets).length > 0 && (
@@ -210,7 +212,12 @@ export function ResourceViewer({ id }: { id: string }) {
           <FileCode2 size={13} /> 源码
         </button>
       </div>
-      {info?.description && <div className="material-state faint">{info.description}</div>}
+      {(info?.description || info?.engine === "three") && (
+        <div className="material-state faint">
+          {info.description}
+          {info.engine === "three" ? `${info.description ? " " : ""}（拖动画面旋转视角，滚轮缩放，双击复原）` : ""}
+        </div>
+      )}
       <div className="resource-body">
         <div className="resource-stage">
           <iframe

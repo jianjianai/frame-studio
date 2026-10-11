@@ -35,5 +35,27 @@ export function createScene(options: SceneOptions) {
 ```
 
 - 不要使用 `app.ticker`、`Ticker.shared`；所有状态在返回的函数中按 `t` 设置。
-- 纹理：`await Assets.load(assetUrl("films/<名称>/sprite.png"))`。
+- 纹理：`await Assets.load(assetUrl("films/<名称>/sprite.png"))`，素材库里的图片写 `assetUrl("materials/<库>/<路径>")`。
 - 作为 visual.json 的 scene 图层时，`engine` 写 `"pixi"`。
+- 动作编排可以用 gsap 时间线动画显示对象的属性，在返回的函数里 `timeline.seek(t, true)`（见 `gsap`）。
+
+## 素材库里的 Pixi 资源
+
+粒子、光效、转场这类效果做成素材库代码，所有作品共用：导出一个创建函数（返回一个 `Container` 和 `update(time)`），再声明成资源（`engine: "pixi"`），在「素材 → 资源」里预览、调参数，AI 用 `resources_search` 找到（声明写法见 `resources`）。作品里：
+
+```ts
+import { burst } from "@materials/特效/code/burst";
+
+export function createScene(options: SceneOptions) {
+  return createPixiScene(options, (app) => {
+    const fx = burst({ count: 200 });
+    fx.view.position.set(options.width / 2, options.height / 2);
+    app.stage.addChild(fx.view);
+    return (t) => {
+      fx.update(t);
+    };
+  });
+}
+```
+
+- 资源里的尺寸按调用方给的画面算（参数或 `app.screen`），不要写死某个作品的分辨率。

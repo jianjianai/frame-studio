@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useImperativeHandle, useState, type Ref } from "react";
-import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes, BarChart3 } from "lucide-react";
+import { useCallback, useEffect, useImperativeHandle, useMemo, useState, type Ref } from "react";
+import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes, BarChart3, Box, Globe2, Type } from "lucide-react";
 import { api, formatTime, workPath, experiencePath, useServerEvent, materialsPath } from "../lib/api";
 import { reviewsPath } from "../lib/reviews";
 import { RawViewer } from "../reviews/RawViewer";
@@ -10,6 +10,8 @@ import { PreviewPane } from "./PreviewPane";
 import { CodeEditor } from "./CodeEditor";
 import { DiffEditor } from "./DiffEditor";
 import { ResourceViewer } from "./ResourceViewer";
+import { AssetViewer } from "./AssetViewer";
+import { isLottieText } from "../views/media";
 
 export interface EditorHandle {
   openFile(path: string, options?: { line?: number; preview?: boolean }): void;
@@ -31,7 +33,7 @@ interface Tab {
   /** Path inside its source (sent to the source's file API). */
   file: string;
   source: Source;
-  kind: "text" | "image" | "audio" | "video" | "file" | "diff" | "resource" | "raw";
+  kind: "text" | "image" | "audio" | "video" | "model" | "environment" | "font" | "file" | "diff" | "resource" | "raw";
   title?: string;
   diff?: string;
   content?: string;
@@ -52,9 +54,15 @@ const kindOf = (path: string): Tab["kind"] =>
       ? "audio"
       : /\.(mp4|webm|mov|m4v)$/i.test(path)
         ? "video"
-        : /\.(ts|tsx|js|mjs|jsx|json|md|txt|css|html|glsl|frag|vert|srt|vtt|csv|ya?ml|toml)$/i.test(path)
-          ? "text"
-          : "file";
+        : /\.(glb|gltf|fbx|obj)$/i.test(path)
+          ? "model"
+          : /\.(hdr|exr)$/i.test(path)
+            ? "environment"
+            : /\.(ttf|otf|woff2?)$/i.test(path)
+              ? "font"
+              : /\.(ts|tsx|js|mjs|jsx|json|md|txt|css|html|glsl|frag|vert|srt|vtt|csv|ya?ml|toml|mtl)$/i.test(path)
+                ? "text"
+                : "file";
 
 export const fileIcon = (path: string, size = 14) => {
   const kind = kindOf(path);
@@ -64,6 +72,12 @@ export const fileIcon = (path: string, size = 14) => {
     <FileAudio size={size} />
   ) : kind === "video" ? (
     <FileVideo size={size} />
+  ) : kind === "model" ? (
+    <Box size={size} />
+  ) : kind === "environment" ? (
+    <Globe2 size={size} />
+  ) : kind === "font" ? (
+    <Type size={size} />
   ) : kind === "text" ? (
     <FileCode2 size={size} />
   ) : (
@@ -258,6 +272,11 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     if (active === path) setActive(next[Math.min(index, next.length - 1)]?.path ?? null);
   };
   const current = tabs.find((tab) => tab.path === active) ?? null;
+  // A Lottie animation among the work's files (public/) can be played as well as read.
+  const lottie = useMemo(
+    () => Boolean(current && current.source === "work" && current.kind === "text" && /^public\/.+\.json$/i.test(current.file) && isLottieText(current.content)),
+    [current?.source, current?.kind, current?.file, current?.content],
+  );
   // The AI is told which file the user has open ("这个文件").
   const activeLabel = !current
     ? null
@@ -335,17 +354,18 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
                   </button>
                 </div>
               )}
-              {current.kind === "text" && /\.md$/i.test(current.file) && current.content !== undefined && (
+              {current.kind === "text" && (/\.md$/i.test(current.file) || lottie) && current.content !== undefined && (
                 <div className="editor-toolbar">
                   <span className="faint small-text ellipsis grow">
                     {current.source === "experience" ? `经验库 · ${current.file}` : current.source === "reviews" ? `复盘 · ${current.file}` : current.file}
+                    {lottie ? " · Lottie 动画" : ""}
                   </span>
                   <div className="segmented">
                     <button className={current.rendered ? "" : "active"} onClick={() => update(current.path, { rendered: false })}>
-                      <Pencil size={12} /> 编辑
+                      <Pencil size={12} /> {lottie ? "源码" : "编辑"}
                     </button>
                     <button className={current.rendered ? "active" : ""} onClick={() => update(current.path, { rendered: true })}>
-                      <Eye size={12} /> 预览
+                      <Eye size={12} /> {lottie ? "动画" : "预览"}
                     </button>
                   </div>
                 </div>
@@ -361,6 +381,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               ) : current.kind === "text" ? (
                 current.content === undefined ? (
                   <div className="empty">正在读取…</div>
+                ) : current.rendered && lottie ? (
+                  <AssetViewer assetBase={work.preview.assetBase} src={`films/${work.slug}/${current.file.slice("public/".length)}`} version={current.hash ?? undefined} />
                 ) : current.rendered ? (
                   <div className="markdown-page" onDoubleClick={() => update(current.path, { rendered: false })} title="双击编辑">
                     <Markdown text={current.content} />
@@ -390,6 +412,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
 
 function MediaViewer({ path, kind }: { path: string; kind: Tab["kind"] }) {
   const { work, addToChat } = useWorkbench();
+  const drawn = kind === "model" || kind === "environment" || kind === "font";
   const [version, setVersion] = useState(0);
   const [info, setInfo] = useState("");
   useEffect(() => {
@@ -401,12 +424,24 @@ function MediaViewer({ path, kind }: { path: string; kind: Tab["kind"] }) {
   const reference = path.startsWith("public/") ? `films/${work.slug}/${path.slice(7)}` : null;
   const media = (element: HTMLVideoElement | HTMLAudioElement) =>
     setInfo([element instanceof HTMLVideoElement && `${element.videoWidth}×${element.videoHeight}`, formatTime(element.duration)].filter(Boolean).join(" · "));
+  if (drawn && reference)
+    return (
+      <>
+        <div className="editor-toolbar material-toolbar">
+          <span className="faint small-text ellipsis grow">{path}</span>
+          <button className="btn small" onClick={() => addToChat({ type: "asset", url: reference, path })}>
+            <Sparkles size={13} /> 引用到 AI 聊天
+          </button>
+        </div>
+        <AssetViewer assetBase={work.preview.assetBase} src={reference} version={version} />
+      </>
+    );
   return (
     <div className="media-viewer">
       {kind === "image" && <img src={url} alt={path} onLoad={(event) => setInfo(`${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`)} />}
       {kind === "audio" && <audio src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
       {kind === "video" && <video src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
-      {kind === "file" && <div className="empty">无法在这里预览这种文件</div>}
+      {(kind === "file" || drawn) && <div className="empty">无法在这里预览这种文件{drawn ? "（只有 public/ 里的素材能预览）" : ""}</div>}
       <div className="media-info">
         <span className="faint mono ellipsis">{path}</span>
         {info && <span className="faint">{info}</span>}
@@ -441,6 +476,7 @@ function MaterialViewer({ fileRef, kind }: { fileRef: string; kind: Tab["kind"] 
   const [info, setInfo] = useState("");
   const [text, setText] = useState<string | null>(null);
   const [failed, setFailed] = useState("");
+  const [source, setSource] = useState(false);
   const status = useCallback(
     () =>
       api<{ files: MaterialUse[] }>(`${workPath(work.repo, work.id)}/materials`).then(
@@ -491,6 +527,10 @@ function MaterialViewer({ fileRef, kind }: { fileRef: string; kind: Tab["kind"] 
       () => (setLockedVersion(false), toast("本作品已改用素材库里的最新版本", "ok")),
       (error: Error) => toast(error.message, "error"),
     );
+  const lottie = useMemo(() => /\.json$/i.test(fileRef) && isLottieText(text ?? undefined), [fileRef, text]);
+  // Drawn by the engine: as the library has it now, or at the version this work locked.
+  const assetBase = showLocked ? work.preview.assetBase : (work.preview.library?.assetBase ?? `/files/${encodeURIComponent(work.repo)}/-/`);
+  const drawn = kind === "model" || kind === "environment" || kind === "font" || (lottie && !source);
   const state = !use?.locked
     ? use?.used
       ? "本作品用到了它，保存版本时会锁定这个版本"
@@ -522,12 +562,24 @@ function MaterialViewer({ fileRef, kind }: { fileRef: string; kind: Tab["kind"] 
             更新到最新版本
           </button>
         )}
+        {lottie && (
+          <div className="segmented">
+            <button className={source ? "" : "active"} onClick={() => setSource(false)}>
+              动画
+            </button>
+            <button className={source ? "active" : ""} onClick={() => setSource(true)}>
+              源码
+            </button>
+          </div>
+        )}
         <button className="btn small" onClick={() => addToChat({ type: "asset", url: `materials/${fileRef}` })}>
           <Sparkles size={13} /> 引用到 AI 聊天
         </button>
       </div>
       {state && <div className={`material-state ${use?.outdated ? "warn-text" : "faint"}`}>{state}</div>}
-      {kind === "text" ? (
+      {drawn ? (
+        <AssetViewer key={`${assetBase}|${fileRef}`} assetBase={assetBase} src={`materials/${fileRef}`} version={showLocked ? (use?.locked ?? undefined) : version} />
+      ) : kind === "text" ? (
         text === null ? (
           <div className="empty">{failed || "正在读取…"}</div>
         ) : (

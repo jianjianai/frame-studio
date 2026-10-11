@@ -127,6 +127,11 @@ export const mimeTypes = {
   ".otf": "font/otf",
   ".glb": "model/gltf-binary",
   ".gltf": "model/gltf+json",
+  ".fbx": "model/vnd.fbx",
+  ".obj": "model/obj",
+  ".mtl": "text/plain; charset=utf-8",
+  ".hdr": "application/octet-stream",
+  ".exr": "application/octet-stream",
   ".wasm": "application/wasm",
   ".sf2": "application/octet-stream",
   ".mid": "audio/midi",
@@ -138,6 +143,8 @@ export const mimeTypes = {
 };
 export const mimeType = (file) => mimeTypes[path.extname(file).toLowerCase()] || "application/octet-stream";
 export const mediaKind = (file) => {
+  // HDR/EXR panoramas light 3D scenes; browsers cannot show them as images.
+  if (/\.(hdr|exr)$/i.test(file)) return "environment";
   const type = mimeType(file);
   if (type.startsWith("image/")) return "image";
   if (type.startsWith("audio/")) return "audio";

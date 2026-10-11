@@ -69,11 +69,25 @@ const KINDS = [
   ["video", /\.(mp4|webm|mov|m4v)$/i],
   ["audio", /\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)$/i],
   ["font", /\.(ttf|otf|woff2?)$/i],
-  ["model", /\.(glb|gltf)$/i],
+  ["model", /\.(glb|gltf|fbx|obj)$/i],
+  ["environment", /\.(hdr|exr)$/i],
   ["code", /\.(m?[jt]sx?|cjs|glsl|frag|vert|wgsl|css)$/i],
   ["data", /\.(json|csv|txt|md)$/i],
 ];
 const kindOf = (file) => KINDS.find(([, pattern]) => pattern.test(file))?.[0] ?? "file";
+/** What a listing says about a media file besides its kind: size, length, animations, problems. */
+export const mediaFacts = (info) =>
+  Object.fromEntries(
+    Object.entries({
+      width: info.width,
+      height: info.height,
+      duration: info.duration,
+      fps: info.kind === "lottie" ? info.fps : undefined,
+      animations: info.animations?.length ? info.animations : undefined,
+      triangles: info.triangles,
+      problem: info.problem,
+    }).filter(([, value]) => value !== undefined && value !== 0),
+  );
 
 const libraryReadme = (title) => `# ${title}
 
@@ -170,17 +184,18 @@ export class Materials {
     const result = [];
     for (const item of tree(path.join(dir, id)).filter((entry) => entry.type === "file" && entry.path !== "README.md")) {
       const kind = kindOf(item.path);
-      // Size and length for the thumbnails (cached until the file changes); a .webm may hold only sound.
-      const info = ["image", "video", "audio"].includes(kind) ? await probe(path.join(dir, id, item.path)).catch(() => ({})) : {};
+      // Size, length and contents for the thumbnails (cached until the file changes): a .webm
+      // may hold only sound, a .json may be a Lottie animation.
+      const probed = ["image", "video", "audio", "model", "environment"].includes(kind) || /\.json$/i.test(item.path);
+      const info = probed ? await probe(path.join(dir, id, item.path)).catch(() => ({})) : {};
       result.push({
         path: item.path,
         ref: `${id}/${item.path}`,
         url: `materials/${id}/${item.path}`,
-        kind: info.kind === "audio" && kind === "video" ? "audio" : kind,
+        kind: info.kind === "audio" && kind === "video" ? "audio" : info.kind === "lottie" ? "lottie" : kind,
         size: item.size,
         blob: blobs.get(`${id}/${item.path}`) ?? null,
-        ...(info.width ? { width: info.width, height: info.height } : {}),
-        ...(info.duration ? { duration: info.duration } : {}),
+        ...mediaFacts(info),
       });
     }
     return result;
@@ -220,7 +235,9 @@ export class Materials {
       this.credit(dir, id, target.slice(id.length + 1), { source, license });
       return target;
     });
-    return { ref: saved, url: `materials/${saved}`, path: saved.slice(id.length + 1), kind: kindOf(saved) };
+    // A .json may be a Lottie animation: the listing and the AI see it as one.
+    const lottie = /\.json$/i.test(saved) && (await probe(path.join(dir, saved)).catch(() => ({}))).kind === "lottie";
+    return { ref: saved, url: `materials/${saved}`, path: saved.slice(id.length + 1), kind: lottie ? "lottie" : kindOf(saved) };
   }
   async move(repo, id, from, to, { toLibrary } = {}) {
     const dir = await this.dir(repo);

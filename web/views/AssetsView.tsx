@@ -7,12 +7,11 @@ import {
   Trash2,
   Copy,
   Film,
-  AudioLines,
   Library,
   PlusSquare,
   Music,
-  FileQuestion,
   Eye,
+  AlertTriangle,
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast, Dialog } from "../lib/ui";
@@ -23,6 +22,7 @@ import { ViewHeader } from "./ViewHeader";
 import { uploadBlobs, uploadFiles } from "./upload";
 import { MaterialsPanel } from "./MaterialsPanel";
 import { ResourcesPanel } from "./ResourcesPanel";
+import { KindIcon, KIND_NAMES, ServerThumb, isDrawn, isVisual, layerOf } from "./media";
 
 export function AssetsView() {
   const { work, stage, addToChat, reload, openFile, readOnly } = useWorkbench();
@@ -54,7 +54,8 @@ export function AssetsView() {
       if (!usesLayers) throw new Error("这个作品的画面完全由代码绘制，没有图层文档。可以把素材引用给 AI，让它接入。");
       const start = stage.playback.get().time;
       const remaining = (work.meta?.duration ?? 10) - start;
-      const length = Math.min(remaining, asset.kind === "video" && asset.duration ? asset.duration : 5);
+      const layer = layerOf(asset);
+      const length = Math.min(remaining, layer.length);
       const id =
         asset.path
           .split("/")
@@ -72,7 +73,7 @@ export function AssetsView() {
               clip: {
                 id,
                 name: asset.path.split("/").pop(),
-                source: { kind: asset.kind === "video" ? "video" : "image", src: asset.url },
+                source: layer.source,
                 start,
                 duration: Math.max(0.1, length),
                 fit: "contain",
@@ -117,9 +118,7 @@ export function AssetsView() {
       { label: "复制引用地址", icon: <Copy size={14} />, onClick: () => navigator.clipboard.writeText(`assetUrl("${asset.url}")`).then(() => toast("已复制")) },
       { label: "存入素材库", icon: <Library size={14} />, onClick: () => toLibrary(asset) },
     ] : [
-      ...(asset.kind === "image" || asset.kind === "video"
-        ? [{ label: "添加到画面（播放头处）", icon: <PlusSquare size={14} />, onClick: () => addLayer(asset) }]
-        : []),
+      ...(isVisual(asset.kind) ? [{ label: "添加到画面（播放头处）", icon: <PlusSquare size={14} />, onClick: () => addLayer(asset) }] : []),
       ...(asset.kind === "audio" || asset.kind === "video"
         ? [{ label: "放到音轨（播放头处）", icon: <Music size={14} />, onClick: () => placeAudio(asset) }]
         : []),
@@ -187,28 +186,36 @@ export function AssetsView() {
               // Like VS Code: a click opens a preview tab, a double-click keeps it open.
               onClick={() => openFile(asset.path, { preview: true })}
               onDoubleClick={() => openFile(asset.path)}
-              title={`${asset.path}\n${formatBytes(asset.size)}${asset.width ? ` · ${asset.width}×${asset.height}` : ""}${asset.duration ? ` · ${formatTime(asset.duration, false)}` : ""}\n单击查看，拖到时间轴使用，右键更多操作`}
+              title={`${asset.path}\n${[KIND_NAMES[asset.kind], formatBytes(asset.size), asset.width ? `${asset.width}×${asset.height}` : "", asset.duration ? formatTime(asset.duration, false) : "", asset.animations?.length ? `动画：${asset.animations.map((item) => item.name).join("、")}` : ""].filter(Boolean).join(" · ")}${asset.problem ? `\n注意：${asset.problem}` : ""}\n单击查看，拖到时间轴使用，右键更多操作`}
             >
-              <div className="asset-thumb">
-                {asset.kind === "image" ? (
-                  <img src={fileUrl(asset)} alt="" loading="lazy" />
-                ) : asset.kind === "video" ? (
-                  <video src={fileUrl(asset) + "#t=0.5"} preload="metadata" muted />
-                ) : asset.kind === "audio" ? (
-                  <AudioLines size={26} />
-                ) : (
-                  <FileQuestion size={26} />
-                )}
-                {asset.duration ? <span className="asset-duration">{formatTime(asset.duration, false)}</span> : null}
-                {asset.kind === "video" && <Film size={12} className="asset-kind" />}
-              </div>
+              {isDrawn(asset.kind) ? (
+                <ServerThumb
+                  src={`${base}/assets/thumb?path=${encodeURIComponent(asset.path)}&v=${asset.version ?? ""}`}
+                  done={(event) => event.type === "asset-thumb" && event.work === work.id && event.path === asset.path}
+                  icon={<KindIcon kind={asset.kind} />}
+                  failedTitle="缩略图画不出来，单击打开看原因"
+                >
+                  <AssetBadges asset={asset} />
+                </ServerThumb>
+              ) : (
+                <div className="asset-thumb">
+                  {asset.kind === "image" ? (
+                    <img src={fileUrl(asset)} alt="" loading="lazy" />
+                  ) : asset.kind === "video" ? (
+                    <video src={fileUrl(asset) + "#t=0.5"} preload="metadata" muted />
+                  ) : (
+                    <KindIcon kind={asset.kind} />
+                  )}
+                  <AssetBadges asset={asset} />
+                </div>
+              )}
               <div className="asset-name ellipsis">{asset.path.replace(/^public\//, "")}</div>
               <button className="icon-btn asset-more" onClick={(event) => (event.stopPropagation(), assetMenu(event, asset))} aria-label="更多">
                 ⋯
               </button>
             </div>
           ))}
-          {!assets.length && <div className="empty">把图片、视频、音频拖到这里，或点上方按钮上传。</div>}
+          {!assets.length && <div className="empty">把图片、视频、音频、三维模型、Lottie 拖到这里，或点上方按钮上传。</div>}
         </div>
       ) : tab === "library" ? (
         <MaterialsPanel onPlace={(asset, how) => (how === "layer" ? addLayer(asset) : placeAudio(asset))} />
@@ -223,6 +230,20 @@ export function AssetsView() {
       )}
       {menu}
     </div>
+  );
+}
+
+/** What an asset's card says about it: length, kind, problems. */
+function AssetBadges({ asset }: { asset: Asset }) {
+  return (
+    <>
+      {asset.duration ? <span className="asset-duration">{formatTime(asset.duration, false)}</span> : null}
+      {asset.kind === "video" && <Film size={12} className="asset-kind" />}
+      {asset.kind === "model" && <span className="asset-tag">{asset.animations?.length ? `3D · 动画 ${asset.animations.length}` : "3D"}</span>}
+      {asset.kind === "lottie" && <span className="asset-tag">Lottie</span>}
+      {asset.kind === "environment" && <span className="asset-tag">HDR</span>}
+      {asset.problem && <AlertTriangle size={13} className="asset-problem" />}
+    </>
   );
 }
 

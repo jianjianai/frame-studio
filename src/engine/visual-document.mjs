@@ -37,6 +37,16 @@ export const visualSourceSchema = z.discriminatedUnion("kind", [
   z.strictObject({ kind: z.literal("image"), src: assetReferenceSchema }),
   z.strictObject({ kind: z.literal("video"), src: assetReferenceSchema }),
   z.strictObject({ kind: z.literal("lottie"), src: assetReferenceSchema }),
+  // A 3D model framed to fill the layer's box (src/engine/model-layer.ts).
+  z.strictObject({
+    kind: z.literal("model"),
+    src: assetReferenceSchema.refine((value) => /\.(glb|gltf|fbx|obj)$/i.test(value), "模型应为 .glb、.gltf、.fbx 或 .obj 文件"),
+    animation: z.string().min(1).max(200).optional(),
+    spin: number.min(-1440).max(1440).optional(),
+    azimuth: number.min(-360).max(360).optional(),
+    elevation: number.min(-89).max(89).optional(),
+    environment: assetReferenceSchema.refine((value) => /\.(hdr|exr|jpe?g|png|webp)$/i.test(value), "环境贴图应为 .hdr、.exr 或 JPEG/PNG/WebP 全景图").optional(),
+  }),
   z.strictObject({
     kind: z.literal("sequence"),
     frames: z.array(assetReferenceSchema).min(1).max(10000),
@@ -137,8 +147,7 @@ export function validateVisualDocument(value, { projectId, duration } = {}) {
   for (const clip of doc.clips) {
     if (duration !== undefined && clip.start + clip.duration > duration + 1e-7)
       throw new Error(`图层 ${clip.id} 超出作品时长：start ${clip.start} + duration ${clip.duration} = ${+(clip.start + clip.duration).toFixed(3)} > ${duration} 秒`);
-    for (const src of clip.source.frames ??
-      (clip.source.src ? [clip.source.src] : []))
+    for (const src of clip.source.frames ?? [clip.source.src, clip.source.environment].filter(Boolean))
       if (projectId && !src.startsWith("films/" + projectId + "/") && !src.startsWith("materials/"))
         throw new Error(`图层 ${clip.id} 的素材 ${src} 不属于这个作品，应为 films/${projectId}/...`);
   }
@@ -202,8 +211,8 @@ export const visualOperationSchema = z.discriminatedUnion("op", [
         z
           .string()
           .refine(
-            (path) => UNSETTABLE.includes(path) || /^(transform|audio|source\.parameters)\.[\w-]+$/.test(path),
-            `可以删除的字段：${UNSETTABLE.join("、")}，或嵌套字段如 transform.opacity、audio.gain、source.parameters.<名称>`,
+            (path) => UNSETTABLE.includes(path) || /^(transform|audio|source\.parameters)\.[\w-]+$/.test(path) || /^source\.(animation|spin|azimuth|elevation|environment)$/.test(path),
+            `可以删除的字段：${UNSETTABLE.join("、")}，或嵌套字段如 transform.opacity、audio.gain、source.parameters.<名称>、模型图层的 source.animation`,
           ),
       )
       .optional(),

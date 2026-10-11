@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { AudioLines, ChevronDown, ChevronRight, Copy, Eye, FileCode2, Music, Search, Shapes, Sparkles } from "lucide-react";
+import { ServerThumb } from "./media";
 import { api, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useContextMenu, useToast } from "../lib/ui";
 import type { Asset, ResourceItem } from "../lib/types";
@@ -23,6 +24,9 @@ const KINDS: [string, string][] = [
   ["text", "文字"],
   ["sound", "音效"],
 ];
+
+/** Engines other than Canvas 2D, as the cards mark them. */
+export const ENGINE_TAGS: Record<string, string> = { three: "三维", pixi: "Pixi" };
 
 /** Sound lengths: "0.4s" under a minute, else m:ss. */
 export const seconds = (value: number) => (value < 60 ? `${+value.toFixed(2)}s` : formatTime(value, false));
@@ -75,7 +79,9 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
     return listing.items.filter(
       (item) =>
         (!kind || item.kind === kind) &&
-        words.every((word) => [item.title, item.key, item.kindLabel, item.description, ...(item.tags ?? [])].some((text) => text?.toLowerCase().includes(word))),
+        words.every((word) =>
+          [item.title, item.key, item.kindLabel, item.description, ENGINE_TAGS[item.engine ?? ""], item.engine, ...(item.tags ?? [])].some((text) => text?.toLowerCase().includes(word)),
+        ),
     );
   }, [listing.items, query, kind]);
   // Linked libraries first; each library by kind.
@@ -177,6 +183,7 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
                           >
                             <ResourceThumb base={base} repo={work.repo} item={item}>
                               {item.preview?.duration ? <span className="asset-duration">{formatTime(item.preview.duration, false)}</span> : null}
+                              {ENGINE_TAGS[item.engine ?? ""] && <span className="asset-tag">{ENGINE_TAGS[item.engine!]}</span>}
                             </ResourceThumb>
                             <div className="asset-name ellipsis">{item.title}</div>
                             <button className="icon-btn asset-more" onClick={(event) => (event.stopPropagation(), menuOf(event, item))} aria-label="更多">
@@ -208,61 +215,16 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
   );
 }
 
-/**
- * A thumbnail the studio renders: asked for when it comes into view (the studio draws the latest
- * requests first), shown when the `resource-thumb` event says it is there.
- */
+/** A resource's thumbnail, rendered by the studio from the library's code. */
 function ResourceThumb({ base, repo, item, children }: { base: string; repo: string; item: ResourceItem; children?: ReactNode }) {
-  const src = `${base}/resources/thumb?id=${encodeURIComponent(item.id)}&v=${item.version}`;
-  const box = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(false);
-  const [image, setImage] = useState("");
-  const [failed, setFailed] = useState(false);
-  const [attempt, setAttempt] = useState(0);
-  useEffect(() => {
-    const observer = new IntersectionObserver(([entry]) => setVisible(entry.isIntersecting), { rootMargin: "120px" });
-    if (box.current) observer.observe(box.current);
-    return () => observer.disconnect();
-  }, []);
-  useEffect(() => {
-    setImage("");
-    setFailed(false);
-  }, [src]);
-  useEffect(() => {
-    if (!visible || image || failed) return;
-    let alive = true;
-    let timer = 0;
-    fetch(src).then(
-      async (response) => {
-        // Still in the queue: the event comes when it is drawn (asking again now and then in case it got lost).
-        if (response.status === 202) timer = window.setTimeout(() => alive && setAttempt((n) => n + 1), 30000);
-        else if (!response.ok) alive && setFailed(true);
-        else {
-          const url = URL.createObjectURL(await response.blob());
-          if (alive) setImage(url);
-          else URL.revokeObjectURL(url);
-        }
-      },
-      () => alive && setFailed(true),
-    );
-    return () => {
-      alive = false;
-      clearTimeout(timer);
-    };
-  }, [visible, src, image, failed, attempt]);
-  useEffect(() => () => void (image && URL.revokeObjectURL(image)), [image]);
-  useServerEvent(
-    (event) => {
-      if (event.type !== "resource-thumb" || event.repo !== repo || event.id !== item.id || event.version !== item.version) return;
-      if (event.error) setFailed(true);
-      else setAttempt((n) => n + 1);
-    },
-    [repo, item.id, item.version],
-  );
   return (
-    <div ref={box} className="asset-thumb" title={failed ? "缩略图画不出来，单击打开预览看原因" : undefined}>
-      {failed ? <Shapes size={24} /> : image ? <img src={image} alt="" /> : null}
+    <ServerThumb
+      src={`${base}/resources/thumb?id=${encodeURIComponent(item.id)}&v=${item.version}`}
+      done={(event) => event.type === "resource-thumb" && event.repo === repo && event.id === item.id && event.version === item.version}
+      icon={<Shapes size={24} />}
+      failedTitle="缩略图画不出来，单击打开预览看原因"
+    >
       {children}
-    </div>
+    </ServerThumb>
   );
 }

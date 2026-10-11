@@ -7,6 +7,7 @@ import { problem, notFound, sha256, writeFileAtomic, Lru } from "./util.mjs";
 import { sendFile, sendJson } from "./http.mjs";
 import { workArg, asJson } from "./tools/registry.mjs";
 import { contactSheet } from "./render.mjs";
+import { Thumbnails } from "./thumbnails.mjs";
 
 /**
  * The resources of material library code, read without running it (the studio never runs
@@ -27,6 +28,9 @@ export const RESOURCE_KINDS = {
   sound: "音效",
 };
 export const CODE_FILE = /\.(m?[jt]sx?)$/i;
+/** Engines a resource preview draws with (src/engine/resources.ts); canvas when it does not say. */
+export const RESOURCE_ENGINES = { canvas: "Canvas 2D", three: "Three.js 三维", pixi: "PixiJS" };
+const ENGINE_TAGS = { three: "三维", pixi: "Pixi" };
 
 const squash = (text, limit = 400) => {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -327,7 +331,7 @@ export function extractModule(code, ref) {
       const field = (name) => (fields.get(name)?.type === "ObjectProperty" ? value(fields.get(name).value) : undefined);
       const preview = propertiesOf(fields.get("preview")?.value, bindings);
       const previewField = (name) => (preview.get(name)?.type === "ObjectProperty" ? value(preview.get(name).value) : undefined);
-      const draw = preview.get("draw");
+      const draw = preview.get("draw") ?? preview.get("build");
       const params = fields.get("params") ? zod(fields.get("params").value) : null;
       const presetsNode = fields.get("presets")?.value;
       const presets = {};
@@ -345,6 +349,7 @@ export function extractModule(code, ref) {
         params: params?.type === "object" ? params.fields : [],
         presets,
         preview: {
+          engine: previewField("engine") ?? "canvas",
           width: previewField("width"),
           height: previewField("height"),
           duration: previewField("duration") ?? 0,
@@ -471,10 +476,7 @@ export class ResourceCatalog {
     this.services = services;
     this.parsed = new Lru(1000); // blob → what the file declares (blobs never change); the limit grows with the libraries
     this.dir = path.join(services.config.dirs.cache, "resources");
-    this.jobs = new Map(); // thumbnail file → { work, ref, key, id, version }, waiting or being rendered
-    this.waiting = []; // thumbnail files not started yet, latest request last
-    this.rendering = null; // the thumbnail file being rendered (one at a time)
-    this.failed = new Lru(2000); // thumbnail file → { message, at }: not retried for a while
+    this.thumbs = new Thumbnails(this.dir);
     this.overviews = new Map(); // repo → Promise of overview(), until the libraries change
     this.overviewed = new Map(); // repo → its last overview, for the (synchronous) session brief
   }
@@ -517,11 +519,12 @@ export class ResourceCatalog {
       type: "resource",
       ...item,
       kindLabel: RESOURCE_KINDS[item.kind] ?? item.kind ?? "资源",
+      engine: item.preview.engine,
       ref: mod.ref,
       library: mod.library,
       import: importOf(mod.ref),
       outdated: mod.outdated,
-      text: [item.usage, item.params.map(paramLine).join(" "), Object.keys(item.presets).join(" ")].filter(Boolean).join(" "),
+      text: [RESOURCE_ENGINES[item.preview.engine], ENGINE_TAGS[item.preview.engine], item.usage, item.params.map(paramLine).join(" "), Object.keys(item.presets).join(" ")].filter(Boolean).join(" "),
     };
   }
   soundEntry(mod, item) {
@@ -549,12 +552,13 @@ export class ResourceCatalog {
     return modules.flatMap((mod) => [...mod.resources.map((item) => this.resourceEntry(mod, item)), ...mod.sounds.map((item) => this.soundEntry(mod, item))]);
   }
 
-  async search(work, { query, kind, library, limit = 30 }) {
+  async search(work, { query, kind, library, engine, limit = 30 }) {
     const modules = await this.modules(work, { library });
     let entries = this.entries(modules);
     if (kind && kind !== "code") entries = entries.filter((entry) => entry.kind === kind);
+    if (engine) entries = entries.filter((entry) => entry.type === "resource" && entry.engine === engine);
     // Exported functions and types join the results only when looking for something.
-    const code = query && (!kind || kind === "code") ? modules.flatMap((mod) => mod.exports.filter((item) => item.kind !== "reexport").map((item) => this.codeEntry(mod, item))) : [];
+    const code = query && (!kind || kind === "code") && !engine ? modules.flatMap((mod) => mod.exports.filter((item) => item.kind !== "reexport").map((item) => this.codeEntry(mod, item))) : [];
     return [...(kind === "code" ? [] : entries), ...code]
       .map((entry) => ({ entry, score: score(entry, query) * (entry.type === "code" ? 0.6 : 1) }))
       .filter((item) => item.score > 0)
@@ -612,35 +616,16 @@ export class ResourceCatalog {
     const [ref, key] = String(id).split("#");
     if (!ref || !key || !CODE_FILE.test(ref)) throw problem(400, `资源地址应为 <素材库>/<路径>.ts#<名称>（收到 ${id}）`);
     const version = await this.version(work, ref);
-    const file = path.join(this.dir, `${sha256(`${version}|${key}`).slice(0, 32)}.webp`);
-    if (fs.existsSync(file)) return { file, version };
-    const failed = this.failed.get(file);
-    if (failed && Date.now() - failed.at < FAILED_FOR) return { error: failed.message, version };
-    if (!this.jobs.has(file)) this.jobs.set(file, { work, ref, key, id, version });
-    if (this.rendering !== file) {
-      const index = this.waiting.indexOf(file);
-      if (index >= 0) this.waiting.splice(index, 1);
-      this.waiting.push(file);
-      this.next();
-    }
-    return { pending: true, version };
-  }
-  next() {
-    if (this.rendering || !this.waiting.length) return;
-    const file = (this.rendering = this.waiting.pop());
-    const job = this.jobs.get(file);
-    const done = (error) => {
-      if (error) this.failed.set(file, { message: error.message, at: Date.now() });
-      else this.failed.delete(file);
-      this.services.events.emit({ type: "resource-thumb", repo: job.work.repo, id: job.id, version: job.version, ...(error ? { error: error.message } : {}) });
+    const job = {
+      work,
+      ref,
+      key,
+      id,
+      version,
+      render: (file) => this.renderThumbnail(job, file),
+      done: (error) => this.services.events.emit({ type: "resource-thumb", repo: work.repo, id, version, ...(error ? { error: error.message } : {}) }),
     };
-    this.renderThumbnail(job, file)
-      .then(() => done(), done)
-      .finally(() => {
-        this.jobs.delete(file);
-        this.rendering = null;
-        this.next();
-      });
+    return { ...this.thumbs.request(`${sha256(`${version}|${key}`).slice(0, 32)}.webp`, job), version };
   }
   async renderThumbnail({ work, ref, key }, file) {
     const { frames } = await this.services.renderer.resourceFrames(work, { ref, key, width: 360 });
@@ -668,6 +653,7 @@ export class ResourceCatalog {
     for (const library of await this.materials.libraries(repo)) {
       const kinds = new Map();
       const canvases = new Map();
+      const engines = {};
       let resources = 0;
       let sounds = 0;
       for (const ref of [...head.keys()].filter((ref) => CODE_FILE.test(ref) && ref.startsWith(library.id + "/"))) {
@@ -682,14 +668,16 @@ export class ResourceCatalog {
           resources++;
           const label = RESOURCE_KINDS[item.kind] ?? item.kind;
           kinds.set(label, (kinds.get(label) ?? 0) + 1);
+          if (ENGINE_TAGS[item.preview?.engine]) engines[ENGINE_TAGS[item.preview.engine]] = (engines[ENGINE_TAGS[item.preview.engine]] ?? 0) + 1;
           const { width, height } = item.preview ?? {};
-          if (width > 0 && height > 0) canvases.set(`${width}×${height}`, (canvases.get(`${width}×${height}`) ?? 0) + 1);
+          // A three resource's picture is only a view of it (the work's camera frames it): not a layout canvas.
+          if (width > 0 && height > 0 && item.preview?.engine !== "three") canvases.set(`${width}×${height}`, (canvases.get(`${width}×${height}`) ?? 0) + 1);
         }
       }
       const canvas = [...canvases].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
       const order = (label) => (Object.values(RESOURCE_KINDS).indexOf(label) + 100) % 100;
       const sorted = Object.fromEntries([...kinds].sort(([a], [b]) => order(a) - order(b)));
-      result.push({ id: library.id, title: library.title, files: library.files, resources, sounds, kinds: sorted, canvas, about: readmeLead(path.join(dir, library.id, "README.md")) });
+      result.push({ id: library.id, title: library.title, files: library.files, resources, sounds, kinds: sorted, ...(Object.keys(engines).length ? { engines } : {}), canvas, about: readmeLead(path.join(dir, library.id, "README.md")) });
     }
     return result;
   }
@@ -716,7 +704,8 @@ export class ResourceCatalog {
     const meta = this.services.works.meta(work);
     const lines = overview.map((library) => {
       const kinds = Object.entries(library.kinds).map(([label, count]) => `${label} ${count}`).join("、");
-      const holds = [library.resources ? `资源 ${library.resources} 个（${kinds}）` : "", library.sounds ? `音效 ${library.sounds} 个` : "", `文件 ${library.files} 个`].filter(Boolean).join("、");
+      const engines = Object.entries(library.engines ?? {}).map(([label, count]) => `${label} ${count}`).join("、");
+      const holds = [library.resources ? `资源 ${library.resources} 个（${kinds}${engines ? `；其中 ${engines}` : ""}）` : "", library.sounds ? `音效 ${library.sounds} 个` : "", `文件 ${library.files} 个`].filter(Boolean).join("、");
       const note = library.canvas && meta.ok ? canvasNote(library.canvas, meta.meta) : "";
       return `- 「${library.title}」${linked.has(library.id) ? "（本作品已关联）" : ""}：${holds}。${library.about ? library.about + " " : ""}${note}`.trim();
     });
@@ -726,18 +715,10 @@ export class ResourceCatalog {
   }
 
   /** The libraries changed: thumbnails waiting for versions that are gone are not wanted any more. */
-  async dropOutdated(repo) {
-    for (const file of [...this.waiting]) {
-      const job = this.jobs.get(file);
-      if (job?.work.repo !== repo || (await this.version(job.work, job.ref).catch(() => "")) === job.version) continue;
-      const index = this.waiting.indexOf(file);
-      if (index >= 0) this.waiting.splice(index, 1);
-      this.jobs.delete(file);
-    }
+  dropOutdated(repo) {
+    return this.thumbs.drop(async (job) => job.work.repo === repo && (await this.version(job.work, job.ref).catch(() => "")) !== job.version);
   }
 }
-
-const FAILED_FOR = 5 * 60 * 1000; // a resource that fails to render is tried again after this (or as soon as its code changes)
 
 const kindArg = z.enum([...Object.keys(RESOURCE_KINDS), "code"]);
 const OUTDATED = "（这里是素材库现在的版本；本作品锁定了另一个版本，运行时用锁定的，要改用这个版本：materials_use 加 update: true）";
@@ -747,7 +728,7 @@ function describeModule(mod) {
   if (mod.doc) lines.push("", mod.doc);
   if (mod.resources.length) {
     lines.push("", `资源（${mod.resources.length}）：`);
-    for (const item of mod.resources) lines.push(`- [${RESOURCE_KINDS[item.kind] ?? item.kind}] ${mod.ref}#${item.key} ${item.title}${item.description ? " — " + firstLine(item.description) : ""}`);
+    for (const item of mod.resources) lines.push(`- [${RESOURCE_KINDS[item.kind] ?? item.kind}${engineTag(item.preview?.engine)}] ${mod.ref}#${item.key} ${item.title}${item.description ? " — " + firstLine(item.description) : ""}`);
   }
   if (mod.sounds.length) {
     lines.push("", `音效（${mod.sounds.length}，在 audio.json 里写 module "materials/${mod.ref}"，trackId 为名称；用 audio_place 的 sound 放到音轨）：`);
@@ -777,6 +758,14 @@ function describeModule(mod) {
   return lines.join("\n");
 }
 
+const engineTag = (engine) => (ENGINE_TAGS[engine] ? ` · ${ENGINE_TAGS[engine]}` : "");
+/** Where a resource of each engine goes in a work. */
+const ENGINE_USE = {
+  canvas: "（在 Canvas 2D 场景里调用；见 frame_guide scene）",
+  three: "（在 three 场景里用：createThreeScene 的 build 里调用，作为 visual.json 的 scene 图层时 engine 写 three；见 frame_guide three）",
+  pixi: "（在 Pixi 场景里用：createPixiScene 的 build 里调用，作为 scene 图层时 engine 写 pixi；见 frame_guide pixi）",
+};
+
 function describeEntry(entry) {
   if (entry.type === "code") {
     const lines = [`${entry.kindLabel} ${entry.ref}#${entry.name}（第 ${entry.line} 行）`, `导入：import { ${entry.name} } from "${entry.import}"`, "", entry.signature];
@@ -797,12 +786,13 @@ function describeEntry(entry) {
       .filter(Boolean)
       .join("\n");
   }
-  const lines = [`[${entry.kindLabel}] ${entry.id} ${entry.title}${entry.outdated ? OUTDATED : ""}`];
+  const lines = [`[${entry.kindLabel}${engineTag(entry.engine)}] ${entry.id} ${entry.title}${entry.outdated ? OUTDATED : ""}`];
   if (entry.description) lines.push(entry.description);
   if (entry.tags?.length) lines.push(`标签：${entry.tags.join("、")}`);
+  lines.push(`引擎：${RESOURCE_ENGINES[entry.engine] ?? entry.engine}${ENGINE_USE[entry.engine] ?? ""}`);
   lines.push("", `导入：import { … } from "${entry.import}"`);
   if (entry.usage) lines.push(`用法：${entry.usage}`);
-  if (entry.preview?.draw) lines.push(`预览里的画法：${entry.preview.draw}`);
+  if (entry.preview?.draw) lines.push(`${entry.engine === "canvas" ? "预览里的画法" : "预览里的搭法"}：${entry.preview.draw}`);
   if (entry.params.length) {
     lines.push("", "参数：");
     for (const param of entry.params) lines.push(`- ${paramLine(param)}`);
@@ -860,7 +850,7 @@ function directory(entries, linked, summary) {
           lines.push(`${label}：${shown.join("、")}${group.length > shown.length ? `……（kind: "${kind}"）` : ""}`);
         } else if (kind === "sound")
           lines.push(`${label}：${[...new Set(group.map((entry) => entry.ref))].map((ref) => `${ref}#…：${group.filter((entry) => entry.ref === ref).map((entry) => `${entry.key} ${entry.title}`).join("、")}`).join("\n")}`);
-        else lines.push(`${label}：${group.map((entry) => `${entry.id} ${entry.title}`).join("；")}`);
+        else lines.push(`${label}：${group.map((entry) => `${entry.id} ${entry.title}${ENGINE_TAGS[entry.engine] ? `（${ENGINE_TAGS[entry.engine]}）` : ""}`).join("；")}`);
       }
       return lines.join("\n");
     })
@@ -915,16 +905,17 @@ export function resourcesPlugin(services) {
       query: z.string().max(200).optional(),
       kind: kindArg.optional().describe("character 角色、prop 物品、set 场景、ui 界面、effect 效果、transition 转场、text 文字、sound 音效、code 函数和类型"),
       library: z.string().max(60).optional().describe("只找这个素材库"),
+      engine: z.enum(Object.keys(RESOURCE_ENGINES)).optional().describe("只找用这个引擎画的资源：canvas（Canvas 2D）、three（三维）、pixi"),
       limit: z.number().int().min(1).max(100).default(30),
     },
-    async run({ query, kind, library, limit }, ctx) {
+    async run({ query, kind, library, engine, limit }, ctx) {
       const work = await ctx.work();
       const linked = new Set(services.materials.names(work));
-      const found = await catalog.search(work, { query, kind, library, limit });
+      const found = await catalog.search(work, { query, kind, library, engine, limit });
       const line = (entry) =>
         entry.type === "code"
           ? `- [${entry.kindLabel}] ${entry.id} ${entry.signature}${entry.doc ? `  // ${firstLine(entry.doc)}` : ""}`
-          : `- [${entry.kindLabel}] ${entry.id} ${entry.title}${entry.type === "sound" && entry.duration && !/\d\s*秒/.test(entry.title) ? `（${entry.duration} 秒）` : ""}${entry.description ? " — " + firstLine(entry.description) : ""}`;
+          : `- [${entry.kindLabel}${engineTag(entry.engine)}] ${entry.id} ${entry.title}${entry.type === "sound" && entry.duration && !/\d\s*秒/.test(entry.title) ? `（${entry.duration} 秒）` : ""}${entry.description ? " — " + firstLine(entry.description) : ""}`;
       if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源。可以换个说法，或不给 query 看全部目录。` : "素材库里还没有声明资源（见 frame_guide resources）。");
       let text;
       // Several words that nothing matches together: say the list is the partial matches.
@@ -983,7 +974,7 @@ export function resourcesPlugin(services) {
         };
       }
       const meta = services.works.meta(work);
-      const note = entry.type === "resource" && meta.ok ? canvasNote(`${entry.preview.width}×${entry.preview.height}`, meta.meta) : "";
+      const note = entry.type === "resource" && entry.engine !== "three" && meta.ok ? canvasNote(`${entry.preview.width}×${entry.preview.height}`, meta.meta) : "";
       const text = describeEntry(entry) + (note ? `\n\n注意：${note}` : "");
       if (entry.type !== "resource" || !image) return asJson({ id: entry.id, type: entry.type }, text);
       const { frames } = await services.renderer.resourceFrames(work, { ref: entry.ref, key: entry.key, preset, values: params, times, width });

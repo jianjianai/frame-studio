@@ -30,6 +30,18 @@ describe("engine contracts", () => {
       ["b", 4, 2],
     ]);
   });
+  it("places 3D models as layers, with their settings checked and removable", () => {
+    const model = { kind: "model", src: "materials/三维/fox.glb", animation: "Walk", spin: 30, environment: "films/demo/studio.hdr" };
+    const doc = validateVisualDocument({ schemaVersion: 1, clips: [{ id: "fox", source: model, start: 0, duration: 4 }] }, { projectId: "demo", duration: 10 });
+    expect(doc.clips[0].source).toEqual(model);
+    expect(() => validateVisualDocument({ schemaVersion: 1, clips: [{ id: "x", source: { ...model, src: "materials/三维/fox.png" }, start: 0, duration: 1 }] })).toThrow(/\.glb/);
+    expect(() => validateVisualDocument({ schemaVersion: 1, clips: [{ id: "x", source: { ...model, elevation: 120 }, start: 0, duration: 1 }] })).toThrow();
+    // The panorama is one of the work's materials too.
+    expect(() => validateVisualDocument({ schemaVersion: 1, clips: [{ id: "x", source: { ...model, environment: "films/other/studio.hdr" }, start: 0, duration: 1 }] }, { projectId: "demo" })).toThrow(/不属于这个作品/);
+    const edited = editVisualDocument(doc, [{ op: "update", id: "fox", patch: { source: { azimuth: 90 } }, unset: ["source.animation", "source.spin"] }]);
+    expect(edited.clips[0].source).toEqual({ kind: "model", src: "materials/三维/fox.glb", environment: "films/demo/studio.hdr", azimuth: 90 });
+  });
+
   it("compiles the audio mix and validates routing", () => {
     const doc = {
       schemaVersion: 1,

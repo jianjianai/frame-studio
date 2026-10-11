@@ -35,17 +35,23 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 配乐、音效、混音 | `audio_place`、`audio_get` / `audio_edit`，配乐节拍 `preview_audio` 的 `src` + `beats`（见 `audio`） |
 | 配音和字幕 | `speech_synthesize`（`lines` + `place` + `subtitles: true` 一次完成整段旁白）、`subtitles_edit`（见 `speech`、`subtitles`） |
 | 标题、时长、节拍、镜头标记 | `work_update`（配乐节拍写进 `tempo`，见 `project`） |
-| 复用素材库里的角色、场景、效果、转场、音效 | `resources_search` 找、`resource_view` 看详情和预览图，音效用 `audio_place` 的 `sound` 放到音轨（见 `resources`） |
-| 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身）；素材库 `materials_list`、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
+| 复用素材库里的角色、场景、效果、转场、音效（Canvas 2D、三维、Pixi） | `resources_search` 找（`engine` 可以只找三维或 Pixi 的）、`resource_view` 看详情和预览图，音效用 `audio_place` 的 `sound` 放到音轨（见 `resources`） |
+| 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身：图片、视频、三维模型、Lottie、全景图、字体）；素材库 `materials_list`、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
 | 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status`（完成时返回下载地址） |
 | 发布后的复盘 | `review_import` 导入平台后台的导出，`review_read` / `review_write` 查看和记录数据、留存（和同类比）和复盘文档，`reviews_compare` 和其他作品在同一发布天数比较（见 `reviews`） |
 
 ## 选择做法
 
-- **以素材为主**（图片、视频、配音、字幕的剪辑排版）：用 `visual.json` 图层 + `audio.json`，见 `layers`、`audio`。
-- **动态图形 / 文字动画 / 数据可视化**：Canvas 2D 场景，见 `scene`。需要大量精灵、滤镜用 `pixi`。
-- **三维**：`three`（或 `babylon`），可加载 GLB 模型。
-- 以上可以混用：在 `visual.json` 里叠加多个 scene 图层。
+| 要做的视频 | 用什么 | 见 |
+|---|---|---|
+| 以素材为主：图片、视频、配音、字幕的剪辑排版 | `visual.json` 图层 + `audio.json` | `layers`、`audio` |
+| 动态图形、插画动画、数据可视化 | Canvas 2D 场景 | `scene` |
+| 文字逐字出现、描边生长、形状变形、沿路径运动、复杂的动作编排 | Canvas 2D + gsap 时间线 | `gsap` |
+| 粒子密集、大量精灵、模糊/置换/发光等滤镜 | PixiJS 场景 | `pixi` |
+| 三维：产品展示、角色动画、三维场景 | Three.js 场景，或直接把模型放成图层 | `three`、`layers` |
+| 设计师用 AE 做好的动效（图标、贴纸、转场） | Lottie 图层 | `lottie` |
+
+以上可以混用：在 `visual.json` 里叠加多个图层，每个 scene 图层可以用不同的引擎。
 - 动手画一个角色、场景、道具或效果之前，先用 `resources_search` 看素材库里有没有现成的：有就导入复用（参数不够就改素材库里的代码，所有作品受益），不要在作品里重画或拷贝一份。
 
 ## 必须遵守

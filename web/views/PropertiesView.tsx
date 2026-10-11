@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { Layers, AudioLines, Captions, Flag, Film, Crosshair, Sparkles, GalleryThumbnails, ImageUp, Wand2 } from "lucide-react";
-import { api, formatTime, useServerEvent, workPath } from "../lib/api";
+import { api, formatTime, materialsPath, useServerEvent, workPath } from "../lib/api";
 import { automaticCover, coverFromFrame, coverUrl, uploadCover, type CoverState } from "../lib/covers";
 import { useAction, useToast } from "../lib/ui";
-import type { AudioDocument, VisualClip } from "../lib/types";
+import type { Asset, AudioDocument, VisualClip } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { VolumeSlider, formatDb } from "../workbench/Timeline";
 import { ViewHeader } from "./ViewHeader";
@@ -234,6 +234,12 @@ export function PropertiesView() {
               </>
             )}
           </Section>
+        )}
+        {layer.source.kind === "model" && (
+          <ModelSection
+            source={layer.source as ModelLayerSource}
+            onChange={(label, change, unset = []) => layerUpdate(layer.id, label, change ? { source: change } : {}, unset)}
+          />
         )}
         {Object.keys(parameters).length > 0 && (
           <Section title="场景参数">
@@ -491,7 +497,82 @@ const sourceLabel = (layer: VisualClip) =>
     ? `代码场景 ${layer.source.module}`
     : layer.source.kind === "color"
       ? `纯色 ${layer.source.color}`
-      : `${{ image: "图片", video: "视频", lottie: "Lottie", sequence: "序列帧" }[layer.source.kind] ?? layer.source.kind} ${(layer.source.src ?? "").replace(/^films\/[^/]+\//, "")}`;
+      : `${{ image: "图片", video: "视频", lottie: "Lottie", sequence: "序列帧", model: "三维模型" }[layer.source.kind] ?? layer.source.kind} ${(layer.source.src ?? "").replace(/^films\/[^/]+\//, "")}`;
+
+interface ModelLayerSource {
+  kind: "model";
+  src: string;
+  animation?: string;
+  spin?: number;
+  azimuth?: number;
+  elevation?: number;
+  environment?: string;
+}
+
+/** The animation clips of a model file (from the listing of the work's assets or of its library). */
+function useAnimations(src: string) {
+  const { work } = useWorkbench();
+  const [animations, setAnimations] = useState<{ name: string; duration: number }[] | null>(null);
+  useEffect(() => {
+    let current = true;
+    const library = /^materials\/([^/]+)\/(.+)$/.exec(src);
+    const request = library
+      ? api<{ ref: string; animations?: { name: string; duration: number }[] }[]>(`${materialsPath(work.repo)}/libraries/${encodeURIComponent(library[1])}/files`).then(
+          (files) => files.find((file) => file.ref === `${library[1]}/${library[2]}`)?.animations,
+        )
+      : api<Asset[]>(`${workPath(work.repo, work.id)}/assets`).then((assets) => assets.find((asset) => asset.url === src)?.animations);
+    request.then(
+      (found) => current && setAnimations(found ?? []),
+      () => current && setAnimations([]),
+    );
+    return () => {
+      current = false;
+    };
+  }, [src, work.repo, work.id]);
+  return animations;
+}
+
+/** A model layer: which animation plays, how it turns, where the camera looks from. */
+function ModelSection({ source, onChange }: { source: ModelLayerSource; onChange: (label: string, change: Record<string, unknown> | null, unset?: string[]) => unknown }) {
+  const animations = useAnimations(source.src);
+  const angle = (key: "spin" | "azimuth" | "elevation", label: string) => (value: number | null) =>
+    value === null ? onChange(label, null, [`source.${key}`]) : onChange(label, { [key]: value });
+  return (
+    <Section title="三维模型">
+      <Prop label="动画">
+        {animations?.length ? (
+          <Select
+            value={source.animation ?? animations[0].name}
+            options={animations.map((item) => ({ value: item.name, label: `${item.name}（${item.duration.toFixed(2)} 秒）` }))}
+            onChange={(animation) => onChange("选择动画", { animation })}
+          />
+        ) : (
+          <TextField
+            value={source.animation ?? ""}
+            placeholder={animations ? "第一个动画（没有读到动画名）" : "读取中…"}
+            onCommit={(animation) => (animation ? onChange("选择动画", { animation }) : onChange("选择动画", null, ["source.animation"]))}
+          />
+        )}
+      </Prop>
+      <Prop label="转动">
+        <NumberField value={source.spin ?? null} placeholder="0" unit="度/秒" min={-1440} max={1440} step={5} onCommit={angle("spin", "修改转动")} />
+      </Prop>
+      <Prop label="水平角度">
+        <NumberField value={source.azimuth ?? null} placeholder="20" unit="度" min={-360} max={360} step={5} hint="0 是正面" onCommit={angle("azimuth", "修改水平角度")} />
+      </Prop>
+      <Prop label="俯仰角度">
+        <NumberField value={source.elevation ?? null} placeholder="10" unit="度" min={-89} max={89} step={5} onCommit={angle("elevation", "修改俯仰角度")} />
+      </Prop>
+      {source.environment && (
+        <Prop label="环境光">
+          <span className="prop-static mono" title={source.environment}>
+            {source.environment.replace(/^films\/[^/]+\//, "")}
+          </span>
+        </Prop>
+      )}
+    </Section>
+  );
+}
 
 function Head({ icon, kind, title, onSeek, onAsk }: { icon: ReactNode; kind: string; title: string; onSeek?: () => void; onAsk?: () => void }) {
   return (

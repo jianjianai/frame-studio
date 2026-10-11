@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { AudioLines, ChevronDown, ChevronRight, Copy, Eye, FileCode2, FileQuestion, FileText, Film, FolderPlus, Lock, Music, Pencil, PlusSquare, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronRight, Copy, Eye, Film, FolderPlus, Lock, Music, Pencil, PlusSquare, RefreshCw, Sparkles, Trash2, Upload } from "lucide-react";
 import { api, del, formatBytes, formatTime, materialsPath, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast } from "../lib/ui";
 import type { Asset } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { assetDrag } from "../workbench/assetDrag";
 import { VersionsPanel } from "./VersionsView";
+import { KindIcon, KIND_NAMES, ServerThumb, isDrawn, isVisual } from "./media";
 
 interface Library {
   id: string;
@@ -24,6 +25,10 @@ interface MaterialFile {
   width?: number;
   height?: number;
   duration?: number;
+  fps?: number;
+  animations?: { name: string; duration: number }[];
+  triangles?: number;
+  problem?: string;
 }
 interface Used {
   ref: string;
@@ -128,11 +133,14 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
     width: file.width,
     height: file.height,
     duration: file.duration,
+    animations: file.animations,
+    fps: file.fps,
+    problem: file.problem,
   });
   const fileMenu = (event: React.MouseEvent, library: string, file: MaterialFile) => {
     const used = locks.get(file.ref);
     openMenu(event, [
-      ...(linked.has(library) && !readOnly && (file.kind === "image" || file.kind === "video")
+      ...(linked.has(library) && !readOnly && isVisual(file.kind)
         ? [{ label: "添加到画面（播放头处）", icon: <PlusSquare size={14} />, onClick: () => onPlace(asAsset(file), "layer") }]
         : []),
       ...(linked.has(library) && !readOnly && (file.kind === "audio" || file.kind === "video")
@@ -255,6 +263,14 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
               {(files[library.id] ?? []).map((file) => {
                 const used = locks.get(file.ref);
                 const src = `${base}/file?path=${enc(file.ref)}&v=${file.blob ?? ""}`;
+                const facts = [
+                  KIND_NAMES[file.kind],
+                  formatBytes(file.size),
+                  file.width ? `${file.width}×${file.height}` : "",
+                  file.duration ? formatTime(file.duration, false) : "",
+                  file.triangles ? `${file.triangles.toLocaleString()} 个三角形` : "",
+                  file.animations?.length ? `动画：${file.animations.map((item) => item.name).join("、")}` : "",
+                ].filter(Boolean);
                 return (
                   <div
                     key={file.ref}
@@ -266,30 +282,29 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
                     // Like the work's own assets: a click opens a preview tab, a double-click keeps it open.
                     onClick={() => openMaterial(file.ref, { preview: true })}
                     onDoubleClick={() => openMaterial(file.ref)}
-                    title={`${file.url}\n${formatBytes(file.size)}${file.width ? ` · ${file.width}×${file.height}` : ""}${file.duration ? ` · ${formatTime(file.duration, false)}` : ""}${used?.locked ? (used.outdated ? "\n作品锁定的是旧版本，素材库里有新版本" : "\n作品已锁定这个版本") : ""}${linked.has(library.id) ? "\n单击查看，拖到时间轴使用，右键更多操作" : "\n单击查看；引用这个素材库后才能用在作品里"}`}
+                    title={`${file.url}\n${facts.join(" · ")}${file.problem ? `\n注意：${file.problem}` : ""}${used?.locked ? (used.outdated ? "\n作品锁定的是旧版本，素材库里有新版本" : "\n作品已锁定这个版本") : ""}${linked.has(library.id) ? "\n单击查看，拖到时间轴使用，右键更多操作" : "\n单击查看；引用这个素材库后才能用在作品里"}`}
                   >
-                    <div className="asset-thumb">
-                      {file.kind === "image" ? (
-                        <img src={src} alt="" loading="lazy" />
-                      ) : file.kind === "video" ? (
-                        <video src={src + "#t=0.5"} preload="metadata" muted />
-                      ) : file.kind === "audio" ? (
-                        <AudioLines size={26} />
-                      ) : file.kind === "data" ? (
-                        <FileText size={26} />
-                      ) : file.kind === "code" ? (
-                        <FileCode2 size={26} />
-                      ) : (
-                        <FileQuestion size={26} />
-                      )}
-                      {file.duration ? <span className="asset-duration">{formatTime(file.duration, false)}</span> : null}
-                      {file.kind === "video" && <Film size={12} className="asset-kind" />}
-                      {used?.locked && (
-                        <span className={`material-lock ${used.outdated ? "outdated" : ""}`} title={used.outdated ? "有新版本" : "已锁定版本"}>
-                          {used.outdated ? <RefreshCw size={10} /> : <Lock size={10} />}
-                        </span>
-                      )}
-                    </div>
+                    {isDrawn(file.kind) ? (
+                      <ServerThumb
+                        src={`${base}/thumb?path=${enc(file.ref)}&v=${file.blob ?? ""}`}
+                        done={(event) => event.type === "asset-thumb" && event.repo === work.repo && event.ref === file.ref}
+                        icon={<KindIcon kind={file.kind} />}
+                        failedTitle="缩略图画不出来，单击打开看原因"
+                      >
+                        <FileBadges file={file} used={used} />
+                      </ServerThumb>
+                    ) : (
+                      <div className="asset-thumb">
+                        {file.kind === "image" ? (
+                          <img src={src} alt="" loading="lazy" />
+                        ) : file.kind === "video" ? (
+                          <video src={src + "#t=0.5"} preload="metadata" muted />
+                        ) : (
+                          <KindIcon kind={file.kind} />
+                        )}
+                        <FileBadges file={file} used={used} />
+                      </div>
+                    )}
                     <div className="asset-name ellipsis">{file.path}</div>
                     <button className="icon-btn asset-more" onClick={(event) => (event.stopPropagation(), fileMenu(event, library.id, file))} aria-label="更多">
                       ⋯
@@ -310,5 +325,24 @@ export function MaterialsPanel({ onPlace }: { onPlace: (asset: Asset, how: "laye
       {showVersions && <VersionsPanel source="materials" />}
       {menu}
     </div>
+  );
+}
+
+/** What a library file's card says about it: length, kind, locked version, problems. */
+function FileBadges({ file, used }: { file: MaterialFile; used?: Used }) {
+  return (
+    <>
+      {file.duration ? <span className="asset-duration">{formatTime(file.duration, false)}</span> : null}
+      {file.kind === "video" && <Film size={12} className="asset-kind" />}
+      {file.kind === "model" && <span className="asset-tag">{file.animations?.length ? `3D · 动画 ${file.animations.length}` : "3D"}</span>}
+      {file.kind === "lottie" && <span className="asset-tag">Lottie</span>}
+      {file.kind === "environment" && <span className="asset-tag">HDR</span>}
+      {file.problem && <AlertTriangle size={13} className="asset-problem" />}
+      {used?.locked && (
+        <span className={`material-lock ${used.outdated ? "outdated" : ""}`} title={used.outdated ? "有新版本" : "已锁定版本"}>
+          {used.outdated ? <RefreshCw size={10} /> : <Lock size={10} />}
+        </span>
+      )}
+    </>
   );
 }

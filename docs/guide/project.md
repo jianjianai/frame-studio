@@ -10,7 +10,7 @@ const project: AnimationProject = {
   title: "夏日海报",
   subtitle: "",
   description: "15 秒竖屏促销短片",
-  renderer: "composition",         // composition | canvas | pixi | three | babylon
+  renderer: "composition",         // composition | canvas | pixi | three
   engineProtocol: 1,
   composition: { width: 1080, height: 1920 },
   duration: 15,                    // 秒，最长 3600

@@ -56,6 +56,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `ai/` | ACP 客户端：代理进程池、会话、权限、登录、自定义 API |
 | `speech/` | 语音引擎与模型下载 |
 | `audio-analysis.mjs` `beat-this/` | AI 的“听”：ffmpeg 解码后算响度；节拍和小节交给 [Beat This!](https://github.com/CPJKU/beat_this)（MIT）模型，由 `beat-this/analyze.py` 在独立的 Python 进程中运行（`FRAME_BEAT_PYTHON`），一次只跑一个 |
+| `asset-previews.mjs` `thumbnails.mjs` | 模型、Lottie、全景图、字体的缩略图：作品 `public/` 里的按大小和修改时间、素材库的按 Git blob 缓存在 `cache/assets/`；`thumbnails.mjs` 是资源和素材共用的后台队列（一次一个，最新的请求先画，画不出来的记住几分钟），画好后广播 `asset-thumb` / `resource-thumb` |
 | `resources.mjs` | 素材库代码里声明的资源（`defineResources` 的角色、场景、效果……，`defineSounds` 的音效）和导出的函数：不运行代码，用 Babel 静态读出字面量字段、zod 参数和注释，按 Git blob 缓存；`resources_search` / `resource_view` 工具、工作台的资源列表、缩略图（无界面浏览器在后台逐个渲染，最新的请求先画；没画好时接口返回 202，画好后广播 `resource-thumb`；按代码版本缓存在 `cache/resources/`，画不出来的按版本记住几分钟）；素材库概况（资源和音效数量、常用画布、README 第一段）给 `work_context` 和会话说明。预览和缩略图运行素材库现在的代码（`tmp/library/<库>/`，素材地址 `/files/<库>/-/`），不混用作品锁定的旧文件 |
 | `reviews.mjs` `review-data.mjs` `review-analysis.mjs` `review-import.mjs` `review-segments.mjs` `sheets.mjs` | 复盘：作品发到平台后的发布记录、按时间记录的累计数据、留存曲线（和同类作品的）、每小时数据、关键时刻和自定义分段（`review.json`）、平台导出的原始文件（`raw/`，原样保存）和复盘文档，放在 `frame/reviews` 分支而不是作品分支（已发布的作品只读，数据却一直在增加；所有作品在一个文件夹里便于对比）。每次修改立即保存为一个版本并自动推送；只读的请求不会建出这个分支。`review-data.mjs`：数据格式和操作、按发布后同一天数取数（有每小时数据时正好算到那一天）、比例、中位数；`review-analysis.mjs`：每秒和每段流失率是同类的几倍、“按同类走”的收益、流量的几波，以及给 AI 的文字；`review-import.mjs`：按表格内容认出抖音创作者中心的导出和评论导出，直接读成数据；`review-segments.mjs`：从作品本身取分段（visual.json 的图层、镜头标记、字幕，配乐旁的 .lrc 按 audio.json 的剪辑换算到作品时间）；`sheets.mjs` 不执行公式地把 xlsx / csv 读成文字表格（GB18030、UTF-16 编码的导出也能读）。工具 `review_import` / `review_read` / `review_write` / `reviews_compare`，工作台「复盘」视图和首页的复盘对比页 |
 | `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件，作品写 `-` 时取现在的版本：Git blob，LFS 内容按需下载；`@materials/...` 代码导入由 Vite 插件解析到作品根目录 `.materials/` 中的副本，锁定版本或素材库当前版本，锁定时沿导入关系一并锁定；保存版本和发布前锁定文件只保留作品用到的）、导出文件、后台任务 |
@@ -66,7 +67,9 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 
 载入作品时页面设置作品的素材地址、节拍（`project.ts` 的 `tempo`，`src/engine/tempo.ts`）和素材库代码副本的位置（`src/engine/materials.ts`）。引擎在任何文件里都按 `@frame/engine/<模块>` 导入（Vite 别名和作品 tsconfig 的 paths）。文档里写的素材库代码（audio.json 生成音源的 `module: "materials/<库>/<文件>.ts"`）在运行时按 `/@fs/<作品根>/.materials/<文件>` 导入，Vite 插件先把作品锁定的版本复制过去。
 
-资源预览页 `/preview/resource.html` 在同样的作品环境里导入一个素材库代码文件，画出其中的资源（工作台的资源标签页通过同源的 `window.__FRAME_RESOURCE__` 控制参数和时间，播放音效）；服务端用同一个页面无界面渲染缩略图和给 AI 的预览图。
+资源预览页 `/preview/resource.html` 在同样的作品环境里导入一个素材库代码文件，画出其中的资源（Canvas 2D 的 `draw`，或 three / pixi 的 `build` 搭出的场景，页面里共用一个 WebGL 渲染器和一个 Pixi 应用；工作台的资源标签页通过同源的 `window.__FRAME_RESOURCE__` 控制参数和时间，播放音效，三维资源可以拖动旋转视角）；服务端用同一个页面无界面渲染缩略图和给 AI 的预览图。
+
+素材预览页 `/preview/asset.html` 画浏览器自己显示不了的素材：三维模型（GLB/glTF/FBX/OBJ，引擎的 `loadModel` + 摄影棚光）、Lottie、HDR/EXR 全景图、字体。工作台的标签页用它播放和旋转（`window.__FRAME_ASSET__`）；服务端每个素材地址前缀（一个作品，或 `/files/<库>/-/` 即素材库现在的版本）保留一个页面，`open` 换文件，给缩略图（`asset-previews.mjs`）和 `asset_view` 出图。
 
 保存作品文件时，Vite 的 `hotUpdate` 钩子使改动模块失效并打上时间戳，但阻止整页刷新；服务端合并 120 ms 内的改动后广播 `preview-update`。舞台带时间戳重新导入 `project.ts`，调用 `session.updateProject()` 原地替换场景和音频，播放位置保持不变。素材文件（`public/`）的改动由目录监听发现。
 

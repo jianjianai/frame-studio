@@ -14,6 +14,7 @@ import { problem, confined } from "../util.mjs";
 import { probe } from "../media.mjs";
 import { placeAudio } from "../documents.mjs";
 import { contactSheet, ffmpegExecutable, formatTime } from "../render.mjs";
+import { DRAWN } from "../asset-previews.mjs";
 
 const extensionFor = (type) =>
   ({
@@ -124,6 +125,41 @@ async function videoFrame(file, time) {
   return Buffer.concat(chunks);
 }
 
+/**
+ * The pictures asset_view shows of one file: the image itself, frames of a video or a Lottie,
+ * a model from several sides (or moments of its animation), a panorama, a font sample.
+ */
+function viewsOf(info, { times, animation, each }) {
+  const spread = (duration) => (times ?? [0.1, 0.5, 0.9, 0.7].slice(0, Math.min(3, each)).map((share) => share * duration)).slice(0, each);
+  if (info.kind === "video") return spread(info.duration ?? 1).map((time) => ({ time: Math.max(0, Math.min(time, (info.duration ?? time) - 0.05)), label: formatTime(time) }));
+  if (info.kind === "lottie") return spread(info.duration ?? 1).map((time) => ({ time: Math.min(time, info.duration ?? time), label: formatTime(time) }));
+  if (info.kind === "model") {
+    const clip = animation ? info.animations?.find((item) => item.name === animation) : info.animations?.[0];
+    if (clip?.duration && (times || animation))
+      return spread(clip.duration).map((time) => ({ time, animation: clip.name, label: `${clip.name} ${formatTime(time)}` }));
+    // Four sides; an animated model in the pose of its first animation's first moment.
+    return [20, 110, 200, 290].slice(0, Math.max(1, each)).map((azimuth) => ({ azimuth, elevation: 12, ...(clip ? { animation: clip.name, time: 0 } : {}), label: `${azimuth}°` }));
+  }
+  return [{}];
+}
+
+/** One line about a media file for the AI: what it is, its size, length, animations and problems. */
+function describeAsset(src, info) {
+  const kinds = { image: "图片", video: "视频", audio: "音频", model: "三维模型", lottie: "Lottie 动画", environment: "全景图", font: "字体" };
+  const parts = [`${kinds[info.kind] ?? info.kind}${info.width ? ` ${info.width}×${info.height}` : ""}${info.duration ? ` ${info.duration} 秒` : ""}`];
+  if (info.kind === "lottie" && info.fps) parts.push(`${info.fps} fps`);
+  if (info.kind === "environment") parts.push("三维场景的环境光（loadEnvironment，或模型图层的 environment）");
+  if (info.kind === "model") {
+    if (info.triangles) parts.push(`${info.triangles.toLocaleString("en-US")} 个三角形`);
+    if (info.dimensions) parts.push(`尺寸 ${info.dimensions.join(" × ")}（模型单位）`);
+    if (info.skinned) parts.push("带骨骼");
+    if (info.compression?.length) parts.push(`压缩 ${info.compression.join("、")}`);
+    parts.push(info.animations?.length ? `动画：${info.animations.map((item) => `${item.name}（${item.duration} 秒）`).join("、")}` : "没有动画");
+  }
+  parts.push(sizeText(info.size ?? 0));
+  return `${src}：${parts.join("，")}${info.problem ? `。注意：${info.problem}` : ""}`;
+}
+
 const SHEET_CELLS = 36;
 const BACKGROUND = "#16191d";
 const sizeText = (bytes) => (bytes >= 1048576 ? `${(bytes / 1048576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
@@ -139,67 +175,87 @@ export function registerAssetTools(registry) {
     name: "asset_view",
     title: "查看素材",
     description:
-      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了图片、视频后，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部图片和视频；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。",
+      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了素材，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。",
     readOnly: true,
     input: {
       work: workArg,
       files: z.array(z.string().min(1).max(512)).min(1).max(SHEET_CELLS).optional(),
-      times: z.array(z.number().nonnegative()).min(1).max(8).optional().describe("视频抽帧的时间点（文件内秒数）"),
+      times: z.array(z.number().nonnegative()).min(1).max(8).optional().describe("视频抽帧、Lottie 和模型动画取帧的时间点（文件内秒数）"),
+      animation: z.string().max(200).optional().describe("模型的哪个动画（默认第一个）"),
     },
-    async run({ files, times }, ctx) {
+    async run({ files, times, animation }, ctx) {
       const work = await ctx.work();
       const all = !files;
-      if (all) files = (await listAssets(work)).filter((item) => item.kind === "image" || item.kind === "video").map((item) => item.url);
-      if (!files.length) return { data: { items: [] }, text: "作品 public/ 里还没有图片或视频。" };
+      const viewable = (kind) => kind === "image" || kind === "video" || DRAWN.has(kind);
+      if (all) files = (await listAssets(work)).filter((item) => viewable(item.kind)).map((item) => item.url);
+      if (!files.length) return { data: { items: [] }, text: "作品 public/ 里还没有可以看的素材（图片、视频、模型、Lottie、全景图、字体）。" };
       const items = [];
       for (const src of files) {
         const file = await resolveAsset(services, work, src);
         items.push({ src, file, info: await probe(file) });
       }
-      // Cells: one per image, a few per video, at most SHEET_CELLS in all.
-      const visual = items.filter((item) => item.info.kind === "image" || item.info.kind === "video");
-      const videos = visual.filter((item) => item.info.kind === "video").length;
-      const perVideo = times?.length ?? Math.max(1, Math.min(3, Math.floor((SHEET_CELLS - (visual.length - videos)) / Math.max(1, videos))));
+      // Cells: one per image, a few per video, model or Lottie, at most SHEET_CELLS in all.
+      const visual = items.filter((item) => viewable(item.info.kind));
+      const several = visual.filter((item) => ["video", "model", "lottie"].includes(item.info.kind)).length;
+      const each = Math.max(1, Math.min(4, Math.floor((SHEET_CELLS - (visual.length - several)) / Math.max(1, several))));
       const cells = [];
       const skipped = [];
       for (const item of visual) {
-        const wanted = item.info.kind === "video" ? (times ?? [0.1, 0.5, 0.9].slice(0, perVideo).map((share) => share * (item.info.duration ?? 1))).slice(0, perVideo) : [null];
-        for (const time of wanted) {
+        for (const view of viewsOf(item.info, { times, animation, each })) {
           if (cells.length >= SHEET_CELLS) {
             if (!skipped.includes(item.src)) skipped.push(item.src);
             continue;
           }
-          cells.push({ item, time: time === null ? null : Math.max(0, Math.min(time, (item.info.duration ?? time) - 0.05)) });
+          cells.push({ item, view });
         }
       }
-      const single = cells.length === 1 && cells[0].time === null;
+      const single = cells.length === 1 && cells[0].view.time === undefined;
       const w = single ? 1024 : cells.length <= 4 ? 480 : 320;
       // Cells take the typical shape of what is shown (landscape video, portrait photos…).
-      const shapes = visual.filter((item) => item.info.width && item.info.height).map((item) => item.info.width / item.info.height).sort((a, b) => a - b);
+      const shapes = visual.filter((item) => item.info.width && item.info.height && item.info.kind !== "environment").map((item) => item.info.width / item.info.height).sort((a, b) => a - b);
       const shape = Math.min(2, Math.max(0.5, shapes[Math.floor(shapes.length / 2)] ?? 4 / 3));
       const h = single ? 1024 : Math.round(w / shape);
+      // Models, Lottie, panoramas and fonts are drawn by the studio's asset page, all views of a file at once.
+      const drawn = new Map();
+      const drawnFacts = new Map();
+      for (const item of visual.filter((entry) => DRAWN.has(entry.info.kind))) {
+        const views = cells.filter((cell) => cell.item === item).map((cell) => cell.view);
+        if (!views.length) continue;
+        try {
+          const src = item.src.startsWith("public/") ? `films/${work.slug}/${item.src.slice(7)}` : item.src;
+          const { frames, info } = await services.renderer.assetFrames({ assetBase: `/files/${work.repo}/${work.id}/`, src, kind: item.info.kind, views, width: Math.min(1024, w * 2) });
+          drawn.set(item, frames.map((frame) => frame.png));
+          drawnFacts.set(item, info);
+        } catch (error) {
+          drawn.set(item, error);
+        }
+      }
       const rendered = [];
       const problems = [];
       for (const [index, cell] of cells.entries()) {
         try {
-          const input = cell.time === null ? cell.item.file : await videoFrame(cell.item.file, cell.time);
+          let input;
+          if (DRAWN.has(cell.item.info.kind)) {
+            const pictures = drawn.get(cell.item);
+            if (pictures instanceof Error) throw pictures;
+            input = pictures[cells.filter((other) => other.item === cell.item).indexOf(cell)];
+          } else input = cell.view.time === undefined ? cell.item.file : await videoFrame(cell.item.file, cell.view.time);
           const png = await sharp(input, { animated: false })
             .resize(w, h, { fit: single ? "inside" : "contain", withoutEnlargement: single, background: BACKGROUND })
             .flatten({ background: BACKGROUND })
             .png()
             .toBuffer();
-          rendered.push({ png, label: `#${index + 1} ${shortName(cell.item.src)}${cell.time === null ? "" : " " + formatTime(cell.time)}` });
+          rendered.push({ png, label: `#${index + 1} ${shortName(cell.item.src)}${cell.view.label ? " " + cell.view.label : ""}` });
         } catch (error) {
-          problems.push(`#${index + 1} ${cell.item.src}：${error.message}`);
+          if (!problems.some((line) => line.includes(cell.item.src))) problems.push(`#${index + 1} ${cell.item.src}：${error.message}`);
           rendered.push({ png: await sharp({ create: { width: w, height: h, channels: 3, background: BACKGROUND } }).png().toBuffer(), label: `#${index + 1} 无法显示` });
         }
       }
       const image = single
         ? await sharp(rendered[0].png).jpeg({ quality: 85 }).toBuffer()
         : await contactSheet(rendered, w, h, Math.min(cells.length <= 4 ? 2 : 6, Math.ceil(Math.sqrt(cells.length))));
-      const describe = (item) =>
-        `${item.src}：${{ image: "图片", video: "视频", audio: "音频" }[item.info.kind] ?? item.info.kind}${item.info.width ? ` ${item.info.width}×${item.info.height}` : ""}${item.info.duration ? ` ${item.info.duration} 秒` : ""}，${sizeText(item.info.size)}`;
-      const numbered = cells.map((cell, index) => `#${index + 1} ${cell.item.src}${cell.time === null ? "" : ` @${formatTime(cell.time)}`}`);
+      const describe = (item) => describeAsset(item.src, { ...item.info, ...(drawnFacts.get(item) ?? {}) });
+      const numbered = cells.map((cell, index) => `#${index + 1} ${cell.item.src}${cell.view.label ? " " + cell.view.label : ""}`);
       const others = items.filter((item) => !visual.includes(item));
       const text = [
         single ? describe(items[0]) : `${numbered.join("\n")}\n\n${visual.map(describe).join("\n")}`,

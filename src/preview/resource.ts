@@ -1,7 +1,9 @@
 import { z } from "zod";
+import type * as THREE from "three";
+import type { Application } from "pixi.js";
 import { setTempo } from "../engine/tempo";
 import { importMaterial, setMaterialBase } from "../engine/materials";
-import type { Resource, SoundLibrary } from "../engine/resources";
+import type { Resource, SoundLibrary, ThreePreview, ThreeStage, PixiPreview } from "../engine/resources";
 
 /**
  * Preview of one material library module's resources and sounds, as the library has it now
@@ -12,6 +14,8 @@ import type { Resource, SoundLibrary } from "../engine/resources";
 export interface ResourceInfo {
   key: string;
   kind: string;
+  /** canvas, three or pixi */
+  engine: string;
   title: string;
   description?: string;
   usage?: string;
@@ -86,26 +90,32 @@ const api: ResourcePageApi = {
   ready: false,
   resources: [],
   sounds: [],
-  async show(key, options) {
+  show(key, options) {
     const resource = find(key);
     shown = () => api.show(key, options);
-    const ratio = devicePixelRatio || 1;
-    const fit = Math.min(view.clientWidth / resource.preview.width, view.clientHeight / resource.preview.height);
-    const width = Math.max(1, Math.round(resource.preview.width * fit));
-    visible.style.width = width + "px";
-    visible.style.height = Math.round(resource.preview.height * fit) + "px";
-    try {
-      await draw(visible, resource, options, width * ratio);
-      say("");
-    } catch (error) {
-      say(messageOf(error));
-      throw error;
-    }
+    if (key !== orbit.key) Object.assign(orbit, { key, azimuth: 0, elevation: 0, zoom: 1 });
+    visible.style.cursor = resource.preview.engine === "three" ? "grab" : "";
+    return serial(async () => {
+      const ratio = devicePixelRatio || 1;
+      const fit = Math.min(view.clientWidth / resource.preview.width, view.clientHeight / resource.preview.height);
+      const width = Math.max(1, Math.round(resource.preview.width * fit));
+      visible.style.width = width + "px";
+      visible.style.height = Math.round(resource.preview.height * fit) + "px";
+      try {
+        await draw(visible, resource, options, width * ratio, true);
+        say("");
+      } catch (error) {
+        say(messageOf(error));
+        throw error;
+      }
+    });
   },
-  async render(key, { width = 640, ...options }) {
-    const canvas = document.createElement("canvas");
-    await draw(canvas, find(key), options, width);
-    return canvas.toDataURL("image/png");
+  render(key, { width = 640, ...options }) {
+    return serial(async () => {
+      const canvas = document.createElement("canvas");
+      await draw(canvas, find(key), options, width, false);
+      return canvas.toDataURL("image/png");
+    });
   },
   async showSound(key) {
     const sound = soundOf(key);
@@ -174,6 +184,131 @@ addEventListener("resize", () => {
   refit = requestAnimationFrame(() => void shown?.().catch(() => {}));
 });
 
+/** One drawing at a time: three and pixi scenes are shared by every request of the page. */
+let tail: Promise<unknown> = Promise.resolve();
+function serial<T>(task: () => Promise<T>): Promise<T> {
+  const next = tail.then(task, task);
+  tail = next.catch(() => {});
+  return next;
+}
+
+/**
+ * Looking around a three resource in the editor tab: drag turns the camera about the scene's
+ * middle, the wheel moves it closer, a double click puts it back. Pictures for thumbnails and
+ * the AI never use it.
+ */
+const orbit = { key: "", azimuth: 0, elevation: 0, zoom: 1 };
+let dragging: { x: number; y: number } | null = null;
+const redraw = () => void shown?.().catch(() => {});
+visible.addEventListener("pointerdown", (event) => {
+  if (visible.style.cursor !== "grab" && visible.style.cursor !== "grabbing") return;
+  dragging = { x: event.clientX, y: event.clientY };
+  visible.setPointerCapture(event.pointerId);
+  visible.style.cursor = "grabbing";
+});
+visible.addEventListener("pointermove", (event) => {
+  if (!dragging) return;
+  orbit.azimuth -= (event.clientX - dragging.x) * 0.01;
+  orbit.elevation = Math.max(-1.5, Math.min(1.5, orbit.elevation + (event.clientY - dragging.y) * 0.01));
+  dragging = { x: event.clientX, y: event.clientY };
+  redraw();
+});
+visible.addEventListener("pointerup", () => {
+  if (!dragging) return;
+  dragging = null;
+  visible.style.cursor = "grab";
+});
+visible.addEventListener(
+  "wheel",
+  (event) => {
+    if (visible.style.cursor !== "grab") return;
+    event.preventDefault();
+    orbit.zoom = Math.max(0.2, Math.min(5, orbit.zoom * Math.exp(event.deltaY * 0.001)));
+    redraw();
+  },
+  { passive: false },
+);
+visible.addEventListener("dblclick", () => {
+  Object.assign(orbit, { azimuth: 0, elevation: 0, zoom: 1 });
+  redraw();
+});
+
+/** The three scene of the resource and parameters shown last (built again when they change). */
+let three: { renderer: THREE.WebGLRenderer; lib: typeof THREE; built?: { id: string; stage: ThreeStage; middle: THREE.Vector3 } } | null = null;
+async function drawThree(preview: ThreePreview<unknown>, id: string, params: unknown, time: number, width: number, height: number, look: boolean) {
+  if (!three) {
+    const lib = await import("three");
+    const renderer = new lib.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderer.setPixelRatio(1);
+    three = { renderer, lib };
+  }
+  const { renderer, lib } = three;
+  renderer.setSize(width, height, false);
+  if (three.built?.id !== id) {
+    disposeThree();
+    // A build may change the renderer's settings; the next one starts from the defaults.
+    renderer.toneMapping = lib.NoToneMapping;
+    renderer.toneMappingExposure = 1;
+    renderer.outputColorSpace = lib.SRGBColorSpace;
+    renderer.shadowMap.enabled = false;
+    renderer.setClearColor(0, 0);
+    const stage = await preview.build({ renderer, params, width: preview.width, height: preview.height });
+    const middle = new lib.Box3().setFromObject(stage.scene).getCenter(new lib.Vector3());
+    three.built = { id, stage, middle };
+  }
+  const { stage, middle } = three.built!;
+  await stage.update?.(time);
+  const camera = stage.camera;
+  const moved = look && (orbit.azimuth || orbit.elevation || orbit.zoom !== 1);
+  const position = camera.position.clone();
+  const quaternion = camera.quaternion.clone();
+  if (moved) {
+    const offset = new lib.Spherical().setFromVector3(camera.position.clone().sub(middle));
+    offset.theta += orbit.azimuth;
+    offset.phi = Math.max(0.01, Math.min(Math.PI - 0.01, offset.phi - orbit.elevation));
+    offset.radius *= orbit.zoom;
+    camera.position.copy(middle).add(new lib.Vector3().setFromSpherical(offset));
+    camera.lookAt(middle);
+  }
+  renderer.render(stage.scene, camera);
+  // The resource's own camera stays as its update left it.
+  camera.position.copy(position);
+  camera.quaternion.copy(quaternion);
+  return renderer.domElement;
+}
+function disposeThree() {
+  if (!three?.built) return;
+  const { stage } = three.built;
+  three.built = undefined;
+  try {
+    stage.dispose?.();
+  } finally {
+    void import("../engine/three-assets").then(({ disposeObject }) => disposeObject(stage.scene));
+  }
+}
+
+/** The pixi application of the resource and parameters shown last. */
+let pixi: { app: Application; built?: { id: string; update: (time: number) => void | Promise<void> } } | null = null;
+async function drawPixi(preview: PixiPreview<unknown>, id: string, params: unknown, time: number, scale: number) {
+  if (!pixi) {
+    await import("pixi.js/unsafe-eval");
+    const { Application } = await import("pixi.js");
+    const app = new Application();
+    await app.init({ width: preview.width, height: preview.height, autoStart: false, sharedTicker: false, antialias: true, preserveDrawingBuffer: true, backgroundAlpha: 0 });
+    pixi = { app };
+  }
+  const { app } = pixi;
+  app.renderer.resize(preview.width, preview.height, scale);
+  if (pixi.built?.id !== id) {
+    pixi.built = undefined;
+    for (const child of app.stage.removeChildren()) child.destroy({ children: true });
+    pixi.built = { id, update: await preview.build({ app, params, width: preview.width, height: preview.height }) };
+  }
+  await pixi.built!.update(time);
+  app.renderer.render(app.stage);
+  return app.canvas as HTMLCanvasElement;
+}
+
 function find(key: string) {
   const resource = resources[key];
   if (!resource) throw new Error(`materials/${material} 里没有资源 ${key}（有：${Object.keys(resources).join("、") || "无"}）`);
@@ -204,7 +339,8 @@ function valuesOf(resource: Resource, { preset, values }: ResourceFrameOptions) 
   return parsed.data;
 }
 
-async function draw(canvas: HTMLCanvasElement, resource: Resource, options: ResourceFrameOptions, pixels: number) {
+/** Draw a resource into a canvas `pixels` wide; `look`: the tab's view, turned by the user. */
+async function draw(canvas: HTMLCanvasElement, resource: Resource, options: ResourceFrameOptions, pixels: number, look: boolean) {
   const { preview } = resource;
   const key = Object.keys(resources).find((name) => resources[name] === resource)!;
   if (!prepared.has(key)) {
@@ -216,16 +352,31 @@ async function draw(canvas: HTMLCanvasElement, resource: Resource, options: Reso
   await document.fonts.ready;
   const values = valuesOf(resource, options);
   const scale = pixels / preview.width;
-  canvas.width = Math.max(1, Math.round(preview.width * scale));
-  canvas.height = Math.max(1, Math.round(preview.height * scale));
+  const width = Math.max(1, Math.round(preview.width * scale));
+  const height = Math.max(1, Math.round(preview.height * scale));
+  const time = options.time ?? preview.time ?? (preview.duration ? preview.duration / 2 : 0);
+  // A scene is built per resource and parameter set, and only drawn again for another time.
+  const id = `${key}|${JSON.stringify(values)}`;
+  const picture =
+    preview.engine === "three"
+      ? await drawThree(preview, id, values, time, width, height, look)
+      : preview.engine === "pixi"
+        ? await drawPixi(preview, id, values, time, scale)
+        : null;
+  canvas.width = width;
+  canvas.height = height;
   const ctx = canvas.getContext("2d")!;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = preview.background ?? "#e9e6df";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (picture) {
+    ctx.drawImage(picture, 0, 0, width, height);
+    return;
+  }
   ctx.save();
   ctx.scale(scale, scale);
   try {
-    const time = options.time ?? preview.time ?? (preview.duration ? preview.duration / 2 : 0);
+    if (!("draw" in preview)) throw new Error(`预览没有 draw（engine 只能是 canvas、three 或 pixi）`);
     await preview.draw(ctx, time, values as never);
   } finally {
     ctx.restore();
@@ -244,6 +395,7 @@ function describe(key: string, resource: Resource): ResourceInfo {
   return {
     key,
     kind: resource.kind,
+    engine: preview.engine ?? "canvas",
     title: resource.title,
     description: resource.description,
     usage: resource.usage,

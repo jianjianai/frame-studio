@@ -1,5 +1,5 @@
 export type RendererId =
-  "composition" | "canvas" | "pixi" | "three" | "babylon";
+  "composition" | "canvas" | "pixi" | "three";
 export const rendererIds: [RendererId, ...RendererId[]];
 export const adapters: ReadonlyArray<{
   id: string;

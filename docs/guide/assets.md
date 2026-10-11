@@ -33,7 +33,7 @@ import glow from "@materials/特效/glow.frag?raw";
 
 ## 获取素材
 
-- 用户上传或拖入的文件在 `work_context` 的 `assets` 中可以看到（含尺寸、时长）；`asset_view` 看图片、视频素材本身的样子（多个拼成一张总览图，视频按时间点抽帧），挑选和安排之前先看一眼。
+- 用户上传或拖入的文件在 `work_context` 的 `assets` 中可以看到（含尺寸、时长，模型的动画，Lottie 的问题）；`asset_view` 看素材本身的样子，挑选和安排之前先看一眼：图片、视频（按时间点抽帧）、三维模型（几个方向的渲染，`times` + `animation` 看动画）、Lottie（几个时刻）、HDR/EXR 全景图、字体（样张）。多个文件拼成一张总览图。
 - `asset_import`：从网址下载（`url`）到作品自己的 `public/`。导入时在 `license` 写清来源和许可，记录在 `production/licenses.md`。别的作品也会用到的素材，放进素材库（`material_write`）。
 - 自己生成的图片（如程序生成的纹理、SVG）可以直接写进 `public/`；SVG 直接写文件（外部 AI 用 `files_batch`）。
 
@@ -42,5 +42,9 @@ import glow from "@materials/特效/glow.frag?raw";
 - 图片：PNG（透明）/ JPEG / WebP；大背景控制在 4K 以内。
 - 视频：H.264 MP4 或 VP9 WebM。视频图层逐帧解码，长视频尽量预先裁短。
 - 音频：MP3 / M4A / WAV / OGG。
-- 三维：GLB（可用 Draco 压缩）。
+- 三维模型：GLB 最好（一个文件，可用 Draco/Meshopt/KTX2 压缩）；也支持 glTF（外部文件放在同一文件夹）、FBX（Mixamo 角色和动作）、OBJ（+ .mtl）。可以直接放成图层（见 `layers`），或在 three 场景里 `loadModel`（见 `three`）。
+- 全景图（三维场景的环境光）：HDR 或 EXR，1K–2K 足够（如 Poly Haven，CC0）。`loadEnvironment` 或模型图层的 `environment`。
+- Lottie：JSON，图片内嵌、不用表达式（见 `lottie`）。
 - 字体：WOFF2，通过 `FontFace` 加载（见 `scene`）。多个作品共用的字体放进素材库，放完整的字体文件，不要只取某个作品用到的字（换了文案就会缺字）。
+
+工作台的「素材」里，模型、Lottie、全景图和字体都有缩略图（服务器在后台画），单击打开预览：模型可以拖动旋转、选动画播放，Lottie 可以播放。图片、视频、Lottie、模型可以拖到时间轴成为图层。

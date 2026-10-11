@@ -14,8 +14,9 @@ export async function createLottieScene(
   const canvas = document.createElement("canvas");
   canvas.width = options.width;
   canvas.height = options.height;
+  // No container: given one, lottie-web draws into a canvas of its own inside it (sized by
+  // the page layout) and ignores the context. dpr 1: the canvas keeps the size it was given.
   const animation = lottie.loadAnimation<"canvas">({
-    container: document.createElement("div"),
     renderer: "canvas",
     loop: false,
     autoplay: false,
@@ -24,8 +25,9 @@ export async function createLottieScene(
       context: canvas.getContext("2d")!,
       clearCanvas: true,
       preserveAspectRatio: "xMidYMid meet",
+      dpr: 1,
     },
-  });
+  } as Parameters<typeof lottie.loadAnimation<"canvas">>[0]);
   try {
     await new Promise<void>((resolve, reject) => {
       let done = false;

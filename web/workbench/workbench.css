@@ -1133,6 +1133,9 @@
   position: relative;
   height: 72px;
   display: grid;
+  /* A definite track: pictures taller than the card scale down instead of covering the name. */
+  grid-template: 100% / 100%;
+  overflow: hidden;
   place-items: center;
   background: repeating-conic-gradient(var(--bg-hover) 0 25%, var(--bg-sunken) 0 50%) 0 0 / 12px 12px;
   color: var(--fg-muted);
@@ -1987,4 +1990,39 @@
 .editor-toolbar select.input.small {
   width: auto;
   max-width: 160px;
+}
+/* Kind of a file the browser does not show by itself (3D, Lottie, HDR), and its problems. */
+.asset-tag {
+  position: absolute;
+  left: 4px;
+  top: 4px;
+  padding: 0 5px;
+  border-radius: 3px;
+  background: rgb(0 0 0 / 0.6);
+  color: #fff;
+  font-size: 10px;
+  line-height: 16px;
+}
+.asset-problem {
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  color: var(--warn);
+}
+/* Controls under a drawn asset (models, Lottie) in an editor tab. */
+.asset-viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  min-width: 0;
+}
+.asset-viewer-bar input[type="range"] {
+  width: 220px;
+}
+.asset-viewer-bar select {
+  flex: none;
+  width: auto;
+  max-width: 260px;
 }

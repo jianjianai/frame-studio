@@ -16,7 +16,8 @@ export type VisualDocument = z.infer<typeof visualDocumentSchema>;
 export type SceneLoaders = Record<string, () => Promise<SceneModule>>;
 type Clip = VisualDocument["clips"][number];
 interface Source {
-  frame(time: number, signal: AbortSignal): Promise<MediaFrame>;
+  /** `box`: the pixels the layer covers on screen (a model is rendered at that size). */
+  frame(time: number, signal: AbortSignal, box: { width: number; height: number }): Promise<MediaFrame>;
   dispose(): void;
 }
 async function source(
@@ -73,6 +74,16 @@ async function source(
         };
       },
       dispose: () => scene.dispose(),
+    };
+  }
+  if (src.kind === "model") {
+    const { createModelLayer } = await import("./model-layer");
+    const layer = await createModelLayer(src, signal);
+    return {
+      async frame(time, _signal, box) {
+        return layer.frame(time, box.width, box.height);
+      },
+      dispose: () => layer.dispose(),
     };
   }
   if (src.kind === "scene") {
@@ -166,6 +177,12 @@ export function createCompositionScene(
       try {
         for (const clip of active) {
           const t = clipTime(clip, time)!;
+          const p = clip.transform ?? {};
+          const w = Math.max(0, sampleValue(p.width, t, 1)) * canvas.width,
+            h = Math.max(0, sampleValue(p.height, t, 1)) * canvas.height;
+          const x = sampleValue(p.x, t, 0) * canvas.width,
+            y = sampleValue(p.y, t, 0) * canvas.height;
+          const zoom = Math.max(0, sampleValue(p.scale, t, 1));
           let frame: MediaFrame | undefined;
           if (clip.source.kind !== "color") {
             let current = sources.get(clip.id);
@@ -178,14 +195,9 @@ export function createCompositionScene(
               }
               sources.set(clip.id, current);
             }
-            frame = await current.frame(t, signal);
+            frame = await current.frame(t, signal, { width: w * zoom, height: h * zoom });
           }
           signal.throwIfAborted();
-          const p = clip.transform ?? {};
-          const w = Math.max(0, sampleValue(p.width, t, 1)) * canvas.width,
-            h = Math.max(0, sampleValue(p.height, t, 1)) * canvas.height;
-          const x = sampleValue(p.x, t, 0) * canvas.width,
-            y = sampleValue(p.y, t, 0) * canvas.height;
           const elapsed = time - clip.start + (clip.fadeOffset ?? 0);
           const fade = Math.min(
             1,
@@ -214,7 +226,6 @@ export function createCompositionScene(
               : clip.blend;
             paint.translate(x + w / 2, y + h / 2);
             paint.rotate((sampleValue(p.rotation, t, 0) * Math.PI) / 180);
-            const zoom = Math.max(0, sampleValue(p.scale, t, 1));
             paint.scale(zoom, zoom);
             paint.beginPath();
             paint.rect(-w / 2, -h / 2, w, h);

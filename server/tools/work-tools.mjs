@@ -24,7 +24,9 @@ export async function listAssets(work) {
   for (const entry of tree(base)) {
     if (entry.type !== "file") continue;
     const info = await probe(path.join(base, entry.path));
-    items.push({ path: "public/" + entry.path, url: `films/${work.slug}/${entry.path}`, ...info });
+    // The version of the file, for thumbnails the studio draws (models, Lottie, panoramas, fonts).
+    const version = `${entry.size.toString(36)}-${Math.floor(entry.mtime).toString(36)}`;
+    items.push({ path: "public/" + entry.path, url: `films/${work.slug}/${entry.path}`, ...info, version });
   }
   return items;
 }
@@ -163,7 +165,7 @@ export function registerWorkTools(registry) {
             }))
           : null,
         files,
-        assets: assets.map(({ url, kind, size, duration, width, height }) => ({ url, kind, size, duration, width, height })),
+        assets: assets.map(({ url, kind, size, duration, width, height, animations, triangles, problem }) => ({ url, kind, size, duration, width, height, animations, triangles, problem })),
         // Built-in agents have the work's notes and its experience libraries in their session brief.
         ...(ctx.scope.session ? {} : { notes: fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8").slice(0, 6000) : "" }),
         unsavedChanges: status.files.map((file) => `${file.status} ${file.path}`),

@@ -143,6 +143,13 @@ export interface Asset {
   height?: number;
   /** A sound of a library sound module (`<library>/<file>#<name>`) instead of a file. */
   sound?: string;
+  /** The file's version (thumbnails the studio draws are cached by it). */
+  version?: string;
+  /** Models: animation clips; Lottie: frame rate; both: what the player cannot show. */
+  animations?: { name: string; duration: number }[];
+  triangles?: number;
+  fps?: number;
+  problem?: string;
 }
 
 /** A resource of the material libraries, as /resources lists it. */
@@ -163,6 +170,8 @@ export interface ResourceItem {
   duration?: number;
   hit?: number;
   preview?: { width?: number; height?: number; duration?: number };
+  /** canvas, three or pixi */
+  engine?: string;
   /** What its pictures depend on (thumbnail cache key). */
   version: string;
   outdated?: boolean;

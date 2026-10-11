@@ -72,7 +72,67 @@ export default defineSounds(SR, {
 });
 `;
 
+const SOLIDS = `/** 三维和 Pixi 的测试资源。 */
+import * as THREE from "three";
+import { Graphics } from "pixi.js";
+import { z } from "zod";
+import { defineResources, resource } from "@frame/engine/resources";
+import { showcase } from "@frame/engine/three-assets";
+
+export const boxOptions = z.object({ color: z.enum(["#ff0000", "#00ff00"]).default("#ff0000").describe("颜色") });
+/** A red box that turns. */
+export function box(options: z.input<typeof boxOptions> = {}) {
+  const { color } = boxOptions.parse(options);
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color }));
+  return { object: mesh, update: (time: number) => void (mesh.rotation.y = time) };
+}
+
+export const resources = defineResources({
+  box: resource({
+    kind: "prop",
+    title: "方块",
+    params: boxOptions,
+    preview: {
+      engine: "three",
+      width: 300,
+      height: 300,
+      duration: 2,
+      background: "#123456",
+      build({ renderer, params }) {
+        const b = box(params);
+        return { ...showcase(b.object, renderer), update: b.update };
+      },
+    },
+  }),
+  dot: resource({
+    kind: "effect",
+    title: "圆点",
+    preview: {
+      engine: "pixi",
+      width: 200,
+      height: 100,
+      background: "#000000",
+      build({ app }) {
+        const dot = new Graphics().circle(0, 0, 30).fill({ color: 0x00ff00 });
+        app.stage.addChild(dot);
+        return (time) => {
+          dot.position.set(100 + time * 10, 50);
+        };
+      },
+    },
+  }),
+});
+`;
+
 describe("resource declarations, read without running code", () => {
+  it("reads which engine draws a resource and how its preview is built", () => {
+    const [box, dot] = extractModule(SOLIDS, "测试/code/solids.ts").resources;
+    expect(box).toMatchObject({ key: "box", kind: "prop", preview: { engine: "three", width: 300, height: 300, duration: 2 } });
+    expect(box.preview.draw).toContain("showcase(b.object, renderer)");
+    expect(dot.preview.engine).toBe("pixi");
+    expect(extractModule(SHAPES, "测试/code/shapes.ts").resources[0].preview.engine).toBe("canvas");
+  });
+
   it("reads resources, parameters, presets, sounds and exports", () => {
     const shapes = extractModule(SHAPES, "测试/code/shapes.ts");
     expect(shapes.doc).toBe("测试用的形状。");
@@ -160,6 +220,7 @@ describe("resources of the material libraries", () => {
     await call(`${lib}/libraries`, { method: "POST", body: { name: "测试" } });
     await put("code/shapes.ts", SHAPES);
     await put("code/sfx.ts", SFX);
+    await put("code/solids.ts", SOLIDS);
     work = await works.create({ title: "用资源" });
   });
   afterAll(() => app.close());
@@ -191,7 +252,25 @@ describe("resources of the material libraries", () => {
 
     const listing = (await call(`/api/works/local/${work.id}/resources`)).body;
     expect(listing.libraries).toEqual([{ id: "测试", title: "测试", linked: false }]);
-    expect(listing.items.map((item) => item.id)).toEqual(["测试/code/sfx.ts#beep", "测试/code/sfx.ts#boop", "测试/code/shapes.ts#ball", "测试/code/shapes.ts#sky"]);
+    expect(listing.items.map((item) => item.id)).toEqual([
+      "测试/code/sfx.ts#beep",
+      "测试/code/sfx.ts#boop",
+      "测试/code/shapes.ts#ball",
+      "测试/code/shapes.ts#sky",
+      "测试/code/solids.ts#box",
+      "测试/code/solids.ts#dot",
+    ]);
+    expect(listing.items.find((item) => item.key === "box").engine).toBe("three");
+
+    // Three.js and PixiJS resources: found by engine, marked, said where they go.
+    const solids = await tool("resources_search", { work: work.id, engine: "three" });
+    expect(solids.body.data.items.map((item) => item.id)).toEqual(["测试/code/solids.ts#box"]);
+    expect((await tool("resources_search", { work: work.id, query: "三维" })).body.text).toContain("[物品 · 三维] 测试/code/solids.ts#box 方块");
+    const three = await tool("resource_view", { work: work.id, id: "测试/code/solids.ts#box", image: false });
+    expect(three.body.text).toContain("引擎：Three.js 三维（在 three 场景里用");
+    expect(three.body.text).toContain("预览里的搭法：");
+    // Its preview size is only a view of it: no warning about the work's picture.
+    expect(three.body.text).not.toContain("注意：按");
     expect(listing.items.find((item) => item.key === "ball").version).toMatch(/^[0-9a-f]{24}$/);
   });
 
@@ -254,7 +333,15 @@ describe("resources of the material libraries", () => {
     // work_context: the libraries, what they hold, whether they fit the picture (the ball's 400×300 does not fit 16:9).
     const context = JSON.parse((await tool("work_context", { work: other.id })).body.text);
     expect(context.materials.libraries).toEqual([
-      expect.objectContaining({ id: "测试", linked: false, sounds: 2, kinds: expect.objectContaining({ 物品: 1, 场景: 1 }), about: expect.stringContaining("素材库「测试」。"), canvasNote: expect.stringContaining("400×300") }),
+      expect.objectContaining({
+        id: "测试",
+        linked: false,
+        sounds: 2,
+        kinds: expect.objectContaining({ 物品: 2, 场景: 1, 效果: 1 }),
+        engines: { 三维: 1, Pixi: 1 },
+        about: expect.stringContaining("素材库「测试」。"),
+        canvasNote: expect.stringContaining("400×300"),
+      }),
     ]);
     expect((await tool("resource_view", { work: other.id, id: "测试/code/shapes.ts#ball", image: false })).body.text).toContain("注意：按 400×300（横屏）的画布设计");
     // The session brief has them too.
@@ -350,6 +437,53 @@ describe("resources of the material libraries", () => {
     const pixel = await sharp(thumb.body).raw().toBuffer();
     // The set's background (#123456), give or take the WebP compression.
     [0x12, 0x34, 0x56].forEach((value, index) => expect(Math.abs(pixel[index] - value)).toBeLessThan(6));
+  }, 120000);
+
+  it.skipIf(!browserExecutable())("renders Three.js and PixiJS resources", async () => {
+    const pixels = async (png) => sharp(png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    const at = ({ data, info }, x, y) => [...data.subarray((y * info.width + x) * 3, (y * info.width + x) * 3 + 3)];
+    // The red box, framed in the middle, on the resource's background.
+    const box = await pixels((await app.services.renderer.resourceFrames(work, { ref: "测试/code/solids.ts", key: "box", width: 200 })).frames[0].png);
+    expect(box.info.width).toBe(200);
+    expect(at(box, 100, 100)).toEqual([255, 0, 0]);
+    expect(at(box, 2, 2)).toEqual([0x12, 0x34, 0x56]);
+    // Other parameters build it anew.
+    const green = await pixels((await app.services.renderer.resourceFrames(work, { ref: "测试/code/solids.ts", key: "box", values: { color: "#00ff00" }, width: 200 })).frames[0].png);
+    expect(at(green, 100, 100)).toEqual([0, 255, 0]);
+    // The pixi dot moves with time.
+    const { frames } = await app.services.renderer.resourceFrames(work, { ref: "测试/code/solids.ts", key: "dot", times: [0, 4], width: 200 });
+    const [early, late] = await Promise.all(frames.map((frame) => pixels(frame.png)));
+    expect(at(early, 100, 50)).toEqual([0, 255, 0]);
+    expect(at(late, 140, 50)).toEqual([0, 255, 0]);
+    expect(at(late, 72, 50)).toEqual([0, 0, 0]);
+
+    // gsap on the canvas: a paused timeline seeked to the frame, a square turning into a diamond, a line drawing itself.
+    await put(
+      "code/motion.ts",
+      `import { defineResources, resource } from "@frame/engine/resources";
+import { gsap, morphPath, strokePath } from "@frame/engine/gsap";
+const morph = morphPath("M10 10 L90 10 L90 90 L10 90 Z", "M50 0 L100 50 L50 100 L0 50 Z");
+const state = { shape: 0, line: 0 };
+const timeline = gsap.timeline({ paused: true }).to(state, { shape: 1, line: 1, duration: 1, ease: "none" });
+export const resources = defineResources({
+  morph: resource({ kind: "effect", title: "变形", preview: { width: 100, height: 120, duration: 1, background: "#000000", draw(ctx, t) {
+    timeline.seek(t, true);
+    ctx.fillStyle = "#ff0000";
+    ctx.fill(new Path2D(morph(state.shape)));
+    ctx.strokeStyle = "#00ff00";
+    ctx.lineWidth = 6;
+    strokePath(ctx, "M0 110 L100 110", state.line);
+  } } }),
+});
+`,
+    );
+    const motion = await app.services.renderer.resourceFrames(work, { ref: "测试/code/motion.ts", key: "morph", times: [0, 0.5, 1], width: 100 });
+    const [start, half, end] = await Promise.all(motion.frames.map((frame) => pixels(frame.png)));
+    expect(at(start, 12, 12)).toEqual([255, 0, 0]);
+    expect(at(end, 12, 12)).toEqual([0, 0, 0]);
+    expect(at(end, 50, 4)).toEqual([255, 0, 0]);
+    expect(at(half, 25, 110)).toEqual([0, 255, 0]);
+    expect(at(half, 75, 110)).toEqual([0, 0, 0]);
   }, 120000);
 
   it.skipIf(!browserExecutable())("previews code whose imports changed since the work locked them", async () => {

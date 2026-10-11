@@ -1,4 +1,6 @@
 import type { z } from "zod";
+import type * as THREE from "three";
+import type { Application } from "pixi.js";
 import type { GeneratedAudioModule } from "./types";
 import { createPcmAudio, type StereoPcm } from "./procedural-audio";
 
@@ -7,7 +9,8 @@ import { createPcmAudio, type StereoPcm } from "./procedural-audio";
  * effects, transitions, text layers and sounds — declared next to their code, so the studio
  * can list and preview them and the AI can find them with resources_search / resource_view.
  * The platform reads the declarations without running code: keep title, kind, description,
- * tags, usage, presets and preview sizes literal.
+ * tags, usage, presets, the preview's engine and sizes literal. A preview draws with Canvas 2D
+ * (`draw`) or builds a Three.js or PixiJS scene (`engine` + `build`).
  */
 export const RESOURCE_KINDS = {
   character: "角色",
@@ -21,8 +24,8 @@ export const RESOURCE_KINDS = {
 } as const;
 export type ResourceKind = Exclude<keyof typeof RESOURCE_KINDS, "sound">;
 
-export interface ResourcePreview<P> {
-  /** Size of the preview canvas, in the units draw() uses. */
+interface PreviewBase {
+  /** Size of the preview picture (for Canvas 2D: the units draw() uses). */
   width: number;
   height: number;
   /** Seconds the preview's time slider covers; without it the resource is a still picture. */
@@ -33,8 +36,42 @@ export interface ResourcePreview<P> {
   background?: string;
   /** Load what drawing needs (fonts, images) before the first frame. */
   prepare?(): Promise<void> | void;
+}
+
+/** A resource drawn with Canvas 2D (the default engine). */
+export interface CanvasPreview<P> extends PreviewBase {
+  engine?: "canvas";
   draw(ctx: CanvasRenderingContext2D, time: number, params: P): void | Promise<void>;
 }
+
+/** What a Three.js resource preview shows: like createThreeScene's build. */
+export interface ThreeStage {
+  scene: THREE.Scene;
+  camera: THREE.Camera;
+  update?(time: number): void | Promise<void>;
+  /** Release what disposeObject(scene) does not (render targets, composers…). */
+  dispose?(): void;
+}
+/**
+ * A Three.js resource: `build` makes the scene for one set of parameters (it is built again
+ * when they change); `showcase(object, renderer)` lights and frames a single object.
+ */
+export interface ThreePreview<P> extends PreviewBase {
+  engine: "three";
+  build(context: { renderer: THREE.WebGLRenderer; params: P; width: number; height: number }): ThreeStage | Promise<ThreeStage>;
+}
+
+/**
+ * A PixiJS resource: `build` puts its display objects on `app.stage` (a width × height
+ * picture) and returns `update(time)`, like createPixiScene's build. Built again when the
+ * parameters change.
+ */
+export interface PixiPreview<P> extends PreviewBase {
+  engine: "pixi";
+  build(context: { app: Application; params: P; width: number; height: number }): ((time: number) => void | Promise<void>) | Promise<(time: number) => void | Promise<void>>;
+}
+
+export type ResourcePreview<P> = CanvasPreview<P> | ThreePreview<P> | PixiPreview<P>;
 
 export interface Resource<S extends z.ZodObject = z.ZodObject> {
   kind: ResourceKind;

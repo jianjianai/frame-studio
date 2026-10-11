@@ -27,6 +27,7 @@ import type { Asset, AudioDocument, Subtitle, Beat, VisualClip } from "../lib/ty
 import { useObservable, useWorkbench } from "./store";
 import { loadPeaks, drawPeaks } from "./waveform";
 import { assetDrag } from "./assetDrag";
+import { isVisual, layerOf } from "../views/media";
 
 const WIDE_LABEL = 168;
 const NARROW_LABEL = 92;
@@ -554,7 +555,7 @@ export function Timeline() {
 
   // ---- dropping assets ------------------------------------------------------------------
   const usesLayers = Boolean(meta?.visual);
-  const visualAsset = (asset: Asset) => asset.kind === "image" || asset.kind === "video";
+  const visualAsset = (asset: Asset) => isVisual(asset.kind);
   /** The row an asset lands in: audio goes to audio tracks (or a new one), pictures to layers. */
   const targetRow = (asset: Asset, rowId: string | null) => {
     const row = rows.find((item) => item.id === rowId);
@@ -570,7 +571,7 @@ export function Timeline() {
     event.dataTransfer.dropEffect = "copy";
     setAssetOver(true);
     const rowId = (event.target as HTMLElement).closest<HTMLElement>("[data-row]")?.dataset.row ?? null;
-    const length = asset.duration ?? 5;
+    const length = asset.kind === "audio" ? (asset.duration ?? 5) : layerOf(asset).length;
     const { time } = snap(Math.max(0, timeAt(event.clientX)), null, event.altKey);
     const start = Math.max(0, Math.min(duration - 0.05, time));
     setDropTarget({ row: targetRow(asset, rowId), start, duration: Math.min(length, duration - start), label: asset.path.split("/").pop()! });
@@ -617,7 +618,7 @@ export function Timeline() {
           clip: {
             id,
             name,
-            source: { kind: asset.kind === "video" ? "video" : "image", src: asset.url },
+            source: layerOf(asset).source,
             start: round3(target.start),
             duration: Math.max(0.1, round3(target.duration)),
             fit: "contain",

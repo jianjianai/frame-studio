@@ -35,7 +35,7 @@ export function createScene(options: SceneOptions) {
 
 ## 图层字段
 
-- `source.kind`：`image`、`video`、`lottie`（`src` 为 Lottie JSON）、`sequence`（`frames` 图片数组 + `fps`）、`color`（`color: "#rrggbb"`）、`scene`（`module` + `engine`，engine 取 canvas/pixi/three/babylon/composition）。
+- `source.kind`：`image`、`video`、`lottie`（`src` 为 Lottie JSON，见 `lottie`）、`model`（三维模型，见下）、`sequence`（`frames` 图片数组 + `fps`）、`color`（`color: "#rrggbb"`）、`scene`（`module` + `engine`，engine 取 canvas/pixi/three/composition）。
 - 时间：`start`、`duration`（作品时间，秒）；`offset` 素材内起点；`rate` 速度；`loop` 循环长度；`phase`。
 - `transform`：`x, y, width, height` 是相对画面的 0–1 比例（默认铺满），`rotation` 度，`scale` 以图层中心缩放（图层框和内容一起，1 是原大小，超出画面的部分被裁掉），`opacity` 0–1。每项可以是数字或关键帧数组 `[{ at, value, easing }]`，`at` 是图层内时间，easing 为 `linear`/`hold`/`smooth`。
 - 推近（照片慢慢放大）：`"transform": { "scale": [{ "at": 0, "value": 1 }, { "at": 4, "value": 1.12, "easing": "smooth" }] }`；弹出：`scale` 从 0.8 到 1 配合 `fadeIn`。不要用改 `width`/`height` 再挪 `x`/`y` 的办法做缩放。
@@ -63,3 +63,19 @@ export function createScene(options: SceneOptions) {
 - 新的 scene 模块要先在 `scene.ts` 的 loaders 中注册（`名称: () => import("./scenes/名称")`），否则会报“场景模块未注册”。
 - scene 图层的模块是普通 Scene（见 `scene`），收到的 `time` 是图层内时间（已减去 start、考虑 rate/offset）。scene 图层输出透明画布即可叠加在下层之上。
 - 同时活跃的图层不超过 32 个。
+
+## 三维模型图层
+
+不写代码直接放一个模型（GLB/glTF/FBX/OBJ，作品的 `films/…` 或素材库的 `materials/…`）：模型在摄影棚光下自动取景，填满图层的框（按框的形状渲染，透明背景），有动画时播放动画。
+
+```json
+{ "id": "fox", "source": { "kind": "model", "src": "materials/三维/models/Fox.glb", "animation": "Walk", "spin": 30 },
+  "start": 0, "duration": 6, "transform": { "x": 0.05, "y": 0.1, "width": 0.45, "height": 0.8 } }
+```
+
+- `animation`：动画名（`asset_view` 或素材列表里能看到），不写播放第一个；按图层时间循环。
+- `spin`：每秒绕竖直轴转多少度（转台展示），转动时按任何角度都放得下来取景。
+- `azimuth` / `elevation`：从哪个方向看（度）：水平角 0 是正面，默认 20；俯仰默认 10。
+- `environment`：HDR/EXR 全景图（`.hdr`、`.exr`）作为环境光，金属、玻璃反射更真实；不写用柔和的摄影棚光。
+- 删除这些设置用 `layers_edit` 的 `unset`，例如 `["source.animation"]`。
+- 要自己摆相机、多个模型同框、加地面和后期，写 three 场景（见 `three`）。

@@ -37,15 +37,6 @@ export const adapters = Object.freeze([
     offline: true,
   },
   {
-    id: "babylon",
-    name: "Babylon.js",
-    category: "3d",
-    template: true,
-    seek: "author",
-    alpha: true,
-    offline: true,
-  },
-  {
     id: "lottie",
     name: "Lottie Canvas",
     category: "animation",
@@ -66,6 +57,15 @@ export const adapters = Object.freeze([
   {
     id: "image",
     name: "图片素材",
+    category: "media",
+    template: false,
+    seek: "absolute",
+    alpha: true,
+    offline: true,
+  },
+  {
+    id: "model",
+    name: "三维模型",
     category: "media",
     template: false,
     seek: "absolute",

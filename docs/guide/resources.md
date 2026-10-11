@@ -1,11 +1,13 @@
 # resources：素材库里的可复用资源
 
-角色、物品、场景、界面、效果、转场、文字（歌词）和音效写在素材库的代码里，所有作品直接导入使用。把它们声明成资源后，用户在「素材 → 资源」里能看到缩略图、打开预览、调参数、把音效拖到音轨；AI 用 `resources_search` / `resource_view` 查找和查看，不需要读经验库或整个源文件。
+角色、物品、场景、界面、效果、转场、文字（歌词）和音效写在素材库的代码里，所有作品直接导入使用。资源可以用 Canvas 2D 画，也可以是 Three.js 三维或 PixiJS 的（`engine`）。把它们声明成资源后，用户在「素材 → 资源」里能看到缩略图、打开预览、调参数（三维资源可以拖动旋转视角）、把音效拖到音轨；AI 用 `resources_search` / `resource_view` 查找和查看，不需要读经验库或整个源文件。
+
+素材库里的模型、Lottie、全景图、字体、图片这些文件不是资源，用 `materials_list` 列出、`asset_view` 查看（见 `assets`）；需要参数、组合或动作时，再在代码里用它们声明资源（例如加载模型的角色）。
 
 ## 找和用
 
 - `work_context` 的 `materials` 列出作品库里的素材库：各有多少资源和音效、README 的第一段，以及画布和作品画面不一致时的提醒（内置 AI 的会话说明里也有）。第一次用一个素材库先用 `material_read` 读它的 README。
-- `resources_search`：`query` 写关键词（「下雨 街道」「手机 聊天」「甩镜」），`kind` 限定类别（`character` 角色、`prop` 物品、`set` 场景、`ui` 界面、`effect` 效果、`transition` 转场、`text` 文字、`sound` 音效、`code` 素材库代码导出的函数和类型）。不给 `query` 列出目录；资源多时每类只列前几个，再用 `kind` 列出一类或用 `query` 搜。
+- `resources_search`：`query` 写关键词（「下雨 街道」「手机 聊天」「甩镜」），`engine` 只找某个引擎的（`three` 三维、`pixi`、`canvas`），`kind` 限定类别（`character` 角色、`prop` 物品、`set` 场景、`ui` 界面、`effect` 效果、`transition` 转场、`text` 文字、`sound` 音效、`code` 素材库代码导出的函数和类型）。不给 `query` 列出目录；资源多时每类只列前几个，再用 `kind` 列出一类或用 `query` 搜。
 - `resource_view`：`id` 是 `<素材库>/<文件>#<名称>`，例如 `s0rrow/code/kid.ts#kid`。返回用法、导入语句、参数（类型、取值、默认值、说明）、预设，并按作品的节拍渲染预览图；`preset` / `params` 换参数，`times` 看动画的几个时刻。只写 `<素材库>/<文件>` 看整个模块：说明、全部资源和导出的函数。
 - 在作品代码里导入后调用，写法看资源的「用法」：
 
@@ -14,6 +16,7 @@ import { drawKid } from "@materials/s0rrow/code/kid";
 import { bedroom } from "@materials/s0rrow/code/sets";
 ```
 
+- 资源用在和它同一种引擎的场景里：Canvas 2D 资源在 Canvas 场景的 `render` 里画，三维资源在 three 场景的 `build` 里创建、`update` 里更新（见 `three`），Pixi 资源加到 Pixi 场景的 `app.stage`（见 `pixi`）。不同引擎的部分做成不同的 scene 图层叠在一起。
 - 音效用 `audio_place` 的 `sound: "<素材库>/<文件>#<名称>"` 放到音轨（见 `audio`）。
 - 导入的代码和用到的素材在保存版本时按文件锁定（见 `assets`），作品运行时用锁定的版本。资源目录、预览和 `resource_view` 都是素材库现在的版本；作品锁定了另一个版本时会注明，要改用现在的版本用 `materials_use` 加 `update: true`。
 - 资源不完全合适时，给素材库里的函数加参数（带默认值，不影响已有的作品），用 `material_write` 修改；不要把文件拷进作品再改。
@@ -57,13 +60,82 @@ export const resources = defineResources({
 });
 ```
 
-- `kind`、`title`、`description`、`tags`、`usage`、`presets`、预览尺寸要写成字面量：FRAME 不运行代码就能读出它们（列表、搜索、给 AI 的说明都来自这里）。
+- `kind`、`title`、`description`、`tags`、`usage`、`presets`、预览的 `engine` 和尺寸要写成字面量：FRAME 不运行代码就能读出它们（列表、搜索、给 AI 的说明都来自这里）。
 - `params` 是 zod 对象：每个字段写 `.describe("…")`（预览里的说明，也给 AI 看），数值写 `.min()` / `.max()`（预览里是滑块），可选值用 `z.enum`，默认值用 `.default()`。函数的参数类型写成 `z.input<typeof 选项>`，参数说明和类型只有一份。
 - `preview.draw(ctx, time, params)` 在 `width`×`height`（`draw` 用的单位）的画布上画这个资源，`params` 已经合并了预设和默认值；有 `duration` 时预览带时间轴可以播放，`time` 是缩略图用的时刻（默认 `duration` 的一半）；`background` 是底色；`prepare()` 在第一帧前加载字体、图片。
 - 角色画一个有代表性的姿势，预设放常用的造型和表情；场景画整幅；效果画在一张示例画面上；转场在 `duration` 里从一个示例画面转到另一个；文字（歌词）用示例数据。
 - 预览和作品用同一段代码：预览用作品的 `tempo` 运行素材库现在的代码，所以跟着节拍动的资源在不同作品里各自对上拍子。
 - 节拍、时间都在画的时候读（`beatAt()`、`pulse()`），不要在模块加载时算成常量，也不要写死某首歌、某个作品的东西（字体目录、文案、BPM）：这些从作品传进来，或者作为参数。
 - 字体放在素材库里，放完整的字体文件，在 `prepare()` 里用 `FontFace` + `assetUrl("materials/<库>/fonts/<文件>")` 加载。
+- 用 gsap 时间线的资源：时间线按参数建一次缓存起来，`draw` 里 `seek` 到这一刻（见 `gsap`）。
+
+## 三维资源（Three.js）
+
+预览写 `engine: "three"` 和 `build`：为一组参数搭好场景，返回 `{ scene, camera, update }`（参数变了会重新搭）。一个物体用 `showcase(物体, renderer)` 得到布好光、取好景的场景；整幅场景自己放相机和灯光。资源本身导出一个创建函数，作品在自己的 three 场景里调用它：
+
+```ts
+// 素材库「三维」的 code/gems.ts
+import * as THREE from "three";
+import { z } from "zod";
+import { defineResources, resource } from "@frame/engine/resources";
+import { showcase, loadModel } from "@frame/engine/three-assets";
+
+export const gemOptions = z.object({
+  color: z.enum(["#4f7cff", "#ff5a7a"]).default("#4f7cff").describe("颜色"),
+  size: z.number().min(0.5).max(2).default(1).describe("大小"),
+});
+/** 会转的多面体宝石：把 object 加进场景，每帧 update(t)。 */
+export function gem(options: z.input<typeof gemOptions> = {}) {
+  const { color, size } = gemOptions.parse(options);
+  const mesh = new THREE.Mesh(new THREE.IcosahedronGeometry(size, 0), new THREE.MeshStandardMaterial({ color, flatShading: true }));
+  return { object: mesh, update: (time: number) => void (mesh.rotation.y = time * 0.8) };
+}
+
+export const resources = defineResources({
+  gem: resource({
+    kind: "prop",
+    title: "宝石",
+    usage: "const g = gem({ color, size }); scene.add(g.object); 每帧 g.update(t)",
+    params: gemOptions,
+    preview: {
+      engine: "three",
+      width: 600,
+      height: 600,
+      duration: 4,
+      build({ renderer, params }) {
+        const g = gem(params);
+        return { ...showcase(g.object, renderer), update: g.update };
+      },
+    },
+  }),
+});
+```
+
+- 用模型文件的资源：`await loadModel("materials/三维/models/fox.glb", renderer)`（`build` 可以是 async），动画按 `update(time)` 的绝对时间求值（`mixer.setTime(time)`）。
+- 资源自己改了渲染器设置（色调映射、阴影）也没关系：预览每次搭建前恢复默认。作品里由作品的场景决定这些设置。
+- 预览尺寸只是看它的窗口（相机由作品决定），不会提醒和作品画面形状不一致。
+
+## Pixi 资源
+
+预览写 `engine: "pixi"` 和 `build`：把显示对象放到 `app.stage`（`width` × `height` 的画面），返回 `update(time)`：
+
+```ts
+preview: {
+  engine: "pixi",
+  width: 800,
+  height: 450,
+  duration: 2,
+  background: "#101820",
+  build({ app, params }) {
+    const fx = burst(params);
+    fx.view.position.set(400, 225);
+    app.stage.addChild(fx.view);
+    return (time) => {
+      fx.update(time);
+    };
+  },
+},
+```
 
 ## 音效
 

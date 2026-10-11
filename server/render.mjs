@@ -8,7 +8,7 @@ import sharp from "sharp";
 import { createExportPlan } from "../src/engine/export-plan.mjs";
 import { frameDimensions, fitComposition } from "../src/engine/dimensions.mjs";
 import { appRoot } from "./config.mjs";
-import { problem, sha256 } from "./util.mjs";
+import { problem, sha256, Locks } from "./util.mjs";
 import { cleanBrowserError, mergeTimedErrors } from "./stack.mjs";
 
 const require = createRequire(import.meta.url);
@@ -56,6 +56,7 @@ export class Renderer {
     this.openPages = 0; // every page from openPage (warm, check, export) until closed
     this.lastUse = 0;
     this.token = services.auth.issueInternal({ purpose: "render" });
+    this.assetQueue = new Locks();
     services.events.subscribe((event) => {
       if (event.type === "preview-update") this.invalidate(`${event.repo}/${event.work}`);
       if (event.type === "materials" && event.repo) this.invalidateResources(event.repo);
@@ -670,6 +671,101 @@ export class Renderer {
   /** Library code changed: drop warm resource pages of the repository. */
   invalidateResources(repo) {
     for (const [key, entry] of this.pages) if (key.startsWith(`resource:${repo}|`)) entry.stale = true;
+  }
+
+  /**
+   * The page that draws media files the browser cannot show by itself (src/preview/asset.ts):
+   * 3D models, Lottie, HDR/EXR panoramas, fonts. One warm page per asset base (a work, or a
+   * repository's libraries as they are now); `open` switches the file it shows.
+   */
+  async assetPage(assetBase) {
+    const key = `asset:${assetBase}`;
+    const existing = this.pages.get(key);
+    if (existing && !existing.stale) {
+      existing.usedAt = Date.now();
+      return existing.handle;
+    }
+    if (existing) {
+      this.pages.delete(key);
+      this.retire(existing);
+    }
+    const entry = { usedAt: Date.now(), stale: false };
+    entry.handle = this.openAssetPage(`${this.services.baseUrl}/preview/asset.html?${new URLSearchParams({ assetBase })}`);
+    this.pages.set(key, entry);
+    entry.handle.catch(() => this.pages.get(key) === entry && this.pages.delete(key));
+    return entry.handle;
+  }
+  async openAssetPage(url, timeoutMs = 60000) {
+    const browser = await this.browser();
+    this.openPages++;
+    let closed = false;
+    let context;
+    const close = () => {
+      if (!closed) {
+        closed = true;
+        this.openPages--;
+        this.lastUse = Date.now();
+      }
+      return context?.close().catch(() => {});
+    };
+    try {
+      context = await browser.newContext({ viewport: { width: 800, height: 600 }, deviceScaleFactor: 1, extraHTTPHeaders: { Authorization: "Bearer " + this.token } });
+      const page = await context.newPage();
+      const errors = [];
+      const logs = [];
+      page.on("pageerror", (error) => errors.push(error.stack || error.message));
+      page.on("console", (message) => {
+        if (["error", "warning"].includes(message.type())) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
+        if (logs.length > 50) logs.shift();
+      });
+      const reoptimized = () => logs.some((line) => line.includes("Outdated Optimize Dep")) || errors.some((line) => line.startsWith("HTTP 504 "));
+      for (let attempt = 1; ; attempt++) {
+        try {
+          await page.goto(url, { waitUntil: "load", timeout: timeoutMs });
+          await page.waitForFunction(() => window.__FRAME_ASSET__?.ready || window.__FRAME_ASSET__?.error, null, { timeout: timeoutMs, polling: 50 });
+          break;
+        } catch (error) {
+          if (attempt >= 3 || !(reoptimized() || /Execution context was destroyed|navigation/i.test(error.message))) throw error;
+          errors.length = 0;
+          logs.length = 0;
+        }
+      }
+      return { page, errors, logs, close };
+    } catch (error) {
+      await close();
+      throw problem(422, "素材预览页无法加载：" + error.message, "ASSET_PAGE_FAILED");
+    }
+  }
+
+  /**
+   * Pictures of one media file (`src` an asset address under `assetBase`): PNG buffers
+   * `width` pixels wide, one per view (`time`, `animation`, `azimuth`, `elevation`), and what
+   * the file holds.
+   */
+  assetFrames({ assetBase, src, kind, views = [{}], width = 640 }) {
+    // Opening one file and drawing it is one step: another request would switch the file between.
+    return this.assetQueue.run(assetBase, () => this.assetFramesNow({ assetBase, src, kind, views, width }));
+  }
+  async assetFramesNow({ assetBase, src, kind, views, width }) {
+    this.lastUse = Date.now();
+    const handle = await this.assetPage(assetBase);
+    const before = handle.errors.length;
+    const fail = (error) => problem(422, [String(error.message).replace(/^page\.evaluate: (Error: )?/, ""), ...handle.errors.slice(before)].join("\n"), "RENDER_FAILED");
+    let info;
+    try {
+      info = await handle.page.evaluate(({ src, kind }) => window.__FRAME_ASSET__.open(src, kind), { src, kind });
+    } catch (error) {
+      throw fail(error);
+    }
+    const frames = [];
+    for (const view of views)
+      try {
+        const data = await handle.page.evaluate(({ view, width }) => window.__FRAME_ASSET__.render({ ...view, width }), { view, width });
+        frames.push({ ...view, png: Buffer.from(data.split(",")[1], "base64") });
+      } catch (error) {
+        throw fail(error);
+      }
+    return { frames, info };
   }
 
   async close() {
