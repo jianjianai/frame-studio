@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import http from "node:http";
+import { execFileSync } from "node:child_process";
 import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
@@ -254,6 +255,18 @@ describe("tools that save the AI calls", () => {
     expect(sheet.body.text).toContain("没有画面的文件");
     expect((await sharp(Buffer.from(sheet.body.images[0].data, "base64")).metadata()).width).toBeGreaterThan(480);
     expect((await tool("asset_view", { work: work.id, files: ["films/other-work/a.png"] })).status).toBe(400);
+    // Facts only: no picture.
+    const facts = await tool("asset_view", { work: work.id, files: ["public/look/green.png", "public/look/drums.wav"], images: false });
+    expect(facts.body.images ?? []).toHaveLength(0);
+    expect(facts.body.text).toContain("public/look/green.png：图片 64×32");
+    expect(facts.body.text).toContain("public/look/drums.wav：音频");
+    if (ffmpegExecutable()) {
+      // Every time asked for is a frame, beyond the default 3.
+      execFileSync(ffmpegExecutable(), ["-v", "error", "-f", "lavfi", "-i", "testsrc=duration=4:size=64x36:rate=10", "-pix_fmt", "yuv420p", path.join(publicDir, "clip.mp4")]);
+      const frames = await tool("asset_view", { work: work.id, files: ["public/look/clip.mp4"], times: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5] });
+      expect(frames.body.data.cells).toHaveLength(8);
+      expect(frames.body.data.cells[7]).toBe("#8 public/look/clip.mp4 0:03.50");
+    }
     if (ffmpegExecutable()) {
       const music = await tool("preview_audio", { work: work.id, src: `films/${work.slug}/look/drums.wav`, beats: true });
       if (process.env.FRAME_BEAT_PYTHON) {

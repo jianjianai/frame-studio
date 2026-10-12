@@ -121,7 +121,7 @@ frame export ab12cd34 --width 1920
 | `preview_audio` | 一段混音或一个音频文件（`src`）的响度、静音段、削波；`beats: true` 给出 BPM、拍号、每个节拍和每小节第一拍（ffmpeg 解码后交给 [Beat This!](https://github.com/CPJKU/beat_this) 模型，`server/beat-this/analyze.py`；一次只跑一个，约为音频长度的十分之一） |
 | `search` | 和 grep 一样按内容判断文本文件（8 MB 以内），整行都搜、长行只显示匹配附近；文字或正则、多个关键词、整词、跨行、区分大小写、glob / exclude、前后上下文、每文件上限；范围可选作品、作品用到的素材库文件（锁定的版本）、素材库当前版本、经验库、各作品的复盘资料、制作指南、引擎源码；返回 文件:行号 和上下文 |
 | `files_list` / `files_batch` | 作品文件（外部 AI 使用；内置 AI 的工具列表里没有它们，用自己的文件工具）：一次调用对一个或多个文件读、写、精确替换、删除、移动；默认能做的都做、失败的逐项说明（同一文件前面失败则后面跳过），`atomic` 时全部成功才写入；`check` / `frames` 改完直接检查并看画面 |
-| `asset_import` / `asset_view` | 作品自己的素材（public/，列表在 `work_context`）：导入网址、base64（小文件）、本机模式下的服务器文件，`items` 一次导入多个，服务器模式不能从内网地址导入；查看图片、视频素材本身（多个拼成带编号的总览图，视频按时间点抽帧） |
+| `asset_import` / `asset_view` | 作品自己的素材（public/，列表在 `work_context`）：导入网址、base64（小文件）、本机模式下的服务器文件，`items` 一次导入多个，服务器模式不能从内网地址导入；查看图片、视频素材本身（多个拼成带编号的总览图，视频按 `times` 指定的时间点抽帧；`images: false` 只返回文字信息） |
 | `upload_link` | AI 所在电脑上的文件：返回一次性上传地址（15 分钟、用一次）和写好本机路径的 curl 命令（`from`），AI 在自己的终端上传到作品 public/（默认 public/imports/）、素材库，或作品复盘资料的 raw/（`review: true`），文件不经过对话 |
 | `materials_list` / `materials_link` / `materials_use` | 素材库：查看（本作品的在前，其余按适合本作品的程度和使用次数，附理由；`query` 按名称和介绍查找、`offset` 翻页；`library` 列文件，文件多时按路径筛选、翻页并按文件夹汇总其余的）、关联或取消关联（也可新建；名称大小写、空格、标点不同也能认出，不存在时给最接近的几个）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
 | `material_read` / `material_write` | 读取素材库文件；修改素材库（`put` 放入网址、作品文件或文本内容，`edit` 精确修改文本，`move`、`delete`，一次可以多个操作），每次修改都是素材库的一个版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |

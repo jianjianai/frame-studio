@@ -129,7 +129,7 @@ async function videoFrame(file, time) {
  * The pictures asset_view shows of one file: the image itself, frames of a video or a Lottie,
  * a model from several sides (or moments of its animation), a panorama, a font sample.
  */
-function viewsOf(info, { times, animation, each }) {
+function viewsOf(info, { times, animation, each, sides }) {
   const spread = (duration) => (times ?? [0.1, 0.5, 0.9, 0.7].slice(0, Math.min(3, each)).map((share) => share * duration)).slice(0, each);
   if (info.kind === "video") return spread(info.duration ?? 1).map((time) => ({ time: Math.max(0, Math.min(time, (info.duration ?? time) - 0.05)), label: formatTime(time) }));
   if (info.kind === "lottie") return spread(info.duration ?? 1).map((time) => ({ time: Math.min(time, info.duration ?? time), label: formatTime(time) }));
@@ -141,7 +141,7 @@ function viewsOf(info, { times, animation, each }) {
     if (clip?.duration && (times || animation))
       return spread(clip.duration).map((time) => ({ time, animation: clip.name, label: `${clip.name} ${formatTime(time)}` }));
     // Four sides; an animated model in the pose of its first animation's first moment.
-    return [20, 110, 200, 290].slice(0, Math.max(1, each)).map((azimuth) => ({ azimuth, elevation: 12, ...(clip ? { animation: clip.name, time: 0 } : {}), label: `${azimuth}°` }));
+    return [20, 110, 200, 290].slice(0, sides).map((azimuth) => ({ azimuth, elevation: 12, ...(clip ? { animation: clip.name, time: 0 } : {}), label: `${azimuth}°` }));
   }
   return [{}];
 }
@@ -178,16 +178,22 @@ export function registerAssetTools(registry) {
     name: "asset_view",
     title: "查看素材",
     description:
-      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了素材，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。还没有作品时用 repo 指定作品库，看素材库的文件。",
+      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了素材，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。还没有作品时用 repo 指定作品库，看素材库的文件。只要文字信息、不需要看画面时设 images: false（快，不抽帧不渲染；FBX/OBJ 模型的三角形数和动画要渲染才知道，这时没有）。",
     readOnly: true,
     input: {
       work: workArg,
       repo: repoArg,
       files: z.array(z.string().min(1).max(512)).min(1).max(SHEET_CELLS).optional(),
-      times: z.array(z.number().nonnegative()).min(1).max(8).optional().describe("视频抽帧、Lottie 和模型动画取帧的时间点（文件内秒数）"),
+      times: z
+        .array(z.number().nonnegative())
+        .min(1)
+        .max(8)
+        .optional()
+        .describe("视频抽帧、Lottie 和模型动画取帧的时间点（文件内秒数），本次查看的每个文件都用这组时间；不给时取开头、中间、结尾附近 3 帧"),
       animation: z.string().max(200).optional().describe("模型的哪个动画（默认第一个）"),
+      images: z.boolean().default(true).describe("false 时只返回文字信息，不出图"),
     },
-    async run({ files, times, animation }, ctx) {
+    async run({ files, times, animation, images }, ctx) {
       const work = await ctx.place();
       if (!work.dir && (!files || files.some((src) => !src.startsWith("materials/"))))
         throw problem(400, "只指定作品库时只能看素材库的文件（materials/<库>/…），作品的素材需要 work");
@@ -200,14 +206,19 @@ export function registerAssetTools(registry) {
         const file = await resolveAsset(services, work, src);
         items.push({ src, file, info: await probe(file) });
       }
+      if (!images) return { data: { items: items.map(({ src, info }) => ({ src, ...info })) }, text: items.map((item) => describeAsset(item.src, item.info)).join("\n") };
       // Cells: one per image, a few per video, model or Lottie, at most SHEET_CELLS in all.
       const visual = items.filter((item) => viewable(item.info.kind));
       const several = visual.filter((item) => ["video", "model", "lottie"].includes(item.info.kind)).length;
-      const each = Math.max(1, Math.min(4, Math.floor((SHEET_CELLS - (visual.length - several)) / Math.max(1, several))));
+      // As many cells per file as times asked for, fewer only when the sheet would overflow.
+      const room = Math.floor((SHEET_CELLS - (visual.length - several)) / Math.max(1, several));
+      const each = Math.max(1, Math.min(times?.length ?? 4, room));
+      const sides = Math.max(1, Math.min(4, room));
+      const trimmed = times && each < times.length && visual.some((item) => item.info.kind === "video" || item.info.kind === "lottie" || item.info.animations?.length);
       const cells = [];
       const skipped = [];
       for (const item of visual) {
-        for (const view of viewsOf(item.info, { times, animation, each })) {
+        for (const view of viewsOf(item.info, { times, animation, each, sides })) {
           if (cells.length >= SHEET_CELLS) {
             if (!skipped.includes(item.src)) skipped.push(item.src);
             continue;
@@ -266,6 +277,7 @@ export function registerAssetTools(registry) {
       const text = [
         single ? describe(items[0]) : `${numbered.join("\n")}\n\n${visual.map(describe).join("\n")}`,
         others.length ? `没有画面的文件：\n${others.map(describe).join("\n")}` : "",
+        trimmed ? `文件较多，每个文件只取了前 ${each} 个时间点（少看几个文件可以看全）` : "",
         skipped.length ? `超过 ${SHEET_CELLS} 格，没有显示：${skipped.join("、")}（用 files 分批查看）` : "",
         problems.length ? `出错：\n${problems.join("\n")}` : "",
       ]
