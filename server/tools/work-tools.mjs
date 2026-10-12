@@ -298,7 +298,7 @@ export function registerWorkTools(registry) {
     name: "version_save",
     title: "保存版本",
     description: "把当前全部修改保存为一个版本（Git 提交）。",
-    input: { work: workArg, message: z.string().min(1).max(200) },
+    input: { work: workArg, message: z.string().min(1).max(200).describe("版本说明，200 字以内") },
     async run({ message }, ctx) {
       const commit = await works.commit(await ctx.work(), message);
       return asJson({ commit }, commit ? `已保存版本 ${commit.slice(0, 7)}` : "没有需要保存的修改");

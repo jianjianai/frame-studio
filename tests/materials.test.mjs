@@ -157,6 +157,42 @@ describe("material libraries", () => {
       ],
     });
     expect(changed.body.data.map((item) => item.ok)).toEqual([true, false]);
+
+    // The README is the library's description: written like any text file, its source notes kept.
+    const dir = await materials.dir("local");
+    const readme = () => fs.readFileSync(path.join(dir, "音效", "README.md"), "utf8");
+    await tool("material_write", {
+      work: work.id,
+      library: "音效",
+      operations: [
+        { op: "put", path: "hit.txt", content: "咚", source: "https://example.com/hit", license: "CC0" },
+        { op: "put", path: "old.txt", content: "旧", source: "自己录的", license: "CC0" },
+      ],
+    });
+    const described = await tool("material_write", {
+      work: work.id,
+      library: "音效",
+      operations: [
+        { op: "put", path: "README.md", content: "# 打击音效\n\n短促的打击声，适合卡点。\n\n## 清单\n\n- hit.txt\n" },
+        { op: "edit", path: "README.md", edits: [{ oldText: "适合卡点", newText: "适合卡点和转场" }] },
+        { op: "move", from: "hit.txt", to: "sfx/hit.txt" },
+        { op: "delete", path: "old.txt" },
+        { op: "move", from: "README.md", to: "about.md" },
+        { op: "put", path: "README.md", content: "没有标题" },
+      ],
+    });
+    expect(described.body.data.map((item) => item.ok)).toEqual([true, true, true, true, false, false]);
+    expect(described.body.text).toContain("2 条素材来源记录已保留");
+    expect(readme()).toMatch(/^# 打击音效\n\n短促的打击声，适合卡点和转场。/);
+    expect(readme()).toContain("- `sfx/hit.txt`：来源 https://example.com/hit；许可 CC0");
+    expect(readme()).not.toContain("old.txt");
+    expect(readme()).not.toContain("readme.txt`：");
+    expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "音效").title).toBe("打击音效");
+    // Moving a file to another library moves its source note with it.
+    await tool("material_write", { work: work.id, library: "音效", operations: [{ op: "move", from: "sfx/hit.txt", to: "hit.txt", to_library: "品牌" }] });
+    expect(readme()).not.toContain("hit.txt`：");
+    expect(fs.readFileSync(path.join(dir, "品牌", "README.md"), "utf8")).toContain("- `hit.txt`：来源 https://example.com/hit；许可 CC0");
+
     expect((await tool("materials_link", { work: work.id, remove: ["音效"] })).body.data.materials).toEqual(["品牌"]);
     // The locked file is still served after the move.
     expect((await call(`/files/local/${work.id}/materials/${encodeURIComponent("音效")}/notes/readme.txt`)).body).toBe("说明");

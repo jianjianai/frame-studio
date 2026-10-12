@@ -237,18 +237,29 @@ function zodDescriber(code, bindings, value) {
     }
     return schema;
   };
-  const fieldsOf = (object, depth) => {
-    if (object?.type === "Identifier" && bindings.has(object.name)) return fieldsOf(bindings.get(object.name), depth + 1);
+  // `{ ...sizes }` and `{ ...base.shape }` (another z.object's fields) count as fields too.
+  const shapes = (object, depth) => {
+    if (depth > 8) return [];
+    if (object?.type === "Identifier" && bindings.has(object.name)) return shapes(bindings.get(object.name), depth + 1);
+    if (object?.type === "MemberExpression" && !object.computed && object.property.name === "shape") {
+      let schema = object.object;
+      while (schema?.type === "Identifier" && bindings.has(schema.name)) schema = bindings.get(schema.name);
+      return schema?.type === "CallExpression" ? shapes(schema.arguments[0], depth + 1) : [];
+    }
     if (object?.type !== "ObjectExpression") return [];
-    return object.properties
-      .filter((property) => property.type === "ObjectProperty" && !property.computed)
-      .map((property) => {
-        const field = { name: keyOf(property), ...describe(property.value, depth) };
-        // A comment above the field documents it when .describe() does not.
-        const note = commentText(property.leadingComments);
-        if (note && !field.description) field.description = note;
-        return field;
-      });
+    return object.properties.flatMap((property) =>
+      property.type === "SpreadElement" ? shapes(property.argument, depth + 1) : property.type === "ObjectProperty" && !property.computed ? [property] : [],
+    );
+  };
+  const fieldsOf = (object, depth) => {
+    const found = new Map(shapes(object, 0).map((property) => [keyOf(property), property]));
+    return [...found.values()].map((property) => {
+      const field = { name: keyOf(property), ...describe(property.value, depth) };
+      // A comment above the field documents it when .describe() does not.
+      const note = commentText(property.leadingComments);
+      if (note && !field.description) field.description = note;
+      return field;
+    });
   };
   return describe;
 }

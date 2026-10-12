@@ -46,8 +46,8 @@ export function createScene(options: SceneOptions) {
 | `loadModel(src, renderer)` | 读模型：GLB/glTF（支持 Draco、Meshopt、KTX2 压缩）、FBX（Mixamo 的角色和动作）、OBJ（连同它引用的 .mtl）。返回 `{ scene, animations, cameras }`。推荐 GLB：一个文件包含几何、材质和贴图 |
 | `loadEnvironment(src, renderer)` | HDR/EXR 全景图（如 Poly Haven 的 CC0 HDRI）或普通全景 JPEG/PNG → `scene.environment`（也可以作 `scene.background`） |
 | `studioEnvironment(renderer)` | 不用文件的柔和摄影棚光 |
-| `frameObject(camera, object, { azimuth, elevation, margin, turning })` | 把透视相机放在能让物体刚好占满画面的位置（水平角 0 是正面 +Z），返回物体中心；`turning: true` 时按物体绕竖直轴转一圈都放得下来取景 |
-| `showcase(object, renderer, options)` | 一个物体的完整展台：环境光 + 主光 + 取好景的相机，返回 `{ scene, camera }`（资源预览常用） |
+| `frameObject(camera, object, { azimuth, elevation, margin, turning })` | 把透视相机放在能让物体刚好占满画面的位置，返回物体中心。`azimuth` 水平角（默认 20，0 是正面 +Z，90 是右侧），`elevation` 俯仰角（默认 10，负数从下往上看），`margin` 留白（默认 1.08，1 是贴边），`turning: true` 时按物体绕竖直轴转一圈都放得下来取景。画面比例取相机的 `aspect`，先设好再调用 |
+| `showcase(object, renderer, options)` | 一个物体的完整展台：环境光 + 主光 + 取好景的相机，返回 `{ scene, camera }`（资源预览常用）。`options` 除了 `frameObject` 的取景参数，还有 `width`/`height`（画面比例，默认渲染器的尺寸）、`environment`（`loadEnvironment` 的结果，默认摄影棚光）、`background`（背景色，默认透明） |
 | `setAnimationTime(mixer, t)` | 动画按绝对时间求值，可以倒退、跳转 |
 | `createPostPipeline(renderer, scene, camera, bloom)` | 辉光后期（见下） |
 | `disposeObject(root)` | 释放几何体、材质、贴图（场景的 environment/background 也一起） |

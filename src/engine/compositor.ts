@@ -62,16 +62,22 @@ async function source(
     };
   }
   if (src.kind === "lottie") {
-    const { createLottieScene } = await import("./lottie-adapter");
-    const scene = await createLottieScene(options, assetUrl(src.src), signal);
+    const { loadLottie, lottieScene } = await import("./lottie-adapter");
+    const data = await loadLottie(assetUrl(src.src), signal);
+    // Drawn at the animation's own shape, as large as the picture holds: crop and fit then
+    // work on the animation's frame, not on a picture-shaped canvas with empty bands.
+    const fit = Math.min(options.width / data.w, options.height / data.h);
+    const width = Math.max(1, Math.round(data.w * fit));
+    const height = Math.max(1, Math.round(data.h * fit));
+    const scene = await lottieScene({ ...options, width, height }, data, signal);
     return {
       async frame(time) {
+        if (time >= scene.duration)
+          throw new Error(
+            `Lottie 图层「${clip.id}」在这一刻要播放动画的第 ${time.toFixed(2)} 秒，但 ${src.src} 只有 ${scene.duration.toFixed(2)} 秒。动画时间 = offset + (经过的时间 × rate + phase)，有 loop 时括号部分对 loop 取余：offset + loop 不能超过动画时长，循环错开用 phase`,
+          );
         await scene.render(time);
-        return {
-          image: scene.canvas,
-          width: options.width,
-          height: options.height,
-        };
+        return { image: scene.canvas, width, height };
       },
       dispose: () => scene.dispose(),
     };

@@ -219,5 +219,20 @@ describe("models, Lottie and panoramas in works and libraries", () => {
     const corner = at(2, 2);
     const middle = at(Math.floor(picture.info.width / 2), Math.floor(picture.info.height / 2));
     expect(middle).not.toEqual(corner);
+
+    // A Lottie layer is drawn at its own shape: the square animation fills a square box.
+    const square = { id: "square", source: { kind: "lottie", src: "materials/三维/fx/square.json" }, start: 0, duration: 1, transform: { x: 0.35, y: 0.1, width: 0.3, height: 0.3 * (16 / 9) } };
+    await tool("layers_edit", { work: work.id, operations: [{ op: "replace", document: { schemaVersion: 1, background: "#000000", clips: [square] } }] });
+    const lottieFrames = (await app.services.renderer.frames(app.services.works.describe("local", work.id), { times: [0.5], width: 320 })).frames;
+    const shot = await sharp(lottieFrames[0].png).removeAlpha().raw().toBuffer({ resolveWithObject: true });
+    let squarePixels = 0;
+    for (let i = 0; i < shot.data.length; i += 3) if (shot.data[i] > 200 && shot.data[i + 1] < 60 && shot.data[i + 2] < 60) squarePixels++;
+    // The box is 96 px wide in a 320 px picture, the square 30% of the animation: about 29 × 29.
+    expect(squarePixels).toBeGreaterThan(650);
+    expect(squarePixels).toBeLessThan(1100);
+    // Past the animation's end the error names the layer and the length.
+    await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "square", patch: { offset: 0.5, loop: 1 } }] });
+    const late = await tool("preview_frames", { work: work.id, times: [0.8] });
+    expect(JSON.stringify(late.body)).toMatch(/Lottie 图层「square」.*只有 1\.00 秒/);
   }, 180000);
 });

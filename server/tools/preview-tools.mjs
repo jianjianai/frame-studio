@@ -99,7 +99,7 @@ export function registerPreviewTools(registry) {
     name: "preview_frames",
     title: "查看画面",
     description:
-      "在浏览器中渲染作品画面给你看，用来亲眼确认修改效果。times 指定绝对时间（秒）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。",
+      "在浏览器中渲染作品画面给你看，用来亲眼确认修改效果。times 指定绝对时间（秒）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张；取的是等分后每一份的中点，不含首尾两端，看首尾和切点用 times）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。",
     readOnly: true,
     input: {
       work: workArg,

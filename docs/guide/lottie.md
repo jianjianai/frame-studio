@@ -7,7 +7,8 @@
   "start": 3, "duration": 2.5, "fit": "contain" }
 ```
 
-- 图层时间按 Lottie 的帧率换算成帧，可配合 `offset`、`rate`、`loop` 使用（`loop` 写 Lottie 的时长就能循环）。
+- 图层按动画自己的宽高比绘制（以作品画面能放下的最大尺寸）；`fit` 决定动画在框里的摆法，`crop` 按动画自己的画面裁剪。方形贴纸放进方形的框就正好填满。
+- 图层时间按 Lottie 的帧率换算成帧，可配合 `offset`、`rate`、`loop`、`phase` 使用（`loop` 写 Lottie 的时长就能循环；几个图层错开循环用 `phase`，见 `layers` 的时间公式）。播放超出动画时长的时刻会报错，指出图层和时长。
 - `asset_view` 能看 Lottie 的几个时刻，并给出尺寸、帧率、时长；素材列表里也有这些信息。
 - 网上的 Lottie 文件先用 `asset_import` 导入（或 `material_write` 放进素材库），在 license 中记录来源与许可。
 

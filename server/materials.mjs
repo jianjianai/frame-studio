@@ -213,11 +213,59 @@ export class Materials {
     const line = `- \`${relative}\`：${[source && `来源 ${source}`, license && `许可 ${license}`].filter(Boolean).join("；")}`;
     writeFileAtomic(file, text.replace(/\n*$/, "\n") + line + "\n");
   }
+  /**
+   * Keep the README's source notes in step with the files: lines of files that moved follow
+   * them (to another library's README too), lines of deleted files go.
+   */
+  recredit(dir, id, from, to = null, toLibrary = id) {
+    const file = path.join(dir, id, "README.md");
+    if (!fs.existsSync(file)) return;
+    const lines = fs.readFileSync(file, "utf8").split("\n");
+    const mine = (line) => {
+      const named = /^- `([^`]+)`：/.exec(line)?.[1];
+      return named && (named === from || named.startsWith(from + "/")) ? named : null;
+    };
+    const moved = lines.filter(mine).map((line) => line.replace(/^- `([^`]+)`/, (_, named) => `- \`${to}${named.slice(from.length)}\``));
+    if (!moved.length) return;
+    writeFileAtomic(file, lines.filter((line) => !mine(line)).join("\n"));
+    if (!to) return;
+    if (toLibrary === id) {
+      const text = fs.readFileSync(file, "utf8");
+      return writeFileAtomic(file, text.replace(/\n*$/, "\n") + moved.join("\n") + "\n");
+    }
+    for (const line of moved) {
+      const [, named, note] = /^- `([^`]+)`：(.*)$/.exec(line);
+      const source = /来源 ([^；]+)/.exec(note)?.[1];
+      const license = /许可 (.+)$/.exec(note)?.[1];
+      this.credit(dir, toLibrary, named, { source, license });
+    }
+  }
+  /**
+   * A new README: the library's title (its first "# " line), introduction (first paragraph)
+   * and notes. Source notes of the old one that the new text lacks are kept at its end (for
+   * files still there).
+   */
+  readme(dir, id, text) {
+    const file = path.join(dir, id, "README.md");
+    const old = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+    const exists = (line) => fs.existsSync(path.join(dir, id, /^- `([^`]+)`：/.exec(line)[1]));
+    const notes = old.split("\n").filter((line) => /^- `[^`]+`：/.test(line) && exists(line) && !text.includes(line.slice(0, line.indexOf("：") + 1)));
+    let next = text.replace(/\n*$/, "\n");
+    if (notes.length) next = (/^## 来源与许可/m.test(next) ? next : next + "\n## 来源与许可\n\n") + notes.join("\n") + "\n";
+    writeFileAtomic(file, next);
+    return notes.length;
+  }
   /** Add or replace a file: from a stream (upload), a URL, a file on disk or text content. */
   async put(repo, id, relative, from, { source, license, replace = true } = {}) {
     const dir = await this.dir(repo);
     this.libraryOf(dir, id);
-    if (!relative || relative === "README.md") throw problem(400, "无效的文件名");
+    if (!relative) throw problem(400, "需要文件路径");
+    if (relative === "README.md") {
+      if (typeof from.content !== "string") throw problem(400, "README.md 用 content 写入文本");
+      if (!/^#\s+\S/m.test(from.content)) throw problem(400, "README.md 需要一个一级标题（# 素材库名称）：它是素材库显示的名称，标题后的第一段是介绍");
+      const kept = await this.save(repo, [id], `素材库「${this.title(dir, id)}」：更新 README.md`, () => this.readme(dir, id, from.content));
+      return { ref: `${id}/README.md`, url: `materials/${id}/README.md`, path: "README.md", kind: "text", kept };
+    }
     let target = `${id}/${relative}`;
     confined(dir, target);
     const existed = fs.existsSync(path.join(dir, target));
@@ -244,14 +292,21 @@ export class Materials {
     this.libraryOf(dir, id);
     const target = toLibrary || id;
     this.libraryOf(dir, target);
-    await this.save(repo, [id, target], `素材库：移动 ${id}/${from} → ${target}/${to}`, () => movePath(dir, `${id}/${from}`, `${target}/${to}`));
+    if (from === "README.md" || to === "README.md") throw problem(400, "README.md 不能移动或被替换：直接用 put（content）或 edit 修改它");
+    await this.save(repo, [id, target], `素材库：移动 ${id}/${from} → ${target}/${to}`, () => {
+      movePath(dir, `${id}/${from}`, `${target}/${to}`);
+      this.recredit(dir, id, from, to, target);
+    });
     return { ref: `${target}/${to}`, url: `materials/${target}/${to}` };
   }
   async delete(repo, id, relative) {
     const dir = await this.dir(repo);
     this.libraryOf(dir, id);
-    if (relative === "README.md") throw problem(400, "README.md 记录素材的来源与许可，不能删除");
-    await this.save(repo, [id], `素材库「${this.title(dir, id)}」：删除 ${relative}`, () => removePath(dir, `${id}/${relative}`));
+    if (relative === "README.md") throw problem(400, "README.md 是素材库的说明并记录素材的来源与许可，不能删除；要改内容用 put（content）或 edit");
+    await this.save(repo, [id], `素材库「${this.title(dir, id)}」：删除 ${relative}`, () => {
+      removePath(dir, `${id}/${relative}`);
+      this.recredit(dir, id, relative);
+    });
   }
 
   // ---- works ------------------------------------------------------------------------
@@ -1028,7 +1083,7 @@ export function materialsPlugin(services) {
     published: true, // the libraries are not the work: allowed on a published one
     title: "修改素材库",
     description:
-      "修改素材库，一次可以做多个操作，按顺序执行，每个操作保存为素材库的一个版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB，没有终端时用），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。你所在电脑上的文件用 upload_link 上传。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。",
+      "修改素材库，一次可以做多个操作，按顺序执行，每个操作保存为素材库的一个版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB，没有终端时用），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。素材库根目录的 README.md 是它的说明：第一个「# 」标题是素材库显示的名称，标题后的第一段是介绍（work_context 和资源目录里显示），用 put 的 content 或 edit 修改；它的「来源与许可」记录各文件的来源，随文件的移动、删除自动更新，不能删除或移动 README.md。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。你所在电脑上的文件用 upload_link 上传。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。",
     destructive: true,
     input: {
       work: workArg,
@@ -1052,11 +1107,12 @@ export function materialsPlugin(services) {
                 : { content };
           const saved = await materials.put(work.repo, library, item.path, from, { source: source || url, license });
           const info = await probe(await materials.file(work.repo, {}, saved.ref)).catch(() => ({}));
-          return { ...saved, ...info, line: `materials/${saved.ref}` };
+          const kept = saved.kept ? `（新内容里没有的 ${saved.kept} 条素材来源记录已保留在「来源与许可」）` : "";
+          return { ...saved, ...info, line: `materials/${saved.ref}${kept}` };
         }
         if (item.op === "edit") {
           const ref = `${library}/${item.path}`;
-          if (!validRef(ref) || !IMPORTABLE.test(ref)) throw problem(400, "只能修改素材库里的文本文件（代码、JSON、SVG 等）");
+          if (!validRef(ref) || !TEXT.test(ref)) throw problem(400, "只能修改素材库里的文本文件（代码、JSON、SVG、Markdown、CSV、字幕等）");
           const file = confined(await materials.dir(work.repo), ref);
           if (!fs.existsSync(file)) throw notFound(`素材不存在：materials/${ref}`);
           const content = applyEdits(fs.readFileSync(file, "utf8"), item.edits, "material_read");

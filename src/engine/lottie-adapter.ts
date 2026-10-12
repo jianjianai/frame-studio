@@ -1,14 +1,37 @@
 import type { Scene, SceneOptions } from "./types";
 import { validateLottie } from "./lottie-document.mjs";
-/** Canvas renderer only; Lottie never owns the playback clock. */
+export interface LottieScene extends Scene {
+  /** The animation's own size and length (seconds). */
+  width: number;
+  height: number;
+  duration: number;
+}
+type LottieData = ReturnType<typeof validateLottie>;
+
+/** The animation document at `url`, checked. */
+export async function loadLottie(url: string, signal?: AbortSignal): Promise<LottieData> {
+  const response = await fetch(url, { signal });
+  if (!response.ok) throw new Error("Lottie 加载失败：" + url);
+  return validateLottie(await response.json());
+}
+
+/**
+ * Canvas renderer only; Lottie never owns the playback clock. The canvas is
+ * options.width × options.height, the animation fitted inside it.
+ */
 export async function createLottieScene(
   options: SceneOptions,
   url: string,
   signal?: AbortSignal,
-): Promise<Scene> {
-  const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error("Lottie 加载失败：" + url);
-  const data = validateLottie(await response.json());
+): Promise<LottieScene> {
+  return lottieScene(options, await loadLottie(url, signal), signal);
+}
+
+export async function lottieScene(
+  options: SceneOptions,
+  data: LottieData,
+  signal?: AbortSignal,
+): Promise<LottieScene> {
   const lottie = (await import("lottie-web/build/player/lottie_light_canvas"))
     .default;
   const canvas = document.createElement("canvas");
@@ -53,11 +76,15 @@ export async function createLottieScene(
     });
     signal?.throwIfAborted();
     animation.setSubframe(true);
+    const duration = (data.op - data.ip) / data.fr;
     return {
       canvas,
+      width: data.w,
+      height: data.h,
+      duration,
       render(time) {
-        if (time < 0 || time >= (data.op - data.ip) / data.fr)
-          throw new Error("Lottie time exceeds animation duration");
+        if (time < 0 || time >= duration)
+          throw new Error(`Lottie 的时间 ${time.toFixed(3)} 秒超出了动画范围（0–${duration.toFixed(3)} 秒）`);
         animation.goToAndStop(time * data.fr, true);
       },
       dispose() {
