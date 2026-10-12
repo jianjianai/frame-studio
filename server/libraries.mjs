@@ -149,10 +149,20 @@ export function suitability({ kind, work, libraries, works }) {
   const own = tokens(work.text);
   const shapes = libraries.map((library) => {
     const title = tokens(`${library.title} ${library.id}`);
-    const words = new Set([...title, ...tokens(`${library.about ?? ""} ${library.extra ?? ""}`)]);
-    return { library, words, weights: new Map([...title].map((word) => [word, 2])) };
+    const words = new Set([...title, ...tokens(library.about)]);
+    // What it holds (resource titles and tags, document titles): many words, so measured by how
+    // much of the work's words it covers rather than by cosine, which many words would dilute.
+    const content = tokens(library.extra);
+    return { library, words, content, weights: new Map([...title].map((word) => [word, 2])) };
   });
-  const rareInLibraries = rarity(shapes.map((shape) => shape.words));
+  const rareInLibraries = rarity(shapes.map((shape) => new Set([...shape.words, ...shape.content])));
+  let ownWeight = 0;
+  for (const word of own) ownWeight += rareInLibraries(word);
+  const covered = (content) => {
+    let shared = 0;
+    for (const word of own) if (content.has(word)) shared += rareInLibraries(word);
+    return ownWeight ? shared / ownWeight : 0;
+  };
   const others = works.filter((item) => item.id !== work.id).map((item) => ({ item, words: tokens(item.text), title: tokens(item.title) }));
   const ownTitle = tokens(work.title);
   const series = seriesOf(work.title);
@@ -172,12 +182,12 @@ export function suitability({ kind, work, libraries, works }) {
     .filter((entry) => entry.weight >= 0.15)
     .sort((a, b) => b.weight - a.weight);
   const result = new Map();
-  for (const { library, words, weights } of shapes) {
-    const close = cosine(own, words, rareInLibraries, weights);
+  for (const { library, words, content, weights } of shapes) {
+    const close = Math.max(cosine(own, words, rareInLibraries, weights), 0.8 * covered(content));
     const users = alike.filter((entry) => entry.item.links.has(`${kind}:${library.id}`));
     const peers = 1 - Math.exp(-users.reduce((sum, entry) => sum + entry.weight, 0));
     const why = [];
-    if (close >= 0.12) why.push("名称或介绍和作品相近");
+    if (close >= 0.12) why.push("名称、介绍或内容和作品相近");
     if (users.length) why.push(`类似的作品${users.slice(0, 2).map((entry) => `「${entry.item.title}」`).join("")}${users.length > 2 ? `等 ${users.length} 个` : ""}在用`);
     result.set(library.id, { score: Math.round((close + 0.8 * peers) * 1000) / 1000, why });
   }
@@ -324,10 +334,15 @@ export class LibraryIndex {
   async prepare(work) {
     const works = await this.works(work.repo);
     const result = {
-      materials: this.services.materials ? await this.annotate("materials", work.repo, await this.services.materials.libraries(work.repo), work, works) : [],
+      // Material libraries with the words of what they hold (resources, sounds), when known.
+      materials: this.services.materials
+        ? await this.annotate("materials", work.repo, await (this.services.resources?.librariesWithWords(work.repo) ?? this.services.materials.libraries(work.repo)), work, works)
+        : [],
       experiences: this.services.experience ? await this.annotate("experiences", work.repo, await this.services.experience.libraries(work.repo), work, works) : [],
     };
-    this.prepared.set(`${work.repo}/${work.id}`, result);
+    // Kept for many works: without the libraries' words, which only served the ranking.
+    const lean = (list) => list.map(({ extra: _extra, documents: _documents, ...library }) => library);
+    this.prepared.set(`${work.repo}/${work.id}`, { materials: lean(result.materials), experiences: lean(result.experiences) });
     return result;
   }
   /** What prepare() found last time for the work (null: never prepared). */

@@ -913,10 +913,11 @@ export function materialsPlugin(services) {
 
   // With `work`: whether it uses each library and how well each suits it (the picker's 推荐).
   router.get(`${base}/libraries`, async ({ params, query }) => {
-    const libraries = await materials.libraries(params.repo);
-    if (!services.libraries) return libraries;
+    if (!services.libraries) return materials.libraries(params.repo);
     const work = query.work ? await services.openWork(query.work, params.repo) : null;
-    return services.libraries.annotate("materials", params.repo, libraries, work);
+    // What the libraries hold counts for what suits the work; the words themselves stay here.
+    const libraries = work ? await (services.resources?.librariesWithWords(params.repo) ?? materials.libraries(params.repo)) : await materials.libraries(params.repo);
+    return (await services.libraries.annotate("materials", params.repo, libraries, work)).map(({ extra: _extra, ...library }) => library);
   });
   router.post(`${base}/libraries`, async ({ params, req }) => materials.create(params.repo, (await readJson(req)).name));
   router.delete(`${base}/libraries/:lib`, ({ params }) => materials.remove(params.repo, params.lib));
@@ -1004,20 +1005,21 @@ export function materialsPlugin(services) {
     name: "materials_list",
     title: "素材库",
     description:
-      "不传 library：列出或查找作品库里的素材库——名称、介绍、文件数、几个作品在用、本作品是否已引用、为什么适合本作品；本作品引用的在前，其余按适合本作品的程度和使用次数排列。query 按名称和介绍查找（素材库很多时用它；按内容找角色、效果、音效、文件用 resources_search）。传 library：列出其中的文件——地址 materials/<库>/<文件>、类型、尺寸、时长、大小，以及本作品锁定的版本是否落后；文件多时 query 按路径和类型筛选。结果多时 offset 翻页。作品只能用它引用的素材库（materials_use 会自动引用）。还没有作品时用 repo 只看某个作品库的素材库。",
+      "不传 library：列出或查找作品库里的素材库——名称、介绍、文件数、几个作品在用、本作品是否已引用、为什么适合本作品；本作品引用的在前，其余按适合本作品的程度和使用次数排列。query 按名称、介绍和其中资源的名称、标签查找（素材库很多时用它；要找具体的角色、效果、音效、文件用 resources_search）。传 library：列出其中的文件——地址 materials/<库>/<文件>、类型、尺寸、时长、大小，以及本作品锁定的版本是否落后；文件多时 query 按路径和类型筛选。结果多时 offset 翻页。作品只能用它引用的素材库（materials_use 会自动引用）。还没有作品时用 repo 只看某个作品库的素材库。",
     readOnly: true,
     input: {
       work: workArg,
       repo: repoArg,
       library: libraryArg.optional(),
-      query: z.string().max(200).optional().describe("不传 library 时按名称和介绍找素材库；传了 library 时按路径和类型筛选文件"),
+      query: z.string().max(200).optional().describe("不传 library 时按名称、介绍和资源找素材库；传了 library 时按路径和类型筛选文件"),
       limit: z.number().int().min(1).max(200).default(30),
       offset: z.number().int().min(0).default(0),
     },
     async run({ library, query, limit, offset }, ctx) {
       const work = await ctx.place();
       const status = work.dir ? await materials.status(work) : { libraries: [], missing: [], files: [], unresolved: [] };
-      const all = await materials.libraries(work.repo);
+      // With the words of what they hold: a query finds a library by its resources too.
+      const all = library ? await materials.libraries(work.repo) : await (services.resources?.librariesWithWords(work.repo) ?? materials.libraries(work.repo));
       const more = (rest, next, how) => (rest > 0 ? `\n还有 ${rest} 个：offset: ${next} 看下一页${how}。` : "");
       if (!library) {
         const annotated = services.libraries ? await services.libraries.annotate("materials", work.repo, all, work.dir ? work : null) : all;
@@ -1045,7 +1047,7 @@ export function materialsPlugin(services) {
           page.length ? "用 library 列出一个素材库的文件；resources_search 找其中声明的角色、效果、音效等资源。" : "",
         ];
         return {
-          data: { total: all.length, matched: ordered.length, libraries: page, missing: status.missing, used: status.files },
+          data: { total: all.length, matched: ordered.length, libraries: page.map(({ extra: _extra, ...item }) => item), missing: status.missing, used: status.files },
           text: lines.filter(Boolean).join("\n"),
         };
       }

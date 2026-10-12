@@ -45,7 +45,7 @@ describe("picking libraries", () => {
     ];
     const work = { id: "c", title: "手机产品展示 第二集", text: "手机产品展示 第二集", links: new Set() };
     const fit = suitability({ kind: "materials", work, libraries, works });
-    expect(fit.get("三维示例").why).toEqual(["名称或介绍和作品相近"]);
+    expect(fit.get("三维示例").why).toEqual(["名称、介绍或内容和作品相近"]);
     expect(fit.get("brand").why).toEqual(["类似的作品「手机产品展示 第一集」在用"]);
     expect(fit.get("动态文字").score).toBe(0);
     // A library shared with other works makes them alike too.
@@ -121,7 +121,7 @@ describe("many libraries", () => {
     const brief = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
     expect(Buffer.byteLength(brief)).toBeLessThan(32 * 1024);
     const materials = brief.slice(brief.indexOf("## 素材库\n"));
-    expect(materials).toMatch(/「三维模型库」（名称或介绍和作品相近；类似的作品「三维产品展示 第.集」「三维产品展示 第.集」在用）：资源 6 个（角色 2、物品 2、场景 2）、文件 46 个。/);
+    expect(materials).toMatch(/「三维模型库」（名称、介绍或内容和作品相近；类似的作品「三维产品展示 第.集」「三维产品展示 第.集」在用）：资源 6 个（角色 2、物品 2、场景 2）、文件 46 个。/);
     expect(materials).toContain("作品库里共有 60 个素材库，下面是可能适合本作品的，还有 59 个没有列出");
     expect(materials).not.toContain("素材42");
     expect(brief).toMatch(/本作品没有关联经验库。可能适合本作品的（作品库里共 40 个[^\n]*）：\n- 「产品视频」：产品展示类短片的节奏和镜头。/);

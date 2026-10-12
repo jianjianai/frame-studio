@@ -768,6 +768,8 @@ export class ResourceCatalog {
       const kinds = new Map();
       const canvases = new Map();
       const engines = {};
+      // What the library holds, in words: how a work finds the library that suits it.
+      const words = new Set();
       let resources = 0;
       let sounds = 0;
       for (const ref of [...head.keys()].filter((ref) => CODE_FILE.test(ref) && ref.startsWith(library.id + "/"))) {
@@ -778,10 +780,12 @@ export class ResourceCatalog {
           continue;
         }
         sounds += mod.sounds.length;
+        for (const item of mod.sounds) for (const word of [item.title, ...(item.tags ?? [])]) if (word) words.add(String(word));
         for (const item of mod.resources) {
           resources++;
           const label = RESOURCE_KINDS[item.kind] ?? item.kind;
           kinds.set(label, (kinds.get(label) ?? 0) + 1);
+          for (const word of [label, item.title, ...(item.tags ?? []), ENGINE_TAGS[item.preview?.engine]]) if (word) words.add(String(word));
           if (ENGINE_TAGS[item.preview?.engine]) engines[ENGINE_TAGS[item.preview.engine]] = (engines[ENGINE_TAGS[item.preview.engine]] ?? 0) + 1;
           const { width, height } = item.preview ?? {};
           // A three resource's picture is only a view of it (the work's camera frames it): not a layout canvas.
@@ -791,7 +795,8 @@ export class ResourceCatalog {
       const canvas = [...canvases].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
       const order = (label) => (Object.values(RESOURCE_KINDS).indexOf(label) + 100) % 100;
       const sorted = Object.fromEntries([...kinds].sort(([a], [b]) => order(a) - order(b)));
-      result.push({ id: library.id, title: library.title, files: library.files, resources, sounds, kinds: sorted, ...(Object.keys(engines).length ? { engines } : {}), canvas, about: library.about });
+      if (sounds) words.add("音效");
+      result.push({ id: library.id, title: library.title, files: library.files, resources, sounds, kinds: sorted, ...(Object.keys(engines).length ? { engines } : {}), canvas, about: library.about, words: [...words].join(" ").slice(0, 3000) });
     }
     return result;
   }
@@ -813,16 +818,26 @@ export class ResourceCatalog {
     return { shown, rest: overview.length - shown.length, offered: suitable.length ? "suitable" : "used" };
   }
 
+  /**
+   * The libraries as materials.libraries() lists them, with `extra`: the words of what they
+   * hold (resource and sound titles, tags, kinds), for search and for what suits a work.
+   */
+  async librariesWithWords(repo) {
+    const [libraries, overview] = await Promise.all([this.materials.libraries(repo), this.overview(repo).catch(() => [])]);
+    const words = new Map(overview.map((library) => [library.id, library.words]));
+    return libraries.map((library) => ({ ...library, extra: words.get(library.id) ?? "" }));
+  }
+
   /** work_context's view of the libraries: the work's own and some others, and how they fit its picture. */
   async librariesFor(work) {
     const linked = new Set(this.materials.names(work));
     const meta = this.services.works.meta(work);
     const overview = await this.overview(work.repo);
-    const annotated = this.services.libraries ? await this.services.libraries.annotate("materials", work.repo, overview, work) : null;
+    const annotated = this.services.libraries ? await this.services.libraries.annotate("materials", work.repo, overview.map((library) => ({ ...library, extra: library.words })), work) : null;
     const { shown, rest } = this.pick(work, overview, annotated);
     const libraries = shown.map((library) => {
       const note = library.canvas && meta.ok ? canvasNote(library.canvas, meta.meta) : "";
-      const { score: _score, usedAt: _usedAt, why, linked: _linked, ...facts } = library;
+      const { score: _score, usedAt: _usedAt, why, linked: _linked, words: _words, extra: _extra, ...facts } = library;
       return { ...facts, linked: linked.has(library.id), ...(!linked.has(library.id) && why?.length ? { why } : {}), ...(note ? { canvasNote: note } : {}) };
     });
     return {

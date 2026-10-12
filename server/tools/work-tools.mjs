@@ -124,7 +124,8 @@ export function registerWorkTools(registry) {
       const work = await works.create(args);
       // Libraries belong to a repository: say which one the work landed in and what it can use.
       let libraries = services.materials ? await services.materials.libraries(work.repo).catch(() => []) : [];
-      if (services.libraries && libraries.length > 12) libraries = offerOrder(await services.libraries.annotate("materials", work.repo, libraries, work).catch(() => libraries));
+      if (services.libraries && libraries.length > 12)
+        libraries = offerOrder(await services.libraries.annotate("materials", work.repo, await (services.resources?.librariesWithWords(work.repo) ?? libraries), work).catch(() => libraries));
       const others = services.repos.list().map((repo) => repo.id).filter((id) => id !== work.repo);
       const named = libraries.slice(0, 12);
       return asJson({ id: work.id, repo: work.repo, dir: work.dir, materials: libraries.map((item) => item.id) }, [
