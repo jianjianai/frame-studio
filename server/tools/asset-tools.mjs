@@ -374,6 +374,8 @@ export function registerAssetTools(registry) {
       fadeOut: z.number().min(0).max(60).optional().describe("淡出秒数"),
     },
     async run({ src, sound, start, duration, track, name, gain, fadeIn, fadeOut }, ctx) {
+      // Cut at the work's end: say so, an explicit length that came out shorter is a surprise.
+      const cut = (asked, clip) => (asked && clip.duration < asked - 0.01 ? `（要的是 ${+asked.toFixed(3)} 秒，作品在 ${+(clip.start + clip.duration).toFixed(3)} 秒结束，截到了 ${clip.duration.toFixed(2)} 秒）` : "");
       const work = await ctx.work();
       if (Boolean(src) === Boolean(sound)) throw problem(400, "src 和 sound 必须且只能提供一个");
       if (sound) {
@@ -382,7 +384,7 @@ export function registerAssetTools(registry) {
         await services.materials?.lockReferenced(work);
         return asJson(
           { clip: result.clip, track: result.track.name, sha256: result.sha256 },
-          `已把音效「${found.title}」放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始，时长 ${result.clip.duration.toFixed(2)}s。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
+          `已把音效「${found.title}」放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始，时长 ${result.clip.duration.toFixed(2)}s${cut(duration ?? found.duration, result.clip)}。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
         );
       }
       const info = await probe(await resolveAsset(services, work, src));
@@ -391,7 +393,7 @@ export function registerAssetTools(registry) {
       await services.materials?.lockReferenced(work);
       return asJson(
         { clip: result.clip, track: result.track.name, sha256: result.sha256 },
-        `已放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始，时长 ${result.clip.duration.toFixed(2)}s。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
+        `已放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始，时长 ${result.clip.duration.toFixed(2)}s${cut(duration, result.clip)}。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
       );
     },
   });

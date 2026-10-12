@@ -104,7 +104,8 @@ export function speechPlugin(services) {
       const results = [];
       let at = place?.start ?? 0;
       for (const [index, item] of items.entries()) {
-        if (index) at += item.gap ?? gap;
+        // Milliseconds, like the subtitles written below: the clip and its subtitle start together.
+        if (index) at = Math.round((at + (item.gap ?? gap)) * 1000) / 1000;
         const fileName = name ? (lines ? `${name}-${String(index + 1).padStart(2, "0")}` : name) : undefined;
         const result = await synthesizeInto(services, work, { text: item.text, provider, voice: item.voice ?? voice, rate, name: fileName });
         const length = result.duration ?? 0;
@@ -120,14 +121,14 @@ export function speechPlugin(services) {
           }).clip;
         // A clip is cut at the end of the work; the subtitle follows the audible part.
         results.push({ ...result, text: item.text, start: place ? at : undefined, end: place ? at + (clip ? clip.duration : length) : undefined, clip });
-        at += length;
+        at = Math.round((at + length) * 1000) / 1000;
       }
       if (subtitles) {
         await tools.call(
           "subtitles_edit",
           {
             work: `${work.repo}/${work.id}`,
-            add: results.filter((item) => item.clip).map((item) => ({ start: round(item.start), end: Math.min(round(item.end), total), text: item.text })),
+            add: results.filter((item) => item.clip).map((item) => ({ start: item.start, end: Math.min(Math.round(item.end * 1000) / 1000, total), text: item.text })),
           },
           ctx.scope,
         );

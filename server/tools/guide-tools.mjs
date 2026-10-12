@@ -34,7 +34,7 @@ export function registerGuideTools(registry) {
     readOnly: true,
     input: {
       topic: z.string().optional().describe("主题名，例如 scene、layers、three、audio"),
-      topics: z.array(z.string()).max(8).optional().describe("一次读几个主题"),
+      topics: z.array(z.string()).max(8).optional().describe("一次读几个主题（最多 8 个）"),
     },
     async run({ topic, topics: wanted }) {
       const topics = guideTopics();

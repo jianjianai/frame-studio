@@ -59,7 +59,7 @@ export function createScene({ width, height }: SceneOptions): Scene {
 
 ## 规则
 
-- 所有尺寸按 `width`/`height` 比例计算：预览画质会改变实际像素尺寸（导出用 high）。
+- **`width`/`height` 是这次渲染的实际像素，不是作品的设计尺寸**：预览、`preview_frames`（默认 960 宽）会缩小，导出是全尺寸。所有位置、字号、线宽都按比例算，不要写死像素。最简单的写法：按作品尺寸（例如 1080×1920）设计，每帧先 `ctx.setTransform(width / 1080, 0, 0, height / 1920, 0, 0)` 再按设计坐标画。
 - 画面状态完全由 `t` 计算。需要累积的效果（粒子轨迹、物理）用解析公式，或在内部从 0 推进到 `t` 并缓存，倒退时重新计算。
 - 异步资源（图片、字体、模型）在 `createScene` 中 `await` 加载，或放到 `prepareFrame`。图片用 `assetUrl`：
 

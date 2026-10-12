@@ -34,7 +34,8 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 排图层 | `layers_get` / `layers_edit`（见 `layers`） |
 | 配乐、音效、混音 | `audio_place`、`audio_get` / `audio_edit`，配乐节拍 `preview_audio` 的 `src` + `beats`（见 `audio`） |
 | 配音和字幕 | `speech_synthesize`（`lines` + `place` + `subtitles: true` 一次完成整段旁白）、`subtitles_edit`（见 `speech`、`subtitles`） |
-| 标题、时长、节拍、镜头标记 | `work_update`（配乐节拍写进 `tempo`，见 `project`） |
+| 标题、时长、画面尺寸、节拍、镜头标记、字幕样式 | `work_update`（配乐节拍写进 `tempo`，见 `project`） |
+| 做另一个版本（竖屏版、换文案） | `work_copy` 复制整个作品（可同时改尺寸），在副本上改 |
 | 复用素材库里的角色、场景、效果、转场、音效（Canvas 2D、三维、Pixi） | `resources_search` 找（`engine` 可以只找三维或 Pixi 的）、`resource_view` 看详情和预览图，音效用 `audio_place` 的 `sound` 放到音轨（见 `resources`） |
 | 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身：图片、视频、三维模型、Lottie、全景图、字体）；素材库 `materials_list`、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
 | 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status`（完成时返回下载地址） |

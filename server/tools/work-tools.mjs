@@ -9,6 +9,22 @@ import { editList, runFileOperations, describeFileOperations } from "./file-ops.
 import { probe } from "../media.mjs";
 import { projectAudioTracks } from "../../src/engine/types.ts";
 import { formatTime } from "../render.mjs";
+import { readVisual, readAudio } from "../documents.mjs";
+
+/** What would run past a new, shorter length: layers, audio clips, subtitles, the cover moment. */
+function pastEnd(work, meta, duration) {
+  const over = [];
+  const end = (start, length) => +(start + length).toFixed(3);
+  try {
+    for (const clip of readVisual(work).document.clips) if (clip.start + clip.duration > duration + 1e-6) over.push(`图层「${clip.id}」到 ${end(clip.start, clip.duration)} 秒`);
+  } catch {}
+  try {
+    for (const clip of readAudio(work).document?.clips ?? []) if (clip.start + clip.duration > duration + 1e-6) over.push(`音频片段「${clip.id}」到 ${end(clip.start, clip.duration)} 秒`);
+  } catch {}
+  for (const cue of meta.subtitles ?? []) if (cue.end > duration + 1e-6) over.push(`字幕「${cue.text}」到 ${cue.end} 秒`);
+  if (meta.posterTime !== undefined && meta.posterTime >= duration) over.push(`封面时间 ${meta.posterTime} 秒`);
+  return over;
+}
 
 const cueSchema = z
   .strictObject({ start: z.number().nonnegative(), end: z.number().positive(), text: z.string().min(1).max(500) })
@@ -118,6 +134,36 @@ export function registerWorkTools(registry) {
   });
 
   registry.add({
+    name: "work_copy",
+    published: true, // copying a published (view-only) work is how it gets edited again
+    title: "复制作品",
+    description:
+      "把一个作品完整复制成新作品（代码、图层、混音、字幕、素材和锁定的素材库版本），在同一个作品库里，返回新作品 id。做另一个版本（例如竖屏版、换文案）时用它，再在副本上修改；width/height 同时改副本的画面尺寸（图层位置是比例会跟着变，场景代码要按 options.width/height 重新排版）。",
+    input: {
+      work: workArg,
+      title: z.string().min(1).max(120).optional().describe("副本的标题，默认「原标题（副本）」"),
+      width: z.number().int().min(16).max(7680).optional(),
+      height: z.number().int().min(16).max(7680).optional(),
+    },
+    async run({ title, width, height }, ctx) {
+      if (ctx.scope.work) throw problem(403, "作品内的 AI 会话不能新建其他作品", "FORBIDDEN");
+      const source = await ctx.work();
+      const copy = await works.duplicate(source, { title });
+      if (width || height) {
+        const meta = works.meta(copy);
+        const current = (meta.ok && meta.meta.composition) || { width: 1920, height: 1080 };
+        await works.update(copy, { composition: { width: width ?? current.width, height: height ?? current.height } });
+      }
+      const meta = works.meta(copy);
+      const size = meta.ok && meta.meta.composition;
+      return asJson(
+        { id: copy.id, repo: copy.repo, dir: copy.dir },
+        `已复制为作品 ${copy.id}（${meta.ok ? meta.meta.title : title ?? ""}${size ? `，${size.width}×${size.height}` : ""}），在作品库 ${copy.repo}。之后的工具调用写 work: "${copy.repo}/${copy.id}"`,
+      );
+    },
+  });
+
+  registry.add({
     name: "work_context",
     title: "作品现状",
     description:
@@ -212,7 +258,11 @@ export function registerWorkTools(registry) {
       const lines = result.problems.map((p) => `- [${p.source}] ${p.file ? p.file + (p.line ? `:${p.line}` : "") + " " : ""}${p.message}`);
       // Console output does not fail a check, but the AI should see it (it only reads `text`).
       const logged = [...new Set((result.console ?? []).map((line) => String(line).slice(0, 300)))];
-      const consoleLines = logged.length ? `\n浏览器控制台（${logged.length} 条，不影响通过）：\n${logged.slice(0, 5).map((line) => "- " + line).join("\n")}` : "";
+      const consoleLines = logged.length
+        ? `\n浏览器控制台（${logged.length} 条，不影响通过）：\n${logged.slice(0, 5).map((line) => "- " + line).join("\n")}`
+        : runtime && result.ok
+          ? "浏览器控制台没有警告和错误。"
+          : "";
       const text = (result.ok
         ? `检查通过（${result.ms} ms）。${lines.length ? "\n警告：\n" + lines.join("\n") : ""}`
         : `发现 ${result.problems.length} 个问题：\n${lines.join("\n")}`) + consoleLines;
@@ -257,7 +307,7 @@ export function registerWorkTools(registry) {
       work: workArg,
       operations: z.array(batchOperation).min(1).max(100),
       atomic: z.boolean().default(false),
-      check: z.boolean().default(false),
+      check: z.boolean().default(false).describe("写入后再运行 work_check；检查不通过时文件已经写入（不会回滚），按报错继续修改，或 version_restore"),
       frames: z.boolean().default(false),
     },
     async run({ operations, atomic, check, frames }, ctx) {
@@ -387,13 +437,27 @@ export function registerWorkTools(registry) {
         .strictObject({ bpm: z.number().min(20).max(400), firstBeat: z.number().nonnegative().default(0), beatsPerBar: z.number().int().min(1).max(16).default(4) })
         .optional()
         .describe("配乐的节拍：BPM、第一小节第一拍在作品里的秒数、每小节拍数（preview_audio 的 beats 给出）。代码和素材库资源用 @frame/engine/tempo 的 beatAt / barAt 跟着它卡点"),
+      width: z.number().int().min(16).max(7680).optional().describe("画面宽度（像素）：改横竖屏或尺寸。图层的位置和大小是比例，跟着变；场景代码要按 options.width/height 画"),
+      height: z.number().int().min(16).max(7680).optional().describe("画面高度（像素）"),
       subtitleStyle: z
         .strictObject({ size: z.number().min(0.01).max(0.08).optional(), y: z.number().min(0.05).max(0.95).optional() })
         .optional()
-        .describe("字幕的样式：size 字高占画面长边的比例（默认 0.022，竖屏短视频常用 0.03–0.035），y 字幕中线的位置（0 顶部 – 1 底部，默认 0.92）"),
+        .describe("字幕的样式：size 字高占画面长边的比例（默认 0.022，竖屏短视频常用 0.03–0.035），y 字幕中线的位置（0.05 顶部 – 0.95 底部，默认 0.92）"),
     },
-    async run({ work: _ignored, posterTime, ...changes }, ctx) {
+    async run({ work: _ignored, posterTime, width, height, ...changes }, ctx) {
       const work = await ctx.work();
+      const current = works.meta(work);
+      if (changes.duration !== undefined && current.ok && changes.duration < current.meta.duration) {
+        // A shorter work with layers past its end would not load: say what to shorten first.
+        const over = pastEnd(work, current.meta, changes.duration);
+        if (over.length)
+          throw problem(400, `时长改成 ${changes.duration} 秒后，这些会超出结尾：${over.slice(0, 12).join("；")}${over.length > 12 ? ` 等 ${over.length} 项` : ""}。先用 layers_edit / audio_edit / subtitles_edit 缩短或删除它们，再改时长`);
+      }
+      if (width || height) {
+        const before = works.meta(work);
+        const current = (before.ok && before.meta.composition) || { width: 1920, height: 1080 };
+        changes.composition = { width: width ?? current.width, height: height ?? current.height };
+      }
       await works.update(work, changes);
       if (posterTime !== undefined) {
         services.covers.useFrame(work, posterTime);
@@ -401,8 +465,9 @@ export function registerWorkTools(registry) {
       }
       const meta = works.meta(work);
       const tempo = meta.ok && meta.meta.tempo;
+      const size = meta.ok && meta.meta.composition;
       const after = meta.ok
-        ? `。现在：${meta.meta.title}，${meta.meta.duration} 秒，${meta.meta.fps} fps${tempo ? `，节拍 ${tempo.bpm} BPM（第一小节第一拍 ${tempo.firstBeat} 秒，每小节 ${tempo.beatsPerBar} 拍）` : ""}`
+        ? `。现在：${meta.meta.title}，${size ? `${size.width}×${size.height}，` : ""}${meta.meta.duration} 秒，${meta.meta.fps} fps${tempo ? `，节拍 ${tempo.bpm} BPM（第一小节第一拍 ${tempo.firstBeat} 秒，每小节 ${tempo.beatsPerBar} 拍）` : ""}`
         : "";
       return asJson(changes, `已更新 ${Object.keys(changes).join("、") || "（无改动）"}${after}`);
     },
@@ -424,6 +489,15 @@ export function registerWorkTools(registry) {
       const meta = works.meta(work);
       if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error);
       const overlaps = (cue, start, end) => cue.start < end && cue.end > start;
+      if (removeBetween && !(removeBetween.end > removeBetween.start))
+        throw problem(400, `removeBetween 的 end 必须大于 start（收到 ${removeBetween.start}–${removeBetween.end}），没有删除任何字幕`);
+      // Overlapping cues would show only one of them: refuse a set that has some.
+      const sorted = [...(set ?? [])].sort((a, b) => a.start - b.start);
+      const clash = sorted.find((cue, index) => index && cue.start < sorted[index - 1].end);
+      if (clash) {
+        const before = sorted[sorted.indexOf(clash) - 1];
+        throw problem(400, `set 里的字幕时间重叠：「${before.text}」${before.start}–${before.end} 秒和「${clash.text}」${clash.start}–${clash.end} 秒（同一时刻只显示一条）`);
+      }
       let cues = set ?? meta.meta.subtitles ?? [];
       if (removeBetween) cues = cues.filter((cue) => !overlaps(cue, removeBetween.start, removeBetween.end));
       for (const cue of add ?? []) cues = [...cues.filter((old) => !overlaps(old, cue.start, cue.end)), cue];

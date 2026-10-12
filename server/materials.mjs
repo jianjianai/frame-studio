@@ -945,7 +945,7 @@ export function materialsPlugin(services) {
           const found = existing.find((item) => item.id === name.trim() || item.title === name.trim());
           if (!found) created.push((await materials.create(work.repo, name)).id);
         }
-        return asJson({ created }, created.length ? `已在作品库 ${work.repo} 新建素材库：${created.map((id) => `「${id}」`).join("")}。用 material_write（repo: "${work.repo}"）往里放文件，第一个是 README.md` : "没有新建素材库（同名的已存在）");
+        return asJson({ created }, created.length ? `已在作品库 ${work.repo} 新建素材库：${created.map((id) => `「${id}」`).join("")}。用 material_write（repo: "${work.repo}"）往里放文件。README.md 已有模板：把第一段改成一句介绍（work_context 和资源目录里显示），后面写资源清单和用法` : "没有新建素材库（同名的已存在）");
       }
       const published = Boolean(works.published(work));
       if (published && (add.length || remove.length))

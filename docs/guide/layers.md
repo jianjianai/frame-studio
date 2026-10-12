@@ -26,7 +26,7 @@ export function createScene(options: SceneOptions) {
     { "id": "logo", "source": { "kind": "image", "src": "films/work-1a2b3c4d/logo.png" },
       "start": 2, "duration": 8, "fadeIn": 0.5,
       "transform": { "x": 0.35, "y": 0.1, "width": 0.3, "height": 0.2,
-                     "opacity": [{ "at": 0, "value": 0 }, { "at": 1, "value": 1, "easing": "smooth" }] } },
+                     "opacity": [{ "at": 0, "value": 0, "easing": "smooth" }, { "at": 1, "value": 1 }] } },
     { "id": "title", "source": { "kind": "scene", "module": "title", "engine": "canvas" },
       "start": 0, "duration": 10 }
   ]
@@ -38,9 +38,12 @@ export function createScene(options: SceneOptions) {
 - `source.kind`：`image`、`video`、`lottie`（`src` 为 Lottie JSON，见 `lottie`）、`model`（三维模型，见下）、`sequence`（`frames` 图片数组 + `fps`）、`color`（`color: "#rrggbb"`）、`scene`（`module` + `engine`，engine 取 canvas/pixi/three/composition）。
 - 时间：`start`、`duration`（作品时间，秒）；`offset` 素材内起点；`rate` 速度；`loop` 循环长度；`phase` 循环的错开量。图层在作品时间 `t` 播放素材的
   `offset + ((t − start) × rate + phase)`，有 `loop` 时括号部分先对 `loop` 取余。所以 `offset + loop` 不能超过素材时长；几个循环图层要错开时改 `phase`，不要改 `offset`。
-- `transform`：`x, y, width, height` 是相对画面的 0–1 比例（默认铺满），`rotation` 度，`scale` 以图层中心缩放（图层框和内容一起，1 是原大小，超出画面的部分被裁掉），`opacity` 0–1。每项可以是数字或关键帧数组 `[{ at, value, easing }]`，`at` 是图层内时间，easing 为 `linear`/`hold`/`smooth`。
-- 推近（照片慢慢放大）：`"transform": { "scale": [{ "at": 0, "value": 1 }, { "at": 4, "value": 1.12, "easing": "smooth" }] }`；弹出：`scale` 从 0.8 到 1 配合 `fadeIn`。不要用改 `width`/`height` 再挪 `x`/`y` 的办法做缩放。
-- `fit`：`contain`/`cover`/`fill`；`crop`：0–1 比例裁剪；`blend`：混合模式；`fadeIn`/`fadeOut` 秒；`hidden` 隐藏。
+- `transform`：`x, y, width, height` 是相对画面的 0–1 比例（默认铺满），`rotation` 度，`scale` 以图层中心缩放（图层框和内容一起，1 是原大小，超出画面的部分被裁掉），`opacity` 0–1。每项可以是数字或关键帧数组 `[{ at, value, easing }]`，`at` 是图层内时间，easing 为 `linear`/`hold`/`smooth`：**写在一段的起点关键帧上**，决定从它到下一个关键帧怎么变化（最后一个关键帧的 easing 不起作用）。
+- 推近（照片慢慢放大）：`"transform": { "scale": [{ "at": 0, "value": 1, "easing": "smooth" }, { "at": 4, "value": 1.12 }] }`；弹出：`scale` 从 0.8 到 1 配合 `fadeIn`。不要用改 `width`/`height` 再挪 `x`/`y` 的办法做缩放。
+- `fit`：`contain`（完整放进框里，可能留边）/`cover`（铺满框，多出的裁掉）/`fill`（拉伸）。
+- `crop`：先从素材自己的画面里取一块，再按 `fit` 放进框：`{ "x": 0.1, "y": 0, "width": 0.8, "height": 1 }`（都是素材画面的 0–1 比例，`x + width`、`y + height` 不超过 1）。
+- `blend`：`source-over`（默认）、`multiply`、`screen`、`overlay`、`darken`、`lighten`、`difference`；`destination-in` / `destination-out` 把这个图层当遮罩（只保留 / 挖掉下面图层和它重叠的部分）。
+- `fadeIn`/`fadeOut` 秒；`hidden` 隐藏。
 - 视频图层 `audio: { enabled: true, gain }` 会把视频原声加入混音。
 - 数组顺序就是叠放顺序：越靠后越在上层。图层不能超过作品时长；`id` 唯一，字母开头。
 
@@ -58,8 +61,8 @@ export function createScene(options: SceneOptions) {
 ]}
 ```
 
-- `add` 可带 `index` 指定插入位置；`replace` 为 `{ "op": "replace", "document": {…} }`。
-- `update` 的 `patch` 只写要改的字段：嵌套对象（`transform`、`audio`、`source`、`crop`）逐项合并，例如 `{ "transform": { "opacity": 0.8 } }` 保留原来的 `x`/`y`；数组（关键帧）整体替换；`source` 换成另一种 `kind` 时整体替换。`unset` 删除字段，可写嵌套的 `transform.opacity`、`audio.gain`、`source.parameters.<名称>`。
+- `add` 可带 `index` 指定插入位置；`reorder` 的 `index` 超过图层数时放到最上面；`replace` 为 `{ "op": "replace", "document": {…} }`。
+- `update` 的 `patch` 只写要改的字段：嵌套对象（`transform`、`audio`、`source`、`crop`）逐项合并，例如 `{ "transform": { "opacity": 0.8 } }` 保留原来的 `x`/`y`；数组（关键帧）整体替换；`source` 换成另一种 `kind` 时整体替换。`unset` 删除字段，可写嵌套的 `transform.opacity`、`audio.gain`、`source.parameters.<名称>`；只删除字段时不用写 `patch`：`{ "op": "update", "id": "fox", "unset": ["source.animation"] }`。
 - `layers_get` 每个图层一行，省略取默认值的字段（`offset` 0、`phase` 0、`rate` 1、`fit` contain、`blend` source-over）。
 - 新的 scene 模块要先在 `scene.ts` 的 loaders 中注册（`名称: () => import("./scenes/名称")`），否则会报“场景模块未注册”。
 - scene 图层的模块是普通 Scene（见 `scene`），收到的 `time` 是图层内时间（已减去 start、考虑 rate/offset）。scene 图层输出透明画布即可叠加在下层之上。

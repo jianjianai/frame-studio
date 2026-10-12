@@ -112,6 +112,26 @@ describe("work covers", () => {
     await call("/api/tools/work_update", { method: "POST", body: { work: work.id, subtitleStyle: { size: 0.032, y: 0.8 } } });
     expect(meta(work).subtitleStyle).toEqual({ size: 0.032, y: 0.8 });
     expect((await call("/api/tools/work_update", { method: "POST", body: { work: work.id, subtitleStyle: { size: 0.5 } } })).status).toBe(400);
+    // Size changes and copies (another version of the work, for example a vertical one).
+    await call("/api/tools/work_update", { method: "POST", body: { work: work.id, width: 1280 } });
+    expect(meta(work).composition).toEqual({ width: 1280, height: 1080 });
+    const copied = await call("/api/tools/work_copy", { method: "POST", body: { work: work.id, title: "竖屏版", width: 1080, height: 1920 } });
+    expect(copied.body.text).toContain("1080×1920");
+    const copy = works.describe("local", copied.body.data.id);
+    expect(meta(copy)).toMatchObject({ title: "竖屏版", composition: { width: 1080, height: 1920 }, subtitleStyle: { size: 0.032, y: 0.8 } });
+
+    // Edits that would lose or break things are refused, with what to do instead.
+    const tool = (name, body) => call(`/api/tools/${name}`, { method: "POST", body: { work: work.id, ...body } });
+    await tool("subtitles_edit", { set: [{ start: 1, end: 2, text: "一" }, { start: 3, end: 4, text: "二" }] });
+    expect((await tool("subtitles_edit", { removeBetween: { start: 1.5, end: 1.5 } })).status).toBe(400);
+    expect(meta(work).subtitles).toHaveLength(2);
+    expect((await tool("subtitles_edit", { set: [{ start: 1, end: 3, text: "一" }, { start: 2, end: 4, text: "二" }] })).body.error.message).toContain("重叠");
+    const shorter = await tool("work_update", { duration: 2.5 });
+    expect(shorter.status).toBe(400);
+    expect(shorter.body.error.message).toContain("字幕「二」到 4 秒");
+    expect(meta(work).duration).not.toBe(2.5);
+    expect((await tool("version_restore", { commit: "deadbeef" })).body.error.message).toContain("没有版本 deadbeef");
+    expect((await tool("version_restore", { commit: "HEAD~1; rm" })).status).toBe(404);
   });
 
   it("keeps the last cover when making a new one fails, and refuses changes to published works", async () => {

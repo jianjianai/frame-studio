@@ -1025,7 +1025,10 @@ export function resourcesPlugin(services) {
         note = `预览按 ${entry.preview.width}×${entry.preview.height} 的画布设计，本作品画面是 ${meta.meta.composition?.width ?? 1920}×${meta.meta.composition?.height ?? 1080}：用资源自己的 scale 参数放大（scale: ${factor}），不要再缩放画布。`;
       const text = describeEntry(entry) + (note ? `\n\n注意：${note}` : "");
       if (entry.type !== "resource" || !image) return asJson({ id: entry.id, type: entry.type }, text);
-      const { frames } = await services.renderer.resourceFrames(work, { ref: entry.ref, key: entry.key, preset, values: params, times, width });
+      // An animated resource is shown at a few moments unless asked: one still hides the motion.
+      const duration = entry.preview.duration;
+      const moments = times ?? (duration ? [0.15, 0.5, 0.85].map((share) => Math.round(share * duration * 100) / 100) : undefined);
+      const { frames } = await services.renderer.resourceFrames(work, { ref: entry.ref, key: entry.key, preset, values: params, times: moments, width });
       const images =
         frames.length > 1
           ? [

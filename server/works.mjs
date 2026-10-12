@@ -347,7 +347,7 @@ export class Works {
   async update(work, changes) {
     this.assertEditable(work);
     const file = path.join(work.dir, "project.ts");
-    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "subtitleStyle", "beats", "tempo", "experiences", "materials"];
+    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "subtitleStyle", "beats", "tempo", "experiences", "materials", "composition"];
     if ("materials" in changes && !(Array.isArray(changes.materials) && changes.materials.every((name) => typeof name === "string")))
       throw problem(400, "materials 必须是素材库名称的列表");
     if ("experiences" in changes && !(Array.isArray(changes.experiences) && changes.experiences.every((name) => typeof name === "string")))
@@ -671,8 +671,12 @@ export class Works {
   /** Make the work's files equal to an earlier version, as a new version (history is kept). */
   async revert(work, commit) {
     return this.locks.run(`${work.repo}/${work.id}`, async () => {
+      // Only a version of this work: another work's commit would replace it with that work.
+      if (!/^[0-9a-f]{4,40}$/i.test(commit) || !(await gitOk(work.root, ["rev-parse", "--verify", "--quiet", commit + "^{commit}"])))
+        throw problem(404, `没有版本 ${commit}：用 versions_list 查看这个作品的版本`, "NOT_FOUND");
+      if (!(await gitOk(work.root, ["merge-base", "--is-ancestor", commit, "HEAD"])))
+        throw problem(400, `${commit} 不是这个作品的版本：用 versions_list 查看这个作品的版本`);
       await this.commitAll(work.root, "恢复前自动保存");
-      await git(work.root, ["rev-parse", "--verify", commit + "^{commit}"]);
       await git(work.root, ["read-tree", "-u", "--reset", commit], { env: this.repos.env(this.repos.get(work.repo)) });
       const short = commit.slice(0, 7);
       const result = await this.commitAll(work.root, `恢复到版本 ${short}`);
