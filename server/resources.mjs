@@ -5,7 +5,7 @@ import { z } from "zod";
 import sharp from "sharp";
 import { problem, notFound, sha256, writeFileAtomic, Lru } from "./util.mjs";
 import { sendFile, sendJson } from "./http.mjs";
-import { workArg, asJson } from "./tools/registry.mjs";
+import { workArg, repoArg, asJson } from "./tools/registry.mjs";
 import { contactSheet } from "./render.mjs";
 import { Thumbnails } from "./thumbnails.mjs";
 
@@ -825,9 +825,16 @@ function describeEntry(entry) {
 export function canvasNote(canvas, meta) {
   const [width, height] = String(canvas).split("×").map(Number);
   const { width: W, height: H } = meta.composition ?? { width: 1920, height: 1080 };
-  if (!(width > 0 && height > 0 && W > 0 && H > 0) || Math.abs(Math.log(width / height / (W / H))) < 0.08) return "";
+  if (!(width > 0 && height > 0 && W > 0 && H > 0)) return "";
+  if (Math.abs(Math.log(width / height / (W / H))) < 0.08) {
+    // Same shape, other size: coordinates and sizes copied from the preview come out too small or large.
+    const factor = W / width;
+    if (Math.abs(Math.log(factor)) < 0.2) return "";
+    const times = Number(factor.toFixed(2));
+    return `预览按 ${width}×${height} 的画布设计，本作品画面是 ${W}×${H}（${times} 倍）：照搬预览里的坐标和尺寸会${factor > 1 ? "偏小" : "偏大"}，在作品的场景里先 ctx.scale(${times}, ${times}) 再按预览的坐标画，或者把坐标和尺寸乘以 ${times}。`;
+  }
   const shape = (w, h) => (w > h * 1.05 ? "横屏" : h > w * 1.05 ? "竖屏" : "方形");
-  return `按 ${width}×${height}（${shape(width, height)}）的画布设计，本作品画面是 ${W}×${H}（${shape(W, H)}）：整幅铺满会被裁切或留边，先按素材库 README 的说明安排，或只取其中一部分。`;
+  return `按 ${width}×${height}（${shape(width, height)}）的画布设计，本作品画面是 ${W}×${H}（${shape(W, H)}）：要铺满整个画面时会被裁切或留边（先看素材库 README 的说明）；只用作画面里的局部元素时，按比例换算位置和大小即可。`;
 }
 
 /** The lead paragraph of a library README (the line under its title), shortened. */
@@ -909,10 +916,11 @@ export function resourcesPlugin(services) {
     name: "resources_search",
     title: "找可复用资源",
     description:
-      "在素材库里找可以直接复用的资源：角色、物品、场景、界面、效果、转场、文字（歌词等）、音效，以及素材库代码导出的函数和类型。query 用中文或英文关键词（例如「下雨 街道」「手机 聊天」「甩镜」）；不给 query 列出目录（资源多时每类只列前几个，再用 kind 列出一类）。kind 限定类别（code 只找函数和类型）。动手画一个东西之前先找，有就导入复用，不要重画。看详情和预览图用 resource_view。",
+      "在素材库里找可以直接复用的资源：角色、物品、场景、界面、效果、转场、文字（歌词等）、音效，以及素材库代码导出的函数和类型。query 用中文或英文关键词（例如「下雨 街道」「手机 聊天」「甩镜」）；不给 query 列出目录（资源多时每类只列前几个，再用 kind 列出一类）。kind 限定类别（code 只找函数和类型）。动手画一个东西之前先找，有就导入复用，不要重画。看详情和预览图用 resource_view。还没有作品时用 repo 指定作品库。",
     readOnly: true,
     input: {
       work: workArg,
+      repo: repoArg,
       query: z.string().max(200).optional(),
       kind: kindArg.optional().describe("character 角色、prop 物品、set 场景、ui 界面、effect 效果、transition 转场、text 文字、sound 音效、code 函数和类型"),
       library: z.string().max(60).optional().describe("只找这个素材库"),
@@ -920,7 +928,7 @@ export function resourcesPlugin(services) {
       limit: z.number().int().min(1).max(100).default(30),
     },
     async run({ query, kind, library, engine, limit }, ctx) {
-      const work = await ctx.work();
+      const work = await ctx.place();
       const linked = new Set(services.materials.names(work));
       const found = await catalog.search(work, { query, kind, library, engine, limit });
       const line = (entry) =>
@@ -950,10 +958,11 @@ export function resourcesPlugin(services) {
     name: "resource_view",
     title: "查看资源",
     description:
-      "看素材库里一个资源的详情和预览图：用法、导入语句、参数（类型、取值、默认值、说明）、预设，并按作品的节拍渲染出来（素材库现在的版本）。id 是 resources_search 给出的地址：资源或音效 <素材库>/<文件>#<名称>，函数和类型同样写法；只写 <素材库>/<文件> 看整个模块（文档、全部资源和导出）。params / preset 按给定参数渲染，times 看动画的几个时刻。",
+      "看素材库里一个资源的详情和预览图：用法、导入语句、参数（类型、取值、默认值、说明）、预设，并按作品的节拍渲染出来（素材库现在的版本）。id 是 resources_search 给出的地址：资源或音效 <素材库>/<文件>#<名称>，函数和类型同样写法；只写 <素材库>/<文件> 看整个模块（文档、全部资源和导出）。params / preset 按给定参数渲染，times 看动画的几个时刻。还没有作品时用 repo 指定作品库（不按作品的节拍）。",
     readOnly: true,
     input: {
       work: workArg,
+      repo: repoArg,
       id: z.string().min(3).max(300),
       preset: z.string().max(100).optional(),
       params: z.record(z.string(), z.json()).optional().describe("覆盖预设的参数值"),
@@ -962,7 +971,7 @@ export function resourcesPlugin(services) {
       width: z.number().int().min(160).max(1600).default(720),
     },
     async run({ id, preset, params, times, image, width }, ctx) {
-      const work = await ctx.work();
+      const work = await ctx.place();
       const { module, entry } = await catalog.get(work, id);
       if (!entry) {
         const text = describeModule(module);

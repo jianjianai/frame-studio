@@ -31,7 +31,7 @@ export function cleanBrowserError(text, { work, vite } = {}) {
       // A few frames of library code: where it failed and how the work got there.
       if (libraryFrames++ >= 3) continue;
       shown = "materials/" + file.slice(file.lastIndexOf(copies) + copies.length).split(path.sep).join("/");
-    } else if (work && inside(work.dir, file)) shown = path.relative(work.dir, file).split(path.sep).join("/");
+    } else if (work?.dir && inside(work.dir, file)) shown = path.relative(work.dir, file).split(path.sep).join("/");
     else if (inside(path.join(appRoot, "src", "engine"), file)) {
       // One engine frame is enough context; the rest is the engine's own plumbing.
       if (engineFrames++ >= 1) continue;

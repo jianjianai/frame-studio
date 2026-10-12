@@ -127,6 +127,18 @@ describe("material libraries", () => {
     expect((await works.status(work)).files).toEqual([]);
   });
 
+  it("shows libraries before there is a work, by repository", async () => {
+    const listed = await tool("materials_list", { repo: "local" });
+    expect(listed.body.data.libraries.map((item) => item.id)).toContain("品牌");
+    expect((await tool("materials_list", { repo: "local", library: "品牌" })).body.data[0]).toMatchObject({ path: "logo.svg", locked: null });
+    expect((await tool("material_read", { repo: "local", library: "品牌", path: "README.md" })).body.text).toMatch(/^# 品牌/);
+    expect((await tool("material_read", { repo: "local", library: "品牌", path: "README.md", locked: true })).status).toBe(400);
+    expect((await tool("resources_search", { repo: "local" })).status).toBe(200);
+    expect((await tool("asset_view", { repo: "local", files: ["public/a.png"] })).body.error.message).toMatch(/materials/);
+    expect((await tool("materials_list", {})).body.error.message).toMatch(/repo/);
+    expect((await tool("materials_list", { repo: "nope" })).status).toBe(404);
+  });
+
   it("lets the AI link libraries, add files and use them", async () => {
     const work = (await call("/api/works", { method: "POST", body: { title: "AI 用素材" } })).body;
     // Using a library's file links the library on the way.

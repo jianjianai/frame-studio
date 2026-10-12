@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 import { spawn } from "node:child_process";
 import sharp from "sharp";
 import { z } from "zod";
-import { workArg, asJson } from "./registry.mjs";
+import { workArg, repoArg, asJson } from "./registry.mjs";
 import { eachSettled, summarize, errorOf } from "./batch.mjs";
 import { listAssets } from "./work-tools.mjs";
 import { writeStream, uniquePath } from "../files.mjs";
@@ -175,16 +175,19 @@ export function registerAssetTools(registry) {
     name: "asset_view",
     title: "查看素材",
     description:
-      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了素材，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。",
+      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了素材，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。还没有作品时用 repo 指定作品库，看素材库的文件。",
     readOnly: true,
     input: {
       work: workArg,
+      repo: repoArg,
       files: z.array(z.string().min(1).max(512)).min(1).max(SHEET_CELLS).optional(),
       times: z.array(z.number().nonnegative()).min(1).max(8).optional().describe("视频抽帧、Lottie 和模型动画取帧的时间点（文件内秒数）"),
       animation: z.string().max(200).optional().describe("模型的哪个动画（默认第一个）"),
     },
     async run({ files, times, animation }, ctx) {
-      const work = await ctx.work();
+      const work = await ctx.place();
+      if (!work.dir && (!files || files.some((src) => !src.startsWith("materials/"))))
+        throw problem(400, "只指定作品库时只能看素材库的文件（materials/<库>/…），作品的素材需要 work");
       const all = !files;
       const viewable = (kind) => kind === "image" || kind === "video" || DRAWN.has(kind);
       if (all) files = (await listAssets(work)).filter((item) => viewable(item.kind)).map((item) => item.url);
@@ -223,7 +226,7 @@ export function registerAssetTools(registry) {
         if (!views.length) continue;
         try {
           const src = item.src.startsWith("public/") ? `films/${work.slug}/${item.src.slice(7)}` : item.src;
-          const { frames, info } = await services.renderer.assetFrames({ assetBase: `/files/${work.repo}/${work.id}/`, src, kind: item.info.kind, views, width: Math.min(1024, w * 2) });
+          const { frames, info } = await services.renderer.assetFrames({ assetBase: work.dir ? `/files/${work.repo}/${work.id}/` : `/files/${work.repo}/-/`, src, kind: item.info.kind, views, width: Math.min(1024, w * 2) });
           drawn.set(item, frames.map((frame) => frame.png));
           drawnFacts.set(item, info);
         } catch (error) {

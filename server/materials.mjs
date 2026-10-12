@@ -6,7 +6,7 @@ import { tree, writeText, writeStream, removePath, movePath, uniquePath, TEXT_LI
 import { readJson, sendFile } from "./http.mjs";
 import { problem, notFound, conflict, confined, inside, sha256, Locks, Lru, writeFileAtomic } from "./util.mjs";
 import { MATERIALS_BRANCH } from "./repos.mjs";
-import { workArg, asJson } from "./tools/registry.mjs";
+import { workArg, repoArg, asJson } from "./tools/registry.mjs";
 import { importFromUrl, decodeData } from "./tools/asset-tools.mjs";
 import { eachSettled, summarize, errorOf } from "./tools/batch.mjs";
 import { Readable } from "node:stream";
@@ -897,12 +897,12 @@ export function materialsPlugin(services) {
     name: "materials_list",
     title: "素材库",
     description:
-      "列出作品库里的素材库，以及本作品引用了哪些（不传 library）；传 library 列出其中的文件：地址 materials/<库>/<文件>、类型、大小，和本作品锁定的版本是否落后。作品只能用它引用的素材库。",
+      "列出作品库里的素材库，以及本作品引用了哪些（不传 library）；传 library 列出其中的文件：地址 materials/<库>/<文件>、类型、大小，和本作品锁定的版本是否落后。作品只能用它引用的素材库。还没有作品时用 repo 只看某个作品库的素材库。",
     readOnly: true,
-    input: { work: workArg, library: libraryArg.optional() },
+    input: { work: workArg, repo: repoArg, library: libraryArg.optional() },
     async run({ library }, ctx) {
-      const work = await ctx.work();
-      const status = await materials.status(work);
+      const work = await ctx.place();
+      const status = work.dir ? await materials.status(work) : { libraries: [], missing: [], files: [] };
       if (!library) {
         const all = await materials.libraries(work.repo);
         const linked = new Set(status.libraries.map((item) => item.id));
@@ -1024,16 +1024,18 @@ export function materialsPlugin(services) {
     readOnly: true,
     title: "阅读素材库文件",
     description:
-      "读取素材库里的文本文件（代码、JSON、SVG、Markdown 说明如 README.md、CSV、字幕和歌词等）。默认是素材库现在的版本；locked: true 读本作品锁定的版本（作品实际运行的那个）。一次读多个用 paths（\"<库>/<路径>\"）。媒体文件只返回信息。",
+      "读取素材库里的文本文件（代码、JSON、SVG、Markdown 说明如 README.md、CSV、字幕和歌词等）。默认是素材库现在的版本；locked: true 读本作品锁定的版本（作品实际运行的那个）。一次读多个用 paths（\"<库>/<路径>\"）。媒体文件只返回信息。还没有作品时用 repo 指定作品库。",
     input: {
       work: workArg,
+      repo: repoArg,
       library: libraryArg.optional(),
       path: z.string().min(1).max(300).optional(),
       paths: z.array(z.string().min(3).max(360)).max(30).optional().describe('一次读多个："<素材库>/<路径>"'),
       locked: z.boolean().default(false),
     },
     async run({ library, path: relative, paths, locked }, ctx) {
-      const work = await ctx.work();
+      const work = await ctx.place();
+      if (locked && !work.dir) throw problem(400, "locked 读的是某个作品锁定的版本：需要 work");
       if (!paths?.length) {
         if (!library || !relative) throw problem(400, "需要 library 和 path，或者 paths");
         const read = await readMaterial(work, `${library}/${relative}`, locked);

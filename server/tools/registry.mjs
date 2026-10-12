@@ -59,6 +59,19 @@ export class ToolRegistry {
         // Changing tools may not touch a published (view-only) work, unless they write elsewhere (exports, experience).
         return tool.readOnly || tool.published ? this.services.openWork(id, repo) : this.services.openEditable(id, repo);
       },
+      /**
+       * The work, or — for tools that only look at material libraries — just a repository
+       * (`repo` argument): `{ repo, dir: null }`, which has no locks, links or tempo.
+       */
+      place: async () => {
+        if (parsed.data.work || scope.work || !parsed.data.repo) {
+          if (!parsed.data.work && !scope.work)
+            throw problem(400, "需要指定作品（work），或者只看素材库时写作品库（repo，见 works_list 结果里的 repo）", "WORK_REQUIRED");
+          return ctx.work();
+        }
+        this.services.repos.get(parsed.data.repo);
+        return { id: null, repo: parsed.data.repo, dir: null };
+      },
     };
     try {
       return await tool.run(parsed.data, ctx);
@@ -162,6 +175,12 @@ export const CORE_TOOLS = new Set([
 ]);
 
 /** Optional `work` argument: "<id>" or "<repo>/<id>"; defaults to the agent's current work. */
+/** Tools that only look at material libraries take a repository instead of a work. */
+export const repoArg = z
+  .string()
+  .regex(/^[a-z0-9-]+$/)
+  .optional()
+  .describe("不针对某个作品、只看素材库时：作品库 id（works_list 结果里的 repo）");
 export const workArg = z
   .string()
   .regex(/^([a-z0-9-]+\/)?[A-Za-z0-9][A-Za-z0-9._-]*$/)

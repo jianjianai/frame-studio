@@ -213,7 +213,9 @@ export const resources = defineResources({
   it("says when a library canvas does not fit the work's picture", () => {
     const landscape = { composition: { width: 1920, height: 1080 } };
     expect(canvasNote("1080×1920", landscape)).toContain("1080×1920（竖屏）的画布设计，本作品画面是 1920×1080（横屏）");
-    expect(canvasNote("1280×720", landscape)).toBe("");
+    expect(canvasNote("1920×1080", landscape)).toBe("");
+    expect(canvasNote("1280×720", landscape)).toContain("1.5 倍");
+    expect(canvasNote("960×540", landscape)).toContain("ctx.scale(2, 2)");
   });
 });
 
