@@ -175,6 +175,13 @@ export function createCompositionScene(
         pixels * 4 * (active.length + 3) > 512 * 1024 * 1024
       )
         throw new Error("合成资源预算不足；请减少同时活跃的图层或降低输出尺寸");
+      // Three.js scenes and model layers each hold a WebGL context; a browser keeps about 16
+      // and silently drops the oldest, so say so instead of losing layers.
+      const contexts = active.filter((c) => c.source.kind === "model" || (c.source.kind === "scene" && c.source.engine === "three"));
+      if (contexts.length > 12)
+        throw new Error(
+          `同一时刻有 ${contexts.length} 个三维图层（three 场景和模型图层，${contexts.map((c) => c.id).join("、")}），每个占一个 WebGL 上下文，浏览器最多同时保留约 16 个：同一时刻请不超过 12 个，把几个物体放进同一个 three 场景`,
+        );
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (doc.background !== "transparent") {
         ctx.fillStyle = doc.background;

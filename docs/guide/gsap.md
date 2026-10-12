@@ -48,7 +48,7 @@ GSAP 的 SplitText、DrawSVG、MorphSVG 操作网页里的元素；FRAME 画在�
 
 | 函数 | 作用 |
 |---|---|
-| `splitText(ctx, text, { x, y, align, lineHeight, letterSpacing, maxWidth })` | 按当前字体把文字拆成一个个字（保留字距，`\n` 换行，`maxWidth` 自动换行：中文按字、西文按词），每个字有 `x`、`y`、`alpha`、`scale`、`rotation` 可以动画，`index`、`word`、`line` 用来分组 |
+| `splitText(ctx, text, { x, y, align, lineHeight, letterSpacing, maxWidth })` | 按当前字体把文字拆成一个个字（保留字距，`\n` 换行，`maxWidth` 自动换行：中文按字、西文按词；`lineHeight` 是字体高度的倍数，默认 1.25，不是像素），每个字有 `x`、`y`、`alpha`、`scale`、`rotation` 可以动画，`index`、`word`、`line` 用来分组 |
 | `drawGlyphs(ctx, glyphs)` | 按每个字的 `alpha`、`scale`、`rotation`（绕字的中心）画出来 |
 | `strokePath(ctx, d, end, start = 0)` | 画出 SVG 路径的一段（长度比例 `start`–`end`）：会自己画出来的线 |
 | `pathLength(d)` | SVG 路径的长度 |

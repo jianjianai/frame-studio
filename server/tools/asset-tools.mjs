@@ -357,7 +357,7 @@ export function registerAssetTools(registry) {
     name: "audio_place",
     title: "放置音频",
     description:
-      "把音频放到音轨上（不存在的音轨会自动创建）：作品或素材库里的音频文件（src），或素材库音效模块里的一个音效（sound，resources_search 找到的地址，时长默认用音效自己的）。用于配乐、音效、配音和录音。",
+      "把音频放到音轨上（不存在的音轨会自动创建）：作品或素材库里的音频文件（src），或素材库音效模块里的一个音效（sound，resources_search 找到的地址，时长默认用音效自己的；作品还没关联那个素材库时自动关联并锁定）。用于配乐、音效、配音和录音。",
     input: {
       work: workArg,
       src: z.string().optional().describe("films/<名称>/…、public/… 或 materials/<素材库>/… 地址"),

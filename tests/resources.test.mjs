@@ -148,6 +148,9 @@ describe("resource declarations, read without running code", () => {
       "label?: string",
     ]);
     expect(sky).toMatchObject({ key: "sky", kind: "set", params: [], preview: { background: "#123456" } });
+    expect(paramLine({ name: "scale", type: "number", min: 0, minExclusive: true })).toBe("scale: number > 0");
+    expect(paramLine({ name: "n", type: "number", int: true, min: 1 })).toBe("n: 整数 ≥ 1");
+    expect(paramLine({ name: "a", type: "number", min: 0, max: 1, maxExclusive: true })).toBe("a: number 0–1（不含 1）");
     // Fields spread in from a constant object or another schema's shape are parameters too.
     const spread = extractModule(
       `import { z } from "zod";
@@ -215,7 +218,9 @@ export const resources = defineResources({
     expect(canvasNote("1080×1920", landscape)).toContain("1080×1920（竖屏）的画布设计，本作品画面是 1920×1080（横屏）");
     expect(canvasNote("1920×1080", landscape)).toBe("");
     expect(canvasNote("1280×720", landscape)).toContain("1.5 倍");
-    expect(canvasNote("960×540", landscape)).toContain("ctx.scale(2, 2)");
+    expect(canvasNote("960×540", landscape, "canvas")).toContain("ctx.scale(2, 2)");
+    expect(canvasNote("960×540", landscape, "pixi")).toContain("scale.set(2)");
+    expect(canvasNote("960×540", landscape, "pixi")).not.toContain("ctx.scale");
   });
 });
 

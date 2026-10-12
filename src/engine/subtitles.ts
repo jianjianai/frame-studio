@@ -37,7 +37,8 @@ export function paintSubtitle(
 ): void {
   if (!text) return;
   ctx.save();
-  const size = Math.round(w * 0.022);
+  // By the long side: a vertical picture gets the same lettering as a landscape one, not half of it.
+  const size = Math.round(Math.max(w, h) * 0.022);
   ctx.font = "500 " + size + 'px "Microsoft YaHei", "PingFang SC", sans-serif';
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";

@@ -32,7 +32,7 @@ export function registerExportTools(registry) {
       "在后台把作品导出为 MP4（H.264 + AAC）。导出使用调用时的作品快照，之后的修改不影响本次导出。wait 秒数内等它完成（不用再查进度）；完成时返回下载地址（1 小时内有效），没完成就返回任务 id，用 task_status 查看。以前的导出列在 work_context 的 exports 中。",
     input: {
       work: workArg,
-      width: z.number().int().min(16).max(3840).multipleOf(2).optional().describe("输出宽度，默认长边 1920"),
+      width: z.number().int().min(16).max(3840).multipleOf(2).optional().describe("输出画面的宽度（像素），高度按作品比例算：竖屏 1080×1920 的作品写 720 得到 720×1280。不写时长边为 1920"),
       fps: z.number().int().min(12).max(60).optional(),
       start: z.number().nonnegative().optional(),
       end: z.number().positive().optional(),

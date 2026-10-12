@@ -63,7 +63,7 @@ export function createScene(options: SceneOptions) {
 - `layers_get` 每个图层一行，省略取默认值的字段（`offset` 0、`phase` 0、`rate` 1、`fit` contain、`blend` source-over）。
 - 新的 scene 模块要先在 `scene.ts` 的 loaders 中注册（`名称: () => import("./scenes/名称")`），否则会报“场景模块未注册”。
 - scene 图层的模块是普通 Scene（见 `scene`），收到的 `time` 是图层内时间（已减去 start、考虑 rate/offset）。scene 图层输出透明画布即可叠加在下层之上。
-- 同时活跃的图层不超过 32 个。
+- 同时活跃的图层不超过 32 个；其中三维图层（three 场景和模型图层，每个占一个 WebGL 上下文）不超过 12 个。Pixi 图层共用一个渲染器，不受这个限制。
 
 ## 三维模型图层
 
@@ -75,7 +75,7 @@ export function createScene(options: SceneOptions) {
 ```
 
 - `animation`：动画名（`asset_view` 或素材列表里能看到），不写播放第一个；按图层时间循环。
-- `spin`：每秒绕竖直轴转多少度（转台展示），转动时按任何角度都放得下来取景。
+- `spin`：每秒绕竖直轴转多少度（转台展示），转动时按任何角度都放得下来取景，所以同样的框里模型会比不转时小一些（扁长的模型尤其明显）。想让它大一些：把框放大或改成接近模型转一圈时的外形（大致方形），或者用 `transform.scale`。
 - `azimuth` / `elevation`：从哪个方向看（度）：水平角 0 是正面，默认 20；俯仰默认 10。
 - `environment`：HDR/EXR 全景图（`.hdr`、`.exr`）作为环境光，金属、玻璃反射更真实；不写用柔和的摄影棚光。
 - 删除这些设置用 `layers_edit` 的 `unset`，例如 `["source.animation"]`。

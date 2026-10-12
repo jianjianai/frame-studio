@@ -137,6 +137,10 @@ describe("material libraries", () => {
     expect((await tool("asset_view", { repo: "local", files: ["public/a.png"] })).body.error.message).toMatch(/materials/);
     expect((await tool("materials_list", {})).body.error.message).toMatch(/repo/);
     expect((await tool("materials_list", { repo: "nope" })).status).toBe(404);
+    // Libraries can be kept up without a work too.
+    const kept = await tool("material_write", { repo: "local", library: "品牌", operations: [{ op: "put", path: "notes.md", content: "备注" }, { op: "put", path: "x.png", work_file: "a.png" }] });
+    expect(kept.body.data.map((item) => item.ok)).toEqual([true, false]);
+    expect(kept.body.text).toContain("需要 work");
   });
 
   it("lets the AI link libraries, add files and use them", async () => {

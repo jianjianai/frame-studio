@@ -226,8 +226,10 @@ function zodDescriber(code, bindings, value) {
       } else if (method === "describe" && typeof argument === "string") schema.description = argument;
       else if (["min", "gte"].includes(method) && typeof argument === "number") schema.min = argument;
       else if (["max", "lte"].includes(method) && typeof argument === "number") schema.max = argument;
+      else if (method === "gt" && typeof argument === "number") Object.assign(schema, { min: argument, minExclusive: true });
+      else if (method === "lt" && typeof argument === "number") Object.assign(schema, { max: argument, maxExclusive: true });
       else if (method === "int") schema.int = true;
-      else if (method === "positive") schema.min = schema.min ?? 0;
+      else if (method === "positive") Object.assign(schema, { min: 0, minExclusive: true });
       else if (method === "nonnegative") schema.min = schema.min ?? 0;
       else if (method === "meta" && argument && typeof argument === "object") {
         if (typeof argument.description === "string") schema.description = argument.description;
@@ -264,6 +266,15 @@ function zodDescriber(code, bindings, value) {
   return describe;
 }
 
+/** "10–200", "> 0", "≥ 0", "≤ 1", "0–1（不含 0）" */
+function range({ min, max, minExclusive, maxExclusive }) {
+  if (min !== undefined && max !== undefined) {
+    const open = [minExclusive && min, maxExclusive && max].filter((value) => value !== false && value !== undefined);
+    return `${min}–${max}${open.length ? `（不含 ${open.join("、")}）` : ""}`;
+  }
+  if (min !== undefined) return `${minExclusive ? ">" : "≥"} ${min}`;
+  return `${maxExclusive ? "<" : "≤"} ${max}`;
+}
 /** One line for a parameter: name?: type = default — description */
 export function paramLine(param) {
   const type =
@@ -272,7 +283,7 @@ export function paramLine(param) {
       : param.type === "literal"
         ? JSON.stringify(param.value)
         : param.type === "number" && (param.min !== undefined || param.max !== undefined)
-          ? `${param.int ? "整数" : "number"} ${param.min ?? ""}–${param.max ?? ""}`
+          ? `${param.int ? "整数" : "number"} ${range(param)}`
           : param.type === "array"
             ? `${param.items?.type ?? "unknown"}[]`
             : param.type === "object"
@@ -822,7 +833,7 @@ function describeEntry(entry) {
  * A library canvas ("1080×1920") of another shape than the work's picture: said plainly, since
  * drawn whole it is cropped or letterboxed and nothing reports that. Empty when they fit.
  */
-export function canvasNote(canvas, meta) {
+export function canvasNote(canvas, meta, engine) {
   const [width, height] = String(canvas).split("×").map(Number);
   const { width: W, height: H } = meta.composition ?? { width: 1920, height: 1080 };
   if (!(width > 0 && height > 0 && W > 0 && H > 0)) return "";
@@ -831,7 +842,13 @@ export function canvasNote(canvas, meta) {
     const factor = W / width;
     if (Math.abs(Math.log(factor)) < 0.2) return "";
     const times = Number(factor.toFixed(2));
-    return `预览按 ${width}×${height} 的画布设计，本作品画面是 ${W}×${H}（${times} 倍）：照搬预览里的坐标和尺寸会${factor > 1 ? "偏小" : "偏大"}，在作品的场景里先 ctx.scale(${times}, ${times}) 再按预览的坐标画，或者把坐标和尺寸乘以 ${times}。`;
+    const how =
+      engine === "pixi"
+        ? `给资源的容器 scale.set(${times})，或者资源有 width/height 参数时传作品的尺寸`
+        : engine === "canvas"
+          ? `在作品的场景里先 ctx.scale(${times}, ${times}) 再按预览的坐标画，或者把坐标和尺寸乘以 ${times}`
+          : `Canvas 资源先 ctx.scale(${times}, ${times}) 再画，Pixi 资源给容器 scale.set(${times})，或者把坐标和尺寸乘以 ${times}`;
+    return `预览按 ${width}×${height} 的画布设计，本作品画面是 ${W}×${H}（${times} 倍）：照搬预览里的坐标和尺寸会${factor > 1 ? "偏小" : "偏大"}，${how}。`;
   }
   const shape = (w, h) => (w > h * 1.05 ? "横屏" : h > w * 1.05 ? "竖屏" : "方形");
   return `按 ${width}×${height}（${shape(width, height)}）的画布设计，本作品画面是 ${W}×${H}（${shape(W, H)}）：要铺满整个画面时会被裁切或留边（先看素材库 README 的说明）；只用作画面里的局部元素时，按比例换算位置和大小即可。`;
@@ -994,7 +1011,11 @@ export function resourcesPlugin(services) {
         };
       }
       const meta = services.works.meta(work);
-      const note = entry.type === "resource" && entry.engine !== "three" && meta.ok ? canvasNote(`${entry.preview.width}×${entry.preview.height}`, meta.meta) : "";
+      let note = entry.type === "resource" && entry.engine !== "three" && meta.ok ? canvasNote(`${entry.preview.width}×${entry.preview.height}`, meta.meta, entry.engine) : "";
+      // A resource with its own scale parameter: that is the way to size it, not scaling the canvas too.
+      const factor = /（([\d.]+) 倍）/.exec(note)?.[1];
+      if (factor && entry.params?.some((param) => param.name === "scale"))
+        note = `预览按 ${entry.preview.width}×${entry.preview.height} 的画布设计，本作品画面是 ${meta.meta.composition?.width ?? 1920}×${meta.meta.composition?.height ?? 1080}：用资源自己的 scale 参数放大（scale: ${factor}），不要再缩放画布。`;
       const text = describeEntry(entry) + (note ? `\n\n注意：${note}` : "");
       if (entry.type !== "resource" || !image) return asJson({ id: entry.id, type: entry.type }, text);
       const { frames } = await services.renderer.resourceFrames(work, { ref: entry.ref, key: entry.key, preset, values: params, times, width });

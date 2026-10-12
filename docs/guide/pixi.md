@@ -1,6 +1,6 @@
 # pixi：PixiJS 二维 WebGL
 
-适合大量精灵、滤镜、遮罩和文字特效。`createPixiScene(options, build)` 创建不自动运行的 Pixi Application（背景透明），`build(app)` 返回 `update(time)`。
+适合大量精灵、滤镜、遮罩和文字特效。`createPixiScene(options, build)` 创建一个 Pixi 场景（背景透明，不自动运行），`build(app)` 把显示对象加到 `app.stage`，返回 `update(time)`。
 
 ```ts
 import { Graphics, Text, Container, BlurFilter } from "pixi.js";
@@ -37,6 +37,8 @@ export function createScene(options: SceneOptions) {
 - 不要使用 `app.ticker`、`Ticker.shared`；所有状态在返回的函数中按 `t` 设置。
 - 纹理：`await Assets.load(assetUrl("films/<名称>/sprite.png"))`，素材库里的图片写 `assetUrl("materials/<库>/<路径>")`。
 - 作为 visual.json 的 scene 图层时，`engine` 写 `"pixi"`。
+- 同一画面里所有 Pixi 场景共用一个渲染器（浏览器同时只保留约 16 个 WebGL 上下文，共用后 Pixi 图层多少都不受限）：`app.stage` 是这个场景自己的，`app.renderer` 是共用的。不要 `app.destroy()`、不要改 `app.renderer` 的尺寸和设置；画面尺寸用 `options.width/height`。
+- 场景结束时它的 `app.stage` 连同子对象一起销毁。自己创建的纹理（`Texture.from(canvas)` 等）和滤镜在舞台的 `destroyed` 事件里释放：先销毁滤镜，再销毁它们用到的纹理（纹理放到 `queueMicrotask` 里），否则控制台会出现「destroyed while still bound to a shader」。不要销毁 `Texture.WHITE` 这类共用纹理。
 - 动作编排可以用 gsap 时间线动画显示对象的属性，在返回的函数里 `timeline.seek(t, true)`（见 `gsap`）。
 
 ## 素材库里的 Pixi 资源

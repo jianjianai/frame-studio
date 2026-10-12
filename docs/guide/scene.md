@@ -77,5 +77,5 @@ const font = new FontFace("Brand", `url(${assetUrl("films/work-1a2b3c4d/fonts/br
 document.fonts.add(await font.load());
 ```
 
-- 一个作品可以有多个场景模块：放在 `scenes/` 下，通过 `visual.json` 的 scene 图层组合（见 `layers`），或在 `scene.ts` 里自己按时间切换。
+- 一个作品可以有多个场景模块：放在 `scenes/` 下，通过 `visual.json` 的 scene 图层组合（见 `layers`），或在 `scene.ts` 里自己按时间切换。模块的名称在三处要一致：文件 `scenes/<名称>.ts`、`scene.ts` 里 `createCompositionScene` 的第三个参数（`<名称>: () => import("./scenes/<名称>")`）、图层的 `source.module`。新作品自带的 `title` 模块可以直接改内容，改名要三处一起改。
 - `Scene` 还可以提供 `debug.parameters()/setParameters()` 暴露可调参数，visual.json 的 scene 图层可用 `parameters` 设置它们。

@@ -1085,21 +1085,23 @@ export function materialsPlugin(services) {
     published: true, // the libraries are not the work: allowed on a published one
     title: "修改素材库",
     description:
-      "修改素材库，一次可以做多个操作，按顺序执行，每个操作保存为素材库的一个版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB，没有终端时用），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。素材库根目录的 README.md 是它的说明：第一个「# 」标题是素材库显示的名称，标题后的第一段是介绍（work_context 和资源目录里显示），用 put 的 content 或 edit 修改；它的「来源与许可」记录各文件的来源，随文件的移动、删除自动更新，不能删除或移动 README.md。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。你所在电脑上的文件用 upload_link 上传。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。",
+      "修改素材库，一次可以做多个操作，按顺序执行，每个操作保存为素材库的一个版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB，没有终端时用），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。素材库根目录的 README.md 是它的说明：第一个「# 」标题是素材库显示的名称，标题后的第一段是介绍（work_context 和资源目录里显示），用 put 的 content 或 edit 修改；它的「来源与许可」记录各文件的来源，随文件的移动、删除自动更新，不能删除或移动 README.md。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。你所在电脑上的文件用 upload_link 上传。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。不针对作品整理素材库时用 repo 指定作品库。",
     destructive: true,
     input: {
       work: workArg,
+      repo: repoArg,
       library: libraryArg.optional().describe("各操作默认的素材库"),
       operations: z.array(materialOperation).min(1).max(30),
     },
     async run({ library: fallback, operations }, ctx) {
-      const work = await ctx.work();
+      const work = await ctx.place();
       const one = async (item) => {
         const library = item.library ?? fallback;
         if (!library) throw problem(400, "需要 library（写在操作里或外层）");
         if (item.op === "put") {
           const { url, work_file, content, data, source, license } = item;
           if ([url, work_file, content, data].filter((value) => value !== undefined).length !== 1) throw problem(400, "url、work_file、content、data 必须且只能提供一个");
+          if (work_file && !work.dir) throw problem(400, "work_file 是作品里的文件：需要 work");
           const from = url
             ? { url }
             : work_file

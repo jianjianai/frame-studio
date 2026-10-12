@@ -210,9 +210,12 @@ export function registerWorkTools(registry) {
       const work = await ctx.work();
       const { sheet, sheetTimes, ...result } = await checkWork(services, work, { runtime, frames: frames && runtime });
       const lines = result.problems.map((p) => `- [${p.source}] ${p.file ? p.file + (p.line ? `:${p.line}` : "") + " " : ""}${p.message}`);
-      const text = result.ok
+      // Console output does not fail a check, but the AI should see it (it only reads `text`).
+      const logged = [...new Set((result.console ?? []).map((line) => String(line).slice(0, 300)))];
+      const consoleLines = logged.length ? `\n浏览器控制台（${logged.length} 条，不影响通过）：\n${logged.slice(0, 5).map((line) => "- " + line).join("\n")}` : "";
+      const text = (result.ok
         ? `检查通过（${result.ms} ms）。${lines.length ? "\n警告：\n" + lines.join("\n") : ""}`
-        : `发现 ${result.problems.length} 个问题：\n${lines.join("\n")}`;
+        : `发现 ${result.problems.length} 个问题：\n${lines.join("\n")}`) + consoleLines;
       return {
         ...asJson(result, sheet ? `${text}\n分镜（${sheetTimes.map((time, index) => `#${index + 1} ${formatTime(time)}`).join("，")}）见附图。` : text),
         images: sheet ? [{ data: sheet, mimeType: "image/jpeg" }] : [],

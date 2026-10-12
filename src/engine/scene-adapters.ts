@@ -49,6 +49,38 @@ export async function createThreeScene(
     throw error;
   }
 }
+/**
+ * One Pixi renderer for every Pixi scene of the page. A browser keeps only about 16 WebGL
+ * contexts alive and silently drops the oldest beyond that, so a context per layer loses
+ * layers in busy pictures. Each scene gets its own stage and canvas; its picture is copied
+ * there after rendering. Never destroyed: destroying a renderer also releases Pixi's global
+ * pools, which every other scene still uses.
+ */
+let shared: Promise<Application> | undefined;
+function sharedPixi(): Promise<Application> {
+  shared ??= (async () => {
+    await import("pixi.js/unsafe-eval");
+    const { Application } = await import("pixi.js");
+    const app = new Application();
+    await app.init({
+      width: 2,
+      height: 2,
+      autoStart: false,
+      sharedTicker: false,
+      antialias: true,
+      preserveDrawingBuffer: true,
+      backgroundAlpha: 0,
+    });
+    return app;
+  })();
+  shared.catch(() => (shared = undefined));
+  return shared;
+}
+/**
+ * A Pixi scene: `build(app)` adds its display objects to `app.stage` and returns
+ * `update(time)`. `app` is the shared application seen through this scene's own stage:
+ * do not destroy it or change the renderer's size or settings.
+ */
 export async function createPixiScene(
   options: SceneOptions,
   build: (
@@ -57,32 +89,37 @@ export async function createPixiScene(
     | Promise<(time: number) => void | Promise<void>>
     | ((time: number) => void | Promise<void>),
 ): Promise<Scene> {
-  await import("pixi.js/unsafe-eval");
-  const { Application } = await import("pixi.js");
-  const app = new Application();
+  const app = await sharedPixi();
+  const { Container } = await import("pixi.js");
+  const fit = () => {
+    if (app.renderer.width !== options.width || app.renderer.height !== options.height)
+      app.renderer.resize(options.width, options.height, 1);
+  };
+  fit();
+  const stage = new Container();
+  const view = Object.create(app, { stage: { value: stage } }) as Application;
+  const canvas = document.createElement("canvas");
+  canvas.width = options.width;
+  canvas.height = options.height;
+  const ctx = canvas.getContext("2d")!;
   try {
-    await app.init({
-      width: options.width,
-      height: options.height,
-      autoStart: false,
-      sharedTicker: false,
-      antialias: true,
-      preserveDrawingBuffer: true,
-      backgroundAlpha: 0,
-    });
-    const update = await build(app);
+    const update = await build(view);
     return {
-      canvas: app.canvas as HTMLCanvasElement,
+      canvas,
       async render(time) {
         await update(time);
-        app.renderer.render(app.stage);
+        fit();
+        app.renderer.render({ container: stage, clear: true });
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(app.canvas as HTMLCanvasElement, 0, 0);
       },
       dispose() {
-        app.destroy(true, { children: true });
+        stage.destroy({ children: true });
+        canvas.width = canvas.height = 1;
       },
     };
   } catch (error) {
-    if (app.renderer) app.destroy(true, { children: true });
+    stage.destroy({ children: true });
     throw error;
   }
 }
