@@ -182,11 +182,14 @@ describe("models, Lottie and panoramas in works and libraries", () => {
     await put("logo.svg", '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>');
     expect((await call(`${lib}/thumb?path=${encodeURIComponent("三维/logo.svg")}`)).status).toBe(400);
     // resources_search finds files too: by kind words and by what the README says about them.
-    await tool("material_write", { repo: "local", library: "三维", operations: [{ op: "put", path: "README.md", content: "# 三维\n\n测试用的三维素材。\n\n- `fx/square.json`：红色方块滑过画面\n" }] });
+    await tool("material_write", { repo: "local", library: "三维", operations: [{ op: "put", path: "README.md", content: "# 三维\n\n测试用的三维素材。\n\n- `fx/square.json`：红色方块滑过画面\n\n## Cube\n\nCube 是一个会转的立方体。\n" }] });
     const found = await tool("resources_search", { repo: "local", query: "红色方块" });
     expect(found.body.text).toContain("[文件 · Lottie] materials/三维/fx/square.json — `fx/square.json`：红色方块滑过画面");
     const models = await tool("resources_search", { repo: "local", query: "模型", kind: "file" });
     expect(models.body.data.files.map((item) => item.id)).toEqual(["materials/三维/models/cube.glb"]);
+    // Named by its stem in the README ("Cube"), the model is found by what the README says.
+    expect((await tool("resources_search", { repo: "local", query: "立方体", kind: "file" })).body.data.files[0].id).toBe("materials/三维/models/cube.glb");
+    expect((await tool("resources_search", { repo: "local", query: "长颈鹿" })).body.text).toContain("也用英文关键词试一次");
   });
 
   it("puts models on the timeline and keeps their files locked", async () => {

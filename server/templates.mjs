@@ -105,7 +105,14 @@ export function createScene({ width, height }: SceneOptions): Scene {
       ctx.fillStyle = "#e8edf2";
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.font = \`600 \${Math.round(height * 0.09)}px system-ui, sans-serif\`;
+      // As large as the height allows, smaller when the title is wider than the picture (vertical works).
+      let size = Math.round(height * 0.09);
+      ctx.font = \`600 \${size}px system-ui, sans-serif\`;
+      const wide = ctx.measureText(project.title).width;
+      if (wide > width * 0.9) {
+        size = Math.floor((size * width * 0.9) / wide);
+        ctx.font = \`600 \${size}px system-ui, sans-serif\`;
+      }
       ctx.globalAlpha = eased;
       ctx.fillText(project.title, width / 2, height / 2 + (1 - eased) * height * 0.04);
       ctx.globalAlpha = 1;

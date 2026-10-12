@@ -660,7 +660,10 @@ export class ResourceCatalog {
       for (const file of await this.materials.files(repo, id)) {
         if (file.kind === "file" || CODE_FILE.test(file.path)) continue;
         const name = path.posix.basename(file.path);
-        const mentions = readme.filter((line) => line.includes(file.path) || line.includes(name)).map((line) => line.replace(/^[-*|#\s]+/, "").trim());
+        // Lines naming the file, or its stem as a word ("Fox" for models/Fox.glb).
+        const stem = name.replace(/\.[^.]+$/, "");
+        const word = stem.length >= 3 ? new RegExp(`(^|[^A-Za-z0-9])${stem.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}([^A-Za-z0-9]|$)`, "i") : null;
+        const mentions = readme.filter((line) => line.includes(file.path) || line.includes(name) || word?.test(line)).map((line) => line.replace(/^[-*|#\s]+/, "").trim());
         const entry = { type: "file", id: `materials/${file.ref}`, title: name, key: file.path, kindLabel: FILE_KINDS[file.kind] ?? file.kind, kind: file.kind, description: mentions.join(" "), tags: [id] };
         const value = score(entry, query);
         if (value > 0) found.push({ entry, value });
@@ -1045,19 +1048,21 @@ export function resourcesPlugin(services) {
       // Files (Lottie, images, models, audio) are looked for too: people ask for "爱心" meaning either.
       const fileHits = query && !engine && (!kind || kind === "file") ? await catalog.searchFiles(work.repo, { query, library, limit: kind === "file" ? limit : 8 }) : [];
       const fileLine = (entry) => `- [文件 · ${entry.kindLabel.split(" ")[0]}] ${entry.id}${entry.description ? " — " + entry.description.slice(0, 120) : ""}`;
+      // Library file names are mostly English: a Chinese query that found no file may find one in English.
+      const english = query && /[\u4e00-\u9fff]/.test(query) && !fileHits.length && !engine && (!kind || kind === "file") ? "\n\n素材库里的文件名多是英文：找图片、Lottie、模型等文件时也用英文关键词试一次（例如 heart、fox、star）。" : "";
       const filesPart = fileHits.length ? `\n\n素材库里的文件 ${fileHits.length} 个（图层、代码里直接用这个地址；asset_view 看样子）：\n${fileHits.map(fileLine).join("\n")}` : "";
       const line = (entry) =>
         entry.type === "code"
           ? `- [${entry.kindLabel}] ${entry.id} ${entry.signature}${entry.doc ? `  // ${firstLine(entry.doc)}` : ""}`
           : `- [${entry.kindLabel}${engineTag(entry.engine)}] ${entry.id} ${entry.title}${entry.type === "sound" && entry.duration && !/\d\s*秒/.test(entry.title) ? `（${entry.duration} 秒）` : ""}${entry.description ? " — " + firstLine(entry.description) : ""}`;
       const files = "素材库里的文件（Lottie、图片、模型、音频、字体）用 materials_list 列出、asset_view 查看。";
-      if (!found.length && fileHits.length) return asJson({ items: [], files: fileHits }, `没有找到「${query}」相关的资源（代码声明的）。${filesPart.trim()}`);
-      if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源和文件。可以换个说法，或不给 query 看全部目录。${files}` : `素材库里还没有声明资源（见 frame_guide resources）。${files}`);
+      if (!found.length && fileHits.length) return asJson({ items: [], files: fileHits }, kind === "file" ? filesPart.trim() : `没有找到「${query}」相关的资源（代码声明的）。${filesPart.trim()}`);
+      if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源和文件。可以换个说法，或不给 query 看全部目录。${files}${english}` : `素材库里还没有声明资源（见 frame_guide resources）。${files}`);
       let text;
       // Several words that nothing matches together: say the list is the partial matches.
       const words = terms(query ?? "");
       const partial = words.length > 1 && !found.some((entry) => score(entry, query) >= 100 * words.length);
-      if (query) text = `${partial ? `没有同时符合「${words.join("」「")}」的；下面是符合其中一部分的 ` : "找到 "}${found.length} 个：\n${found.map(line).join("\n")}${filesPart}`;
+      if (query) text = `${partial ? `没有同时符合「${words.join("」「")}」的；下面是符合其中一部分的 ` : "找到 "}${found.length} 个：\n${found.map(line).join("\n")}${filesPart}${english}`;
       else {
         // The directory, by library and kind; once it gets long, only the first few of each kind.
         text = directory(found, linked, false);

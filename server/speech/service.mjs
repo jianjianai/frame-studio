@@ -68,6 +68,25 @@ export class SpeechService {
       list.push({ id: "local:" + model.id, name: `本地 · ${model.name}`, ready: true, detail: "离线运行 · " + model.languages.join(" / ") });
     return list;
   }
+  /**
+   * Whether Edge answers now: opening its connection is where a refusal shows (403), so
+   * that is all the check does. Remembered for ten minutes, and updated by real synthesis.
+   */
+  async edgeStatus() {
+    if (this.edgeChecked && Date.now() - this.edgeChecked < 600_000) return this.edgeFailure;
+    const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
+    const tts = new MsEdgeTTS();
+    try {
+      await tts.setMetadata("zh-CN-XiaoxiaoNeural", OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+      this.edgeFailure = null;
+    } catch (error) {
+      this.edgeFailure = { at: new Date().toISOString(), message: this.edgeProblem(error).message };
+    } finally {
+      tts.close?.();
+    }
+    this.edgeChecked = Date.now();
+    return this.edgeFailure;
+  }
   /** Edge's free service refusing or unreachable: say why and what else there is, not the socket error. */
   edgeProblem(error) {
     const message = String(error?.message ?? error);
@@ -151,11 +170,13 @@ export class SpeechService {
         const refused = this.edgeProblem(error);
         // Remembered for speech_voices: a list of voices says nothing about whether they speak.
         this.edgeFailure = { at: new Date().toISOString(), message: refused.message };
+        this.edgeChecked = Date.now();
         throw refused;
       } finally {
         tts.close?.();
       }
       this.edgeFailure = null;
+      this.edgeChecked = Date.now();
       if (!chunks.length) throw problem(502, "Edge 语音没有返回音频（检查网络或换一个声音）");
       return { bytes: Buffer.concat(chunks), ext: "mp3" };
     }

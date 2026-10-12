@@ -368,6 +368,9 @@ describe("tools that save the AI calls", () => {
     await tool("work_check", { work: work.id, runtime: false });
     const checked = () => tool("work_context", { work: work.id }).then((result) => result.body.data.lastCheck);
     expect((await checked()).current).toBe(true);
+    const part = await tool("work_context", { work: work.id, sections: ["lastCheck"] });
+    expect(Object.keys(part.body.data).sort()).toEqual(["lastCheck", "work"]);
+    expect((await tool("work_context", { work: work.id, sections: ["nope"] })).body.error.message).toContain("没有这些部分：nope");
     fs.writeFileSync(path.join(work.dir, "scenes", "extra.ts"), "export const x = 1;\n");
     expect((await checked()).current).toBe(false);
     fs.rmSync(path.join(work.dir, "scenes", "extra.ts"));

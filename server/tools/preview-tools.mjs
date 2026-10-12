@@ -78,7 +78,9 @@ function trackLines(solo, window) {
   for (const track of solo) {
     const heard = track.windows.filter((item) => item.rmsDb > -60);
     const rms = heard.length ? Math.round(10 * Math.log10(heard.reduce((sum, item) => sum + power(item.rmsDb), 0) / heard.length) * 10) / 10 : null;
-    lines.push(`- 「${track.name}」${track.voice ? "（人声）" : ""}：${rms === null ? "这段没有声音" : `rms ${rms} / peak ${track.overall.peakDb}，有声 ${Math.round(heard.length * window * 10) / 10} 秒`}`);
+    // Very quiet all through: often the wrong file or a gain left near zero.
+    const faint = rms !== null && rms < -45 ? "（很轻：是不是素材几乎静音，或 gain 太低？）" : "";
+    lines.push(`- 「${track.name}」${track.voice ? "（人声）" : ""}：${rms === null ? "这段没有声音" : `rms ${rms} / peak ${track.overall.peakDb}，有声 ${Math.round(heard.length * window * 10) / 10} 秒${faint}`}`);
   }
   const balance = voiceBalance(solo, window);
   if (balance?.differenceDb != null) {
@@ -275,7 +277,7 @@ export function registerPreviewTools(registry) {
         await encodeMp3(left.subarray(0, cut), right.subarray(0, cut), rate, file);
         const link = services.downloads?.link(file, `试听-${name}`);
         stats.listen = { seconds: Math.round((cut / rate) * 1000) / 1000, ...(link ? { url: link.url } : {}) };
-        lines.push("", `试听：${formatTime(from)}–${formatTime(from + cut / rate)} 的 MP3${link ? `，下载地址（${link.expiresInMinutes} 分钟内有效，可以给用户）：${link.url}` : ""}`);
+        lines.push("", `试听：${formatTime(from)}–${formatTime(from + cut / rate)} 的 MP3 已附在结果里（客户端不能接收音频时只有这条链接）${link ? `，下载地址（${link.expiresInMinutes} 分钟内有效，可以给用户）：${link.url}` : ""}`);
         return { ...asJson(stats, lines.join("\n")), audio: [{ data: fs.readFileSync(file), mimeType: "audio/mpeg" }] };
       }
       return asJson(stats, lines.join("\n"));

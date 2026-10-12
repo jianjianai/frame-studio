@@ -237,9 +237,9 @@ export function registerDocumentTools(registry) {
       const result = editAudio(work, args);
       let follow = { moved: [] };
       const meta = registry.services.works.meta(work);
-      if (args.subtitles !== false && meta.ok) {
+      if (meta.ok) {
         follow = followSubtitles(before, result.document, meta.meta.subtitles, meta.meta.duration);
-        if (follow.moved.length && !args.dryRun) await registry.services.works.update(work, { subtitles: [...follow.cues].sort((a, b) => a.start - b.start) });
+        if (args.subtitles !== false && follow.moved.length && !args.dryRun) await registry.services.works.update(work, { subtitles: [...follow.cues].sort((a, b) => a.start - b.start) });
       }
       if (!args.dryRun) await registry.services.materials?.lockReferenced(work);
       const { tracks, clips } = result.document;
@@ -252,7 +252,7 @@ export function registerDocumentTools(registry) {
       return {
         data: { sha256: result.sha256, tracks: tracks.length, clips: clips.length, dryRun: args.dryRun },
         meta: { sha256: result.sha256 },
-        text: `${args.dryRun ? "预检通过（未写入）" : "已更新混音"}。${summary || "没有音轨"}${follow.moved.length ? `\n字幕跟着配音${args.dryRun ? "会" : ""}移动：${follow.moved.join("、")}（不想跟着动时传 subtitles: false）` : ""}`,
+        text: `${args.dryRun ? "预检通过（未写入）" : "已更新混音"}。${summary || "没有音轨"}${follow.moved.length ? (args.subtitles === false ? `\n字幕没有跟着配音移动（subtitles: false）：${follow.moved.map((line) => line.replace(/ [\d.]+–[\d.]+ 秒$/, "")).join("、")} 还在原来的时间` : `\n字幕跟着配音${args.dryRun ? "会" : ""}移动：${follow.moved.join("、")}（不想跟着动时传 subtitles: false）`) : ""}`,
       };
     },
   });

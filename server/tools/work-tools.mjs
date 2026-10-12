@@ -170,8 +170,11 @@ export function registerWorkTools(registry) {
     description:
       "读取作品的元数据、文件、素材（地址、类型、时长、尺寸）、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果、最近的导出、作品需求和关联的经验库、作品库里的素材库（各有哪些资源和音效）、发布后的复盘数据概要，以及是否已发布、和 GitHub 是否同步（warnings 里的情况要先处理）。外部 AI 开始工作前先调用。",
     readOnly: true,
-    input: { work: workArg },
-    async run(_, ctx) {
+    input: {
+      work: workArg,
+      sections: z.array(z.string().max(40)).max(20).optional().describe("只要其中几部分，例如 [\"lastCheck\", \"layers\"]（warnings 和 work 总会返回）；不给返回全部"),
+    },
+    async run({ sections }, ctx) {
       const work = await ctx.work();
       const meta = works.meta(work);
       const files = tree(work.dir)
@@ -244,6 +247,12 @@ export function registerWorkTools(registry) {
         // Where the work was posted and how it did (only when there is review data).
         ...(services.reviews ? { reviews: await services.reviews.summary(work).catch(() => null) } : {}),
       };
+      if (sections?.length) {
+        // A part of it: the whole is several kilobytes, mostly the libraries' descriptions.
+        const unknown = sections.filter((key) => !(key in result));
+        if (unknown.length) throw problem(400, `没有这些部分：${unknown.join("、")}（有：${Object.keys(result).join("、")}）`);
+        return asJson(Object.fromEntries(Object.entries(result).filter(([key]) => key === "warnings" || key === "work" || sections.includes(key))));
+      }
       return asJson(result);
     },
   });
