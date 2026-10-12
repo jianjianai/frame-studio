@@ -12,23 +12,26 @@ import {
   Music,
   Eye,
   AlertTriangle,
+  Shapes,
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, materialsPath, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, useToast, Dialog } from "../lib/ui";
-import type { Asset, ResourceItem } from "../lib/types";
+import type { Asset } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { assetDrag } from "../workbench/assetDrag";
 import { ViewHeader } from "./ViewHeader";
 import { uploadBlobs, uploadFiles } from "./upload";
 import { MaterialsPanel } from "./MaterialsPanel";
-import { ResourcesPanel } from "./ResourcesPanel";
-import { KindIcon, KIND_NAMES, ServerThumb, isDrawn, isVisual, layerOf } from "./media";
-import { LibraryPicker, type LibraryInfo } from "./LibraryPicker";
+import { KindIcon, KIND_NAMES, ServerThumb, isDrawn, isVisual } from "./media";
+import { LibraryPicker } from "./LibraryPicker";
+import type { LibraryInfo } from "./libraryShared";
+import { usePlacement } from "./placement";
 
 export function AssetsView() {
-  const { work, stage, addToChat, reload, openFile, readOnly } = useWorkbench();
+  const { work, addToChat, openFile, openTool, readOnly } = useWorkbench();
   const toast = useToast();
-  const [tab, setTab] = useState<"work" | "library" | "resources">("work");
+  const { addLayer, placeAudio } = usePlacement();
+  const [tab, setTab] = useState<"work" | "library">("work");
   // A published work's own files are view-only; the shared materials library is not part of it.
   const locked = readOnly && tab === "work";
   const [assets, setAssets] = useState<Asset[]>([]);
@@ -50,55 +53,6 @@ export function AssetsView() {
   });
 
   const fileUrl = (asset: Asset) => `${work.preview.assetBase}${asset.url}`;
-  const usesLayers = Boolean(work.meta?.visual);
-  const addLayer = (asset: Asset) =>
-    run(async () => {
-      if (!usesLayers) throw new Error("这个作品的画面完全由代码绘制，没有图层文档。可以把素材引用给 AI，让它接入。");
-      const start = stage.playback.get().time;
-      const remaining = (work.meta?.duration ?? 10) - start;
-      const layer = layerOf(asset);
-      const length = Math.min(remaining, layer.length);
-      const id =
-        asset.path
-          .split("/")
-          .pop()!
-          .replace(/\.[^.]+$/, "")
-          .replace(/[^a-zA-Z0-9_-]/g, "_")
-          .replace(/^[^a-zA-Z]/, "m") +
-        "_" +
-        Math.random().toString(36).slice(2, 6);
-      await api(`${base}/layers`, {
-        body: {
-          operations: [
-            {
-              op: "add",
-              clip: {
-                id,
-                name: asset.path.split("/").pop(),
-                source: layer.source,
-                start,
-                duration: Math.max(0.1, length),
-                fit: "contain",
-                ...(asset.kind === "video" ? { audio: { enabled: true } } : {}),
-              },
-            },
-          ],
-        },
-      });
-      await reload();
-    }, "已添加到画面（时间轴最上层）");
-  const placeAudio = (asset: Asset) =>
-    run(async () => {
-      await api(`${base}/audio/place`, {
-        body: { src: asset.url, start: stage.playback.get().time, duration: asset.duration, track: "音效", name: asset.path.split("/").pop() },
-      });
-      await reload();
-    }, "已放到「音效」音轨");
-  const placeSound = (item: ResourceItem) =>
-    run(async () => {
-      await api(`${base}/audio/place`, { body: { sound: item.id, start: stage.playback.get().time, track: "音效", name: item.title } });
-      await reload();
-    }, `已把「${item.title}」放到「音效」音轨`);
   /** Share one of the work's files with other works: copy it into a material library (picked, or made there). */
   const toLibrary = (asset: Asset) =>
     run(async () => setSharing({ asset, libraries: await api<LibraryInfo[]>(`${materialsPath(work.repo)}/libraries?work=${encodeURIComponent(work.id)}`) }));
@@ -155,6 +109,9 @@ export function AssetsView() {
             <Link2 size={15} />
           </button>
         )}
+        <button className="icon-btn" title="资源：素材库里声明的角色、场景、效果、音效等（在选项卡中打开）" onClick={() => openTool("resources")}>
+          <Shapes size={15} />
+        </button>
         <button className="icon-btn" title="刷新" onClick={() => load()}>
           <RefreshCw size={15} />
         </button>
@@ -165,9 +122,6 @@ export function AssetsView() {
         </button>
         <button className={tab === "library" ? "active" : ""} onClick={() => setTab("library")}>
           素材库 <span className="faint">{work.meta?.materials?.length || ""}</span>
-        </button>
-        <button className={tab === "resources" ? "active" : ""} onClick={() => setTab("resources")} title="素材库代码里声明的角色、场景、效果、音效等，可以预览和复用">
-          资源
         </button>
       </div>
       {busy && <div className="view-progress" />}
@@ -184,7 +138,7 @@ export function AssetsView() {
               // Like VS Code: a click opens a preview tab, a double-click keeps it open.
               onClick={() => openFile(asset.path, { preview: true })}
               onDoubleClick={() => openFile(asset.path)}
-              title={`${asset.path}\n${[KIND_NAMES[asset.kind], formatBytes(asset.size), asset.width ? `${asset.width}×${asset.height}` : "", asset.duration ? formatTime(asset.duration, false) : "", asset.animations?.length ? `动画：${asset.animations.map((item) => item.name).join("、")}` : ""].filter(Boolean).join(" · ")}${asset.problem ? `\n注意：${asset.problem}` : ""}\n单击查看，拖到时间轴使用，右键更多操作`}
+              title={`${asset.path}\n${[KIND_NAMES[asset.kind], formatBytes(asset.size), asset.width ? `${asset.width}×${asset.height}` : "", asset.duration ? formatTime(asset.duration, false) : "", asset.animations?.length ? `动画：${asset.animations.map((item) => item.name).join("、")}` : ""].filter(Boolean).join(" · ")}${asset.problem ? `\n注意：${asset.problem}` : ""}\n单击查看，拖到时间轴使用，右键或长按更多操作`}
             >
               {isDrawn(asset.kind) ? (
                 <ServerThumb
@@ -215,15 +169,12 @@ export function AssetsView() {
           ))}
           {!assets.length && <div className="empty">把图片、视频、音频、三维模型、Lottie 拖到这里，或点上方按钮上传。</div>}
         </div>
-      ) : tab === "library" ? (
-        <MaterialsPanel onPlace={(asset, how) => (how === "layer" ? addLayer(asset) : placeAudio(asset))} />
       ) : (
-        <ResourcesPanel onPlaceSound={placeSound} />
+        <MaterialsPanel />
       )}
       {sharing && (
         <LibraryPicker
           kind="materials"
-          single
           title={`把 ${sharing.asset.path.split("/").pop()} 存入素材库`}
           libraries={sharing.libraries}
           pinned={work.meta?.materials ?? []}

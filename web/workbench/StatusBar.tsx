@@ -5,7 +5,7 @@ import { useRemoteState, type RemoteState } from "./RemoteBar";
 import type { WorkStatus } from "../lib/types";
 import { useObservable, useWorkbench } from "./store";
 
-export function StatusBar({ status, version, onOpenView }: { status: WorkStatus | null; version: string; onOpenView: (view: string) => void }) {
+export function StatusBar({ status, version, onOpenVersions }: { status: WorkStatus | null; version: string; onOpenVersions: () => void }) {
   const { stage, check, showPanel, work } = useWorkbench();
   const playback = useObservable(stage.playback);
   const stageStatus = useObservable(stage.status);
@@ -24,7 +24,7 @@ export function StatusBar({ status, version, onOpenView }: { status: WorkStatus 
   const project = stageStatus.project;
   return (
     <footer className="statusbar">
-      <button onClick={() => onOpenView("versions")} title="版本与同步">
+      <button onClick={onOpenVersions} title="版本与同步">
         <GitBranch size={13} /> {work.branch}
         {status && status.files.length > 0 && (
           <span>
@@ -44,7 +44,7 @@ export function StatusBar({ status, version, onOpenView }: { status: WorkStatus 
           </span>
         )}
       </button>
-      <RemoteStatus state={remote} onClick={() => onOpenView("versions")} />
+      <RemoteStatus state={remote} onClick={onOpenVersions} />
       <button onClick={() => showPanel("problems")} title="问题">
         {check ? errors ? <AlertCircle size={13} className="danger-text" /> : <CheckCircle2 size={13} /> : <CircleDot size={13} />}
         {check ? (errors ? `${errors} 个错误` : "检查通过") : "未检查"}

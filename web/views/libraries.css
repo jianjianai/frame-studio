@@ -69,28 +69,6 @@
   color: var(--fg-faint);
   font-size: 12px;
 }
-.library-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-.library-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  max-width: 200px;
-  height: 22px;
-  padding: 0 2px 0 8px;
-  border-radius: 11px;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 12px;
-}
-.library-chip .icon-btn {
-  width: 18px;
-  height: 18px;
-  color: inherit;
-}
 .library-options {
   height: min(52vh, 460px);
   overflow: auto;
@@ -107,14 +85,6 @@
 }
 .library-option.active {
   background: var(--bg-hover);
-}
-.library-option.selected {
-  box-shadow: inset 2px 0 0 var(--accent);
-}
-.library-option > input {
-  flex: none;
-  margin: 3px 0 0;
-  pointer-events: none;
 }
 .library-option.create {
   align-items: center;
@@ -150,41 +120,13 @@
   flex: none;
 }
 .library-picker mark,
-.library-panel mark {
+.library-manager mark {
   border-radius: 2px;
   background: var(--warn-soft);
   color: inherit;
 }
 
-/* ---- the 经验 view and the 素材库 tab with many libraries ---- */
-.library-panel-search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 8px 10px 4px;
-  padding: 0 4px 0 8px;
-  height: 28px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--bg-input);
-  color: var(--fg-muted);
-}
-.library-panel-search:focus-within {
-  border-color: var(--accent);
-}
-.library-panel-search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--fg);
-  font-size: 12px;
-}
-.library-panel-search .icon-btn {
-  width: 20px;
-  height: 20px;
-}
+/* ---- the 经验 view and the 素材库 side bar ---- */
 .library-group {
   display: flex;
   align-items: center;
@@ -204,26 +146,6 @@
   color: var(--fg-faint);
   font-weight: 400;
 }
-.library-linked-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-}
-.library-linked-row .icon-btn {
-  width: 22px;
-  height: 22px;
-  opacity: 0;
-}
-.library-linked-row:hover .icon-btn,
-.library-linked-row .icon-btn:focus-visible {
-  opacity: 1;
-}
-.library-row-about {
-  padding: 0 10px 4px 34px;
-  color: var(--fg-faint);
-  font-size: 11px;
-}
 .library-doc-row {
   display: flex;
   align-items: center;
@@ -239,34 +161,104 @@
   flex: none;
   color: var(--fg-muted);
 }
-.library-more {
-  padding: 4px 14px 8px;
-  color: var(--fg-faint);
-  font-size: 12px;
+
+/* ---- the 素材库 / 经验库 tab ---- */
+.library-manager .home-chips button {
+  height: 28px;
 }
-.library-suggestions {
-  display: grid;
-  gap: 2px;
-  margin-bottom: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--bg);
-}
-.library-suggestions-title {
+.library-create {
   display: flex;
   align-items: center;
-  gap: 4px;
-  color: var(--fg-muted);
-  font-size: 11px;
+  gap: 8px;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
 }
-.library-suggestion {
+.library-create:hover {
+  background: var(--accent-soft);
+}
+.library-card {
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elev);
+}
+.library-card.linked {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+.library-card-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 10px 10px 10px 8px;
+  cursor: pointer;
+}
+.library-card.trashed {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+.library-card-chevron {
+  flex: none;
+  padding-top: 2px;
+  color: var(--fg-muted);
+}
+.library-card-main {
+  display: grid;
+  flex: 1;
+  gap: 3px;
+  min-width: 0;
+}
+.library-card-title {
   display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 3px 0;
 }
-.library-suggestion .btn {
-  margin: 0;
+.library-card-title strong {
+  font-size: 14px;
+}
+.library-card-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 4px;
+}
+.library-card-body {
+  border-top: 1px solid var(--border);
+  padding: 6px 4px 4px;
+}
+.library-card-body .asset-grid,
+.library-manager .tab-section .asset-grid {
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+}
+.library-trash-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.library-docs {
+  padding: 2px 4px;
+}
+@media (max-width: 640px) {
+  .library-card-row {
+    flex-wrap: wrap;
+  }
+  .library-card-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
+.library-more {
+  padding: 4px 14px 8px;
+  color: var(--fg-faint);
+  font-size: 12px;
 }

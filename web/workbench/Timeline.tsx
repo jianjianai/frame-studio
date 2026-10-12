@@ -27,6 +27,7 @@ import type { Asset, AudioDocument, Subtitle, Beat, VisualClip } from "../lib/ty
 import { useObservable, useWorkbench } from "./store";
 import { loadPeaks, drawPeaks } from "./waveform";
 import { assetDrag } from "./assetDrag";
+import { coarsePointer } from "../lib/touch";
 import { isVisual, layerOf } from "../views/media";
 
 const WIDE_LABEL = 168;
@@ -179,7 +180,33 @@ export function Timeline() {
       }
     };
     element.addEventListener("wheel", wheel, { passive: false });
-    return () => element.removeEventListener("wheel", wheel);
+    // Two fingers: pinch to zoom around their middle (one finger scrolls, as the browser does).
+    let spread = 0;
+    const distance = (touches: TouchList) => Math.hypot(touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
+    const touchStart = (event: TouchEvent) => {
+      if (event.touches.length === 2) spread = distance(event.touches);
+    };
+    const touchMove = (event: TouchEvent) => {
+      if (event.touches.length !== 2 || !spread) return;
+      event.preventDefault();
+      const next = distance(event.touches);
+      zoomRef.current(next / spread, (event.touches[0].clientX + event.touches[1].clientX) / 2);
+      spread = next;
+    };
+    const touchEnd = (event: TouchEvent) => {
+      if (event.touches.length < 2) spread = 0;
+    };
+    element.addEventListener("touchstart", touchStart, { passive: true });
+    element.addEventListener("touchmove", touchMove, { passive: false });
+    element.addEventListener("touchend", touchEnd, { passive: true });
+    element.addEventListener("touchcancel", touchEnd, { passive: true });
+    return () => {
+      element.removeEventListener("wheel", wheel);
+      element.removeEventListener("touchstart", touchStart);
+      element.removeEventListener("touchmove", touchMove);
+      element.removeEventListener("touchend", touchEnd);
+      element.removeEventListener("touchcancel", touchEnd);
+    };
   }, []);
 
   // Middle button drag pans the view (hand tool).
@@ -195,9 +222,11 @@ export function Timeline() {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
     return true;
   };
 
@@ -452,20 +481,55 @@ export function Timeline() {
   };
   const seekAt = (event: React.PointerEvent) => {
     if (pan(event) || event.button !== 0 || (event.target as HTMLElement).closest(".tl-item")) return;
+    const seek = (clientX: number) => void stage.seek(Math.max(0, Math.min(duration, timeAt(clientX))));
+    // A finger on the lanes scrolls them (the browser pans); a tap there seeks. The ruler scrubs.
+    if (event.pointerType === "touch" && !(event.currentTarget as HTMLElement).closest(".tl-ruler")) {
+      const origin = { x: event.clientX, y: event.clientY };
+      const done = () => {
+        window.removeEventListener("pointerup", tap);
+        window.removeEventListener("pointercancel", done);
+      };
+      const tap = (upEvent: PointerEvent) => {
+        done();
+        if (Math.hypot(upEvent.clientX - origin.x, upEvent.clientY - origin.y) > 10) return;
+        select(null);
+        seek(upEvent.clientX);
+      };
+      window.addEventListener("pointerup", tap);
+      window.addEventListener("pointercancel", done);
+      return;
+    }
     event.preventDefault(); // dragging across the ruler must not select text
     select(null);
-    const seek = (clientX: number) => void stage.seek(Math.max(0, Math.min(duration, timeAt(clientX))));
     seek(event.clientX);
     const move = (moveEvent: PointerEvent) => seek(moveEvent.clientX);
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
   const startDrag = (event: React.PointerEvent, item: Item, mode: "move" | "left" | "right") => {
     if (pan(event) || event.button !== 0) return;
+    // A finger scrolls across clips; a tap selects one, and the selected one is dragged and trimmed.
+    if (event.pointerType === "touch" && !(selection?.id === item.id && selection.kind === item.kind)) {
+      event.stopPropagation();
+      const origin = { x: event.clientX, y: event.clientY };
+      const done = () => {
+        window.removeEventListener("pointerup", tap);
+        window.removeEventListener("pointercancel", done);
+      };
+      const tap = (upEvent: PointerEvent) => {
+        done();
+        if (Math.hypot(upEvent.clientX - origin.x, upEvent.clientY - origin.y) <= 10) select({ kind: item.kind, id: item.id, index: item.index });
+      };
+      window.addEventListener("pointerup", tap);
+      window.addEventListener("pointercancel", done);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
     select({ kind: item.kind, id: item.id, index: item.index });
@@ -502,6 +566,7 @@ export function Timeline() {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
       setSnapAt(null);
       if (moved) void run(() => commitItem(item, state.start, state.duration)).finally(() => setDrag(null));
       else {
@@ -511,6 +576,7 @@ export function Timeline() {
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
   // ---- film length: drag the end bar ---------------------------------------------------------
   const [endDrag, setEndDrag] = useState<{ time: number; limited: boolean } | null>(null);
@@ -531,12 +597,14 @@ export function Timeline() {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
       const value = Math.round(next * 1000) / 1000;
       if (Math.abs(value - duration) < 1e-6) return setEndDrag(null);
       void run(() => history.run("project", "调整作品时长", () => api(base, { method: "PATCH", body: { duration: value } }))).finally(() => setEndDrag(null));
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
   const filmEnd = endDrag?.time ?? duration;
 
@@ -548,9 +616,11 @@ export function Timeline() {
     const up = () => {
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
     };
     window.addEventListener("pointermove", move);
     window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   };
 
   // ---- dropping assets ------------------------------------------------------------------
@@ -938,7 +1008,9 @@ export function Timeline() {
           )}
           {!assetOver && !readOnly && (
             <div className="tl-hint" style={{ left: LABEL_WIDTH + 8 }}>
-              把素材从左侧「素材」拖到这里 · Ctrl + 滚轮缩放 · 中键拖动平移 · Alt 关闭吸附
+              {coarsePointer()
+                ? "长按素材或片段打开菜单（添加到播放头处）· 双指缩放 · 单指滑动"
+                : "把素材从左侧「素材」拖到这里 · Ctrl + 滚轮缩放 · 中键拖动平移 · Alt 关闭吸附"}
             </div>
           )}
           {snapAt !== null && <div className="tl-snap" style={{ left: LABEL_WIDTH + snapAt * pps }} />}

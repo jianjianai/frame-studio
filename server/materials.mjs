@@ -13,7 +13,7 @@ import { Readable } from "node:stream";
 import { editList, applyEdits } from "./tools/file-ops.mjs";
 import { probe } from "./media.mjs";
 import { appRoot } from "./config.mjs";
-import { findLibrary, unknownLibraries, closestLibraries, searchLibraries, searchWords, offerOrder, readmeLead } from "./libraries.mjs";
+import { findLibrary, unknownLibraries, closestLibraries, searchLibraries, searchWords, offerOrder, readmeLead, TRASH, trashed, moveToTrash, trashNote, restoreName, moveFromTrash, purgeTrash } from "./libraries.mjs";
 
 /**
  * Material libraries: media shared by the works of a content repository (images, video,
@@ -183,11 +183,44 @@ export class Materials {
     await this.save(repo, [id], `新建素材库：${title}`, () => writeText(dir, `${id}/README.md`, libraryReadme(title)));
     return { id, title };
   }
+  /**
+   * Delete a library: into the recycle bin (.trash/ on the branch), from where it can come
+   * back. Works keep the versions they locked either way: those stay in the branch's history.
+   */
   async remove(repo, id) {
     const dir = await this.dir(repo);
     if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound("素材库不存在");
-    // Works keep the versions they locked: they stay in the branch's history.
-    await this.save(repo, [id], `删除素材库：${this.title(dir, id)}`, () => removePath(dir, id));
+    const title = this.title(dir, id);
+    const key = await this.save(repo, [id, TRASH], `删除素材库：${title}（移到回收站）`, () => moveToTrash(dir, id, title));
+    return { key, id, title };
+  }
+  /** The worktree when the branch exists (here or on GitHub), else null: looking need not create it. */
+  async existing(repo) {
+    if (fs.existsSync(path.join(this.services.config.dirs.libraries, repo, ".git"))) return this.dir(repo);
+    return (await this.services.repos.hasBranch(repo, MATERIALS_BRANCH)) ? this.dir(repo) : null;
+  }
+  /** The libraries in the recycle bin. */
+  async trash(repo) {
+    const dir = await this.existing(repo);
+    return dir ? trashed(dir) : [];
+  }
+  /** A library back from the bin: under its name, or a free one when that was taken meanwhile. */
+  async restore(repo, key) {
+    const dir = await this.dir(repo);
+    const note = trashNote(dir, key);
+    const id = restoreName(dir, note);
+    await this.save(repo, [TRASH, id], `恢复素材库：${note.title}${id !== note.id ? `（改名为「${id}」）` : ""}`, () => moveFromTrash(dir, key, id));
+    return { id, title: note.title, renamed: id !== note.id };
+  }
+  /** Delete a library in the bin for good; `key` null empties the bin. The history keeps them. */
+  async purge(repo, key = null) {
+    const dir = await this.dir(repo);
+    const notes = key === null ? trashed(dir) : [trashNote(dir, key)];
+    if (!notes.length) return { purged: [] };
+    await this.save(repo, [TRASH], key === null ? "清空素材库回收站" : `从回收站删除素材库：${notes[0].title}`, () => {
+      for (const note of notes) purgeTrash(dir, note.key);
+    });
+    return { purged: notes.map((note) => note.key) };
   }
 
   /** The current versions in the branch: path → blob. */
@@ -921,6 +954,11 @@ export function materialsPlugin(services) {
   });
   router.post(`${base}/libraries`, async ({ params, req }) => materials.create(params.repo, (await readJson(req)).name));
   router.delete(`${base}/libraries/:lib`, ({ params }) => materials.remove(params.repo, params.lib));
+  // The recycle bin of deleted libraries.
+  router.get(`${base}/trash`, ({ params }) => materials.trash(params.repo));
+  router.post(`${base}/trash/:key/restore`, ({ params }) => materials.restore(params.repo, params.key));
+  router.delete(`${base}/trash/:key`, ({ params }) => materials.purge(params.repo, params.key));
+  router.delete(`${base}/trash`, ({ params }) => materials.purge(params.repo));
   router.get(`${base}/libraries/:lib/files`, ({ params }) => materials.files(params.repo, params.lib));
   router.get(`${base}/find`, ({ params, query }) => materials.find(params.repo, String(query.q || "")));
   router.post(
@@ -1106,7 +1144,8 @@ export function materialsPlugin(services) {
       // A folder name or title, also written a little differently (case, spaces, a "素材库" ending).
       const find = (name) => findLibrary(name, all)?.id ?? null;
       const unknown = add.filter((name) => !find(name));
-      if (unknown.length) throw problem(400, `${unknownLibraries("materials", unknown, all)}。素材库属于作品库（这里是 ${work.repo}），别的作品库里的素材库要在那个作品库里新建作品才能用`);
+      if (unknown.length)
+        throw problem(400, `${unknownLibraries("materials", unknown, all, await materials.trash(work.repo))}。素材库属于作品库（这里是 ${work.repo}），别的作品库里的素材库要在那个作品库里新建作品才能用`);
       const adding = add.map(find);
       const created = [];
       for (const name of create) {

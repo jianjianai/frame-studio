@@ -33,7 +33,7 @@ const BLENDS = [
  * and is one step of the timeline's undo history.
  */
 export function PropertiesView() {
-  const { work, selection, history, stage, addToChat, showView, readOnly } = useWorkbench();
+  const { work, selection, history, stage, addToChat, openTool, readOnly } = useWorkbench();
   const [run] = useAction();
   const meta = work.meta;
   const base = workPath(work.repo, work.id);
@@ -464,7 +464,15 @@ export function PropertiesView() {
           <Prop label="经验库">
             <span className="prop-number">
               <span className="prop-static">{work.experiences?.libraries.map((library) => library.title).join("、") || "不使用"}</span>
-              <button className="btn small" onClick={() => showView("experience")}>
+              <button className="btn small" onClick={() => openTool("libraries:experiences")}>
+                选择…
+              </button>
+            </span>
+          </Prop>
+          <Prop label="素材库">
+            <span className="prop-number">
+              <span className="prop-static">{work.meta?.materials?.join("、") || "不使用"}</span>
+              <button className="btn small" onClick={() => openTool("libraries:materials")}>
                 选择…
               </button>
             </span>

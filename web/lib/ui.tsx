@@ -283,9 +283,11 @@ export function Sash({
       document.body.classList.remove("resizing-x", "resizing-y");
       target.removeEventListener("pointermove", move);
       target.removeEventListener("pointerup", up);
+      target.removeEventListener("pointercancel", up);
     };
     target.addEventListener("pointermove", move);
     target.addEventListener("pointerup", up);
+    target.addEventListener("pointercancel", up);
   };
   return <div className={`sash ${direction}`} onPointerDown={start} onDoubleClick={onDoubleClick} role="separator" />;
 }

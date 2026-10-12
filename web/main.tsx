@@ -1,6 +1,9 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { installTouchSupport } from "./lib/touch";
 import "./theme.css";
+
+installTouchSupport();
 
 const theme = localStorage.getItem("frame:theme");
 if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;

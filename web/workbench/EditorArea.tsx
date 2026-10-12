@@ -5,7 +5,8 @@ import { reviewsPath } from "../lib/reviews";
 import { RawViewer } from "../reviews/RawViewer";
 import { Markdown } from "../chat/Markdown";
 import { useToast, useConfirm } from "../lib/ui";
-import { useWorkbench } from "./store";
+import { useWorkbench, type Tool, type VersionSource } from "./store";
+import { ToolTab, TOOL_TITLES, toolIcon } from "./ToolTab";
 import { PreviewPane } from "./PreviewPane";
 import { CodeEditor } from "./CodeEditor";
 import { DiffEditor } from "./DiffEditor";
@@ -24,16 +25,18 @@ export interface EditorHandle {
   /** A file of a work's review (`<work id>/<path>`): documents are edited, original files viewed. */
   openReview(path: string, options?: { preview?: boolean }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
-  openDiff(title: string, query: string, options?: { preview?: boolean; source?: Source }): void;
+  openDiff(title: string, query: string, options?: { preview?: boolean; source?: VersionSource }): void;
+  /** A tool in its own tab (export, reviews, audio, resources, versions, library management). */
+  openTool(tool: Tool): void;
 }
 type Source = "work" | "experience" | "materials" | "resource" | "reviews";
 interface Tab {
-  /** Unique key: the work file path, `exp:<path>` for experience documents, `mat:<ref>` for material files, `rev:<path>` for review files, `diff:…` for diffs. */
+  /** Unique key: the work file path, `exp:<path>` for experience documents, `mat:<ref>` for material files, `rev:<path>` for review files, `diff:…` for diffs, `tool:<tool>` for tools. */
   path: string;
   /** Path inside its source (sent to the source's file API). */
   file: string;
   source: Source;
-  kind: "text" | "image" | "audio" | "video" | "model" | "environment" | "font" | "file" | "diff" | "resource" | "raw";
+  kind: "text" | "image" | "audio" | "video" | "model" | "environment" | "font" | "file" | "diff" | "resource" | "raw" | "tool";
   title?: string;
   diff?: string;
   content?: string;
@@ -91,7 +94,16 @@ export const fileIcon = (path: string, size = 14) => {
  * while another tab is shown, so playback, the timeline and AI captures keep working.
  * Tabs come from the work or from the repository's experience libraries.
  */
-export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; onActiveChange?: (label: string | null) => void }) {
+export function EditorArea({
+  ref,
+  onActiveChange,
+  onActiveTool,
+}: {
+  ref?: Ref<EditorHandle>;
+  onActiveChange?: (label: string | null) => void;
+  /** The tool whose tab is shown (the activity bar marks it), or null. */
+  onActiveTool?: (tool: Tool | null) => void;
+}) {
   const { work, readOnly } = useWorkbench();
   const toast = useToast();
   const confirm = useConfirm();
@@ -184,11 +196,15 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     [openTab],
   );
   const openDiff = useCallback(
-    (title: string, query: string, options: { preview?: boolean; source?: Source } = {}) => {
+    (title: string, query: string, options: { preview?: boolean; source?: VersionSource } = {}) => {
       const preview = options.preview ?? true;
       const source = options.source ?? "work";
       place({ path: `diff:${source}:${query}`, file: "", source, kind: "diff", title, diff: query, preview }, { preview });
     },
+    [place],
+  );
+  const openTool = useCallback(
+    (tool: Tool) => void place({ path: `tool:${tool}`, file: tool, source: "work", kind: "tool", title: TOOL_TITLES[tool] }, { preview: false }),
     [place],
   );
   useImperativeHandle(
@@ -200,8 +216,9 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       openResource,
       openReview: (path, options) => void openReview(path, options),
       openDiff,
+      openTool,
     }),
-    [openFile, openExperience, openMaterial, openResource, openReview, openDiff],
+    [openFile, openExperience, openMaterial, openResource, openReview, openDiff, openTool],
   );
 
   // Files changed by the AI or other tools: refresh clean tabs, flag dirty ones.
@@ -280,6 +297,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   // The AI is told which file the user has open ("这个文件").
   const activeLabel = !current
     ? null
+    : current.kind === "tool"
+      ? `「${current.title}」选项卡`
     : current.kind === "diff"
       ? `改动「${current.title}」`
       : current.kind === "resource"
@@ -292,9 +311,11 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
           ? `素材库文件 materials/${current.file}`
           : current.file;
   useEffect(() => onActiveChange?.(activeLabel), [activeLabel, onActiveChange]);
+  const activeTool = current?.kind === "tool" ? (current.file as Tool) : null;
+  useEffect(() => onActiveTool?.(activeTool), [activeTool, onActiveTool]);
   const update = (path: string, change: Partial<Tab>) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...change } : item)));
   const tooltip = (tab: Tab) =>
-    `${tab.kind === "diff" ? `改动：${tab.title}` : tab.kind === "resource" ? `资源：${tab.file}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "reviews" ? `复盘：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
+    `${tab.kind === "tool" ? (tab.title ?? "") : tab.kind === "diff" ? `改动：${tab.title}` : tab.kind === "resource" ? `资源：${tab.file}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "reviews" ? `复盘：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
 
   return (
     <div className="editor-area">
@@ -312,7 +333,9 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               onDoubleClick={() => update(tab.path, { preview: false })}
               onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
             >
-              {tab.kind === "diff" ? (
+              {tab.kind === "tool" ? (
+                toolIcon(tab.file as Tool)
+              ) : tab.kind === "diff" ? (
                 <FileDiff size={14} />
               ) : tab.kind === "resource" ? (
                 <Shapes size={14} />
@@ -370,7 +393,9 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
                   </div>
                 </div>
               )}
-              {current.kind === "resource" ? (
+              {current.kind === "tool" ? (
+                <ToolTab key={current.file} tool={current.file as Tool} />
+              ) : current.kind === "resource" ? (
                 <ResourceViewer key={current.file} id={current.file} />
               ) : current.kind === "raw" ? (
                 <RawViewer key={current.file} fileRef={current.file} />
@@ -451,7 +476,7 @@ function MediaViewer({ path, kind }: { path: string; kind: Tab["kind"] }) {
           </button>
         )}
       </div>
-      {reference && kind !== "file" && <div className="faint small-text">拖动左侧「素材」中的这个文件到时间轴即可使用</div>}
+      {reference && kind !== "file" && <div className="faint small-text">把「素材」侧栏里的这个文件拖到时间轴即可使用（触屏上长按它选「添加到画面」）</div>}
     </div>
   );
 }
@@ -594,7 +619,7 @@ function MaterialViewer({ fileRef, kind }: { fileRef: string; kind: Tab["kind"] 
           {kind === "video" && <video key={url} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} onError={() => setFailed(missing)} />}
           {kind === "file" && <div className="empty">无法在这里预览这种文件</div>}
           {failed && <div className="danger-text small-text">{failed}</div>}
-          {kind !== "file" && !failed && <div className="faint small-text">引用了这个素材库的作品，可以把左侧「素材 → 素材库」中的这个文件拖到时间轴使用</div>}
+          {kind !== "file" && !failed && <div className="faint small-text">把「素材 → 素材库」或「素材库」选项卡里的这个文件拖到时间轴即可使用（触屏上长按它选「添加到画面」）</div>}
         </div>
       )}
     </>

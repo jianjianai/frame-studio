@@ -578,7 +578,8 @@ export class ResourceCatalog {
     const head = await this.materials.headOf(work.repo);
     const locks = this.materials.readLocks(work.dir);
     const result = [];
-    const wanted = (ref) => (!library || ref.startsWith(library + "/")) && (!libraries || libraries.has(ref.split("/")[0]));
+    // Dot folders are no libraries (.trash holds deleted ones).
+    const wanted = (ref) => !ref.startsWith(".") && (!library || ref.startsWith(library + "/")) && (!libraries || libraries.has(ref.split("/")[0]));
     const refs = [...head.keys()].filter((ref) => CODE_FILE.test(ref) && wanted(ref)).sort();
     // Every module of the libraries stays parsed, however many there are.
     this.parsed.limit = Math.max(this.parsed.limit, refs.length * 2);
@@ -685,7 +686,7 @@ export class ResourceCatalog {
     const blob = head.get(ref);
     if (!blob) {
       const library = ref.split("/")[0];
-      const known = [...new Set([...head.keys()].filter((path) => path.includes("/")).map((path) => path.split("/")[0]))];
+      const known = [...new Set([...head.keys()].filter((path) => path.includes("/") && !path.startsWith(".")).map((path) => path.split("/")[0]))];
       if (known.includes(library)) throw notFound(`素材库「${library}」里没有 ${ref.slice(library.length + 1)}（resources_search 找资源的地址）`);
       const close = closestLibraries(library, known.map((id) => ({ id, title: id })));
       throw notFound(`作品库 ${work.repo} 里没有素材库「${library}」${close.length ? `。最接近的：${close.map((item) => `「${item.id}」`).join("")}` : ""}（resources_search 找资源的地址）`);

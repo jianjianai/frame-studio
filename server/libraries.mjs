@@ -1,5 +1,7 @@
 import fs from "node:fs";
-import { Lru } from "./util.mjs";
+import path from "node:path";
+import { Lru, notFound } from "./util.mjs";
+import { tree, movePath, removePath, writeText } from "./files.mjs";
 
 /**
  * Picking libraries among many. A repository may hold dozens or hundreds of material and
@@ -245,12 +247,19 @@ export function findLibrary(name, libraries, alias) {
   return fits.length === 1 ? fits[0] : null;
 }
 
-/** What to say about names that lead to no library: the closest ones and how to find others. */
-export function unknownLibraries(kind, names, libraries) {
+/**
+ * What to say about names that lead to no library: those waiting in the recycle bin (`bin`,
+ * from trashed()), the closest ones, and how to find others.
+ */
+export function unknownLibraries(kind, names, libraries, bin = []) {
   const { name, lister } = KINDS[kind];
-  const close = [...new Map(names.flatMap((item) => closestLibraries(item, libraries)).map((library) => [library.id, library])).values()].slice(0, 6);
+  const binned = names.filter((item) => bin.some((entry) => looseName(entry.id) === looseName(item) || looseName(entry.title) === looseName(item)));
+  const rest = names.filter((item) => !binned.includes(item));
+  const close = [...new Map(rest.flatMap((item) => closestLibraries(item, libraries)).map((library) => [library.id, library])).values()].slice(0, 6);
   const near = close.length ? `最接近的：${close.map((library) => `「${library.id}」${library.title !== library.id ? `（${library.title}）` : ""}`).join("")}。` : "";
-  return `${name}不存在：${names.join("、")}。${near}${libraries.length ? `作品库里共有 ${libraries.length} 个${name}，用 ${lister}。` : `作品库里还没有${name}。`}新建用 create`;
+  const inBin = binned.length ? `${binned.map((item) => `「${item}」`).join("")}在${name}的回收站里：请用户在「${name}」选项卡（管理…）的回收站中恢复。` : "";
+  if (!rest.length) return inBin;
+  return `${inBin}${name}不存在：${rest.join("、")}。${near}${libraries.length ? `作品库里共有 ${libraries.length} 个${name}，用 ${lister}。` : `作品库里还没有${name}。`}新建用 create`;
 }
 
 /**
@@ -268,6 +277,81 @@ export function readmeLead(file, template = "") {
   if (!line || (template && line === template)) return "";
   return line.length > 160 ? line.slice(0, 159) + "…" : line;
 }
+
+// ---- the recycle bin of a library branch ---------------------------------------------------
+
+/**
+ * Deleted libraries wait in the branch's `.trash/<key>/` (a dot folder, so no listing, search
+ * or work sees them), with a note of what they were. The branch carries the bin to GitHub like
+ * any other change; restoring moves the folder back.
+ */
+export const TRASH = ".trash";
+const NOTE = ".trashed.json";
+const validKey = (key) => typeof key === "string" && key && !/[\\/\x00-\x1f]/.test(key) && !key.startsWith(".");
+
+/** The libraries in a branch's recycle bin, the latest deleted first. */
+export function trashed(dir) {
+  let keys = [];
+  try {
+    keys = fs
+      .readdirSync(path.join(dir, TRASH), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+  return keys
+    .map((key) => {
+      let note = {};
+      try {
+        note = JSON.parse(fs.readFileSync(path.join(dir, TRASH, key, NOTE), "utf8"));
+      } catch {}
+      const files = tree(path.join(dir, TRASH, key), { maxEntries: 100000 }).filter((item) => item.type === "file" && item.path !== NOTE && item.path !== "README.md");
+      return { key, id: note.id || key, title: note.title || note.id || key, deletedAt: note.deletedAt || null, files: files.length, size: files.reduce((sum, item) => sum + (item.size || 0), 0) };
+    })
+    .sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
+}
+
+/** Move a library folder into the recycle bin; returns its key there (unique, the same name may go twice). */
+export function moveToTrash(dir, id, title) {
+  let key = id;
+  for (let n = 2; fs.existsSync(path.join(dir, TRASH, key)); n++) key = `${id} (${n})`;
+  movePath(dir, id, `${TRASH}/${key}`);
+  writeText(dir, `${TRASH}/${key}/${NOTE}`, JSON.stringify({ id, title, deletedAt: new Date().toISOString() }, null, 2) + "\n");
+  return key;
+}
+
+/** The note of a library in the bin (what restoring brings back); 404 for none. */
+export function trashNote(dir, key) {
+  if (!validKey(key) || !fs.existsSync(path.join(dir, TRASH, key))) throw notFound("回收站里没有这个库");
+  return trashed(dir).find((item) => item.key === key);
+}
+
+/** The name a library comes back under: its own, or — another library took it meanwhile — a free one. */
+export function restoreName(dir, note) {
+  let id = note.id;
+  for (let n = 2; fs.existsSync(path.join(dir, id)); n++) id = `${note.id} ${n}`;
+  return id;
+}
+
+/** Move a library from the bin back to `id` (see restoreName). */
+export function moveFromTrash(dir, key, id) {
+  if (fs.existsSync(path.join(dir, TRASH, key, NOTE))) removePath(dir, `${TRASH}/${key}/${NOTE}`);
+  movePath(dir, `${TRASH}/${key}`, id);
+  removeEmptyTrash(dir);
+}
+
+/** Delete a library in the bin for good (the branch's history still has it). */
+export function purgeTrash(dir, key) {
+  removePath(dir, `${TRASH}/${key}`);
+  removeEmptyTrash(dir);
+}
+
+const removeEmptyTrash = (dir) => {
+  try {
+    if (!fs.readdirSync(path.join(dir, TRASH)).length) fs.rmdirSync(path.join(dir, TRASH));
+  } catch {}
+};
 
 /**
  * What a repository's libraries are to its works: how many works link each, when such a work

@@ -9,7 +9,8 @@ const SCOPES = ["work", "used", "materials", "experience", "reviews", "guide", "
 const FILE_LIMIT = 8 * 1024 * 1024; // larger files are skipped (and counted)
 const FILE_COUNT = 20000;
 const SHOWN = 300; // characters of a line shown; longer lines are cut around the match
-const SKIP_DIRS = new Set([".git", "node_modules", ".cache", "exports", ".materials"]);
+// .trash: libraries in the recycle bin are not searched (restore one to use it again).
+const SKIP_DIRS = new Set([".git", "node_modules", ".cache", "exports", ".materials", ".trash"]);
 // Known binary formats are skipped without reading them; anything else is read and judged by content.
 const BINARY = /\.(png|jpe?g|webp|gif|avif|bmp|tiff?|psd|ico|mp3|wav|m4a|aac|flac|ogg|oga|opus|weba|mp4|m4v|mov|webm|mkv|avi|ttf|otf|woff2?|glb|fbx|usdz|hdr|exr|ktx2|sf2|sf3|bin|zip|onnx|pdf|gz|7z)$/i;
 

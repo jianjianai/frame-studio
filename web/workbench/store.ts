@@ -134,6 +134,15 @@ export interface Selection {
   index?: number;
 }
 
+/** Branches with versions: the work, and the repository's experience, material and review branches. */
+export type VersionSource = "work" | "experience" | "materials" | "reviews";
+/**
+ * Tools that open as editor tabs (wide, many options or much data) instead of side bar views:
+ * export, reviews, audio and voice, the libraries' resources, versions of a branch, and the
+ * management of the material or experience libraries.
+ */
+export type Tool = "export" | "reviews" | "audio" | "resources" | `versions:${VersionSource}` | "libraries:materials" | "libraries:experiences";
+
 export interface WorkbenchContextValue {
   work: WorkInfo;
   reload: () => Promise<void>;
@@ -151,7 +160,9 @@ export interface WorkbenchContextValue {
   /** Open a file of a work's review (`<work id>/<path>`): documents to edit, original files to view. */
   openReview: (path: string, options?: { preview?: boolean }) => void;
   /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. */
-  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: "work" | "experience" | "materials" | "reviews" }) => void;
+  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: VersionSource }) => void;
+  /** Open (or show) a tool's tab: export, reviews, audio, resources, versions, library management. */
+  openTool: (tool: Tool) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
   /** Put a prompt into the chat's input box (opening the chat). */

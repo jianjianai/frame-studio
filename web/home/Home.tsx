@@ -30,7 +30,7 @@ import { SettingsView } from "../settings/SettingsView";
 import { HomeSidebar, type RepoState } from "./Sidebar";
 import { WorkCard, WorkListHead, WorkRow } from "./WorkItems";
 import { Attention, AttentionBanner, Empty, RepoHead, SelectionBar, Toolbar, Welcome, openWork } from "./Parts";
-import { TrashView } from "./TrashView";
+import { TrashView, type BinnedLibrary } from "./TrashView";
 import { PageHead } from "./PageHead";
 import { AccountDialog, UnlinkDialog, type Account } from "./RepoDialogs";
 import {
@@ -69,6 +69,8 @@ type DialogState =
 export function Home({ version, local }: { version: string; local: boolean }) {
   const [works, setWorks] = useState<WorkSummary[]>([]);
   const [trash, setTrash] = useState<WorkSummary[]>([]);
+  // Material and experience libraries in the bin, of every repository.
+  const [binned, setBinned] = useState<BinnedLibrary[]>([]);
   const [repos, setRepos] = useState<Repo[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
@@ -98,9 +100,24 @@ export function Home({ version, local }: { version: string; local: boolean }) {
     const turn = ++loads.current;
     try {
       const [list, bin, repoList] = await Promise.all([api<WorkSummary[]>("/api/works"), api<WorkSummary[]>("/api/works?trash=1"), api<Repo[]>("/api/repos")]);
+      const libraries = (
+        await Promise.all(
+          repoList
+            .filter((repo) => repo.ready)
+            .flatMap((repo) =>
+              (["materials", "experience"] as const).map((kind) =>
+                api<Omit<BinnedLibrary, "repo" | "kind">[]>(`/api/repos/${encodeURIComponent(repo.id)}/${kind}/trash`).then(
+                  (items) => items.map((item) => ({ ...item, repo: repo.id, kind })),
+                  () => [],
+                ),
+              ),
+            ),
+        )
+      ).flat();
       if (turn !== loads.current) return;
       setWorks(list);
       setTrash(bin);
+      setBinned(libraries);
       setRepos(repoList);
     } catch (error) {
       toast((error as Error).message, "error");
@@ -130,7 +147,8 @@ export function Home({ version, local }: { version: string; local: boolean }) {
   useEffect(() => () => clearTimeout(later.current), []);
   useServerEvent((event) => {
     if (event.type === "works" || event.type === "repos") void load();
-    if (event.type === "work-files") {
+    // Libraries moved into or out of a bin, among other library changes.
+    if (event.type === "work-files" || event.type === "materials" || event.type === "experience-files") {
       clearTimeout(later.current);
       later.current = setTimeout(() => void load(), 4000);
     }
@@ -426,7 +444,7 @@ export function Home({ version, local }: { version: string; local: boolean }) {
 
   let main: ReactNode;
   if (scope.kind === "trash")
-    main = <TrashView items={trash} repos={repos} repo={scope.repo} onRepo={(repo) => go({ kind: "trash", repo })} onChanged={load} onNav={nav} />;
+    main = <TrashView items={trash} libraries={binned} repos={repos} repo={scope.repo} onRepo={(repo) => go({ kind: "trash", repo })} onChanged={load} onNav={nav} />;
   else if (scope.kind === "settings")
     main = (
       <>
@@ -585,7 +603,7 @@ export function Home({ version, local }: { version: string; local: boolean }) {
         go={go}
         repos={repos}
         states={states}
-        counts={{ all: works.length, recent: works.filter((work) => work.openedAt).length, attention: attention.length, trash: trash.length }}
+        counts={{ all: works.length, recent: works.filter((work) => work.openedAt).length, attention: attention.length, trash: trash.length + binned.length }}
         version={version}
         theme={theme}
         onTheme={toggleTheme}

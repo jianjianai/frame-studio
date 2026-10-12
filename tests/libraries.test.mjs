@@ -197,3 +197,89 @@ describe("many libraries", () => {
 });
 
 const listedIds = (response) => response.body.map((item) => item.id);
+
+describe("the recycle bin of libraries", () => {
+  let app, base;
+  const call = async (route, { method = "GET", body, raw } = {}) => {
+    const response = await fetch(base + route, { method, headers: body ? { "Content-Type": "application/json" } : {}, body: raw ?? (body ? JSON.stringify(body) : undefined) });
+    return { status: response.status, body: await response.json().catch(() => null) };
+  };
+  const tool = (name, args) => call(`/api/tools/${name}`, { method: "POST", body: args });
+  const materials = "/api/repos/local/materials";
+  const experience = "/api/repos/local/experience";
+  const enc = encodeURIComponent;
+
+  beforeAll(async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-library-trash-"));
+    app = await createApp({ env: { FRAME_HOME: home, FRAME_PORT: "0" }, plugins });
+    base = await app.listen();
+  });
+  afterAll(() => app.close());
+
+  it("keeps a deleted material library in the bin until it is restored or purged", async () => {
+    await call(`${materials}/libraries`, { method: "POST", body: { name: "旧素材" } });
+    await call(`${materials}/libraries/${enc("旧素材")}/upload?path=logo.svg`, { method: "POST", raw: "<svg/>" });
+    const work = (await call("/api/works", { method: "POST", body: { title: "用旧素材" } })).body;
+    await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { materials: ["旧素材"] } });
+
+    const removed = await call(`${materials}/libraries/${enc("旧素材")}`, { method: "DELETE" });
+    expect(removed.body).toMatchObject({ key: "旧素材", id: "旧素材", title: "旧素材" });
+    expect((await call(`${materials}/libraries`)).body.map((item) => item.id)).toEqual([]);
+    expect((await call(`${materials}/trash`)).body).toMatchObject([{ key: "旧素材", id: "旧素材", title: "旧素材", files: 1 }]);
+    expect((await call(`/api/works/local/${work.id}/materials`)).body.missing).toEqual(["旧素材"]);
+    // Nothing in the bin is searched or listed for the AI.
+    expect((await tool("search", { work: work.id, pattern: "svg", scope: ["materials"] })).body.text).toContain("没有找到");
+    expect((await tool("materials_list", { work: work.id })).body.text).toContain("有 0 个素材库");
+    expect((await call(`${materials}/history`)).body[0].message).toBe("删除素材库：旧素材（移到回收站）");
+
+    expect((await call(`${materials}/trash/${enc("旧素材")}/restore`, { method: "POST" })).body).toEqual({ id: "旧素材", title: "旧素材", renamed: false });
+    expect((await call(`/api/works/local/${work.id}/materials`)).body.libraries.map((item) => item.id)).toEqual(["旧素材"]);
+    expect((await call(`${materials}/trash`)).body).toEqual([]);
+
+    // Deleted again, its name taken meanwhile: it comes back under another one.
+    await call(`${materials}/libraries/${enc("旧素材")}`, { method: "DELETE" });
+    await call(`${materials}/libraries`, { method: "POST", body: { name: "旧素材" } });
+    expect((await call(`${materials}/trash/${enc("旧素材")}/restore`, { method: "POST" })).body).toEqual({ id: "旧素材 2", title: "旧素材", renamed: true });
+    await call(`${materials}/libraries/${enc("旧素材 2")}`, { method: "DELETE" });
+    await call(`${materials}/libraries/${enc("旧素材")}`, { method: "DELETE" });
+    expect((await call(`${materials}/trash`)).body.map((item) => item.key).sort()).toEqual(["旧素材", "旧素材 2"]);
+    expect((await call(`${materials}/trash/${enc("旧素材 2")}`, { method: "DELETE" })).body).toEqual({ purged: ["旧素材 2"] });
+    expect((await call(`${materials}/trash`, { method: "DELETE" })).body).toEqual({ purged: ["旧素材"] });
+    expect((await call(`${materials}/trash`)).body).toEqual([]);
+    expect((await call(`${materials}/trash/${enc("旧素材")}/restore`, { method: "POST" })).status).toBe(404);
+    expect((await call(`${materials}/trash/${enc("../x")}/restore`, { method: "POST" })).status).toBe(404);
+  });
+
+  it("saves only the move of an experience library as a version, leaving other edits unsaved", async () => {
+    await call(`${experience}/libraries`, { method: "POST", body: { name: "旧经验" } });
+    await call(`${experience}/libraries`, { method: "POST", body: { name: "留着" } });
+    await call(`${experience}/commit`, { method: "POST", body: { message: "两个经验库" } });
+    await call(`${experience}/libraries/${enc("旧经验")}/rename`, { method: "POST", body: { name: "更旧的经验" } });
+    await call(`${experience}/commit`, { method: "POST", body: { message: "改名" } });
+    await call(`${experience}/file`, { method: "PUT", body: { path: "留着/草稿.md", content: "# 草稿\n", expectedHash: null } });
+
+    expect((await call(`${experience}/libraries/${enc("更旧的经验")}`, { method: "DELETE" })).body).toMatchObject({ key: "更旧的经验", title: "更旧的经验" });
+    expect((await call(`${experience}/history`)).body[0].message).toBe("删除经验库：更旧的经验（移到回收站）");
+    expect((await call(`${experience}/status`)).body.files.map((file) => file.path)).toEqual(["留着/草稿.md"]);
+    expect((await call(`${experience}/libraries`)).body.map((item) => item.id)).toEqual(["留着"]);
+    expect((await call(`${experience}/trash`)).body).toMatchObject([{ key: "更旧的经验", id: "更旧的经验" }]);
+
+    // The AI hears where it is; restored, links through its earlier name work again.
+    const work = (await call("/api/works", { method: "POST", body: { title: "用旧名字" } })).body;
+    expect((await tool("experience_link", { work: work.id, add: ["更旧的经验"] })).body.error.message).toBe(
+      "「更旧的经验」在经验库的回收站里：请用户在「经验库」选项卡（管理…）的回收站中恢复。",
+    );
+    await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experiences: ["旧经验"] } });
+    expect((await call(`${experience}/trash/${enc("更旧的经验")}/restore`, { method: "POST" })).body).toEqual({ id: "更旧的经验", title: "更旧的经验", renamed: false });
+    expect((await tool("experience_read", { work: work.id })).body.text).toContain("经验库「更旧的经验」");
+
+    // Purged: the history keeps it, its earlier names go.
+    await call(`${experience}/libraries/${enc("更旧的经验")}`, { method: "DELETE" });
+    expect((await call(`${experience}/trash/${enc("更旧的经验")}`, { method: "DELETE" })).body).toEqual({ purged: ["更旧的经验"] });
+    const dir = await app.services.experience.dir("local");
+    expect(fs.existsSync(path.join(dir, ".aliases.json"))).toBe(false);
+    expect(fs.existsSync(path.join(dir, ".trash"))).toBe(false);
+    expect((await call(`${experience}/status`)).body.files.map((file) => file.path)).toEqual(["留着/草稿.md"]);
+    expect((await call(`${experience}/history`)).body.map((item) => item.message).slice(0, 2)).toEqual(["从回收站删除经验库：更旧的经验", "删除经验库：更旧的经验（移到回收站）"]);
+  });
+});

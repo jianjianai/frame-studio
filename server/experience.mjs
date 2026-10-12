@@ -8,7 +8,8 @@ import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { workArg, repoArg, asJson } from "./tools/registry.mjs";
 import { readLibrary, libraryBrief, experienceBrief, briefText, describeDocument } from "./ai/context.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./tools/file-ops.mjs";
-import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST } from "./libraries.mjs";
+import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST, TRASH, trashed, moveToTrash, trashNote, moveFromTrash, purgeTrash } from "./libraries.mjs";
+import { git, gitOk } from "./git.mjs";
 
 /**
  * Experience libraries: Markdown documents of production know-how, shared by the works
@@ -167,17 +168,82 @@ export class Experience {
     return { id: next, title };
   }
 
+  /**
+   * Save only these paths as a version, now: moving a library into or out of the recycle bin is
+   * kept at once (other unsaved edits stay unsaved). Paths neither on disk nor in the last
+   * version are left out (a library made and deleted before any version).
+   */
+  async commitPaths(repoId, paths, message) {
+    const scope = await this.scope(repoId);
+    const { works } = this.services;
+    return works.locks.run(`${scope.repo}/${scope.id}`, async () => {
+      const known = [];
+      for (const item of paths)
+        if (fs.existsSync(path.join(scope.root, item)) || (await git(scope.root, ["ls-files", "--", item]).catch(() => "")).trim()) known.push(item);
+      if (!known.length) return null;
+      await git(scope.root, ["add", "-A", "--", ...known]);
+      if (await gitOk(scope.root, ["diff", "--cached", "--quiet", "--", ...known])) return null;
+      await git(scope.root, ["commit", "-q", "-m", message, "--", ...known]);
+      this.services.events.emit({ type: "work-versions", work: scope.id });
+      works.saved(scope);
+      return true;
+    });
+  }
+
+  /**
+   * Delete a library: into the recycle bin (.trash/ on the branch), saved as a version at once.
+   * Works linking it see it missing until it is restored; earlier names keep leading to it.
+   */
   async remove(repoId, id) {
     if (!validId(id)) throw notFound("经验库不存在");
     const dir = await this.dir(repoId);
     if (!fs.existsSync(path.join(dir, id))) throw notFound("经验库不存在");
-    removePath(dir, id);
-    // Earlier names led here; links through them now point at nothing, like the library's own.
+    const title = this.title(dir, id);
+    const key = moveToTrash(dir, id, title);
+    await this.commitPaths(repoId, [id, TRASH], `删除经验库：${title}（移到回收站）`);
+    this.changed(repoId, [id, `${TRASH}/${key}`]);
+    return { key, id, title };
+  }
+  /** The worktree when the branch exists (here or on GitHub), else null: looking need not create it. */
+  async existing(repoId) {
+    if (fs.existsSync(path.join(this.services.config.dirs.experience, repoId, ".git"))) return this.dir(repoId);
+    return (await this.services.repos.hasBranch(repoId, EXPERIENCE_BRANCH)) ? this.dir(repoId) : null;
+  }
+  /** The libraries in the recycle bin. */
+  async trash(repoId) {
+    const dir = await this.existing(repoId);
+    return dir ? trashed(dir) : [];
+  }
+  /** A library back from the bin: under its name, or a free one when that was taken meanwhile. */
+  async restore(repoId, key) {
+    const dir = await this.dir(repoId);
+    const note = trashNote(dir, key);
+    // Taken: a library's name, or an earlier name works still use for one.
+    let id = note.id;
+    for (let n = 2; this.resolve(dir, id); n++) id = `${note.id} ${n}`;
+    moveFromTrash(dir, key, id);
+    await this.commitPaths(repoId, [TRASH, id], `恢复经验库：${note.title}${id !== note.id ? `（改名为「${id}」）` : ""}`);
+    this.changed(repoId, [id, TRASH]);
+    return { id, title: note.title, renamed: id !== note.id };
+  }
+  /**
+   * Delete a library in the bin for good (`key` null: all of them); the history keeps them.
+   * Earlier names that led to it now lead nowhere and go too.
+   */
+  async purge(repoId, key = null) {
+    const dir = await this.dir(repoId);
+    const notes = key === null ? trashed(dir) : [trashNote(dir, key)];
+    if (!notes.length) return { purged: [] };
+    for (const note of notes) purgeTrash(dir, note.key);
+    // Earlier names of the deleted libraries (each kept one step from its library).
+    const gone = new Set(notes.map((note) => note.id).filter((id) => !fs.existsSync(path.join(dir, id))));
     const aliases = this.aliases(dir);
-    const left = Object.fromEntries(Object.entries(aliases).filter(([, to]) => to !== id));
-    if (Object.keys(left).length !== Object.keys(aliases).length)
-      Object.keys(left).length ? writeText(dir, ALIASES, JSON.stringify(left, null, 2) + "\n") : removePath(dir, ALIASES);
-    this.changed(repoId, [id, ALIASES]);
+    const left = Object.fromEntries(Object.entries(aliases).filter(([, to]) => !gone.has(to)));
+    const pruned = Object.keys(left).length !== Object.keys(aliases).length;
+    if (pruned) Object.keys(left).length ? writeText(dir, ALIASES, JSON.stringify(left, null, 2) + "\n") : removePath(dir, ALIASES);
+    await this.commitPaths(repoId, [TRASH, ...(pruned ? [ALIASES] : [])], key === null ? "清空经验库回收站" : `从回收站删除经验库：${notes[0].title}`);
+    this.changed(repoId, [TRASH, ALIASES]);
+    return { purged: notes.map((note) => note.key) };
   }
 
   /** Earlier library names: { old folder name: newer folder name }. */
@@ -261,6 +327,18 @@ export class Experience {
     return next;
   }
 
+  /** What the AI is told about linked names that lead nowhere: in the recycle bin, or deleted. */
+  goneText(work, missing) {
+    if (!missing.length) return "";
+    const bin = trashed(path.join(this.services.config.dirs.experience, work.repo));
+    const binned = missing.filter((name) => bin.some((entry) => entry.id === name));
+    const deleted = missing.filter((name) => !binned.includes(name));
+    return [
+      binned.length ? `作品关联的经验库${binned.map((name) => `「${name}」`).join("")}在回收站里，用户恢复后才能用（在「经验库」选项卡的回收站中恢复）。` : "",
+      deleted.length ? `作品关联的经验库${deleted.map((name) => `「${name}」`).join("")}已被删除。` : "",
+    ].join("");
+  }
+
   /** How many libraries the repository has, without listing them (the brief is written synchronously). */
   countSync(repo) {
     try {
@@ -292,7 +370,7 @@ export class Experience {
   brief(work) {
     const { missing } = this.linkedSync(work);
     const current = this.current(work);
-    const gone = missing.length ? `作品关联的经验库「${missing.join("」「")}」已被删除。` : "";
+    const gone = this.goneText(work, missing);
     const total = this.countSync(work.repo);
     if (!current.length) {
       // What the repository has: prepared before a session starts (it needs every work's links).
@@ -327,9 +405,10 @@ export class Experience {
       return {
         libraries: [],
         missing,
+        ...(missing.length ? { gone: this.goneText(work, missing) } : {}),
         available: annotated.length,
         ...(list.length ? { offered: label, offers: list.map(({ id, title, about, files, works, why }) => ({ library: id, title, about, documents: files, works, why })) } : {}),
-        hint: `这个作品没有关联经验库${annotated.length ? `（作品库里有 ${annotated.length} 个，experience_list 按主题查找）` : ""}。用户同意后用 experience_link 关联（可以多个），用户也可以在左侧「经验」中选择。`,
+        hint: `这个作品没有关联经验库${annotated.length ? `（作品库里有 ${annotated.length} 个，experience_list 按主题查找）` : ""}。用户同意后用 experience_link 关联（可以多个），用户也可以在「经验」面板的「管理…」（经验库选项卡）中关联。`,
       };
     }
     return {
@@ -364,6 +443,11 @@ export function experiencePlugin(services) {
   });
   router.post(`${base}/libraries`, async ({ params, req }) => experience.create(params.repo, (await readJson(req)).name));
   router.delete(`${base}/libraries/:lib`, ({ params }) => experience.remove(params.repo, params.lib));
+  // The recycle bin of deleted libraries.
+  router.get(`${base}/trash`, ({ params }) => experience.trash(params.repo));
+  router.post(`${base}/trash/:key/restore`, ({ params }) => experience.restore(params.repo, params.key));
+  router.delete(`${base}/trash/:key`, ({ params }) => experience.purge(params.repo, params.key));
+  router.delete(`${base}/trash`, ({ params }) => experience.purge(params.repo));
   router.post(`${base}/libraries/:lib/rename`, async ({ params, req }) => experience.rename(params.repo, params.lib, (await readJson(req)).name));
 
   // ---- files (same shape as a work's file API, so the editor tabs reuse it) --------------
@@ -452,15 +536,16 @@ export function experiencePlugin(services) {
       // Linked libraries by name or title first (cheap); any other library of the repository after.
       const id =
         experience.resolve(dir, name.trim()) ?? findLibrary(name, libraries)?.id ?? findLibrary(name, await experience.libraries(work.repo), (alias) => experience.resolve(dir, alias))?.id;
-      if (!id) throw problem(400, unknownLibraries("experiences", [name.trim()], await experience.libraries(work.repo)).replace(/新建用 create$/, "新建用 experience_link 的 create"), "NO_EXPERIENCE");
+      if (!id)
+        throw problem(400, unknownLibraries("experiences", [name.trim()], await experience.libraries(work.repo), trashed(dir)).replace(/新建用 create$/, "新建用 experience_link 的 create"), "NO_EXPERIENCE");
       return { work, library: libraries.find((item) => item.id === id) ?? { id, title: experience.title(dir, id), root: path.join(dir, id), dir } };
     }
     if (!libraries.length)
       throw problem(
         409,
         missing.length
-          ? `关联的经验库「${missing.join("」「")}」已被删除。用 experience_link 关联其他经验库（先征得用户同意），或请用户在左侧「经验」面板中选择。`
-          : `这个作品没有关联经验库${experience.countSync(work.repo) ? `（作品库里有 ${experience.countSync(work.repo)} 个，用 experience_list 查找；没关联的也可以用 library 参数读）` : ""}。用 experience_link 关联已有的或新建一个（先征得用户同意），或请用户在左侧「经验」面板中选择。`,
+          ? `${experience.goneText(work, missing)}用 experience_link 关联其他经验库（先征得用户同意），或请用户在「经验」面板的「管理…」（经验库选项卡）中关联或恢复。`
+          : `这个作品没有关联经验库${experience.countSync(work.repo) ? `（作品库里有 ${experience.countSync(work.repo)} 个，用 experience_list 查找；没关联的也可以用 library 参数读）` : ""}。用 experience_link 关联已有的或新建一个（先征得用户同意），或请用户在「经验」面板的「管理…」（经验库选项卡）中关联。`,
         "NO_EXPERIENCE",
       );
     if (libraries.length === 1) return { work, library: libraries[0] };
@@ -597,7 +682,7 @@ export function experiencePlugin(services) {
       // A folder name (or an earlier one), a library's title, or either written a little differently.
       const find = (name) => findLibrary(name, all, (alias) => experience.resolve(dir, alias))?.id ?? null;
       const unknown = add.filter((name) => !find(name));
-      if (unknown.length) throw problem(400, unknownLibraries("experiences", unknown, all));
+      if (unknown.length) throw problem(400, unknownLibraries("experiences", unknown, all, trashed(dir)));
       const adding = add.map(find);
       const created = [];
       for (const name of create) {
@@ -639,7 +724,7 @@ export function experiencePlugin(services) {
     published: true, // the experience branch, not the work: allowed on a published work
     title: "保存经验库版本",
     description:
-      "把经验库里未保存的修改保存为一个版本（Git 提交）。同一作品库的经验库在同一个分支上，会一起保存，和用户在「经验」面板点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。",
+      "把经验库里未保存的修改保存为一个版本（Git 提交）。同一作品库的经验库在同一个分支上，会一起保存，和用户在资源管理器的「版本与同步」→ 经验库里点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。",
     input: { work: workArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
     async run({ message, push }, ctx) {
       const work = await ctx.work();
@@ -654,7 +739,7 @@ export function experiencePlugin(services) {
         } catch (error) {
           pushed = { ok: false, error: error.message };
         }
-      const pushText = !pushed ? "" : pushed.ok ? "，已推送到 GitHub" : `。推送到 GitHub 失败：${pushed.error}（请用户在「经验」面板的版本与同步中处理）`;
+      const pushText = !pushed ? "" : pushed.ok ? "，已推送到 GitHub" : `。推送到 GitHub 失败：${pushed.error}（请用户在资源管理器的「版本与同步」→ 经验库中处理）`;
       return asJson(
         { commit, files, pushed },
         commit ? `已保存经验库版本 ${commit.slice(0, 7)}：${files.join("、")}${pushText}` : `经验库没有未保存的修改${pushText}`,
@@ -674,7 +759,7 @@ export function experiencePlugin(services) {
     published: true, // writes outside the work: allowed on a published (view-only) work
     title: "整理经验库",
     description:
-      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名）。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。失败的逐项说明原因，只需重试失败的。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在「经验」面板中保存）。",
+      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名）。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。失败的逐项说明原因，只需重试失败的。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在资源管理器的「版本与同步」中保存）。",
     destructive: true,
     input: { work: workArg, library: libraryArg, operations: z.array(docOperation).min(1).max(30) },
     async run({ library: name, operations }, ctx) {

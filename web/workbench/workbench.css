@@ -2026,3 +2026,263 @@
   width: auto;
   max-width: 260px;
 }
+
+/* ---- tools in editor tabs (export, reviews, audio, resources, versions, libraries) ---- */
+.tool-page {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--bg);
+}
+/* Forms and lists made for a narrow column, centered; their own scroll gives way to the page's. */
+.tool-column > .view {
+  height: auto;
+  max-width: 760px;
+  margin: 0 auto;
+  overflow: visible;
+}
+.tool-column.wide > .view {
+  max-width: 1100px;
+}
+.tool-column > .view > .view-header {
+  position: static;
+  background: transparent;
+}
+.tab-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 20px 8px;
+  min-width: 0;
+}
+.tab-head > svg {
+  flex: none;
+}
+.tab-head h2 {
+  flex: none;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+}
+.tab-head.compact {
+  padding: 10px 12px 6px 14px;
+}
+.tab-head.compact h2 {
+  font-size: 13px;
+}
+.tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 4px 20px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.tab-bar .library-search {
+  flex: 1 1 280px;
+  max-width: 520px;
+}
+.tab-body {
+  padding: 12px 20px 32px;
+}
+.tab-note {
+  margin: 10px 20px 0;
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.tab-note.warn {
+  background: var(--warn-soft);
+  color: var(--fg);
+}
+.tab-empty {
+  padding: 24px 8px;
+  color: var(--fg-faint);
+  text-align: center;
+  font-size: 13px;
+}
+.tab-section {
+  margin-top: 20px;
+}
+.tab-section h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+@media (max-width: 640px) {
+  .tab-head,
+  .tab-bar,
+  .tab-body {
+    padding-left: 12px;
+    padding-right: 12px;
+  }
+  .tab-note {
+    margin-left: 12px;
+    margin-right: 12px;
+  }
+}
+
+/* versions: the list on the left, the change picked there on the right */
+.versions-tab {
+  display: flex;
+  overflow: hidden;
+}
+.versions-side {
+  display: flex;
+  flex-direction: column;
+  width: min(380px, 42%);
+  min-width: 280px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.versions-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+.versions-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.change-row.selected,
+.version-row.selected {
+  background: var(--bg-active);
+}
+@media (max-width: 760px) {
+  .versions-tab {
+    flex-direction: column;
+    overflow: auto;
+  }
+  .versions-side {
+    width: auto;
+    min-width: 0;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .versions-list {
+    overflow: visible;
+  }
+  .versions-main {
+    min-height: 60vh;
+  }
+}
+
+/* the explorer's 版本与同步: one row per branch */
+.explorer-versions-head {
+  margin-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.versions-summary {
+  padding: 0 6px 10px;
+}
+.versions-summary-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.versions-summary-row:hover {
+  background: var(--bg-hover);
+}
+.versions-summary-row > svg {
+  flex: none;
+  color: var(--fg-muted);
+}
+.versions-summary .view-hint {
+  padding: 0 8px;
+}
+
+/* resources in a tab: bigger cards */
+.resources-tab .resources {
+  padding-top: 12px;
+}
+.resources-tab .asset-grid {
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  padding: 4px 16px 16px;
+}
+.resources-tab .resource-grid .asset-thumb {
+  height: 130px;
+}
+.resources-tab .resources-search,
+.resources-tab .resource-kinds {
+  margin-left: 16px;
+  margin-right: 16px;
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* ---- touch screens: the workbench ---- */
+/* Dragging the selected clip, its trim handles, the playhead or across the ruler is the app's,
+   not a scroll (other clips scroll under a finger; a tap selects them). */
+.tl-item.selected,
+.tl-item.selected .tl-handle,
+.tl-playhead-grip,
+.tl-end-grip,
+.tl-ruler,
+.sash {
+  touch-action: none;
+}
+/* The lanes scroll with one finger; two fingers zoom (the timeline does it, not the page). */
+.tl-scroller {
+  touch-action: pan-x pan-y;
+}
+@media (pointer: coarse) {
+  .tree-row {
+    height: 34px;
+  }
+  .editor-tabs {
+    height: 42px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tab-close {
+    width: 30px;
+    height: 30px;
+  }
+  .wb-activity button {
+    width: 44px;
+    height: 46px;
+  }
+  .view-tabs button {
+    height: 34px;
+  }
+  .sash.vertical::after {
+    inset: 0 -10px;
+  }
+  .sash.horizontal::after {
+    inset: -10px 0;
+  }
+  .tl-item.selected .tl-handle {
+    width: 16px;
+    background: rgb(255 255 255 / 0.25);
+  }
+  .tl-playhead-grip {
+    left: -14px;
+    width: 29px;
+    height: 30px;
+  }
+  .tl-end-grip {
+    height: 26px;
+    line-height: 26px;
+  }
+  .version-row,
+  .change-row,
+  .versions-summary-row,
+  .library-doc-row {
+    min-height: 40px;
+  }
+  .asset-more {
+    width: 30px;
+    height: 30px;
+  }
+  .sound-row {
+    height: 36px;
+  }
+}

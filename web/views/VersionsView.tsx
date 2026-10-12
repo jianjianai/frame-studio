@@ -1,49 +1,37 @@
 import { useEffect, useState } from "react";
-import { RefreshCw, Save, Undo2, ArrowUp, ArrowDown, CloudUpload, History, FileDiff, RotateCcw } from "lucide-react";
+import { Save, Undo2, ArrowUp, ArrowDown, CloudUpload, History, FileDiff, RotateCcw } from "lucide-react";
 import { api, timeAgo, workPath, experiencePath, materialsPath, useServerEvent, type ApiError } from "../lib/api";
 import { useAction, useConfirm, useContextMenu } from "../lib/ui";
 import type { Version, WorkStatus } from "../lib/types";
-import { useWorkbench } from "../workbench/store";
+import { useWorkbench, type VersionSource } from "../workbench/store";
 import { RepoDialog } from "../components/RepoDialog";
-import { ViewHeader } from "./ViewHeader";
 import { RemoteBar } from "../workbench/RemoteBar";
 import { reviewsPath } from "../lib/reviews";
 
 const statusLabel: Record<string, string> = { M: "修改", A: "新增", D: "删除", "?": "新增", R: "重命名", U: "冲突" };
+export const SOURCE_NAMES: Record<VersionSource, string> = { work: "作品", experience: "经验库", materials: "素材库", reviews: "复盘资料" };
 
-export function VersionsView() {
-  const { work } = useWorkbench();
-  const [refresh, setRefresh] = useState(0);
-  return (
-    <div className="view">
-      <ViewHeader title="版本与同步">
-        <button
-          className="icon-btn"
-          title="刷新"
-          // A manual refresh also compares with GitHub (the bar above the editor shows the result).
-          onClick={() =>
-            Promise.all([
-              api(`${workPath(work.repo, work.id)}/sync`, { method: "POST" }),
-              api(`${workPath(work.repo, work.id)}/remote/check`, { method: "POST" }),
-            ]).then(
-              () => setRefresh(Date.now()),
-              () => setRefresh(Date.now()),
-            )
-          }
-        >
-          <RefreshCw size={15} />
-        </button>
-      </ViewHeader>
-      <VersionsPanel source="work" refresh={refresh} />
-    </div>
-  );
-}
+/** The API base of a branch with versions: the work's, or a shared branch of its repository. */
+export const versionsBase = (source: VersionSource, repo: string, id: string) =>
+  source === "experience" ? experiencePath(repo) : source === "materials" ? materialsPath(repo) : source === "reviews" ? reviewsPath(repo) : workPath(repo, id);
 
 /**
  * Save versions, unsaved changes, history and GitHub sync of the work or of one of the
  * repository's shared branches: experience, materials, reviews (same API on another branch).
+ * `onShow` shows a change (diff query) beside the list; without it a diff tab opens.
  */
-export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "experience" | "materials" | "reviews"; refresh?: number }) {
+export function VersionsPanel({
+  source,
+  refresh = 0,
+  onShow,
+  selected,
+}: {
+  source: VersionSource;
+  refresh?: number;
+  onShow?: (title: string, query: string) => void;
+  /** The diff query shown beside the list (its row is marked). */
+  selected?: string;
+}) {
   const { work, reload: reloadWork, openDiff, readOnly } = useWorkbench();
   // Experience and material libraries share the work's version UI on their own branches.
   const experience = source !== "work";
@@ -58,15 +46,8 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
   const [run, busy] = useAction();
   const confirm = useConfirm();
   const [openMenu, menu] = useContextMenu();
-  const base =
-    source === "experience"
-      ? experiencePath(work.repo)
-      : source === "materials"
-        ? materialsPath(work.repo)
-        : source === "reviews"
-          ? reviewsPath(work.repo)
-          : workPath(work.repo, work.id);
-  const name = { work: "作品", experience: "经验库", materials: "素材库", reviews: "复盘资料" }[source];
+  const base = versionsBase(source, work.repo, work.id);
+  const name = SOURCE_NAMES[source];
   const prefix = experience ? "" : `projects/${work.slug}/`;
   const load = async () => {
     const [nextStatus, nextHistory] = await Promise.all([api<WorkStatus>(`${base}/status`), api<Version[]>(`${base}/history?limit=100`)]);
@@ -91,8 +72,8 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
       await load();
       return result;
     }, "已保存版本");
-  // Like VS Code: a click previews the changes in a tab, a double-click keeps the tab.
-  const showDiff = (title: string, query: string, preview = true) => openDiff(title, query, { preview, source });
+  // Like VS Code: a click previews the changes in a tab, a double-click keeps the tab; beside the list when shown there.
+  const showDiff = (title: string, query: string, preview = true) => (onShow ? onShow(title, query) : openDiff(title, query, { preview, source }));
   const revert = async (version: Version) => {
     if (
       !(await confirm(`把${name}恢复成「${version.message}」时的样子？\n当前内容会先自动保存，恢复本身也会成为一个新版本，随时可以再恢复回来。`, {
@@ -208,7 +189,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
         {status?.files.map((file) => (
           <div
             key={file.path}
-            className="change-row"
+            className={`change-row ${selected === `file=${encodeURIComponent(file.path)}` ? "selected" : ""}`}
             title="单击查看改动，双击保持打开"
             onClick={() => showDiff(`${file.path.split("/").pop()}（未保存）`, `file=${encodeURIComponent(file.path)}`)}
             onDoubleClick={() => showDiff(`${file.path.split("/").pop()}（未保存）`, `file=${encodeURIComponent(file.path)}`, false)}
@@ -239,7 +220,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: "work" | "exper
         {history.map((version, index) => (
           <div
             key={version.commit}
-            className="version-row"
+            className={`version-row ${selected === `commit=${version.commit}` ? "selected" : ""}`}
             onClick={() => showDiff(`${version.short} ${version.message}`, `commit=${version.commit}`)}
             onDoubleClick={() => showDiff(`${version.short} ${version.message}`, `commit=${version.commit}`, false)}
             onContextMenu={(event) =>

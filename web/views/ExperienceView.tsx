@@ -1,170 +1,80 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  BookOpen,
-  ChevronDown,
-  ChevronRight,
-  FilePlus,
-  FolderPlus,
-  Pencil,
-  RefreshCw,
-  Search,
-  Sparkles,
-  Trash2,
-  FileText,
-  Link2,
-  ListChecks,
-  Unlink,
-  X,
-} from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, FilePlus, FileText, Library, Pencil, RefreshCw, Settings2, Sparkles, Trash2, Undo2, Unlink } from "lucide-react";
 import { api, del, experiencePath, workPath, useServerEvent } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, usePrompt, useToast } from "../lib/ui";
-import type { FileEntry, WorkStatus } from "../lib/types";
+import { useAction, useConfirm, useContextMenu, usePrompt, type MenuItem } from "../lib/ui";
+import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { buildTree, type Node } from "./ExplorerView";
-import { VersionsPanel } from "./VersionsView";
 import { ViewHeader } from "./ViewHeader";
-import { LibraryPicker, LibrarySuggestions, Marked, libraryMatches, type LibraryInfo } from "./LibraryPicker";
+import type { LibraryInfo, TrashedLibrary } from "./libraryShared";
 
-const ORGANIZE = (titles: string[]) =>
+export const ORGANIZE = (titles: string[]) =>
   `请整理经验库${titles.map((title) => `「${title}」`).join("")}：回顾我们这次的对话和作品的修改，把在同类作品里值得复用的做法、我明确表达过的偏好、踩过的坑和解决办法整理进去${titles.length > 1 ? "（按内容放进最合适的经验库）" : ""}。先阅读现有内容，按主题合并到已有文档，不要重复，过时的说法直接改掉；改完简单告诉我改了哪些文档。`;
 
-/** Libraries past this many get a search box, and the ones the work does not use start folded. */
-const MANY = 6;
-
 /**
- * Experience libraries of the work's repository: Markdown documents shared by works of the
- * same kind. The work's own libraries come first, each with its documents; the others are
- * folded away and found by name or document; the picker chooses among many. The AI reads the
- * work's libraries before working and keeps them organized; documents open as editor tabs;
- * versions are saved like a work's.
+ * The experience libraries the work uses, each with its documents (opened as editor tabs).
+ * Finding, linking, creating and deleting libraries happens in the 经验库 tab (管理…); their
+ * versions are in the explorer's 版本与同步.
  */
 export function ExperienceView() {
-  const { work, reload, openExperience, addToChat, askAi, readOnly } = useWorkbench();
+  const { work, reload, openExperience, openTool, addToChat, askAi, readOnly } = useWorkbench();
   const [libraries, setLibraries] = useState<LibraryInfo[]>([]);
+  const [trash, setTrash] = useState<TrashedLibrary[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [trees, setTrees] = useState<Record<string, FileEntry[]>>({});
-  const [changes, setChanges] = useState(0);
-  const [open, setOpen] = useState<Set<string>>(new Set());
-  const [othersOpen, setOthersOpen] = useState<boolean | null>(null);
-  const [query, setQuery] = useState("");
-  const [documents, setDocuments] = useState<{ library: string; path: string; title: string }[]>([]);
-  const [picker, setPicker] = useState(false);
-  const [showVersions, setShowVersions] = useState(false);
+  // Libraries the user folded; folders inside them the user opened (as "+<path>").
+  const [toggled, setToggled] = useState<Set<string>>(new Set());
   const [run, busy] = useAction();
   const confirm = useConfirm();
   const prompt = usePrompt();
-  const toast = useToast();
   const [openMenu, menu] = useContextMenu();
   const base = experiencePath(work.repo);
   const enc = encodeURIComponent;
   // The work links libraries by name; renamed ones are found through their earlier names.
   const linkedNames = useMemo(() => work.meta?.experiences ?? [], [work.meta?.experiences]);
   const libraryOfName = (name: string) => libraries.find((item) => item.id === name || item.aliases?.includes(name));
-  const linkedIds = linkedNames.map((name) => libraryOfName(name)?.id).filter((id): id is string => Boolean(id));
-  const linkedSet = new Set(linkedIds);
-  const linkedLibraries = linkedIds.map((id) => libraries.find((item) => item.id === id)!).filter((item, index, list) => list.indexOf(item) === index);
+  const linked = [...new Set(linkedNames.map((name) => libraryOfName(name)).filter((item): item is LibraryInfo => Boolean(item)))];
   const missingNames = loaded ? linkedNames.filter((name) => !libraryOfName(name)) : [];
-  const others = libraries.filter((item) => !linkedSet.has(item.id));
-  const titleOf = (id: string) => libraries.find((item) => item.id === id)?.title ?? id;
 
   const load = () =>
-    Promise.all([api<LibraryInfo[]>(`${base}/libraries?work=${enc(work.id)}`), api<WorkStatus>(`${base}/status`)]).then(
-      ([nextLibraries, status]) => {
+    Promise.all([api<LibraryInfo[]>(`${base}/libraries`), api<TrashedLibrary[]>(`${base}/trash`)]).then(
+      ([nextLibraries, nextTrash]) => {
         setLibraries(nextLibraries);
-        setChanges(status.files.length);
+        setTrash(nextTrash);
         setLoaded(true);
       },
       () => {},
     );
-  const loadTree = (id: string) =>
-    api<FileEntry[]>(`${base}/tree?library=${enc(id)}`).then(
-      (list) => setTrees((map) => ({ ...map, [id]: list })),
-      () => {},
-    );
-  // Open libraries' documents (a library id has no "/", folders inside one do).
-  const openLibraries = [...open].filter((key) => !key.includes("/") && libraries.some((item) => item.id === key));
-  const openKey = openLibraries.join("|");
+  const loadTree = (id: string) => api<FileEntry[]>(`${base}/tree?library=${enc(id)}`).then((list) => setTrees((map) => ({ ...map, [id]: list })), () => {});
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, work.id]);
+  const openKey = linked
+    .filter((library) => !toggled.has(library.id))
+    .map((library) => library.id)
+    .join("|");
   useEffect(() => {
-    for (const id of openLibraries) void loadTree(id);
+    for (const id of openKey.split("|").filter(Boolean)) void loadTree(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openKey, libraries]);
-  // The work's libraries start open.
-  const linkedKey = linkedIds.join("|");
-  useEffect(() => {
-    if (linkedKey) setOpen((current) => new Set([...current, ...linkedKey.split("|")]));
-  }, [linkedKey]);
   useServerEvent((event) => {
     if (event.type === "experience-files" && event.repo === work.repo) void load();
     if (event.type === "work-versions" && event.work === `experience-${work.repo}`) void load();
   });
-  // Documents of every library matching the search (by file name and title), shortly after typing.
-  useEffect(() => {
-    if (!query.trim()) return setDocuments([]);
-    const timer = setTimeout(() => void api<typeof documents>(`${base}/find?q=${enc(query.trim())}`).then(setDocuments, () => setDocuments([])), 200);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, base, libraries]);
 
+  const titleOf = (id: string) => libraries.find((item) => item.id === id)?.title ?? id;
   const setLinks = (names: string[], message: string) =>
     run(async () => {
       await api(workPath(work.repo, work.id), { method: "PATCH", body: { experiences: names } });
       await reload();
-      await load();
     }, message);
-  const link = (id: string) => setLinks([...linkedNames.filter((name) => libraryOfName(name)?.id !== id), id], `已关联经验库「${titleOf(id)}」`);
-  const unlink = (id: string) =>
-    setLinks(
-      linkedNames.filter((name) => libraryOfName(name)?.id !== id),
-      `已取消关联「${titleOf(id)}」`,
-    );
-  /** The picker's choice (errors keep it open); links to deleted libraries stay until removed on their own. */
-  const choose = async (ids: string[]) => {
-    const kept = linkedNames.filter((name) => !libraryOfName(name));
-    await api(workPath(work.repo, work.id), { method: "PATCH", body: { experiences: [...ids, ...kept] } });
-    await reload();
-    await load();
-    const added = ids.filter((id) => !linkedSet.has(id)).length;
-    const removed = linkedIds.filter((id) => !ids.includes(id)).length;
-    toast([added ? `关联了 ${added} 个经验库` : "", removed ? `取消关联 ${removed} 个` : ""].filter(Boolean).join("，") || "已更新", "ok");
-  };
-  const createNamed = async (name: string): Promise<LibraryInfo> => {
-    const created = await api<{ id: string; title: string }>(`${base}/libraries`, { body: { name } });
-    await load();
-    return { ...created, files: 1, works: 0 };
-  };
-  const createLibrary = () =>
+  const unlink = (id: string) => setLinks(linkedNames.filter((name) => libraryOfName(name)?.id !== id), `已取消关联「${titleOf(id)}」`);
+  const restore = (item: TrashedLibrary) =>
     run(async () => {
-      const name = (await prompt("新经验库的名称", "", "例如：知识类视频、音乐视频"))?.trim();
-      if (!name) return;
-      const created = await createNamed(name);
-      setOpen((current) => new Set([...current, created.id]));
-      if (!readOnly && (await confirm(`把经验库「${created.title}」关联到当前作品？`, { confirm: "关联" }))) await link(created.id);
-      openExperience(`${created.id}/README.md`);
-    });
-  const renameLibrary = (id: string) =>
-    run(async () => {
-      const name = (await prompt("重命名经验库", titleOf(id)))?.trim();
-      if (!name || name === titleOf(id)) return;
-      const renamed = await api<{ id: string; title: string }>(`${base}/libraries/${enc(id)}/rename`, { body: { name } });
-      setOpen((current) => new Set([...current].map((item) => (item === id ? renamed.id : item))));
+      await api(`${base}/trash/${enc(item.key)}/restore`, { method: "POST" });
       await load();
-      await reload(); // the work's description shows the library's title
-    }, "已重命名。保存版本后会同步；关联它的作品不受影响");
-  const removeLibrary = (id: string) =>
-    run(async () => {
-      if (
-        !(await confirm(`删除经验库「${titleOf(id)}」及其中所有文档？保存版本前可以在「版本」中撤销，保存后也能从历史恢复。`, {
-          confirm: "删除",
-          danger: true,
-        }))
-      )
-        return;
-      await del(`${base}/libraries/${enc(id)}`);
-    });
+    }, `已恢复经验库「${item.title}」`);
   const newDocument = (folder: string) =>
     run(async () => {
       const name = (await prompt("新文档（可以包含子文件夹）", "新经验.md"))?.trim();
@@ -193,45 +103,35 @@ export function ExperienceView() {
 
   const menuFor = (event: React.MouseEvent, node: Pick<Node, "path" | "type">, depth: number) => {
     const library = node.path.split("/")[0];
-    const isLibrary = depth === 0;
     const folder = node.type === "dir" ? node.path : node.path.split("/").slice(0, -1).join("/");
-    openMenu(event, [
+    const items: MenuItem[] = [
       ...(node.type === "file" ? [{ label: "打开", icon: <FileText size={14} />, onClick: () => openExperience(node.path) }] : []),
       { label: "新建文档", icon: <FilePlus size={14} />, onClick: () => newDocument(folder) },
-      ...(isLibrary && !readOnly
+      ...(node.type === "file"
         ? [
-            linkedSet.has(library)
-              ? { label: "不再用于当前作品", icon: <Unlink size={14} />, onClick: () => unlink(library) }
-              : { label: "关联到当前作品", icon: <Link2 size={14} />, onClick: () => link(library) },
+            {
+              label: "引用到 AI 聊天",
+              icon: <Sparkles size={14} />,
+              onClick: () => addToChat({ type: "experience" as const, library, path: node.path.slice(library.length + 1) }),
+            },
           ]
         : []),
-      ...(isLibrary ? [{ label: "重命名", icon: <Pencil size={14} />, onClick: () => renameLibrary(library) }] : []),
-      ...(linkedSet.has(library)
-        ? [
-            ...(node.type === "file"
-              ? [
-                  {
-                    label: "引用到 AI 聊天",
-                    icon: <Sparkles size={14} />,
-                    onClick: () => addToChat({ type: "experience" as const, library, path: node.path.slice(library.length + 1) }),
-                  },
-                ]
-              : []),
-            { label: "让 AI 整理这个经验库", icon: <Sparkles size={14} />, onClick: () => askAi(ORGANIZE([titleOf(library)])) },
-          ]
-        : []),
-      "separator",
-      ...(isLibrary
-        ? [{ label: "删除经验库", icon: <Trash2 size={14} />, danger: true, onClick: () => removeLibrary(library) }]
-        : [
-            { label: "重命名 / 移动", icon: <Pencil size={14} />, onClick: () => rename(node) },
-            { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(node), disabled: node.path === `${library}/README.md` },
-          ]),
-    ]);
+      { label: "让 AI 整理这个经验库", icon: <Sparkles size={14} />, onClick: () => askAi(ORGANIZE([titleOf(library)])) },
+    ];
+    if (depth === 0) {
+      items.push({ label: "管理经验库…", icon: <Library size={14} />, onClick: () => openTool("libraries:experiences") });
+      if (!readOnly) items.push("separator", { label: "不再用于当前作品", icon: <Unlink size={14} />, onClick: () => unlink(library) });
+    } else
+      items.push(
+        "separator",
+        { label: "重命名 / 移动", icon: <Pencil size={14} />, onClick: () => rename(node) },
+        { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(node), disabled: node.path === `${library}/README.md` },
+      );
+    openMenu(event, items);
   };
 
   const flip = (key: string) =>
-    setOpen((current) => {
+    setToggled((current) => {
       const next = new Set(current);
       if (next.has(key)) next.delete(key);
       else next.add(key);
@@ -244,16 +144,12 @@ export function ExperienceView() {
           className="tree-row"
           style={{ paddingLeft: 8 + depth * 12 }}
           title={node.path}
-          onClick={() => (node.type === "dir" ? flip(node.path) : openExperience(node.path, { preview: true }))}
+          onClick={() => (node.type === "dir" ? flip("+" + node.path) : openExperience(node.path, { preview: true }))}
           onDoubleClick={() => node.type === "file" && openExperience(node.path)}
           onContextMenu={(event) => menuFor(event, node, depth)}
         >
           {node.type === "dir" ? (
-            open.has(node.path) ? (
-              <ChevronDown size={14} />
-            ) : (
-              <ChevronRight size={14} />
-            )
+            toggled.has("+" + node.path) ? <ChevronDown size={14} /> : <ChevronRight size={14} />
           ) : (
             <>
               <span style={{ width: 14 }} />
@@ -262,70 +158,21 @@ export function ExperienceView() {
           )}
           <span className="ellipsis grow">{node.name}</span>
         </div>
-        {node.type === "dir" && open.has(node.path) && renderNodes(node.children, depth + 1)}
+        {node.type === "dir" && toggled.has("+" + node.path) && renderNodes(node.children, depth + 1)}
       </div>
     ));
-  /** A library: its row (unlink button for the work's own) and, open, its documents. */
-  const renderLibrary = (library: LibraryInfo) => {
-    const linked = linkedSet.has(library.id);
-    return (
-      <div key={library.id}>
-        <div
-          className={`tree-row library-linked-row ${linked ? "linked" : ""}`}
-          style={{ paddingLeft: 8 }}
-          title={`${library.title}（${library.id}）${library.about ? `\n${library.about}` : ""}\n${library.files} 篇${library.works ? ` · ${library.works} 个作品在用` : ""}`}
-          onClick={() => flip(library.id)}
-          onContextMenu={(event) => menuFor(event, { path: library.id, type: "dir" }, 0)}
-        >
-          {open.has(library.id) ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-          <BookOpen size={14} className="folder-icon" />
-          <span className="ellipsis grow">
-            <Marked text={library.title} query={query} />
-          </span>
-          {linked && query && <span className="badge accent">本作品</span>}
-          <span className="faint small-text">{library.files} 篇</span>
-          {linked && !readOnly && (
-            <button
-              className="icon-btn"
-              title="不再用于当前作品"
-              aria-label={`不再用「${library.title}」`}
-              onClick={(event) => {
-                event.stopPropagation();
-                void unlink(library.id);
-              }}
-            >
-              <X size={13} />
-            </button>
-          )}
-        </div>
-        {open.has(library.id) && (trees[library.id] ? renderNodes(buildTree(trees[library.id]), 1) : <div className="library-more">读取中…</div>)}
-      </div>
-    );
-  };
-
-  const searching = Boolean(query.trim());
-  const found = searching
-    ? libraries.filter((library) => libraryMatches(library, query)).sort((a, b) => Number(linkedSet.has(b.id)) - Number(linkedSet.has(a.id)))
-    : [];
-  const othersShown = othersOpen ?? others.length <= MANY;
-  const hasMany = libraries.length > MANY;
 
   return (
     <div className="view library-panel">
       <ViewHeader title="经验">
-        {!readOnly && libraries.length > 0 && (
-          <button className="icon-btn" title="选择本作品使用的经验库" onClick={() => setPicker(true)}>
-            <ListChecks size={15} />
-          </button>
-        )}
-        <button className="icon-btn" title="新建经验库" onClick={createLibrary}>
-          <FolderPlus size={15} />
+        <button className="icon-btn" title="管理经验库：查找、关联、新建、删除" onClick={() => openTool("libraries:experiences")}>
+          <Settings2 size={15} />
         </button>
         <button
           className="icon-btn"
-          title={linkedLibraries.length > 1 ? "作品关联了多个经验库：右键其中一个新建文档" : "在当前作品的经验库中新建文档"}
-          disabled={linkedLibraries.length !== 1}
-          onClick={() => newDocument(linkedLibraries[0].id)}
+          title={linked.length > 1 ? "作品关联了多个经验库：右键（或长按）其中一个新建文档" : "在当前作品的经验库中新建文档"}
+          disabled={linked.length !== 1}
+          onClick={() => newDocument(linked[0].id)}
         >
           <FilePlus size={15} />
         </button>
@@ -334,141 +181,72 @@ export function ExperienceView() {
         </button>
       </ViewHeader>
       {busy && <div className="view-progress" />}
-      {(hasMany || searching) && (
-        <label className="library-panel-search">
-          <Search size={13} />
-          <input
-            placeholder={`在 ${libraries.length} 个经验库里找经验库或文档`}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => event.key === "Escape" && setQuery("")}
-          />
-          {query && (
-            <button className="icon-btn" aria-label="清除搜索" onClick={() => setQuery("")}>
-              <X size={13} />
-            </button>
-          )}
-        </label>
-      )}
-      {searching ? (
-        <div className="tree">
-          <div className="library-group">
-            经验库 <span className="count">{found.length}</span>
-          </div>
-          {found.map(renderLibrary)}
-          {!found.length && <p className="view-hint">没有名称或介绍符合的经验库。</p>}
-          <div className="library-group">
-            文档 <span className="count">{documents.length}</span>
-          </div>
-          {documents.map((doc) => (
+      <div className="library-group" title={readOnly ? "作品已发布，不能更改关联" : undefined}>
+        本作品使用的经验库 <span className="count">{linked.length}</span>
+        <span className="grow" />
+        <button className="link-btn" title="查找、关联、新建或删除经验库" onClick={() => openTool("libraries:experiences")}>
+          <Settings2 size={13} /> 管理…
+        </button>
+      </div>
+      <div className="tree">
+        {linked.map((library) => (
+          <div key={library.id}>
             <div
-              key={doc.path}
-              className="library-doc-row"
-              title={doc.path}
-              onClick={() => openExperience(doc.path, { preview: true })}
-              onDoubleClick={() => openExperience(doc.path)}
-              onContextMenu={(event) => menuFor(event, { path: doc.path, type: "file" }, 1)}
+              className="tree-row linked"
+              style={{ paddingLeft: 8 }}
+              title={`${library.title}（${library.id}）${library.about ? `\n${library.about}` : ""}\n${library.files} 篇${library.works ? ` · ${library.works} 个作品在用` : ""}`}
+              onClick={() => flip(library.id)}
+              onContextMenu={(event) => menuFor(event, { path: library.id, type: "dir" }, 0)}
             >
-              <FileText size={14} />
-              <span className="ellipsis grow">
-                <Marked text={doc.title || doc.path.split("/").pop()!} query={query} />
-              </span>
-              <span className="faint small-text ellipsis">{titleOf(doc.library)}</span>
+              {toggled.has(library.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+              <BookOpen size={14} className="folder-icon" />
+              <span className="ellipsis grow">{library.title}</span>
+              <span className="faint small-text">{library.files} 篇</span>
             </div>
-          ))}
-          {!documents.length && <p className="view-hint">没有文件名或标题符合的文档。要按内容找，可以问 AI。</p>}
-        </div>
-      ) : (
-        <>
-          <div className="library-group" title={readOnly ? "作品已发布，不能更改关联" : undefined}>
-            本作品使用的经验库 <span className="count">{linkedLibraries.length}</span>
-            <span className="grow" />
-            {!readOnly && libraries.length > 0 && (
-              <button className="link-btn" onClick={() => setPicker(true)}>
-                选择…
-              </button>
-            )}
+            {!toggled.has(library.id) && (trees[library.id] ? renderNodes(buildTree(trees[library.id]), 1) : <div className="library-more">读取中…</div>)}
           </div>
-          <div className="tree">{linkedLibraries.map(renderLibrary)}</div>
-          <section className="view-section">
-            {missingNames.map((name) => (
-              <p key={name} className="view-hint">
-                关联的经验库「{name}」已不存在。
-                {!readOnly && (
-                  <button
-                    className="link-btn"
-                    onClick={() =>
-                      setLinks(
-                        linkedNames.filter((item) => item !== name),
-                        "已移除",
-                      )
-                    }
-                  >
-                    移除
-                  </button>
-                )}
-              </p>
-            ))}
-            {linkedLibraries.length ? (
-              <div className="row">
-                <button
-                  className="btn small grow"
-                  title="AI 回顾本次对话和作品修改，把经验整理进经验库"
-                  onClick={() => askAi(ORGANIZE(linkedLibraries.map((library) => library.title)))}
-                >
-                  <Sparkles size={13} /> 让 AI 整理经验
+        ))}
+      </div>
+      <section className="view-section">
+        {missingNames.map((name) => {
+          const bin = trash.find((item) => item.id === name);
+          return (
+            <p key={name} className="view-hint">
+              关联的经验库「{name}」{bin ? "在回收站里。" : "已不存在。"}
+              {bin && (
+                <button className="link-btn" onClick={() => restore(bin)}>
+                  <Undo2 size={12} /> 恢复
                 </button>
-              </div>
-            ) : (
-              <>
-                {!readOnly && <LibrarySuggestions libraries={libraries} disabled={busy} onUse={link} />}
-                <p className="view-hint">
-                  {libraries.length ? (
-                    <>
-                      还没有选择。AI 制作这个作品前会先阅读选中的经验库（可以多个），并把新的经验整理进去。
-                      {!readOnly && (
-                        <button className="link-btn" onClick={() => setPicker(true)}>
-                          选择经验库…
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    "还没有经验库。点上方「新建经验库」，例如“知识类视频”“音乐视频”。"
-                  )}
-                </p>
-              </>
-            )}
-          </section>
-          {others.length > 0 && (
-            <>
-              <div className="library-group" onClick={() => setOthersOpen(!othersShown)}>
-                {othersShown ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                {linkedLibraries.length ? "其他经验库" : "全部经验库"} <span className="count">{others.length}</span>
-              </div>
-              {othersShown && <div className="tree">{others.map(renderLibrary)}</div>}
-            </>
-          )}
-        </>
-      )}
-      <section className="view-section experience-versions">
-        <h3 className="clickable" onClick={() => setShowVersions(!showVersions)}>
-          {showVersions ? <ChevronDown size={14} /> : <ChevronRight size={14} />} 版本 {changes > 0 && <span className="badge accent">{changes} 个未保存</span>}
-        </h3>
+              )}
+              {!bin && !readOnly && (
+                <button className="link-btn" onClick={() => setLinks(linkedNames.filter((item) => item !== name), "已移除")}>
+                  移除
+                </button>
+              )}
+            </p>
+          );
+        })}
+        {linked.length ? (
+          <div className="row">
+            <button
+              className="btn small grow"
+              title="AI 回顾本次对话和作品修改，把经验整理进经验库"
+              onClick={() => askAi(ORGANIZE(linked.map((library) => library.title)))}
+            >
+              <Sparkles size={13} /> 让 AI 整理经验
+            </button>
+          </div>
+        ) : (
+          loaded && (
+            <p className="view-hint">
+              还没有关联经验库。AI 制作这个作品前会先阅读关联的经验库（可以多个），并把新的经验整理进去。
+              <button className="link-btn" onClick={() => openTool("libraries:experiences")}>
+                {readOnly ? "查看经验库…" : libraries.length ? "关联经验库…" : "新建经验库…"}
+              </button>
+            </p>
+          )
+        )}
       </section>
-      {showVersions && <VersionsPanel source="experience" />}
-      {picker && (
-        <LibraryPicker
-          kind="experiences"
-          title="选择本作品使用的经验库"
-          libraries={libraries}
-          initial={linkedLibraries.map((library) => library.id)}
-          confirm="使用选中的经验库"
-          hint="AI 制作这个作品前会先阅读选中的经验库，并把新的经验整理进去。"
-          onApply={choose}
-          onCreate={createNamed}
-          onClose={() => setPicker(false)}
-        />
-      )}
       {menu}
     </div>
   );
