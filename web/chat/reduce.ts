@@ -26,6 +26,9 @@ export interface ToolBlock {
   locations?: { path: string; line?: number }[];
   rawInput?: unknown;
   rawOutput?: unknown;
+  /** Streamed terminal output (Codex sends it in `_meta`, not as content). */
+  output?: string;
+  exitCode?: number | null;
 }
 export type Block =
   | { kind: "user"; id: string; text: string; attachments: Record<string, unknown>[]; at: number; steered?: boolean }
@@ -50,6 +53,17 @@ export interface Entry {
   at: number;
   kind: string;
   [key: string]: unknown;
+}
+
+const OUTPUT_LIMIT = 20000;
+
+function terminalMeta(tool: ToolBlock, meta: unknown) {
+  const { terminal_output_delta: delta, terminal_exit: exit } = (meta ?? {}) as {
+    terminal_output_delta?: { data?: string };
+    terminal_exit?: { exit_code?: number | null };
+  };
+  if (delta?.data && (tool.output?.length ?? 0) < OUTPUT_LIMIT) tool.output = ((tool.output ?? "") + delta.data).slice(0, OUTPUT_LIMIT);
+  if (exit) tool.exitCode = exit.exit_code ?? null;
 }
 
 export function reduceTranscript(entries: Entry[]): Block[] {
@@ -94,6 +108,7 @@ export function reduceTranscript(entries: Entry[]): Block[] {
             tools.set(tool.id, tool);
             blocks.push(tool);
           }
+          terminalMeta(existing ?? tool, update._meta);
         } else if (update.sessionUpdate === "tool_call_update") {
           const tool = tools.get(update.toolCallId as string);
           if (!tool) break;
@@ -104,6 +119,7 @@ export function reduceTranscript(entries: Entry[]): Block[] {
           if (update.locations) tool.locations = update.locations as ToolBlock["locations"];
           if (update.rawInput !== undefined) tool.rawInput = update.rawInput;
           if (update.rawOutput !== undefined) tool.rawOutput = update.rawOutput;
+          terminalMeta(tool, update._meta);
         } else if (update.sessionUpdate === "plan") {
           const entries = (update.entries as { content: string; status: string; priority?: string }[]) ?? [];
           if (last?.kind === "plan") last.entries = entries;

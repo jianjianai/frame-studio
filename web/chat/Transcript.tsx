@@ -26,7 +26,7 @@ import {
 import { formatTime } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { lineDiff, compactDiff } from "./lineDiff";
-import type { Block, ToolBlock, ToolContent } from "./reduce";
+import type { Block, ContentBlock, ToolBlock, ToolContent } from "./reduce";
 
 const kindIcon = (kind?: string, title = "") => {
   if (/frame__|^mcp\.frame\.|frame\./.test(title)) return <Clapperboard size={13} />;
@@ -146,36 +146,71 @@ function ContentView({ item }: { item: ToolContent }) {
   return null;
 }
 
+/** What a tool produced. Codex leaves `content` empty for most tools: shell output arrives as
+ * terminal deltas and MCP results only in `rawOutput`, so fall back to those. */
+function toolResults(tool: ToolBlock): ToolContent[] {
+  const items = tool.content.filter((item) => item.type !== "terminal");
+  const text = (value: string): ToolContent => ({ type: "content", content: { type: "text", text: value } });
+  if (tool.output) items.push(text(tool.output));
+  if (tool.exitCode) items.push(text(`退出码 ${tool.exitCode}`));
+  if (items.some((item) => item.type === "content")) return items;
+  const raw = tool.rawOutput as { result?: { content?: unknown }; error?: unknown; output?: unknown; stdout?: unknown } | string | undefined;
+  if (typeof raw === "string") {
+    if (raw) items.push(text(raw));
+  } else if (raw && typeof raw === "object") {
+    if (Array.isArray(raw.result?.content))
+      for (const content of raw.result.content as ContentBlock[]) items.push({ type: "content", content });
+    if (raw.error) items.push(text(typeof raw.error === "string" ? raw.error : JSON.stringify(raw.error, null, 2)));
+    for (const value of [raw.output, raw.stdout]) if (typeof value === "string" && value) items.push(text(value));
+  }
+  return items;
+}
+
+/** MCP arguments, shown when the card is opened ({ server, tool, arguments } from Codex, plain object from Claude). */
+function toolArguments(tool: ToolBlock) {
+  if (!/mcp__|^mcp\.|frame[.:]/.test(tool.title)) return "";
+  const input = tool.rawInput as { arguments?: unknown } | undefined;
+  const args = input && typeof input === "object" && "arguments" in input ? input.arguments : input;
+  if (!args || typeof args !== "object" || !Object.keys(args).length) return "";
+  const json = JSON.stringify(args, null, 2);
+  return json.length > 4000 ? json.slice(0, 4000) + "…" : json;
+}
+
 function ToolCard({ tool }: { tool: ToolBlock }) {
   const [open, setOpen] = useState(false);
-  const hasDiff = tool.content.some((item) => item.type === "diff");
-  const images = tool.content.filter((item) => item.content?.type === "image");
+  const results = toolResults(tool);
+  const images = results.filter((item) => item.content?.type === "image");
+  const args = open ? toolArguments(tool) : "";
   const title = toolTitle(tool.title);
   const input = tool.rawInput as Record<string, unknown> | undefined;
+  const diffPath = tool.content.find((item) => item.type === "diff")?.path ?? tool.locations?.[0]?.path;
   const detail =
-    input && typeof input === "object"
+    (input && typeof input === "object"
       ? input.path ||
         input.file_path ||
         input.command ||
         input.pattern ||
         (Array.isArray(input.times) ? (input.times as number[]).map((t) => formatTime(t)).join(", ") : "")
-      : "";
+      : "") || (tool.toolKind === "edit" && diffPath ? diffPath.split("/").slice(-2).join("/") : "");
+  const running = tool.status === "pending" || tool.status === "in_progress";
   return (
     <div className={`tool-card status-${tool.status}`}>
       <button className="tool-head" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
         {kindIcon(tool.toolKind, tool.title)}
         <span className="tool-title ellipsis">{title}</span>
-        {detail ? <span className="tool-detail ellipsis mono">{String(detail)}</span> : null}
+        {detail && detail !== tool.title ? <span className="tool-detail ellipsis mono">{String(detail)}</span> : null}
         {images.length > 0 && <ImageIcon size={12} className="faint" />}
         <span className="grow" />
         <StatusIcon status={tool.status} />
       </button>
-      {(open || (hasDiff && tool.status !== "failed")) && tool.content.length > 0 && (
+      {open && (
         <div className="tool-body">
-          {(open ? tool.content : tool.content.filter((item) => item.type === "diff")).map((item, index) => (
+          {args && <pre className="tool-text tool-args">{args}</pre>}
+          {results.map((item, index) => (
             <ContentView key={index} item={item} />
           ))}
+          {!args && !results.length && <div className="faint small-text">{running ? "运行中…" : "没有输出"}</div>}
         </div>
       )}
       {!open && images.length > 0 && (

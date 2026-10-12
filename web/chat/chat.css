@@ -308,6 +308,10 @@
   white-space: pre-wrap;
   word-break: break-word;
 }
+.tool-args {
+  color: var(--fg-muted);
+  max-height: 120px;
+}
 .tool-image {
   max-width: 100%;
   border-radius: 6px;
