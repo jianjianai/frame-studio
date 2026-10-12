@@ -223,7 +223,9 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      const typing = /INPUT|TEXTAREA|SELECT/.test(target.tagName) || target.isContentEditable || target.closest(".cm-editor");
+      // A slider keeps focus after a drag; Space must still play rather than do nothing.
+      const slider = target instanceof HTMLInputElement && target.type === "range" && event.key === " ";
+      const typing = !slider && (/INPUT|TEXTAREA|SELECT/.test(target.tagName) || target.isContentEditable || target.closest(".cm-editor"));
       const mod = event.ctrlKey || event.metaKey;
       if (mod && event.key.toLowerCase() === "b" && !event.altKey) {
         event.preventDefault();

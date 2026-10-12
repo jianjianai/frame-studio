@@ -569,8 +569,8 @@
   bottom: calc(100% + 4px);
   left: 0;
   z-index: 50;
-  min-width: 240px;
-  max-width: 340px;
+  min-width: min(240px, calc(100vw - 16px));
+  max-width: min(340px, calc(100vw - 16px));
   max-height: 360px;
   overflow: auto;
   padding: 4px;

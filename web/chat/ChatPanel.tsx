@@ -978,13 +978,38 @@ function Popover({
     window.addEventListener("mousedown", close);
     return () => window.removeEventListener("mousedown", close);
   }, [open]);
+  // The anchor sits wherever the input bar puts it; nudge the popover back inside the window.
+  const panel = useRef<HTMLDivElement>(null);
+  const [shift, setShift] = useState(0);
+  useLayoutEffect(() => {
+    if (!open) return setShift(0);
+    const fit = () => {
+      const el = panel.current;
+      if (!el) return;
+      el.style.translate = "";
+      const rect = el.getBoundingClientRect();
+      const margin = 8;
+      const over = rect.right - (window.innerWidth - margin);
+      const under = margin - rect.left;
+      const next = over > 0 ? -Math.min(over, Math.max(0, rect.left - margin)) : under > 0 ? under : 0;
+      el.style.translate = next ? `${next}px 0` : "";
+      setShift(next);
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [open]);
   return (
     <div className="popover-anchor" ref={ref} title={disabled ? title : undefined}>
       <button className={className} disabled={disabled} title={disabled ? undefined : title} onClick={() => setOpen(!open)}>
         {button}
         {chevron && <ChevronDown size={11} />}
       </button>
-      {open && <div className={`popover ${align === "right" ? "align-right" : ""}`}>{children(() => setOpen(false))}</div>}
+      {open && (
+        <div ref={panel} className={`popover ${align === "right" ? "align-right" : ""}`} style={shift ? { translate: `${shift}px 0` } : undefined}>
+          {children(() => setOpen(false))}
+        </div>
+      )}
     </div>
   );
 }

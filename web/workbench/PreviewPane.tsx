@@ -139,6 +139,21 @@ function Transport({
   const ready = status.status === "ready";
   const [scrub, setScrub] = useState<number | null>(null);
   const time = scrub ?? playback.time;
+  // A release outside the slider, or a touch the browser cancels, never reaches the input's own
+  // pointerup; without this the bar would stay frozen at the dragged position during playback.
+  const scrubbing = scrub !== null;
+  useEffect(() => {
+    if (!scrubbing) return;
+    const end = () => setScrub(null);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+    window.addEventListener("blur", end);
+    return () => {
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      window.removeEventListener("blur", end);
+    };
+  }, [scrubbing]);
   return (
     <div className="transport">
       <div className="scrubber">
@@ -156,7 +171,6 @@ function Transport({
             setScrub(value);
             void stage.seek(value);
           }}
-          onPointerUp={() => setScrub(null)}
           onKeyUp={() => setScrub(null)}
         />
       </div>
