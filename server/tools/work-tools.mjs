@@ -8,7 +8,7 @@ import { problem, confined } from "../util.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./file-ops.mjs";
 import { probe } from "../media.mjs";
 import { projectAudioTracks } from "../../src/engine/types.ts";
-import { formatTime } from "../render.mjs";
+import { formatTime, contentStamp } from "../render.mjs";
 import { readVisual, readAudio } from "../documents.mjs";
 
 /** What would run past a new, shorter length: layers, audio clips, subtitles, the cover moment. */
@@ -226,7 +226,13 @@ export function registerWorkTools(registry) {
         unsavedChanges: status.files.map((file) => `${file.status} ${file.path}`),
         lastVersion: status.head,
         userView: view && { time: view.time, playing: view.playing, selection: view.selection, at: view.at },
-        lastCheck: services.checks.get(`${work.repo}/${work.id}`) || null,
+        lastCheck: (() => {
+          const check = services.checks.get(`${work.repo}/${work.id}`);
+          if (!check) return null;
+          const { content, ...rest } = check;
+          // Whether the check saw exactly the files the work has now (saving a version changes nothing here).
+          return { ...rest, current: content === contentStamp(work.dir) };
+        })(),
         exports: services.exports
           .list(work)
           .slice(0, 5)

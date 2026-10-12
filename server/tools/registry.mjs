@@ -8,7 +8,7 @@ import { problem } from "../util.mjs";
  * `publicInput` is a looser shape advertised to clients when the strict one would be a
  * huge JSON schema (document operations); arguments are still validated against `input`.
  * `guide` names the frame_guide topic that documents the arguments.
- * `run` returns { text?, data?, meta?, images?: [{ data: Buffer|base64, mimeType }] };
+ * `run` returns { text?, data?, meta?, images?: [{ data: Buffer|base64, mimeType }], audio?: [{ data, mimeType }] };
  * `meta` is a small object every client receives next to a custom text (e.g. sha256).
  */
 export class ToolRegistry {

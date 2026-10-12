@@ -21,6 +21,35 @@ import { audioOperationSchema, audioClipSchema, audioChannelSchema, audioSourceS
 import { resolveAsset } from "./asset-tools.mjs";
 import { probe } from "../media.mjs";
 import { problem } from "../util.mjs";
+import { VOICE_TRACK } from "../audio-analysis.mjs";
+
+/**
+ * Subtitles follow voice clips that move: the cues inside a voice clip's old span shift with
+ * it (speech_synthesize writes them once, and a moved line with its subtitle left behind is
+ * a mistake nobody wants). Voice: a clip on a voice-named track or of a public/voice/ file.
+ */
+function followSubtitles(before, after, cues, duration) {
+  if (!before || !cues?.length) return { cues, moved: [] };
+  const sources = new Map(after.sources.map((source) => [source.id, source]));
+  const tracks = new Map(after.tracks.map((track) => [track.id, track]));
+  const voice = (clip) => VOICE_TRACK.test(tracks.get(clip.track)?.name ?? "") || /(^|\/)voice\//.test(sources.get(clip.source)?.src ?? "");
+  let next = cues;
+  const moved = [];
+  for (const clip of after.clips) {
+    const old = before.clips.find((item) => item.id === clip.id);
+    const delta = old ? clip.start - old.start : 0;
+    if (!old || Math.abs(delta) < 1e-6 || !voice(clip)) continue;
+    next = next.map((cue) => {
+      if (cue.start < old.start - 0.05 || cue.end > old.start + old.duration + 0.05) return cue;
+      const start = Math.round((cue.start + delta) * 1000) / 1000;
+      const end = Math.round((cue.end + delta) * 1000) / 1000;
+      if (start < 0 || end > duration) return cue;
+      moved.push(`「${cue.text}」${start}–${end} 秒`);
+      return { ...cue, start, end };
+    });
+  }
+  return { cues: next, moved };
+}
 
 /** Most three scenes and model layers at one moment: each holds a WebGL context (a browser keeps ~16). */
 const WEBGL_LAYERS = 12;
@@ -121,13 +150,22 @@ export function registerDocumentTools(registry) {
     async run(args, ctx) {
       const work = await ctx.work();
       await checkLayers(registry.services, work, editVisual(work, { ...args, dryRun: true }).document);
+      // Unsetting a field the layer never had does nothing: worth a word (often a misspelt path).
+      const before = readVisual(work).document;
+      const absent = [];
+      for (const op of args.operations) {
+        if (op.op !== "update" || !op.unset?.length) continue;
+        const clip = before.clips.find((item) => item.id === op.id);
+        if (!clip) continue;
+        for (const field of op.unset) if (field.split(".").reduce((node, key) => (node && typeof node === "object" ? node[key] : undefined), clip) === undefined) absent.push(`「${op.id}」没有 ${field}`);
+      }
       const result = editVisual(work, args);
       if (!args.dryRun) await registry.services.materials?.lockReferenced(work);
       const summary = result.document.clips.map((clip) => `${clip.id} ${round(clip.start)}–${round(clip.start + clip.duration)}s`).join("，");
       return {
         data: { sha256: result.sha256, clips: result.document.clips.length, dryRun: args.dryRun },
         meta: { sha256: result.sha256 },
-        text: `${args.dryRun ? "预检通过（未写入）" : "已更新图层"}。图层（从下到上）：${summary || "无"}`,
+        text: `${args.dryRun ? "预检通过（未写入）" : "已更新图层"}。图层（从下到上）：${summary || "无"}${absent.length ? `\n注意：unset 的字段本来就不存在，没有改动：${absent.join("、")}` : ""}`,
       };
     },
   });
@@ -176,6 +214,7 @@ export function registerDocumentTools(registry) {
       work: workArg,
       operations: z.array(audioOperationSchema).min(1).max(100),
       ...editOptions,
+      subtitles: z.boolean().default(true).describe("移动配音片段时，片段里的字幕跟着移动"),
     },
     publicInput: {
       work: workArg,
@@ -184,10 +223,24 @@ export function registerDocumentTools(registry) {
         '按顺序执行，全部成功才写入。例：{"op":"update","collection":"clips","id":"c1","patch":{"gain":0.5,"fadeOut":1}}、{"op":"update","collection":"master","patch":{"gain":0.8}}、{"op":"put","collection":"clips","value":{"id":"c2","track":"voice","source":"vo1","start":1.2,"duration":3.4}}（新增；id 相同则整项替换）、{"op":"remove","collection":"tracks","id":"fx"}、{"op":"split","id":"c1","at":5,"newId":"c1b"}。字段见 frame_guide audio',
       ),
       ...editOptions,
+      subtitles: z.boolean().default(true).describe("移动配音片段（配音音轨上、或 voice/ 里的文件）时，片段里的字幕跟着移动"),
     },
     async run(args, ctx) {
       const work = await ctx.work();
+      const before = (() => {
+        try {
+          return readAudio(work).document;
+        } catch {
+          return null;
+        }
+      })();
       const result = editAudio(work, args);
+      let follow = { moved: [] };
+      const meta = registry.services.works.meta(work);
+      if (args.subtitles !== false && meta.ok) {
+        follow = followSubtitles(before, result.document, meta.meta.subtitles, meta.meta.duration);
+        if (follow.moved.length && !args.dryRun) await registry.services.works.update(work, { subtitles: [...follow.cues].sort((a, b) => a.start - b.start) });
+      }
       if (!args.dryRun) await registry.services.materials?.lockReferenced(work);
       const { tracks, clips } = result.document;
       const summary = tracks
@@ -199,7 +252,7 @@ export function registerDocumentTools(registry) {
       return {
         data: { sha256: result.sha256, tracks: tracks.length, clips: clips.length, dryRun: args.dryRun },
         meta: { sha256: result.sha256 },
-        text: `${args.dryRun ? "预检通过（未写入）" : "已更新混音"}。${summary || "没有音轨"}`,
+        text: `${args.dryRun ? "预检通过（未写入）" : "已更新混音"}。${summary || "没有音轨"}${follow.moved.length ? `\n字幕跟着配音${args.dryRun ? "会" : ""}移动：${follow.moved.join("、")}（不想跟着动时传 subtitles: false）` : ""}`,
       };
     },
   });

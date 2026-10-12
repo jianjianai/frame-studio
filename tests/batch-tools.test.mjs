@@ -342,6 +342,45 @@ describe("tools that save the AI calls", () => {
     const second = await tool("preview_audio", { work: work.id, start: 0, duration: 2 });
     expect(second.body.text).toMatch(/人声比其他声音响 \d+(\.\d+)? dB，听得清/);
     expect(second.body.data.overall.rmsDb).toBeLessThan(first.body.data.overall.rmsDb);
+
+    // Listening: an MP3 of the passage, inline and as a link for the user.
+    const heard = await tool("preview_audio", { work: work.id, start: 0, duration: 2, listen: true });
+    expect(heard.body.audio[0].mimeType).toBe("audio/mpeg");
+    expect(Buffer.from(heard.body.audio[0].data, "base64").length).toBeGreaterThan(1000);
+    expect(heard.body.text).toMatch(/试听：.*\/api\/downloads\//);
+
+    // A voice clip that moves takes its subtitle along (the music clip's start is no voice).
+    await tool("subtitles_edit", { work: work.id, set: [{ start: 0.2, end: 1.5, text: "你好" }] });
+    const voiceTrack = audio.tracks.find((track) => track.name === "配音").id;
+    const voice = audio.clips.find((clip) => clip.track === voiceTrack);
+    const moved = await tool("audio_edit", { work: work.id, operations: [{ op: "update", collection: "clips", id: voice.id, patch: { start: 0.3 } }] });
+    expect(moved.body.text).toContain("字幕跟着配音移动：「你好」0.5–1.8 秒");
+    expect((await tool("subtitles_edit", { work: work.id })).body.text).toContain("0.5");
+    await tool("audio_edit", { work: work.id, operations: [{ op: "update", collection: "clips", id: music.id, patch: { start: 0.1 } }] });
+  }, 120000);
+
+  it.skipIf(!browserExecutable())("gives lossless frames with fingerprints, and says what a check covered", async () => {
+    const png = await tool("preview_frames", { work: work.id, times: [0.5, 0.5], format: "png" });
+    expect(png.body.images[0].mimeType).toBe("image/png");
+    expect(png.body.data.digests[0]).toMatch(/^[0-9a-f]{12}$/);
+    expect(png.body.data.digests[1]).toBe(png.body.data.digests[0]);
+    expect(png.body.text).toContain(`（${png.body.data.digests[0]}）`);
+    await tool("work_check", { work: work.id, runtime: false });
+    const checked = () => tool("work_context", { work: work.id }).then((result) => result.body.data.lastCheck);
+    expect((await checked()).current).toBe(true);
+    fs.writeFileSync(path.join(work.dir, "scenes", "extra.ts"), "export const x = 1;\n");
+    expect((await checked()).current).toBe(false);
+    fs.rmSync(path.join(work.dir, "scenes", "extra.ts"));
+    // Two works side by side at the same moments (here the work and a vertical copy of it).
+    const copy = await tool("work_copy", { work: work.id, width: 360, height: 640 });
+    const pair = await tool("preview_frames", { work: work.id, times: [0.5, 1], compare: copy.body.data.id });
+    expect(pair.body.text).toContain(`右：${copy.body.data.id} 270×480`);
+    expect(pair.body.images).toHaveLength(1);
+    expect((await tool("preview_frames", { work: work.id, compare: copy.body.data.id })).status).toBe(400);
+    // Unsetting what a layer does not have says so.
+    const layers = JSON.parse(fs.readFileSync(path.join(work.dir, "visual.json"), "utf8"));
+    const unset = await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: layers.clips[0].id, unset: ["transform.opacity"] }] });
+    expect(unset.body.text).toContain(`unset 的字段本来就不存在，没有改动：「${layers.clips[0].id}」没有 transform.opacity`);
   }, 120000);
 
   it("shows the file's own text when an edit misses by quotes or whitespace", async () => {

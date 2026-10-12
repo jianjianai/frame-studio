@@ -62,9 +62,12 @@ export function speechPlugin(services) {
       const filtered = language === "all" ? all : all.filter((voice) => !voice.language || voice.language.toLowerCase().startsWith(language.toLowerCase()));
       const voices = (filtered.length ? filtered : all).slice(0, 200);
       const line = (voice) => [voice.id, voice.name !== voice.id && voice.name, voice.language, voice.gender].filter(Boolean).join(" · ");
+      const failed = chosen === "edge" && speech.edgeFailure;
+      const warning = failed ? `注意：Edge 最近一次合成失败（${failed.at}）：${failed.message}\n` : "";
       return {
         data: { providers: ready.map(({ id, name }) => ({ id, name })), provider: chosen, voices },
         text:
+          warning +
           `可用引擎：${ready.map((item) => `${item.id}（${item.name}）`).join("、") || "无"}。当前 ${chosen}` +
           `${filtered.length ? "" : `，没有 ${language} 的声音，以下为全部`}，共 ${voices.length} 个声音：\n` +
           voices.map(line).join("\n"),

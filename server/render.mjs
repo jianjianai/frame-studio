@@ -278,28 +278,7 @@ export class Renderer {
    * Returns the stamp a warm page is valid for.
    */
   freshen(work) {
-    const parts = [];
-    const walk = (dir) => {
-      let entries = [];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {
-        return;
-      }
-      for (const entry of entries) {
-        // Notes (AGENTS.md…) are not part of the picture: the AI writing them must not reload the page.
-        if (["exports", ".cache", "node_modules"].includes(entry.name) || entry.name.endsWith(".md")) continue;
-        const file = path.join(dir, entry.name);
-        if (entry.isDirectory()) walk(file);
-        else if (entry.isFile())
-          try {
-            const stat = fs.statSync(file);
-            parts.push(`${file}\0${stat.size}\0${stat.mtimeMs}`);
-          } catch {}
-      }
-    };
-    walk(work.dir);
-    const stamp = sha256(parts.join("\n"));
+    const stamp = contentStamp(work.dir);
     const key = `${work.repo}/${work.id}`;
     if (this.stamps.get(key) !== stamp) {
       this.stamps.set(key, stamp);
@@ -419,9 +398,9 @@ export class Renderer {
   }
 
   /** One labelled contact sheet; much cheaper for AI context than many images. */
-  async storyboard(work, { times, columns, width = 480, subtitles = true }) {
+  async storyboard(work, { times, columns, width = 480, subtitles = true, format = "jpeg" }) {
     const { frames, width: w, height: h, errors } = await this.frames(work, { times, width, subtitles });
-    return { image: await contactSheet(frames, w, h, columns), times: frames.map((frame) => frame.time), errors };
+    return { image: await contactSheet(frames, w, h, columns, format), times: frames.map((frame) => frame.time), errors, digests: frames.map((frame) => digest(frame.png)) };
   }
 
   /** A segment of the work's mix as stereo float PCM (48 kHz), rendered offline in the page. */
@@ -838,10 +817,38 @@ export const formatTime = (seconds) => {
 
 
 /** Frames ({ time, png }) of one size as one labelled grid (JPEG): cheap for an AI to look at. */
+/** What the work's picture is made of, as one fingerprint (files' sizes and times; notes left out). */
+export function contentStamp(root) {
+  const parts = [];
+  const walk = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      // Notes (AGENTS.md…) are not part of the picture: the AI writing them must not reload the page.
+      if (["exports", ".cache", "node_modules"].includes(entry.name) || entry.name.endsWith(".md")) continue;
+      const file = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile())
+        try {
+          const stat = fs.statSync(file);
+          parts.push(`${file}\0${stat.size}\0${stat.mtimeMs}`);
+        } catch {}
+    }
+  };
+  walk(root);
+  return sha256(parts.join("\n"));
+}
+
+/** A short fingerprint of a rendered frame: equal pictures, equal fingerprints. */
+export const digest = (png) => sha256(png).slice(0, 12);
 const escapeXml = (text) => String(text).replace(/[<>&"']/g, (char) => `&#${char.charCodeAt(0)};`);
 
 /** Frames of equal size w×h in a grid, each under a label (default "#n  time"). */
-export async function contactSheet(frames, w, h, columns) {
+export async function contactSheet(frames, w, h, columns, format = "jpeg") {
   columns = columns || Math.min(4, Math.ceil(Math.sqrt(frames.length)));
   const rows = Math.ceil(frames.length / columns);
   const gap = 8,
@@ -861,6 +868,6 @@ export async function contactSheet(frames, w, h, columns) {
   });
   return sharp({ create: { width: columns * w + (columns + 1) * gap, height: rows * (h + label) + (rows + 1) * gap, channels: 3, background: "#16191d" } })
     .composite(composites)
-    .jpeg({ quality: 82 })
+    [format === "png" ? "png" : "jpeg"](format === "png" ? {} : { quality: 82 })
     .toBuffer();
 }

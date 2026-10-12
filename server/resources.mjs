@@ -643,6 +643,32 @@ export class ResourceCatalog {
       .map((item) => item.entry);
   }
 
+  /**
+   * Library files (Lottie, images, models, audio…) that match a query: by name, kind and the
+   * README lines that mention them (where libraries say what a file is).
+   */
+  async searchFiles(repo, { query, library, limit = 20 }) {
+    if (!terms(query).length) return [];
+    const libraries = (await this.materials.libraries(repo)).filter((item) => !library || item.id === library);
+    const dir = await this.materials.dir(repo);
+    const found = [];
+    for (const { id } of libraries) {
+      let readme = [];
+      try {
+        readme = fs.readFileSync(path.join(dir, id, "README.md"), "utf8").split("\n");
+      } catch {}
+      for (const file of await this.materials.files(repo, id)) {
+        if (file.kind === "file" || CODE_FILE.test(file.path)) continue;
+        const name = path.posix.basename(file.path);
+        const mentions = readme.filter((line) => line.includes(file.path) || line.includes(name)).map((line) => line.replace(/^[-*|#\s]+/, "").trim());
+        const entry = { type: "file", id: `materials/${file.ref}`, title: name, key: file.path, kindLabel: FILE_KINDS[file.kind] ?? file.kind, kind: file.kind, description: mentions.join(" "), tags: [id] };
+        const value = score(entry, query);
+        if (value > 0) found.push({ entry, value });
+      }
+    }
+    return found.sort((a, b) => b.value - a.value).slice(0, limit).map((item) => item.entry);
+  }
+
   /** `<library>/<path>` (a module) or `<library>/<path>#<id>` (a resource, sound or export). */
   async get(work, id) {
     const [ref, key] = String(id).replace(/^materials\//, "").split("#");
@@ -800,7 +826,17 @@ export class ResourceCatalog {
   }
 }
 
-const kindArg = z.enum([...Object.keys(RESOURCE_KINDS), "code"]);
+const kindArg = z.enum([...Object.keys(RESOURCE_KINDS), "code", "file"]);
+/** Words a file's kind is found by. */
+const FILE_KINDS = {
+  image: "图片 图像 照片 插画",
+  video: "视频 片段",
+  audio: "音频 声音 音乐 配乐 音效",
+  model: "三维模型 模型 3D",
+  lottie: "Lottie 动画 动效 贴纸 图标",
+  environment: "全景图 环境光 HDR",
+  font: "字体",
+};
 const OUTDATED = "（这里是素材库现在的版本；本作品锁定了另一个版本，运行时用锁定的，要改用这个版本：materials_use 加 update: true）";
 
 function describeModule(mod) {
@@ -991,13 +1027,13 @@ export function resourcesPlugin(services) {
     name: "resources_search",
     title: "找可复用资源",
     description:
-      "在素材库里找可以直接复用的资源：角色、物品、场景、界面、效果、转场、文字（歌词等）、音效，以及素材库代码导出的函数和类型。query 用中文或英文关键词（例如「下雨 街道」「手机 聊天」「甩镜」）；不给 query 列出目录（资源多时每类只列前几个，再用 kind 列出一类）。kind 限定类别（code 只找函数和类型）。动手画一个东西之前先找，有就导入复用，不要重画。看详情和预览图用 resource_view。还没有作品时用 repo 指定作品库。",
+      "在素材库里找可以直接复用的资源：角色、物品、场景、界面、效果、转场、文字（歌词等）、音效，以及素材库代码导出的函数和类型。query 用中文或英文关键词（例如「下雨 街道」「手机 聊天」「甩镜」）；不给 query 列出目录（资源多时每类只列前几个，再用 kind 列出一类）。kind 限定类别（code 只找函数和类型）。给了 query 时还会一起找素材库里的文件（Lottie、图片、模型、音频、字体：按文件名、类型和素材库 README 里对它的说明），kind 设为 file 只找文件。动手画一个东西之前先找，有就导入复用，不要重画。看详情和预览图用 resource_view。还没有作品时用 repo 指定作品库。",
     readOnly: true,
     input: {
       work: workArg,
       repo: repoArg,
       query: z.string().max(200).optional(),
-      kind: kindArg.optional().describe("character 角色、prop 物品、set 场景、ui 界面、effect 效果、transition 转场、text 文字、sound 音效、code 函数和类型"),
+      kind: kindArg.optional().describe("character 角色、prop 物品、set 场景、ui 界面、effect 效果、transition 转场、text 文字、sound 音效、code 函数和类型、file 只找素材库里的文件"),
       library: z.string().max(60).optional().describe("只找这个素材库"),
       engine: z.enum(Object.keys(RESOURCE_ENGINES)).optional().describe("只找用这个引擎画的资源：canvas（Canvas 2D）、three（三维）、pixi"),
       limit: z.number().int().min(1).max(100).default(30),
@@ -1005,18 +1041,23 @@ export function resourcesPlugin(services) {
     async run({ query, kind, library, engine, limit }, ctx) {
       const work = await ctx.place();
       const linked = new Set(services.materials.names(work));
-      const found = await catalog.search(work, { query, kind, library, engine, limit });
+      const found = kind === "file" ? [] : await catalog.search(work, { query, kind, library, engine, limit });
+      // Files (Lottie, images, models, audio) are looked for too: people ask for "爱心" meaning either.
+      const fileHits = query && !engine && (!kind || kind === "file") ? await catalog.searchFiles(work.repo, { query, library, limit: kind === "file" ? limit : 8 }) : [];
+      const fileLine = (entry) => `- [文件 · ${entry.kindLabel.split(" ")[0]}] ${entry.id}${entry.description ? " — " + entry.description.slice(0, 120) : ""}`;
+      const filesPart = fileHits.length ? `\n\n素材库里的文件 ${fileHits.length} 个（图层、代码里直接用这个地址；asset_view 看样子）：\n${fileHits.map(fileLine).join("\n")}` : "";
       const line = (entry) =>
         entry.type === "code"
           ? `- [${entry.kindLabel}] ${entry.id} ${entry.signature}${entry.doc ? `  // ${firstLine(entry.doc)}` : ""}`
           : `- [${entry.kindLabel}${engineTag(entry.engine)}] ${entry.id} ${entry.title}${entry.type === "sound" && entry.duration && !/\d\s*秒/.test(entry.title) ? `（${entry.duration} 秒）` : ""}${entry.description ? " — " + firstLine(entry.description) : ""}`;
-      const files = "素材库里的文件（Lottie、图片、模型、音频、字体）不是资源，不在这里：用 materials_list 列出、asset_view 查看。";
-      if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源。可以换个说法，或不给 query 看全部目录。${files}` : `素材库里还没有声明资源（见 frame_guide resources）。${files}`);
+      const files = "素材库里的文件（Lottie、图片、模型、音频、字体）用 materials_list 列出、asset_view 查看。";
+      if (!found.length && fileHits.length) return asJson({ items: [], files: fileHits }, `没有找到「${query}」相关的资源（代码声明的）。${filesPart.trim()}`);
+      if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源和文件。可以换个说法，或不给 query 看全部目录。${files}` : `素材库里还没有声明资源（见 frame_guide resources）。${files}`);
       let text;
       // Several words that nothing matches together: say the list is the partial matches.
       const words = terms(query ?? "");
       const partial = words.length > 1 && !found.some((entry) => score(entry, query) >= 100 * words.length);
-      if (query) text = `${partial ? `没有同时符合「${words.join("」「")}」的；下面是符合其中一部分的 ` : "找到 "}${found.length} 个：\n${found.map(line).join("\n")}${partial ? `\n\n${files}` : ""}`;
+      if (query) text = `${partial ? `没有同时符合「${words.join("」「")}」的；下面是符合其中一部分的 ` : "找到 "}${found.length} 个：\n${found.map(line).join("\n")}${filesPart}`;
       else {
         // The directory, by library and kind; once it gets long, only the first few of each kind.
         text = directory(found, linked, false);
@@ -1026,7 +1067,7 @@ export function resourcesPlugin(services) {
           ? `\n\n资源较多，每类只列出前几个：${kind ? "用 query 搜索这一类" : "用 kind 列出一类，或用 query 搜索"}，拿到地址后用 resource_view 看详情。`
           : "\n\n地址写法 <素材库>/<文件>#<名称>；resource_view 看详情和预览图，音效用 audio_place 的 sound 放到音轨。";
       }
-      return asJson({ items: found.map(({ text: _text, ...entry }) => entry) }, text);
+      return asJson({ items: found.map(({ text: _text, ...entry }) => entry), ...(fileHits.length ? { files: fileHits } : {}) }, text);
     },
   });
 

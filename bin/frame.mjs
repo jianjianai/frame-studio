@@ -140,6 +140,7 @@ try {
                   const content = [];
                   if (result.text) content.push({ type: "text", text: result.text });
                   for (const image of result.images || []) content.push({ type: "image", data: image.data, mimeType: image.mimeType });
+                  for (const clip of result.audio || []) content.push({ type: "audio", data: clip.data, mimeType: clip.mimeType });
                   if (!content.length) content.push({ type: "text", text: JSON.stringify(result.data) });
                   if (result.meta) content.push({ type: "text", text: JSON.stringify(result.meta) });
                   return {

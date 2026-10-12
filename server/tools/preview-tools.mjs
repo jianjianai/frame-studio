@@ -1,9 +1,11 @@
+import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { z } from "zod";
 import sharp from "sharp";
 import { workArg, asJson } from "./registry.mjs";
 import { resolveAsset } from "./asset-tools.mjs";
-import { formatTime } from "../render.mjs";
+import { formatTime, ffmpegExecutable, digest, contactSheet } from "../render.mjs";
 import { problem } from "../util.mjs";
 import { probe } from "../media.mjs";
 import { decodeAudio, loudness, loudnessStretches, beatThis, mixDown, voiceBalance, VOICE_TRACK } from "../audio-analysis.mjs";
@@ -99,7 +101,7 @@ export function registerPreviewTools(registry) {
     name: "preview_frames",
     title: "查看画面",
     description:
-      "在浏览器中渲染作品画面给你看，用来亲眼确认修改效果。times 指定绝对时间（秒，超出 0–作品时长的按 0 或最后一刻 时长−0.001 秒画）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张；取的是等分后每一份的中点，不含首尾两端，看首尾和切点用 times）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。",
+      "在浏览器中渲染作品画面给你看，用来亲眼确认修改效果。times 指定绝对时间（秒，超出 0–作品时长的按 0 或最后一刻 时长−0.001 秒画）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张；取的是等分后每一份的中点，不含首尾两端，看首尾和切点用 times）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。默认 JPEG；format 设为 png 时返回无损 PNG（看细小文字、颜色）。每张都有画面指纹：同一时刻两次渲染指纹相同，画面就完全一样（检查能否倒退、重复渲染时用）。",
     readOnly: true,
     input: {
       work: workArg,
@@ -111,9 +113,38 @@ export function registerPreviewTools(registry) {
       columns: z.number().int().min(1).max(8).optional().describe("总览图的列数"),
       width: z.number().int().min(160).max(1920).multipleOf(2).default(960).describe("分开返回时每张的宽度（像素），高度按画幅计算"),
       subtitles: z.boolean().default(true),
+      format: z.enum(["jpeg", "png"]).default("jpeg").describe("图片格式：jpeg 小，png 无损"),
+      compare: workArg.describe("另一个作品：同样的时刻并排画出两个作品（左边本作品，右边这个），例如对比横屏版和竖屏版"),
     },
-    async run({ times, count, start, end, sheet, columns, width, subtitles }, ctx) {
+    async run({ times, count, start, end, sheet, columns, width, subtitles, format, compare }, ctx) {
       const work = await ctx.work();
+      if (compare) {
+        // Two works side by side at the same moments, each fitted into the same cell.
+        if (!times) throw problem(400, "compare 需要 times");
+        if (times.length > 12) throw problem(400, "compare 最多 12 个时刻");
+        const other = await ctx.work(compare);
+        const cell = 480;
+        // Each rendered with its long side the cell's size (an even width, as the renderer wants).
+        const widthFor = (item) => {
+          const meta = services.works.meta(item);
+          const { width: w, height: h } = (meta.ok && meta.meta.composition) || { width: 1920, height: 1080 };
+          return w >= h ? cell : Math.max(2, Math.round((cell * w) / h / 2) * 2);
+        };
+        const [mine, theirs] = await Promise.all([work, other].map((item) => services.renderer.frames(item, { times, width: widthFor(item), subtitles })));
+        const fit = (png) => sharp(png).resize(cell, cell, { fit: "contain", background: "#16191d" }).png().toBuffer();
+        const cells = [];
+        for (const [index, time] of times.entries()) {
+          const a = mine.frames[index], b = theirs.frames[index];
+          cells.push({ png: a ? await fit(a.png) : await sharp({ create: { width: cell, height: cell, channels: 3, background: "#16191d" } }).png().toBuffer(), label: `${formatTime(time)} 本作品` });
+          cells.push({ png: b ? await fit(b.png) : await sharp({ create: { width: cell, height: cell, channels: 3, background: "#16191d" } }).png().toBuffer(), label: `${formatTime(time)} ${other.id}` });
+        }
+        const errors = [...mine.errors.map((text) => `本作品：${text}`), ...theirs.errors.map((text) => `${other.id}：${text}`)];
+        return {
+          data: { times, errors },
+          text: `并排对比（每行一个时刻，左：本作品 ${mine.width}×${mine.height}，右：${other.id} ${theirs.width}×${theirs.height}）：${times.map(formatTime).join("、")}${errors.length ? "\n错误：\n" + errors.join("\n") : ""}`,
+          images: [{ data: await contactSheet(cells, cell, cell, 2, format), mimeType: `image/${format}` }],
+        };
+      }
       if (times && (count !== undefined || start !== undefined || end !== undefined)) throw problem(400, "times 和 count/start/end 二选一");
       if (!times) {
         const meta = services.works.meta(work);
@@ -126,37 +157,57 @@ export function registerPreviewTools(registry) {
       }
       if (sheet ?? times.length > 4) {
         const cells = columns ?? Math.min(4, Math.ceil(Math.sqrt(times.length)));
-        const { image, times: rendered, errors } = await services.renderer.storyboard(work, { times, columns: cells, width: cells > 4 ? 320 : 480, subtitles });
+        const { image, times: rendered, errors, digests } = await services.renderer.storyboard(work, { times, columns: cells, width: cells > 4 ? 320 : 480, subtitles, format });
         return {
-          data: { times: rendered, errors },
-          text: `总览 ${rendered.length} 张：${rendered.map((time, index) => `#${index + 1} ${formatTime(time)}`).join("，")}${errors.length ? "\n错误：\n" + errors.join("\n") : ""}`,
-          images: [{ data: image, mimeType: "image/jpeg" }],
+          data: { times: rendered, errors, digests },
+          text: `总览 ${rendered.length} 张：${rendered.map((time, index) => `#${index + 1} ${formatTime(time)}（${digests[index]}）`).join("，")}${errors.length ? "\n错误：\n" + errors.join("\n") : ""}`,
+          images: [{ data: image, mimeType: `image/${format}` }],
         };
       }
       if (times.length > SEPARATE_MAX) throw problem(400, `分开返回最多 ${SEPARATE_MAX} 张；更多时用 sheet: true 拼成一张`);
       const result = await services.renderer.frames(work, { times, width, subtitles });
       const images = await Promise.all(
         result.frames.map(async (frame) => ({
-          data: await sharp(frame.png).jpeg({ quality: 82 }).toBuffer(),
-          mimeType: "image/jpeg",
+          data: format === "png" ? frame.png : await sharp(frame.png).jpeg({ quality: 82 }).toBuffer(),
+          mimeType: `image/${format}`,
           label: formatTime(frame.time),
         })),
       );
-      const notes = [`${result.width}×${result.height}，时间：${result.frames.map((frame) => formatTime(frame.time)).join("、")}`];
+      const digests = result.frames.map((frame) => digest(frame.png));
+      const notes = [`${result.width}×${result.height}，时间：${result.frames.map((frame, index) => `${formatTime(frame.time)}（${digests[index]}）`).join("、")}`];
       if (result.errors.length) notes.push("渲染时出现错误：\n" + result.errors.join("\n"));
       return {
-        data: { times: result.frames.map((frame) => frame.time), width: result.width, height: result.height, errors: result.errors },
+        data: { times: result.frames.map((frame) => frame.time), width: result.width, height: result.height, errors: result.errors, digests },
         text: notes.join("\n"),
         images,
       };
     },
   });
 
+  /** Stereo PCM → an MP3 file (128 kbit/s) under the studio's temporary folder. */
+  const encodeMp3 = async (left, right, rate, file) => {
+    const ffmpeg = ffmpegExecutable();
+    if (!ffmpeg) throw problem(500, "生成试听需要 FFmpeg", "NO_FFMPEG");
+    const pcm = Buffer.alloc(left.length * 4);
+    for (let i = 0; i < left.length; i++) {
+      pcm.writeInt16LE(Math.round(Math.max(-1, Math.min(1, left[i])) * 32767), i * 4);
+      pcm.writeInt16LE(Math.round(Math.max(-1, Math.min(1, right[i])) * 32767), i * 4 + 2);
+    }
+    await new Promise((resolve, reject) => {
+      const child = spawn(ffmpeg, ["-hide_banner", "-loglevel", "error", "-y", "-f", "s16le", "-ar", String(rate), "-ac", "2", "-i", "pipe:0", "-c:a", "libmp3lame", "-b:a", "128k", file], { stdio: ["pipe", "ignore", "pipe"], windowsHide: true });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => (stderr += chunk));
+      child.on("error", reject);
+      child.on("close", (code) => (code === 0 ? resolve() : reject(new Error("FFmpeg 失败：" + stderr))));
+      child.stdin.end(pcm);
+    });
+  };
+
   registry.add({
     name: "preview_audio",
     title: "分析声音",
     description:
-      "听不到声音时用数字确认：响度（RMS/峰值 dBFS，响度相近的时间合并成一段）、静音段和削波。默认分析作品混音（start 起 duration 秒，最多 60 秒）；src 分析单个音频或视频文件（films/…、materials/<库>/…，默认整个文件，最多 300 秒）。分析混音时（有两条以上音轨）还会单独渲染每条音轨，给出各自的响度，有人声时说明人声是否被盖住。beats: true 再用 Beat This! 模型给出准确的速度（中途变速时分段）、拍号、每小节第一拍的时间和写进 project.ts 的 tempo，用来把剪辑点、画面变化对上音乐（耗时约为音频长度的十分之一）。",
+      "听不到声音时用数字确认：响度（RMS/峰值 dBFS，响度相近的时间合并成一段）、静音段和削波。默认分析作品混音（start 起 duration 秒，最多 60 秒）；src 分析单个音频或视频文件（films/…、materials/<库>/…，默认整个文件，最多 300 秒）。分析混音时（有两条以上音轨）还会单独渲染每条音轨，给出各自的响度，有人声时说明人声是否被盖住。beats: true 再用 Beat This! 模型给出准确的速度（中途变速时分段）、拍号、每小节第一拍的时间和写进 project.ts 的 tempo，用来把剪辑点、画面变化对上音乐（耗时约为音频长度的十分之一）。listen: true 同时把这一段做成 MP3：能听音频的 AI 直接收到音频，结果里还有给用户试听的下载链接（1 小时内有效）——念错字、语气、音色这些数字看不出来，交给能听的人。",
     readOnly: true,
     input: {
       work: workArg,
@@ -166,8 +217,9 @@ export function registerPreviewTools(registry) {
       window: z.number().min(0.05).max(10).optional().describe("响度窗口秒数；默认 0.5，长音频自动加大到不超过 60 个窗口"),
       beats: z.boolean().default(false).describe("同时分析节拍和小节"),
       tracks: z.boolean().default(true).describe("分析混音时单独渲染各音轨（最多 8 条），给出各自的响度和人声是否被盖住"),
+      listen: z.boolean().default(false).describe("同时生成这一段的 MP3 试听（最多 60 秒）"),
     },
-    async run({ src, start, duration, window, beats, tracks }, ctx) {
+    async run({ src, start, duration, window, beats, tracks, listen }, ctx) {
       const work = await ctx.work();
       let left, right, rate, from, length, label;
       if (src) {
@@ -211,6 +263,20 @@ export function registerPreviewTools(registry) {
         const rhythm = await beatThis(mixDown(left, right), rate, { start: from, modelsDir: path.join(services.config.dirs.models, "beat-this") });
         stats.rhythm = rhythm;
         lines.push("", ...rhythmText(rhythm, { file: Boolean(src) }));
+      }
+      if (listen) {
+        // At most a minute: enough to hear a line or a passage, small enough to hand over inline.
+        const cut = Math.min(left.length, Math.round(60 * rate));
+        const dir = path.join(services.config.dirs.tmp, "listen");
+        fs.mkdirSync(dir, { recursive: true });
+        for (const old of fs.readdirSync(dir)) if (Date.now() - fs.statSync(path.join(dir, old)).mtimeMs > 3600_000) fs.rmSync(path.join(dir, old), { force: true });
+        const name = `${work.slug}-${Math.round(from * 1000)}-${Date.now().toString(36)}.mp3`;
+        const file = path.join(dir, name);
+        await encodeMp3(left.subarray(0, cut), right.subarray(0, cut), rate, file);
+        const link = services.downloads?.link(file, `试听-${name}`);
+        stats.listen = { seconds: Math.round((cut / rate) * 1000) / 1000, ...(link ? { url: link.url } : {}) };
+        lines.push("", `试听：${formatTime(from)}–${formatTime(from + cut / rate)} 的 MP3${link ? `，下载地址（${link.expiresInMinutes} 分钟内有效，可以给用户）：${link.url}` : ""}`);
+        return { ...asJson(stats, lines.join("\n")), audio: [{ data: fs.readFileSync(file), mimeType: "audio/mpeg" }] };
       }
       return asJson(stats, lines.join("\n"));
     },

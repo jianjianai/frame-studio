@@ -3,6 +3,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { appRoot } from "./config.mjs";
 import { projectSchema } from "../src/engine/types.ts";
+import { contentStamp } from "./render.mjs";
 
 const tsc = path.join(appRoot, "node_modules", "typescript", "bin", "tsc");
 
@@ -172,6 +173,8 @@ export async function checkWork(services, work, { runtime = true, frames = false
     checkedAt: new Date().toISOString(),
     ms: Date.now() - started,
     version: head,
+    // What was checked, to tell later whether it is still what the work is.
+    content: contentStamp(work.dir),
     problems,
     console: runtimeResult?.console?.slice(-20) ?? [],
   };

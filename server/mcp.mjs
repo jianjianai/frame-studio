@@ -36,6 +36,7 @@ export function toMcpResult(result) {
   if (result.text) content.push({ type: "text", text: result.text });
   for (const image of result.images || [])
     content.push({ type: "image", data: Buffer.isBuffer(image.data) ? image.data.toString("base64") : image.data, mimeType: image.mimeType });
+  for (const clip of result.audio || []) content.push({ type: "audio", data: Buffer.isBuffer(clip.data) ? clip.data.toString("base64") : clip.data, mimeType: clip.mimeType });
   if (!content.length) content.push({ type: "text", text: JSON.stringify(result.data ?? null) });
   if (result.meta) content.push({ type: "text", text: JSON.stringify(result.meta) });
   const structured = result.structured && result.data && typeof result.data === "object" && !Array.isArray(result.data) ? result.data : undefined;
@@ -154,6 +155,7 @@ export function mcpPlugin(services) {
           label: image.label,
           data: Buffer.isBuffer(image.data) ? image.data.toString("base64") : image.data,
         })),
+        audio: (result.audio || []).map((clip) => ({ mimeType: clip.mimeType, data: Buffer.isBuffer(clip.data) ? clip.data.toString("base64") : clip.data })),
       };
     },
     { internal: true },

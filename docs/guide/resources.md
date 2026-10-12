@@ -2,12 +2,12 @@
 
 角色、物品、场景、界面、效果、转场、文字（歌词）和音效写在素材库的代码里，所有作品直接导入使用。资源可以用 Canvas 2D 画，也可以是 Three.js 三维或 PixiJS 的（`engine`）。把它们声明成资源后，用户在「素材 → 资源」里能看到缩略图、打开预览、调参数（三维资源可以拖动旋转视角）、把音效拖到音轨；AI 用 `resources_search` / `resource_view` 查找和查看，不需要读经验库或整个源文件。
 
-素材库里的模型、Lottie、全景图、字体、图片这些文件不是资源，用 `materials_list` 列出、`asset_view` 查看（见 `assets`）；需要参数、组合或动作时，再在代码里用它们声明资源（例如加载模型的角色）。
+素材库里的模型、Lottie、全景图、字体、图片这些文件不是资源，用 `materials_list` 列出、`asset_view` 查看（见 `assets`）；`resources_search` 给了 `query` 时也会一起找这些文件（按文件名、类型和素材库 README 里对它的说明，所以 README 里写清每个文件是什么很重要）；需要参数、组合或动作时，再在代码里用它们声明资源（例如加载模型的角色）。
 
 ## 找和用
 
 - `work_context` 的 `materials` 列出作品库里的素材库：各有多少资源和音效、README 的第一段，以及画布和作品画面不一致时的提醒（内置 AI 的会话说明里也有）。第一次用一个素材库先用 `material_read` 读它的 README。
-- `resources_search`：`query` 写关键词（「下雨 街道」「手机 聊天」「甩镜」），`engine` 只找某个引擎的（`three` 三维、`pixi`、`canvas`），`kind` 限定类别（`character` 角色、`prop` 物品、`set` 场景、`ui` 界面、`effect` 效果、`transition` 转场、`text` 文字、`sound` 音效、`code` 素材库代码导出的函数和类型）。不给 `query` 列出目录；资源多时每类只列前几个，再用 `kind` 列出一类或用 `query` 搜。
+- `resources_search`：`query` 写关键词（「下雨 街道」「手机 聊天」「甩镜」），`engine` 只找某个引擎的（`three` 三维、`pixi`、`canvas`），`kind` 限定类别（`character` 角色、`prop` 物品、`set` 场景、`ui` 界面、`effect` 效果、`transition` 转场、`text` 文字、`sound` 音效、`code` 素材库代码导出的函数和类型，`file` 只找素材库里的文件）。不给 `query` 列出目录；资源多时每类只列前几个，再用 `kind` 列出一类或用 `query` 搜。
 - `resource_view`：`id` 是 `<素材库>/<文件>#<名称>`，例如 `s0rrow/code/kid.ts#kid`。返回用法、导入语句、参数（类型、取值、默认值、说明）、预设，并按作品的节拍渲染预览图；`preset` / `params` 换参数，`times` 看动画的几个时刻。只写 `<素材库>/<文件>` 看整个模块：说明、全部资源和导出的函数。
 - 在作品代码里导入后调用，写法看资源的「用法」：
 

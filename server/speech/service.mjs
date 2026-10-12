@@ -148,10 +148,14 @@ export class SpeechService {
         const { audioStream } = tts.toStream(escapeSsml(text), { rate: `${Math.round((rate - 1) * 100) >= 0 ? "+" : ""}${Math.round((rate - 1) * 100)}%` });
         for await (const chunk of audioStream) chunks.push(chunk);
       } catch (error) {
-        throw this.edgeProblem(error);
+        const refused = this.edgeProblem(error);
+        // Remembered for speech_voices: a list of voices says nothing about whether they speak.
+        this.edgeFailure = { at: new Date().toISOString(), message: refused.message };
+        throw refused;
       } finally {
         tts.close?.();
       }
+      this.edgeFailure = null;
       if (!chunks.length) throw problem(502, "Edge 语音没有返回音频（检查网络或换一个声音）");
       return { bytes: Buffer.concat(chunks), ext: "mp3" };
     }
