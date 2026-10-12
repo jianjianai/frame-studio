@@ -1,0 +1,272 @@
+/* ---- choosing material and experience libraries (LibraryPicker) ---- */
+.library-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+}
+.library-picker-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.library-search {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 6px 0 10px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--fg-muted);
+}
+.library-search:focus-within {
+  border-color: var(--accent);
+}
+.library-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+}
+.library-search .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+.library-sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  color: var(--fg-muted);
+}
+.library-sort select {
+  height: 28px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.library-sort select:hover {
+  background: var(--bg-hover);
+}
+.library-picker-hint {
+  margin: 0;
+  padding: 6px 2px;
+  color: var(--fg-faint);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.library-picker-note {
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+.library-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.library-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 200px;
+  height: 22px;
+  padding: 0 2px 0 8px;
+  border-radius: 11px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 12px;
+}
+.library-chip .icon-btn {
+  width: 18px;
+  height: 18px;
+  color: inherit;
+}
+.library-options {
+  height: min(52vh, 460px);
+  overflow: auto;
+  margin: 0 -8px;
+  padding: 0 4px;
+}
+.library-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 7px 8px;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.library-option.active {
+  background: var(--bg-hover);
+}
+.library-option.selected {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.library-option > input {
+  flex: none;
+  margin: 3px 0 0;
+  pointer-events: none;
+}
+.library-option.create {
+  align-items: center;
+  color: var(--accent);
+}
+.library-option-main {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+.library-option-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.library-option-head .faint {
+  flex: none;
+}
+.library-option-about {
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.library-option-why {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--accent);
+  font-size: 11px;
+}
+.library-option-why svg {
+  flex: none;
+}
+.library-picker mark,
+.library-panel mark {
+  border-radius: 2px;
+  background: var(--warn-soft);
+  color: inherit;
+}
+
+/* ---- the 经验 view and the 素材库 tab with many libraries ---- */
+.library-panel-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 10px 4px;
+  padding: 0 4px 0 8px;
+  height: 28px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  color: var(--fg-muted);
+}
+.library-panel-search:focus-within {
+  border-color: var(--accent);
+}
+.library-panel-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12px;
+}
+.library-panel-search .icon-btn {
+  width: 20px;
+  height: 20px;
+}
+.library-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 8px 0 10px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.library-group:hover {
+  color: var(--fg);
+}
+.library-group .count {
+  color: var(--fg-faint);
+  font-weight: 400;
+}
+.library-linked-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+}
+.library-linked-row .icon-btn {
+  width: 22px;
+  height: 22px;
+  opacity: 0;
+}
+.library-linked-row:hover .icon-btn,
+.library-linked-row .icon-btn:focus-visible {
+  opacity: 1;
+}
+.library-row-about {
+  padding: 0 10px 4px 34px;
+  color: var(--fg-faint);
+  font-size: 11px;
+}
+.library-doc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px 0 14px;
+  cursor: pointer;
+}
+.library-doc-row:hover {
+  background: var(--bg-hover);
+}
+.library-doc-row svg {
+  flex: none;
+  color: var(--fg-muted);
+}
+.library-more {
+  padding: 4px 14px 8px;
+  color: var(--fg-faint);
+  font-size: 12px;
+}
+.library-suggestions {
+  display: grid;
+  gap: 2px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.library-suggestions-title {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--fg-muted);
+  font-size: 11px;
+}
+.library-suggestion {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 3px 0;
+}
+.library-suggestion .btn {
+  margin: 0;
+}

@@ -52,8 +52,12 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
   const [listing, setListing] = useState<Listing>({ libraries: [], items: [], errors: [] });
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("");
-  const [closed, setClosed] = useState<Set<string>>(new Set());
+  // Sections the user folded or unfolded; others follow the default (the work's libraries open).
+  const [flipped, setFlipped] = useState<Set<string>>(new Set());
   const [loaded, setLoaded] = useState(false);
+  // With many libraries, the work's own are what matters most: those by default when it has any.
+  const [scope, setScope] = useState<"linked" | "all" | null>(null);
+  const shownScope = scope ?? (work.meta?.materials?.length ? "linked" : "all");
   const [run, busy] = useAction();
   const toast = useToast();
   const [openMenu, menu] = useContextMenu();
@@ -61,13 +65,13 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
 
   const load = () =>
     run(async () => {
-      setListing(await api<Listing>(`${base}/resources`));
+      setListing(await api<Listing>(`${base}/resources${shownScope === "linked" ? "?scope=linked" : ""}`));
       setLoaded(true);
     });
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base]);
+  }, [base, shownScope]);
   useServerEvent((event) => {
     if (event.type === "materials" && event.repo === work.repo) void load();
     if ((event.type === "work-materials" || event.type === "works") && (event.work === work.id || event.repo === work.repo)) void load();
@@ -90,7 +94,8 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
   const menuOf = (event: React.MouseEvent, item: ResourceItem) =>
     openMenu(event, [
       { label: "打开预览", icon: <Eye size={14} />, onClick: () => openResource(item.id, { title: item.title }) },
-      ...(item.type === "sound" && linked.has(item.library) && !readOnly ? [{ label: "放到音轨（播放头处）", icon: <Music size={14} />, onClick: () => onPlaceSound(item) }] : []),
+      // A sound of a library the work does not reference yet references it on the way (server side).
+      ...(item.type === "sound" && !readOnly ? [{ label: "放到音轨（播放头处）", icon: <Music size={14} />, onClick: () => onPlaceSound(item) }] : []),
       { label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => addToChat({ type: "resource", id: item.id, title: item.title }) },
       {
         label: item.type === "sound" ? "复制音效地址" : "复制导入语句",
@@ -111,6 +116,13 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
         <input className="input" placeholder="搜索：角色、下雨、手机、甩镜…" value={query} onChange={(event) => setQuery(event.target.value)} />
       </div>
       <div className="resource-kinds">
+        {(["linked", "all"] as const).map((id) => (
+          <button key={id} className={shownScope === id ? "active" : ""} onClick={() => setScope(id)} title={id === "linked" ? "只看本作品引用的素材库" : "作品库里所有素材库的资源"}>
+            {id === "linked" ? `本作品的素材库 ${work.meta?.materials?.length ?? 0}` : `全部素材库 ${listing.libraries.length || ""}`}
+          </button>
+        ))}
+      </div>
+      <div className="resource-kinds">
         {KINDS.map(([id, label]) => (
           <button key={id} className={kind === id ? "active" : ""} onClick={() => setKind(id)}>
             {label}
@@ -122,13 +134,14 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
         // Characters first, sounds last (the order of KINDS).
         const order = KINDS.map(([, label]) => label);
         const kinds = [...new Set(items.map((item) => item.kindLabel))].sort((a, b) => order.indexOf(a) - order.indexOf(b));
-        const open = !closed.has(library);
+        // Open by default: the work's libraries, and every library while searching or filtering.
+        const open = (linked.has(library) || Boolean(query.trim() || kind)) !== flipped.has(library);
         return (
           <section key={library} className="materials-library">
             <div
               className="tree-row"
               onClick={() =>
-                setClosed((current) => {
+                setFlipped((current) => {
                   const next = new Set(current);
                   if (next.has(library)) next.delete(library);
                   else next.add(library);
@@ -155,13 +168,13 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
                           <div
                             key={item.id}
                             className="sound-row"
-                            draggable={linked.has(item.library) && !readOnly}
+                            draggable={!readOnly}
                             onDragStart={(event) => assetDrag.start(event, soundAsset(item))}
                             onDragEnd={() => assetDrag.end()}
                             onClick={() => openResource(item.id, { preview: true, title: item.title })}
                             onDoubleClick={() => openResource(item.id, { title: item.title })}
                             onContextMenu={(event) => menuOf(event, item)}
-                            title={`${item.id}${item.description ? "\n" + item.description : ""}\n${linked.has(item.library) ? "单击试听和看波形，拖到音轨使用" : "单击试听；引用这个素材库后才能拖到音轨"}`}
+                            title={`${item.id}${item.description ? "\n" + item.description : ""}\n${readOnly ? "单击试听和看波形" : linked.has(item.library) ? "单击试听和看波形，拖到音轨使用" : "单击试听和看波形；拖到音轨使用时，作品会引用这个素材库"}`}
                           >
                             <AudioLines size={13} />
                             <span className="ellipsis grow">{item.title}</span>
@@ -204,7 +217,15 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
           materials/{item.ref} 解析出错：{item.errors.join("；")}
         </p>
       ))}
-      {loaded && !listing.items.length && (
+      {loaded && !listing.items.length && shownScope === "linked" && (
+        <p className="view-hint">
+          {work.meta?.materials?.length ? "本作品引用的素材库里没有声明资源。" : "本作品还没有引用素材库。"}
+          <button className="link-btn" onClick={() => setScope("all")}>
+            看全部素材库的资源
+          </button>
+        </p>
+      )}
+      {loaded && !listing.items.length && shownScope === "all" && (
         <p className="view-hint">
           素材库里还没有声明资源。在素材库的代码里用 defineResources / defineSounds 声明角色、场景、效果和音效后，它们会出现在这里，可以预览、调参数、拖到时间轴（音效）。AI 用 resources_search 找到它们。
         </p>

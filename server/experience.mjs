@@ -3,11 +3,12 @@ import path from "node:path";
 import { z } from "zod";
 import { tree, readText, writeText, removePath, movePath } from "./files.mjs";
 import { readJson } from "./http.mjs";
-import { problem, notFound, conflict } from "./util.mjs";
+import { problem, notFound, conflict, confined } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
-import { workArg, asJson } from "./tools/registry.mjs";
-import { readLibrary, libraryBrief, experienceBrief, briefText } from "./ai/context.mjs";
+import { workArg, repoArg, asJson } from "./tools/registry.mjs";
+import { readLibrary, libraryBrief, experienceBrief, briefText, describeDocument } from "./ai/context.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./tools/file-ops.mjs";
+import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST } from "./libraries.mjs";
 
 /**
  * Experience libraries: Markdown documents of production know-how, shared by the works
@@ -26,9 +27,11 @@ const ROOT_README = `# FRAME 经验库
 每个文件夹是一个经验库（例如“知识类视频”“音乐视频”），里面是 Markdown 写的制作经验。
 作品在 FRAME Studio 中关联一个经验库后，AI 开始制作前会先阅读它，也会把新的经验整理进来。
 `;
+/** The introduction a new library's README starts with (it says nothing about the library). */
+const templateLead = (title) => `「${title}」类作品的制作经验。关联了这个经验库的作品，AI 开始制作时会先看这里。`;
 const libraryReadme = (title) => `# ${title}
 
-「${title}」类作品的制作经验。关联了这个经验库的作品，AI 开始制作时会先看这里。
+${templateLead(title)}
 
 ## 用户偏好
 
@@ -71,16 +74,41 @@ export class Experience {
     return { id: `experience-${repoId}`, repo: repoId, root, dir: root, branch: EXPERIENCE_BRANCH };
   }
 
-  async libraries(repoId) {
+  /**
+   * The libraries: folder name, title, number of documents, earlier names, and the README's
+   * introduction (`about`). With `documents`, also the documents' paths and titles, and as
+   * `extra` the text a search by topic looks through.
+   */
+  async libraries(repoId, { documents = false } = {}) {
     const dir = await this.dir(repoId);
+    // Earlier names, which works may still link: each with the library it leads to now.
+    const aliases = Object.keys(this.aliases(dir)).map((name) => [name, this.resolve(dir, name)]);
     return fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
       .map((entry) => {
-        const files = tree(path.join(dir, entry.name)).filter((item) => item.type === "file");
-        // Earlier names, which works may still link.
-        const aliases = Object.keys(this.aliases(dir)).filter((name) => this.resolve(dir, name) === entry.name);
-        return { id: entry.name, title: this.title(dir, entry.name), files: files.length, aliases };
+        const files = tree(path.join(dir, entry.name), { maxEntries: 100000 }).filter((item) => item.type === "file");
+        const title = this.title(dir, entry.name);
+        const library = {
+          id: entry.name,
+          title,
+          files: files.length,
+          aliases: aliases.filter(([, target]) => target === entry.name).map(([name]) => name),
+          about: readmeLead(path.join(dir, entry.name, "README.md"), templateLead(title)),
+        };
+        if (documents) {
+          library.documents = files
+            .filter((item) => /\.(md|txt)$/i.test(item.path) && item.path !== "README.md")
+            .map((item) => {
+              let title = "";
+              try {
+                title = describeDocument(item.path, fs.readFileSync(path.join(dir, entry.name, item.path), "utf8").slice(0, 2000)).title;
+              } catch {}
+              return { path: item.path, title };
+            });
+          library.extra = library.documents.map((doc) => `${doc.path.replace(/\.(md|txt)$/i, "")} ${doc.title}`).join(" ");
+        }
+        return library;
       })
       .sort((a, b) => a.title.localeCompare(b.title, "zh"));
   }
@@ -233,13 +261,49 @@ export class Experience {
     return next;
   }
 
+  /** How many libraries the repository has, without listing them (the brief is written synchronously). */
+  countSync(repo) {
+    try {
+      return fs.readdirSync(path.join(this.services.config.dirs.experience, repo), { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith(".")).length;
+    } catch {
+      return 0;
+    }
+  }
+
+  /**
+   * Libraries the work does not link that are worth naming to the AI: all of a few, else
+   * those that suit the work (or the most used), at most `count`. `annotated`: the
+   * repository's libraries from the library index (linked, works, score, why).
+   */
+  offers(annotated, count = 5) {
+    const others = offerOrder(annotated.filter((library) => !library.linked));
+    if (others.length <= 8) return { label: "作品库里的经验库", list: others };
+    const suitable = others.filter((library) => library.score >= SUGGEST).slice(0, count);
+    if (suitable.length) return { label: "可能适合本作品的", list: suitable };
+    return { label: "用得最多的", list: others.filter((library) => library.works).slice(0, count) };
+  }
+  /** One line per library for the AI: name, introduction, documents, how much it is used, why it fits. */
+  offerLine(library) {
+    const facts = [`${library.files} 篇文档`, library.works ? `${library.works} 个作品在用` : "", ...(library.why ?? [])].filter(Boolean).join("；");
+    return `- 「${library.id}」${library.title !== library.id ? `（${library.title}）` : ""}${library.about ? `：${library.about}` : ""}（${facts}）`;
+  }
+
   /** The libraries' section of the session brief, and what it tells the AI. */
   brief(work) {
     const { missing } = this.linkedSync(work);
     const current = this.current(work);
     const gone = missing.length ? `作品关联的经验库「${missing.join("」「")}」已被删除。` : "";
+    const total = this.countSync(work.repo);
     if (!current.length) {
-      const text = `## 经验库\n\n${gone || "本作品没有关联经验库。"}需要记录经验时，征得用户同意后用 experience_link 关联已有的经验库或新建一个。`;
+      // What the repository has: prepared before a session starts (it needs every work's links).
+      const annotated = this.services.libraries?.preparedFor(work)?.experiences;
+      let offer = total ? `作品库里有 ${total} 个经验库，用 experience_list 按主题查找。` : "作品库里还没有经验库。";
+      if (annotated?.length) {
+        const { label, list } = this.offers(annotated);
+        if (list.length)
+          offer = `${label}${list.length < total ? `（作品库里共 ${total} 个，其他的用 experience_list 按主题查找）` : ""}：\n${list.map((library) => this.offerLine(library)).join("\n")}\n\n`;
+      }
+      const text = `## 经验库\n\n${gone || "本作品没有关联经验库。"}${offer}需要参考或记录经验时，征得用户同意后用 experience_link 关联（可以多个）或新建一个；没关联的经验库也可以用 experience_read（library 参数）先看看。`;
       return { text, state: { experience: {} } };
     }
     const { sections, seen } = experienceBrief(current);
@@ -247,16 +311,27 @@ export class Experience {
       current.length > 1
         ? `本作品关联了 ${current.length} 个经验库：${current.map((item) => `「${item.library.title}」`).join("")}。记录新经验时按内容选择合适的一个（工具的 library 参数）。`
         : "";
-    const lead = `动手前对照经验库，照着做；和用户这次的要求冲突时以用户为准，并更新经验库。${several}${gone}`;
+    const others = total - current.length;
+    const more = others > 0 ? `作品库里还有 ${others} 个经验库没有关联（experience_list 按主题查找；要关联先征得用户同意）。` : "";
+    const lead = `动手前对照经验库，照着做；和用户这次的要求冲突时以用户为准，并更新经验库。${several}${gone}${more}`;
     return { text: `${lead}\n\n${briefText(sections)}`, state: { experience: seen } };
   }
 
   /** For work_context: built-in agents already have the libraries in their brief, others get them here. */
-  summary(work, { inBrief = false } = {}) {
+  async summary(work, { inBrief = false } = {}) {
     const { missing } = this.linkedSync(work);
     const current = this.current(work);
-    if (!current.length)
-      return { libraries: [], missing, hint: "这个作品没有关联经验库。用户同意后用 experience_link 关联（可以多个），用户也可以在左侧「经验」中选择。" };
+    if (!current.length) {
+      const annotated = this.services.libraries ? await this.services.libraries.annotate("experiences", work.repo, await this.libraries(work.repo), work) : [];
+      const { label, list } = this.offers(annotated);
+      return {
+        libraries: [],
+        missing,
+        available: annotated.length,
+        ...(list.length ? { offered: label, offers: list.map(({ id, title, about, files, works, why }) => ({ library: id, title, about, documents: files, works, why })) } : {}),
+        hint: `这个作品没有关联经验库${annotated.length ? `（作品库里有 ${annotated.length} 个，experience_list 按主题查找）` : ""}。用户同意后用 experience_link 关联（可以多个），用户也可以在左侧「经验」中选择。`,
+      };
+    }
     return {
       libraries: current.map(({ library, documents }) => ({
         library: library.id,
@@ -280,13 +355,44 @@ export function experiencePlugin(services) {
   const scope = (params) => experience.scope(params.repo);
 
   // ---- libraries ----------------------------------------------------------------
-  router.get(`${base}/libraries`, ({ params }) => experience.libraries(params.repo));
+  // With `work`: whether it links each library and how well each suits it (the picker's 推荐).
+  router.get(`${base}/libraries`, async ({ params, query }) => {
+    const libraries = await experience.libraries(params.repo);
+    if (!services.libraries) return libraries;
+    const work = query.work ? await services.openWork(query.work, params.repo) : null;
+    return services.libraries.annotate("experiences", params.repo, libraries, work);
+  });
   router.post(`${base}/libraries`, async ({ params, req }) => experience.create(params.repo, (await readJson(req)).name));
   router.delete(`${base}/libraries/:lib`, ({ params }) => experience.remove(params.repo, params.lib));
   router.post(`${base}/libraries/:lib/rename`, async ({ params, req }) => experience.rename(params.repo, params.lib, (await readJson(req)).name));
 
   // ---- files (same shape as a work's file API, so the editor tabs reuse it) --------------
-  router.get(`${base}/tree`, async ({ params }) => tree(await experience.dir(params.repo)));
+  // One library's documents (paths from the branch root), or the whole branch.
+  router.get(`${base}/tree`, async ({ params, query }) => {
+    const dir = await experience.dir(params.repo);
+    if (!query.library) return tree(dir);
+    if (!validId(query.library) || !fs.existsSync(path.join(dir, query.library))) throw notFound("经验库不存在");
+    return tree(confined(dir, query.library)).map((entry) => ({ ...entry, path: `${query.library}/${entry.path}` }));
+  });
+  /** Documents of every library whose name or title has all the words (the 经验 view's filter). */
+  router.get(`${base}/find`, async ({ params, query }) => {
+    const words = searchWords(query.q);
+    if (!words.length) return [];
+    const dir = await experience.dir(params.repo);
+    const found = [];
+    for (const library of await experience.libraries(params.repo))
+      for (const entry of tree(path.join(dir, library.id), { maxEntries: 100000 })) {
+        if (entry.type !== "file" || !/\.(md|txt)$/i.test(entry.path)) continue;
+        let title = "";
+        try {
+          title = describeDocument(entry.path, fs.readFileSync(path.join(dir, library.id, entry.path), "utf8").slice(0, 2000)).title;
+        } catch {}
+        const text = `${entry.path} ${title}`.toLowerCase();
+        if (words.every((word) => text.includes(word))) found.push({ library: library.id, path: `${library.id}/${entry.path}`, title });
+        if (found.length >= 200) return found;
+      }
+    return found;
+  });
   router.get(`${base}/file`, async ({ params, query }) => readText(await experience.dir(params.repo), query.path));
   router.put(`${base}/file`, async ({ params, req }) => {
     const body = await readJson(req);
@@ -343,10 +449,10 @@ export function experiencePlugin(services) {
     const { libraries, missing } = await experience.linked(work);
     if (name?.trim()) {
       const dir = await experience.dir(work.repo);
-      const all = await experience.libraries(work.repo);
-      const id = experience.resolve(dir, name.trim()) ?? all.find((item) => item.title === name.trim())?.id;
-      if (!id)
-        throw problem(400, `经验库「${name}」不存在。现有的经验库：${all.map((item) => `「${item.title}」`).join("") || "（无）"}；新建用 experience_link 的 create`, "NO_EXPERIENCE");
+      // Linked libraries by name or title first (cheap); any other library of the repository after.
+      const id =
+        experience.resolve(dir, name.trim()) ?? findLibrary(name, libraries)?.id ?? findLibrary(name, await experience.libraries(work.repo), (alias) => experience.resolve(dir, alias))?.id;
+      if (!id) throw problem(400, unknownLibraries("experiences", [name.trim()], await experience.libraries(work.repo)).replace(/新建用 create$/, "新建用 experience_link 的 create"), "NO_EXPERIENCE");
       return { work, library: libraries.find((item) => item.id === id) ?? { id, title: experience.title(dir, id), root: path.join(dir, id), dir } };
     }
     if (!libraries.length)
@@ -354,7 +460,7 @@ export function experiencePlugin(services) {
         409,
         missing.length
           ? `关联的经验库「${missing.join("」「")}」已被删除。用 experience_link 关联其他经验库（先征得用户同意），或请用户在左侧「经验」面板中选择。`
-          : "这个作品没有关联经验库。用 experience_link 关联已有的或新建一个（先征得用户同意），或请用户在左侧「经验」面板中选择。",
+          : `这个作品没有关联经验库${experience.countSync(work.repo) ? `（作品库里有 ${experience.countSync(work.repo)} 个，用 experience_list 查找；没关联的也可以用 library 参数读）` : ""}。用 experience_link 关联已有的或新建一个（先征得用户同意），或请用户在左侧「经验」面板中选择。`,
         "NO_EXPERIENCE",
       );
     if (libraries.length === 1) return { work, library: libraries[0] };
@@ -424,13 +530,62 @@ export function experiencePlugin(services) {
     },
   });
 
-  const nameArg = z.string().min(1).max(60).describe("经验库名称");
+  tools.add({
+    name: "experience_list",
+    title: "查找经验库",
+    description:
+      "列出或按主题查找作品库里的经验库：名称、介绍、文档数、几个作品在用、本作品是否已关联、为什么适合本作品。query 按名称、介绍和文档标题找（例如「开场」「卡点」「知识类」），同时列出相关的文档；不给 query 时本作品关联的在前，其余按适合本作品的程度和使用次数排列。经验库很多时用它找合适的，征得用户同意后用 experience_link 关联；没关联的也可以先用 experience_read（library 参数）看看。还没有作品时用 repo 指定作品库。",
+    readOnly: true,
+    input: {
+      work: workArg,
+      repo: repoArg,
+      query: z.string().max(200).optional(),
+      limit: z.number().int().min(1).max(100).default(20),
+      offset: z.number().int().min(0).default(0),
+    },
+    async run({ query, limit, offset }, ctx) {
+      const place = await ctx.place();
+      const work = place.dir ? place : null;
+      const all = await experience.libraries(place.repo, { documents: Boolean(query?.trim()) });
+      const annotated = services.libraries ? await services.libraries.annotate("experiences", place.repo, all, work) : all;
+      const order = work ? experience.linkedSync(work).libraries.map((library) => library.id) : [];
+      const linked = annotated.filter((library) => library.linked).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+      const ordered = query?.trim() ? searchLibraries(annotated, query) : [...linked, ...offerOrder(annotated.filter((library) => !library.linked))];
+      const page = ordered.slice(offset, offset + limit);
+      const words = searchWords(query);
+      const line = (library) => {
+        const facts = [`${library.files} 篇文档`, library.works ? `${library.works} 个作品在用` : "没有作品在用", library.linked ? "本作品已关联" : "", ...(library.linked ? [] : (library.why ?? []))].filter(Boolean).join("；");
+        const docs = words.length ? (library.documents ?? []).filter((doc) => words.some((word) => `${doc.path} ${doc.title}`.toLowerCase().includes(word))).slice(0, 4) : [];
+        return [
+          `- 「${library.id}」${library.title !== library.id ? `（${library.title}）` : ""}${library.about ? `：${library.about}` : ""}（${facts}）`,
+          ...(docs.length ? [`  相关文档：${docs.map((doc) => `${doc.path}${doc.title ? `（${doc.title}）` : ""}`).join("、")}`] : []),
+        ].join("\n");
+      };
+      const head = `作品库 ${place.repo} 有 ${all.length} 个经验库${work ? `，本作品关联了 ${linked.length} 个${linked.length ? `：${linked.map((library) => `「${library.title}」`).join("")}` : ""}` : ""}。`;
+      const body = query?.trim()
+        ? ordered.length
+          ? `与「${query.trim()}」相关的 ${ordered.length} 个${ordered.length > page.length ? `（第 ${offset + 1}–${offset + page.length} 个）` : ""}：\n${page.map(line).join("\n")}`
+          : `没有找到与「${query.trim()}」相关的经验库（按名称、介绍和文档标题找）。换个说法，或用 search（scope: ["experience"]）搜文档内容。`
+        : all.length
+          ? `${offset ? `第 ${offset + 1}–${offset + page.length} 个` : "本作品关联的在前，其余按适合本作品的程度和使用次数"}：\n${page.map(line).join("\n")}`
+          : "还没有经验库：征得用户同意后用 experience_link 的 create 新建。";
+      const rest = ordered.length - offset - page.length;
+      const more = rest > 0 ? `\n还有 ${rest} 个：offset: ${offset + page.length} 看下一页${query?.trim() ? "" : "，或用 query 按主题查找"}。` : "";
+      const next = page.length ? "\n关联用 experience_link（先征得用户同意）；看内容用 experience_read 的 library（不用先关联）。" : "";
+      return {
+        data: { total: all.length, matched: ordered.length, libraries: page.map(({ extra, documents, ...library }) => library) },
+        text: `${head}\n${body}${more}${next}`,
+      };
+    },
+  });
+
+  const nameArg = z.string().min(1).max(60).describe("经验库名称（文件夹名或标题）");
   tools.add({
     name: "experience_link",
     published: true, // creating libraries is fine on a published work; changing its links is checked below
     title: "关联经验库",
     description:
-      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
+      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。名称写文件夹名或标题（大小写、空格、标点不同也能认出）；不存在时返回最接近的几个，经验库很多时先用 experience_list 查找。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
     input: { work: workArg, add: z.array(nameArg).max(10).default([]), remove: z.array(nameArg).max(10).default([]), create: z.array(nameArg).max(5).default([]) },
     async run({ add, remove, create }, ctx) {
       const work = await ctx.work();
@@ -439,11 +594,10 @@ export function experiencePlugin(services) {
         throw problem(423, "作品已发布，不能改变它关联的经验库。经验库本身可以照常整理（用 library 参数指定），也可以用 create 新建。要改关联，请用户先取消发布或创建副本。", "PUBLISHED");
       const dir = await experience.dir(work.repo);
       const all = await experience.libraries(work.repo);
-      // A folder name (or an earlier one), or a library's title.
-      const find = (name) => experience.resolve(dir, name.trim()) ?? all.find((item) => item.title === name.trim())?.id ?? null;
+      // A folder name (or an earlier one), a library's title, or either written a little differently.
+      const find = (name) => findLibrary(name, all, (alias) => experience.resolve(dir, alias))?.id ?? null;
       const unknown = add.filter((name) => !find(name));
-      if (unknown.length)
-        throw problem(400, `经验库不存在：${unknown.join("、")}。现有的经验库：${all.map((item) => `「${item.title}」`).join("") || "（无）"}；新建用 create`);
+      if (unknown.length) throw problem(400, unknownLibraries("experiences", unknown, all));
       const adding = add.map(find);
       const created = [];
       for (const name of create) {

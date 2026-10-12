@@ -263,14 +263,14 @@ export function ResourceViewer({ id }: { id: string }) {
         {isSound && (
           <div className="resource-controls">
             <div className="faint small-text">
-              {sounds.length} 个音效。单击试听，{linked && !readOnly ? "拖到时间轴的音轨上使用。" : readOnly ? "作品已发布，不能放到音轨。" : "引用这个素材库后可以拖到音轨。"}
+              {sounds.length} 个音效。单击试听，{readOnly ? "作品已发布，不能放到音轨。" : linked ? "拖到时间轴的音轨上使用。" : "拖到时间轴的音轨上使用（作品会自动引用这个素材库）。"}
             </div>
             <div className="sound-list">
               {sounds.map((item) => (
                 <div
                   key={item.key}
                   className={`sound-row ${item.key === sound ? "active" : ""}`}
-                  draggable={linked && !readOnly}
+                  draggable={!readOnly}
                   onDragStart={(event) => assetDrag.start(event, soundAsset({ id: `${ref}#${item.key}`, title: item.title, duration: item.duration, module: `materials/${ref}` }))}
                   onDragEnd={() => assetDrag.end()}
                   onClick={() => {
@@ -283,7 +283,7 @@ export function ResourceViewer({ id }: { id: string }) {
                   <span className="ellipsis grow">{item.title}</span>
                   <span className="faint mono small-text">{item.key}</span>
                   <span className="faint small-text">{seconds(item.duration)}</span>
-                  {linked && !readOnly && (
+                  {!readOnly && (
                     <button
                       className="icon-btn tiny"
                       title="放到「音效」音轨（播放头处）"

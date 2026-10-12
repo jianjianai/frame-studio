@@ -44,7 +44,7 @@ describe("material libraries", () => {
     expect(readme).toContain("- `logo.svg`：来源 自己画的；许可 CC0");
     expect((await call(`${lib}/history`)).body.map((version) => version.message).slice(0, 2)).toEqual(["素材库「品牌」：添加 logo.svg", "新建素材库：品牌"]);
     expect((await call(`${lib}/status`)).body.files).toEqual([]);
-    expect((await call(`${lib}/libraries`)).body).toEqual([{ id: "品牌", title: "品牌", files: 1, size: 13 }]);
+    expect((await call(`${lib}/libraries`)).body).toMatchObject([{ id: "品牌", title: "品牌", files: 1, size: 13, about: "", works: 0 }]);
   });
 
   it("lists library files with their size and length for previews", async () => {
@@ -130,7 +130,7 @@ describe("material libraries", () => {
   it("shows libraries before there is a work, by repository", async () => {
     const listed = await tool("materials_list", { repo: "local" });
     expect(listed.body.data.libraries.map((item) => item.id)).toContain("品牌");
-    expect((await tool("materials_list", { repo: "local", library: "品牌" })).body.data[0]).toMatchObject({ path: "logo.svg", locked: null });
+    expect((await tool("materials_list", { repo: "local", library: "品牌" })).body.data.files[0]).toMatchObject({ path: "logo.svg", locked: null });
     expect((await tool("material_read", { repo: "local", library: "品牌", path: "README.md" })).body.text).toMatch(/^# 品牌/);
     expect((await tool("material_read", { repo: "local", library: "品牌", path: "README.md", locked: true })).status).toBe(400);
     expect((await tool("resources_search", { repo: "local" })).status).toBe(200);
@@ -165,12 +165,15 @@ describe("material libraries", () => {
     const opened = await app.services.openWork(work.id, "local");
     expect(materials.readLocks(opened.dir)).toHaveProperty(["音效/notes/readme.txt"]);
     const list = await tool("materials_list", { work: work.id });
-    expect(list.body.data.libraries.map((item) => [item.id, item.referenced])).toEqual([
+    // The work's libraries first, in its order; then the others.
+    expect(list.body.data.libraries.map((item) => [item.id, item.linked])).toEqual([
       ["品牌", true],
-      ["图标", false],
       ["音效", true],
+      ["图标", false],
     ]);
-    expect((await tool("materials_list", { work: work.id, library: "音效" })).body.data).toMatchObject([{ path: "notes/readme.txt", locked: "已锁定" }]);
+    expect(list.body.text).toContain("本作品引用了 2 个：「品牌」「音效」");
+    expect((await tool("materials_list", { work: work.id, library: "音效" })).body.data.files).toMatchObject([{ path: "notes/readme.txt", locked: "locked" }]);
+    expect((await tool("materials_list", { work: work.id, library: "音效素材库" })).body.text).toContain("materials/音效/notes/readme.txt · 数据");
     const changed = await tool("material_write", {
       work: work.id,
       library: "音效",

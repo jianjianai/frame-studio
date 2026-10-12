@@ -73,7 +73,11 @@ describe("experience libraries", () => {
     expect((await call(`${lib}/commit`, { method: "POST", body: { message: "开场经验" } })).body.commit).toMatch(/^[0-9a-f]{40}$/);
     expect((await call(`${lib}/history`)).body.map((version) => version.message)).toEqual(["开场经验", "创建经验库"]);
     expect((await call(`${lib}/diff?commit=HEAD`)).body.diff).toContain("+- 前 2 秒给出问题");
-    expect((await call(`${lib}/libraries`)).body).toEqual([{ id: "知识类视频", title: "知识类视频", files: 2, aliases: [] }]);
+    // The template's introduction says nothing about the library: no `about` until someone writes one.
+    expect((await call(`${lib}/libraries`)).body).toMatchObject([{ id: "知识类视频", title: "知识类视频", files: 2, aliases: [], about: "", works: 1 }]);
+    expect((await call(`${lib}/libraries?work=${work.id}`)).body).toMatchObject([{ id: "知识类视频", linked: true }]);
+    expect((await call(`${lib}/tree?library=${encodeURIComponent("知识类视频")}`)).body.map((entry) => entry.path)).toEqual(["知识类视频/README.md", "知识类视频/开场.md"]);
+    expect((await call(`${lib}/find?q=${encodeURIComponent("开场")}`)).body).toEqual([{ library: "知识类视频", path: "知识类视频/开场.md", title: "开场" }]);
 
     // The session brief carries the work's notes and the whole (small) library.
     const opened = await app.services.openWork(work.id, "local");
@@ -139,7 +143,10 @@ describe("experience libraries", () => {
     expect((await tool("experience_read", { work: work.id, library: "竖屏短片", path: "节奏.md" })).body.text).toContain("3 秒一切");
     // A library the work does not link can be named too (organizing); this one has no such document.
     expect((await tool("experience_read", { work: work.id, library: "知识类视频", path: "节奏.md" })).status).toBe(404);
-    expect((await tool("experience_read", { work: work.id, library: "没有这个库", path: "节奏.md" })).body.error.message).toContain("现有的经验库");
+    expect((await tool("experience_read", { work: work.id, library: "没有这个库", path: "节奏.md" })).body.error.message).toContain("用 experience_list 的 query");
+    // Names written a little differently still find the library; unknown ones get the closest.
+    expect((await tool("experience_read", { work: work.id, library: "竖屏 短片", path: "节奏.md" })).body.text).toContain("3 秒一切");
+    expect((await tool("experience_read", { work: work.id, library: "竖屏", path: "节奏.md" })).body.error.message).toContain("最接近的：「竖屏短片」");
     const overview = await tool("experience_read", { work: work.id });
     expect(overview.body.text).toContain("## 经验库「通用规范」");
     expect(overview.body.text).toMatch(/## 经验库「竖屏短片」[\s\S]*### 节奏.md[\s\S]*3 秒一切/);

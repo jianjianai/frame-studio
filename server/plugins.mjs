@@ -12,6 +12,7 @@ import { registerSearchTools } from "./tools/search-tools.mjs";
 import { mcpPlugin } from "./mcp.mjs";
 import { oauthPlugin } from "./oauth.mjs";
 import { experiencePlugin } from "./experience.mjs";
+import { librariesPlugin } from "./libraries.mjs";
 import { promptsPlugin } from "./prompts.mjs";
 import { materialsPlugin } from "./materials.mjs";
 import { reviewsPlugin } from "./reviews.mjs";
@@ -46,4 +47,4 @@ function corePlugin(services) {
   registerSearchTools(tools);
 }
 
-export const plugins = [corePlugin, speechPlugin, experiencePlugin, materialsPlugin, reviewsPlugin, resourcesPlugin, assetPreviewsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];
+export const plugins = [corePlugin, speechPlugin, librariesPlugin, experiencePlugin, materialsPlugin, reviewsPlugin, resourcesPlugin, assetPreviewsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];

@@ -45,7 +45,9 @@ AI 在作品目录中工作，拥有读写文件和运行命令的能力（与�
 
 - 平台规则：作品结构、工作流程、工具用法。
 - 作品自己的需求与约定：`projects/<名称>/AGENTS.md` 的原文（超过 6 KB 时只放开头）。
-- 关联的经验库（可以多个）：按作品里的顺序，预算（12 KB）够的放全部文档，其余的放 README 和其他文档的目录（标题 + 第一句），AI 按需用 `experience_read` 阅读全文。
+- 关联的经验库（可以多个）：按作品里的顺序，预算（12 KB）够的放全部文档，其余的放 README 和其他文档的目录（标题 + 第一句），AI 按需用 `experience_read` 阅读全文。没有关联时列出几个可能适合这个作品的（或用得最多的），附理由，并说明作品库里一共有多少个、怎么查找。
+- 素材库：本作品关联的每个一行（资源、音效、文件数，README 第一段，画布和作品画面是否相符）；其他的少时全列，多时只列可能适合本作品的（或用得最多的），整节有大小上限，再说明还有多少个、怎么查找。
+- 作品库里的库可能有几十上百个，“适合本作品”由 `server/libraries.mjs` 算出（会话开始前准备好）：库的名称和介绍与作品标题、说明、标签相近（少见的词分量更重），以及同一系列（“数学：…”“…第 3 期”）、标题相近或关联了相同库的作品在用哪些库。
 - 有复盘数据时一句话说明发到了哪些平台、有几次数据和哪些复盘文档；数字不放进来，需要时用 `review_read` / `reviews_compare` 读取。
 
 文档逐字放在代码块里，AI 可以直接复制原文做精确修改。整份说明不超过 Codex 读取 `AGENTS.md` 的 32 KiB 上限，代理压缩上下文后仍然保留。
@@ -121,13 +123,14 @@ frame export ab12cd34 --width 1920
 | `files_list` / `files_batch` | 作品文件（外部 AI 使用；内置 AI 的工具列表里没有它们，用自己的文件工具）：一次调用对一个或多个文件读、写、精确替换、删除、移动；默认能做的都做、失败的逐项说明（同一文件前面失败则后面跳过），`atomic` 时全部成功才写入；`check` / `frames` 改完直接检查并看画面 |
 | `asset_import` / `asset_view` | 作品自己的素材（public/，列表在 `work_context`）：导入网址、base64（小文件）、本机模式下的服务器文件，`items` 一次导入多个，服务器模式不能从内网地址导入；查看图片、视频素材本身（多个拼成带编号的总览图，视频按时间点抽帧） |
 | `upload_link` | AI 所在电脑上的文件：返回一次性上传地址（15 分钟、用一次）和写好本机路径的 curl 命令（`from`），AI 在自己的终端上传到作品 public/（默认 public/imports/）、素材库，或作品复盘资料的 raw/（`review: true`），文件不经过对话 |
-| `materials_list` / `materials_link` / `materials_use` | 素材库：查看、关联或取消关联（也可新建）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
+| `materials_list` / `materials_link` / `materials_use` | 素材库：查看（本作品的在前，其余按适合本作品的程度和使用次数，附理由；`query` 按名称和介绍查找、`offset` 翻页；`library` 列文件，文件多时按路径筛选、翻页并按文件夹汇总其余的）、关联或取消关联（也可新建；名称大小写、空格、标点不同也能认出，不存在时给最接近的几个）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
 | `material_read` / `material_write` | 读取素材库文件；修改素材库（`put` 放入网址、作品文件或文本内容，`edit` 精确修改文本，`move`、`delete`，一次可以多个操作），每次修改都是素材库的一个版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |
 | `layers_get` / `layers_edit` | visual.json 图层（读取时每层一行、省略默认值；`update` 嵌套对象逐项合并） |
 | `audio_get` / `audio_edit` / `audio_place` | audio.json 混音（`update` 只改给出的字段；`audio_place` 返回片段 id） |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
 | `experience_read` / `experience_write` | 作品关联的经验库：照着做，过程中随时整理经验（`write` / `edit` / `delete` / `move`，一次可以改几篇；未保存状态） |
-| `experience_link` / `experience_commit` | 关联、取消关联或新建经验库；把经验库的修改保存为版本（可选推送到 GitHub） |
+| `experience_list` | 作品库里的经验库：本作品关联的在前，其余按适合本作品的程度和使用次数（附理由）；`query` 按名称、介绍和文档标题查找，并列出相关的文档；`offset` 翻页 |
+| `experience_link` / `experience_commit` | 关联、取消关联或新建经验库（名称的写法同 `materials_link`）；把经验库的修改保存为版本（可选推送到 GitHub） |
 | `review_import` | 把复盘资料 `raw/` 里平台后台的导出直接导入成一次数据（不经过 AI 读表格）：抖音创作者中心的作品数据（指标、逐秒留存和同类作品、每小时播放和涨粉分渠道、流量来源和对比 7 日）和全部评论导出，按表格内容识别（`server/review-import.mjs`）；没有发布记录时新建一条；`dryRun` 只说会导入什么 |
 | `review_read` / `review_write` | 作品发布后的复盘（`frame/reviews` 分支，不在作品里，已发布的作品也能写）：发布记录（标题、置顶评论、目标）、按发布天数的数据（和同类并列）、每小时流量（首 24/48/72 小时、几波）、流量来源、留存分析（每秒流失率是同类的几倍、按图层 / 歌词 / 镜头 / 字幕分段的倍数和“按同类走结尾多多少”、关键时刻还剩多少人）、评论、复盘文档和原始文件；`file` 把平台导出的 xlsx / csv 读成文字表格、截图返回图片；`review_write` 的 `post` / `snapshot` / `series` / `moment` / `segments` / `remove_*` 和文档的 `write` / `edit` / `delete` / `move`，每次调用自动保存一个版本 |
 | `reviews_compare` | 各作品的发布记录在同一发布天数（`checkpoint`，不写时取大多数发布记录都到了的最大天数）比较，有每小时数据的播放、涨粉正好算到那一天；附同类值、关键时刻列、中位数和本作品相对中位数的倍数；可按平台、标签、经验库、作品、时间筛选，`curves` 附按视频进度对齐的留存曲线（和同类的），`lyrics` 按歌词对齐同一首歌的作品 |
@@ -144,3 +147,4 @@ frame export ab12cd34 --width 1920
 - 制作作品时几乎每次都用到的工具加入 `CORE_TOOLS`（`server/tools/registry.mjs`），Claude Code 不用先搜索就能调用。
 - 作品从 `ctx.scope.work` 或 `work` 参数得到（`workArg`）；限定作品的会话里 `work` 参数对 AI 隐藏，描述中不要要求传它。
 - 内置 AI 自己读写了哪些需要跟踪的内容（目前是经验库文档），通过 `ctx.scope.session` 告诉 `services.ai`，下一条消息就不会再当作变化提醒它。
+- 列表的长度不能随数据增长：库、文件、资源可能有成百上千个，给 AI 的文字只列最相关的一部分（分页或按类汇总），并写明总数和怎么查找其余的；名称找不到时给最接近的几个，不要把所有名称都列出来。

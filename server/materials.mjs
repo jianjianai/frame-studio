@@ -13,6 +13,7 @@ import { Readable } from "node:stream";
 import { editList, applyEdits } from "./tools/file-ops.mjs";
 import { probe } from "./media.mjs";
 import { appRoot } from "./config.mjs";
+import { findLibrary, unknownLibraries, closestLibraries, searchLibraries, searchWords, offerOrder, readmeLead } from "./libraries.mjs";
 
 /**
  * Material libraries: media shared by the works of a content repository (images, video,
@@ -75,6 +76,8 @@ const KINDS = [
   ["data", /\.(json|csv|txt|md)$/i],
 ];
 const kindOf = (file) => KINDS.find(([, pattern]) => pattern.test(file))?.[0] ?? "file";
+/** Words a kind of file is found by in the studio's search. */
+const KIND_WORDS = { image: "图片 图像", video: "视频", audio: "音频 声音 音乐 音效", font: "字体", model: "模型 三维 3d", environment: "全景图 环境光 hdr", code: "代码", data: "数据" };
 /** What a listing says about a media file besides its kind: size, length, animations, problems. */
 export const mediaFacts = (info) =>
   Object.fromEntries(
@@ -89,9 +92,11 @@ export const mediaFacts = (info) =>
     }).filter(([, value]) => value !== undefined && value !== 0),
   );
 
+/** The introduction a new library's README starts with (it says nothing about the library). */
+const templateLead = (title) => `素材库「${title}」。引用了它的作品可以直接使用其中的文件：\`materials/${folderOf(title)}/<文件>\`。`;
 const libraryReadme = (title) => `# ${title}
 
-素材库「${title}」。引用了它的作品可以直接使用其中的文件：\`materials/${folderOf(title)}/<文件>\`。
+${templateLead(title)}
 
 ## 来源与许可
 
@@ -106,6 +111,7 @@ export class Materials {
     this.links = new Lru(20000); // blob → what library code names: imports, materials/… addresses (small; follow() runs per listing and thumbnail)
     this.manifests = new Map(); // root → { ref: blob } of its .materials copies
     this.excluded = new Set(); // repositories whose worktrees ignore .materials
+    this.listed = new Map(); // repo → { commit, libraries }: the listing walks every file, so it is kept per version
   }
 
   /** The materials worktree of a repository (checked out on first use). */
@@ -127,16 +133,33 @@ export class Materials {
       return id;
     }
   }
+  /**
+   * The libraries: folder name, title, number of files and their size, and the README's
+   * introduction (`about`). Every change is a version, so the listing is kept until the
+   * branch moves.
+   */
   async libraries(repo) {
     const dir = await this.dir(repo);
-    return fs
+    const commit = (await git(dir, ["rev-parse", "HEAD"]).catch(() => "")).trim();
+    const known = this.listed.get(repo);
+    if (commit && known?.commit === commit) return known.libraries.map((library) => ({ ...library }));
+    const libraries = fs
       .readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
       .map((entry) => {
-        const files = tree(path.join(dir, entry.name)).filter((item) => item.type === "file" && item.path !== "README.md");
-        return { id: entry.name, title: this.title(dir, entry.name), files: files.length, size: files.reduce((sum, item) => sum + (item.size || 0), 0) };
+        const files = tree(path.join(dir, entry.name), { maxEntries: 100000 }).filter((item) => item.type === "file" && item.path !== "README.md");
+        const title = this.title(dir, entry.name);
+        return {
+          id: entry.name,
+          title,
+          files: files.length,
+          size: files.reduce((sum, item) => sum + (item.size || 0), 0),
+          about: readmeLead(path.join(dir, entry.name, "README.md"), templateLead(title)),
+        };
       })
       .sort((a, b) => a.title.localeCompare(b.title, "zh"));
+    if (commit) this.listed.set(repo, { commit, libraries });
+    return libraries.map((library) => ({ ...library }));
   }
   /** Run a change in the worktree and save it as a version (only the given paths). */
   async save(repo, paths, message, change) {
@@ -182,26 +205,59 @@ export class Materials {
     if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound("素材库不存在");
     const blobs = await this.head(dir);
     const result = [];
-    for (const item of tree(path.join(dir, id)).filter((entry) => entry.type === "file" && entry.path !== "README.md")) {
-      const kind = kindOf(item.path);
-      // Size, length and contents for the thumbnails (cached until the file changes): a .webm
-      // may hold only sound, a .json may be a Lottie animation.
-      const probed = ["image", "video", "audio", "model", "environment"].includes(kind) || /\.json$/i.test(item.path);
-      const info = probed ? await probe(path.join(dir, id, item.path)).catch(() => ({})) : {};
-      result.push({
-        path: item.path,
-        ref: `${id}/${item.path}`,
-        url: `materials/${id}/${item.path}`,
-        kind: info.kind === "audio" && kind === "video" ? "audio" : info.kind === "lottie" ? "lottie" : kind,
-        size: item.size,
-        blob: blobs.get(`${id}/${item.path}`) ?? null,
-        ...mediaFacts(info),
-      });
+    for (const item of tree(path.join(dir, id), { maxEntries: 100000 }).filter((entry) => entry.type === "file" && entry.path !== "README.md"))
+      result.push(await this.describeFile(dir, id, item.path, item.size, blobs.get(`${id}/${item.path}`) ?? null));
+    return result;
+  }
+  /**
+   * A library file as listings show it. Size, length and contents for the thumbnails (cached
+   * until the file changes): a .webm may hold only sound, a .json may be a Lottie animation.
+   */
+  async describeFile(dir, id, relative, size, blob) {
+    const kind = kindOf(relative);
+    const probed = ["image", "video", "audio", "model", "environment"].includes(kind) || /\.json$/i.test(relative);
+    const info = probed ? await probe(path.join(dir, id, relative)).catch(() => ({})) : {};
+    return {
+      path: relative,
+      ref: `${id}/${relative}`,
+      url: `materials/${id}/${relative}`,
+      kind: info.kind === "audio" && kind === "video" ? "audio" : info.kind === "lottie" ? "lottie" : kind,
+      size,
+      blob,
+      ...mediaFacts(info),
+    };
+  }
+  /**
+   * Files of every library whose path (or kind, in Chinese) has all the words: finding a file
+   * without knowing which of many libraries holds it. Only the matches are looked into.
+   */
+  async find(repo, query, limit = 120) {
+    const words = searchWords(query);
+    if (!words.length) return [];
+    const dir = await this.dir(repo);
+    const result = [];
+    for (const [ref, blob] of await this.head(dir)) {
+      const [id, ...rest] = ref.split("/");
+      const relative = rest.join("/");
+      if (!relative || relative === "README.md" || id.startsWith(".")) continue;
+      if (!words.every((word) => `${ref} ${KIND_WORDS[kindOf(relative)] ?? ""}`.toLowerCase().includes(word))) continue;
+      const stat = fs.statSync(path.join(dir, ref), { throwIfNoEntry: false });
+      if (!stat?.isFile()) continue;
+      result.push(await this.describeFile(dir, id, relative, stat.size, blob));
+      if (result.length >= limit) break;
     }
     return result;
   }
   libraryOf(dir, id) {
-    if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound(`素材库「${id}」不存在（新建用 materials_link 的 create）`);
+    if (!validId(id) || !fs.existsSync(path.join(dir, id))) {
+      // The closest names (from the folders: this runs synchronously), as the link tools say them.
+      const all = fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .map((entry) => ({ id: entry.name, title: this.title(dir, entry.name) }));
+      const close = closestLibraries(String(id), all, 5);
+      throw notFound(`素材库「${id}」不存在${close.length ? `。最接近的：${close.map((item) => `「${item.id}」`).join("")}` : ""}（素材库很多时用 materials_list 的 query 查找，新建用 materials_link 的 create）`);
+    }
     return path.join(dir, id);
   }
   /** Note where a third-party file comes from, in the library's README. */
@@ -744,6 +800,7 @@ export class Materials {
     const library = path.join(this.services.config.dirs.tmp, "library", repo);
     const works = path.join(this.services.config.dirs.works, repo);
     this.heads.delete(repo);
+    this.listed.delete(repo);
     this.excluded.delete(repo);
     for (const root of this.manifests.keys()) if (root === library || inside(works, root)) this.manifests.delete(root);
     fs.rmSync(library, { recursive: true, force: true });
@@ -829,8 +886,23 @@ export function materialsPlugin(services) {
   // Library code: the preview resolves @materials/… to copies at the versions each work uses,
   // which follow the libraries (unlocked files) and the works' lock files (pull, revert, edits).
   services.preview?.importResolvers?.push((source, importer) => materials.resolveImport(source, importer));
+  // The branch also moves without a change made here (GitHub's newer versions brought in, a
+  // conflict settled): its versions event then counts as a change of the libraries.
+  const seen = new Map(); // repo → the commit the libraries were last known at
+  const commitOf = async (repo) => (await git(await materials.dir(repo), ["rev-parse", "HEAD"]).catch(() => "")).trim();
   services.events.subscribe((event) => {
-    if (event.type === "materials" && event.repo) void materials.refreshRepo(event.repo).catch(() => {});
+    if (event.type === "materials" && event.repo) {
+      void commitOf(event.repo).then((commit) => seen.set(event.repo, commit));
+      void materials.refreshRepo(event.repo).catch(() => {});
+    }
+    if (event.type === "work-versions" && String(event.work).startsWith("materials-")) {
+      const repo = String(event.work).slice("materials-".length);
+      void commitOf(repo).then((commit) => {
+        if (!commit || seen.get(repo) === commit) return;
+        seen.set(repo, commit);
+        services.events.emit({ type: "materials", repo, paths: [] });
+      });
+    }
     if (event.type === "work-files" && event.files?.some((file) => file.endsWith(LOCK_FILE))) {
       const place = materials.rootOf(path.join(services.config.dirs.works, event.repo, event.work, "projects"));
       if (place) void materials.refreshCopies(place).catch(() => {});
@@ -839,10 +911,17 @@ export function materialsPlugin(services) {
   const base = "/api/repos/:repo/materials";
   const scope = (params) => materials.scope(params.repo);
 
-  router.get(`${base}/libraries`, ({ params }) => materials.libraries(params.repo));
+  // With `work`: whether it uses each library and how well each suits it (the picker's 推荐).
+  router.get(`${base}/libraries`, async ({ params, query }) => {
+    const libraries = await materials.libraries(params.repo);
+    if (!services.libraries) return libraries;
+    const work = query.work ? await services.openWork(query.work, params.repo) : null;
+    return services.libraries.annotate("materials", params.repo, libraries, work);
+  });
   router.post(`${base}/libraries`, async ({ params, req }) => materials.create(params.repo, (await readJson(req)).name));
   router.delete(`${base}/libraries/:lib`, ({ params }) => materials.remove(params.repo, params.lib));
   router.get(`${base}/libraries/:lib/files`, ({ params }) => materials.files(params.repo, params.lib));
+  router.get(`${base}/find`, ({ params, query }) => materials.find(params.repo, String(query.q || "")));
   router.post(
     `${base}/libraries/:lib/upload`,
     ({ params, req, query }) =>
@@ -906,32 +985,93 @@ export function materialsPlugin(services) {
   const refArg = z.string().regex(/^[^/]+\/.+/).describe("<素材库>/<文件路径>，例如 通用素材/logo.svg");
   const libraryArg = z.string().min(1).max(60).describe("素材库名称");
 
+  const KIND_LABELS = { image: "图片", video: "视频", audio: "音频", font: "字体", model: "三维模型", environment: "全景图", lottie: "Lottie", code: "代码", data: "数据", file: "文件" };
+  const sizeText = (bytes) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
+  const fileLine = (file, lock) =>
+    `- materials/${file.ref} · ${[
+      KIND_LABELS[file.kind] ?? file.kind,
+      file.width ? `${file.width}×${file.height}` : "",
+      file.duration ? `${+file.duration.toFixed(2)} 秒` : "",
+      file.animations?.length ? `动画 ${file.animations.map((item) => item.name).join("、")}` : "",
+      sizeText(file.size),
+      lock?.locked ? (lock.outdated ? "本作品锁定的是旧版本（有更新）" : "本作品已锁定") : "",
+      file.problem ? `注意：${file.problem}` : "",
+    ]
+      .filter(Boolean)
+      .join(" · ")}`;
+
   tools.add({
     name: "materials_list",
     title: "素材库",
     description:
-      "列出作品库里的素材库，以及本作品引用了哪些（不传 library）；传 library 列出其中的文件：地址 materials/<库>/<文件>、类型、大小，和本作品锁定的版本是否落后。作品只能用它引用的素材库。还没有作品时用 repo 只看某个作品库的素材库。",
+      "不传 library：列出或查找作品库里的素材库——名称、介绍、文件数、几个作品在用、本作品是否已引用、为什么适合本作品；本作品引用的在前，其余按适合本作品的程度和使用次数排列。query 按名称和介绍查找（素材库很多时用它；按内容找角色、效果、音效、文件用 resources_search）。传 library：列出其中的文件——地址 materials/<库>/<文件>、类型、尺寸、时长、大小，以及本作品锁定的版本是否落后；文件多时 query 按路径和类型筛选。结果多时 offset 翻页。作品只能用它引用的素材库（materials_use 会自动引用）。还没有作品时用 repo 只看某个作品库的素材库。",
     readOnly: true,
-    input: { work: workArg, repo: repoArg, library: libraryArg.optional() },
-    async run({ library }, ctx) {
+    input: {
+      work: workArg,
+      repo: repoArg,
+      library: libraryArg.optional(),
+      query: z.string().max(200).optional().describe("不传 library 时按名称和介绍找素材库；传了 library 时按路径和类型筛选文件"),
+      limit: z.number().int().min(1).max(200).default(30),
+      offset: z.number().int().min(0).default(0),
+    },
+    async run({ library, query, limit, offset }, ctx) {
       const work = await ctx.place();
-      const status = work.dir ? await materials.status(work) : { libraries: [], missing: [], files: [] };
+      const status = work.dir ? await materials.status(work) : { libraries: [], missing: [], files: [], unresolved: [] };
+      const all = await materials.libraries(work.repo);
+      const more = (rest, next, how) => (rest > 0 ? `\n还有 ${rest} 个：offset: ${next} 看下一页${how}。` : "");
       if (!library) {
-        const all = await materials.libraries(work.repo);
-        const linked = new Set(status.libraries.map((item) => item.id));
-        return asJson({
-          libraries: all.map((item) => ({ ...item, referenced: linked.has(item.id) })),
-          missing: status.missing,
-          used: status.files,
-        });
+        const annotated = services.libraries ? await services.libraries.annotate("materials", work.repo, all, work.dir ? work : null) : all;
+        const order = work.dir ? materials.names(work) : [];
+        const linked = annotated.filter((item) => item.linked).sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        const ordered = query?.trim() ? searchLibraries(annotated, query) : [...linked, ...offerOrder(annotated.filter((item) => !item.linked))];
+        const page = ordered.slice(offset, offset + limit);
+        const line = (item) => {
+          const facts = [`文件 ${item.files} 个，${sizeText(item.size)}`, item.works ? `${item.works} 个作品在用` : "没有作品在用", item.linked ? "本作品已引用" : "", ...(item.linked ? [] : (item.why ?? []))].filter(Boolean).join("；");
+          return `- 「${item.id}」${item.title !== item.id ? `（${item.title}）` : ""}${item.about ? `：${item.about}` : ""}（${facts}）`;
+        };
+        const outdated = status.files.filter((item) => item.outdated && item.used);
+        const lines = [
+          `作品库 ${work.repo} 有 ${all.length} 个素材库${work.dir ? `，本作品引用了 ${linked.length} 个${linked.length ? `：${linked.map((item) => `「${item.id}」`).join("")}` : ""}` : ""}。`,
+          query?.trim()
+            ? ordered.length
+              ? `与「${query.trim()}」相关的 ${ordered.length} 个${ordered.length > page.length ? `（第 ${offset + 1}–${offset + page.length} 个）` : ""}：\n${page.map(line).join("\n")}`
+              : `没有找到名称或介绍与「${query.trim()}」相关的素材库。按内容找（角色、效果、音效、图片、模型等）用 resources_search。`
+            : all.length
+              ? `${offset ? `第 ${offset + 1}–${offset + page.length} 个` : work.dir ? "本作品引用的在前，其余按适合本作品的程度和使用次数" : "按使用次数"}：\n${page.map(line).join("\n")}`
+              : "还没有素材库：新建用 materials_link 的 create。",
+          more(ordered.length - offset - page.length, offset + page.length, query?.trim() ? "" : "，或用 query 按名称和介绍查找").trim(),
+          status.missing.length ? `本作品引用的素材库${status.missing.map((name) => `「${name}」`).join("")}已不存在。` : "",
+          status.files.length ? `本作品用到素材库文件 ${status.files.filter((item) => item.used).length} 个${outdated.length ? `，其中 ${outdated.length} 个在素材库里有新版本（materials_use 加 update: true 更新）` : ""}。` : "",
+          page.length ? "用 library 列出一个素材库的文件；resources_search 找其中声明的角色、效果、音效等资源。" : "",
+        ];
+        return {
+          data: { total: all.length, matched: ordered.length, libraries: page, missing: status.missing, used: status.files },
+          text: lines.filter(Boolean).join("\n"),
+        };
       }
+      const found = findLibrary(library, all);
+      if (!found) throw problem(404, unknownLibraries("materials", [library], all).replace(/新建用 create$/, "新建用 materials_link 的 create"), "NOT_FOUND");
       const locks = new Map(status.files.map((item) => [item.ref, item]));
-      return asJson(
-        (await materials.files(work.repo, library)).map((file) => ({
-          ...file,
-          locked: locks.get(file.ref)?.locked ? (locks.get(file.ref).outdated ? "旧版本（有更新）" : "已锁定") : null,
-        })),
-      );
+      const files = await materials.files(work.repo, found.id);
+      const words = searchWords(query);
+      const matched = words.length ? files.filter((file) => words.every((word) => `${file.path} ${KIND_LABELS[file.kind] ?? ""} ${file.kind}`.toLowerCase().includes(word))) : files;
+      const page = matched.slice(offset, offset + limit);
+      // What the rest is, by top folder: enough to page or filter towards it.
+      const rest = matched.slice(offset + page.length);
+      const folders = new Map();
+      for (const file of rest) {
+        const folder = file.path.includes("/") ? file.path.split("/")[0] + "/" : "（根目录）";
+        folders.set(folder, (folders.get(folder) ?? 0) + 1);
+      }
+      const head = `素材库「${found.id}」${found.title !== found.id ? `（${found.title}）` : ""}${found.about ? `：${found.about}` : ""}\n文件 ${files.length} 个${words.length ? `，符合「${query.trim()}」的 ${matched.length} 个` : ""}${matched.length > page.length ? `（第 ${offset + 1}–${offset + page.length} 个）` : ""}：`;
+      const restText = rest.length
+        ? `\n还有 ${rest.length} 个：${[...folders].map(([folder, count]) => `${folder}（${count}）`).join("、")}。offset: ${offset + page.length} 看下一页，或用 query 筛选（例如文件夹名、扩展名、"字体"）。`
+        : "";
+      const linkedNote = work.dir && !status.libraries.some((item) => item.id === found.id) ? "\n本作品还没有引用这个素材库：materials_use 使用其中的文件时会自动引用。" : "";
+      return {
+        data: { library: found.id, total: files.length, matched: matched.length, files: page.map((file) => ({ ...file, locked: locks.get(file.ref)?.locked ? (locks.get(file.ref).outdated ? "outdated" : "locked") : null })) },
+        text: `${head}\n${page.map((file) => fileLine(file, locks.get(file.ref))).join("\n") || (words.length ? "（没有符合的文件）" : "（还没有文件）")}${restText}${linkedNote}`,
+      };
     },
   });
 
@@ -940,7 +1080,7 @@ export function materialsPlugin(services) {
     published: true, // creating libraries is fine on a published work; changing its links is checked below
     title: "关联素材库",
     description:
-      "增加或移除本作品关联（引用）的素材库（project.ts 的 materials，可以多个）。add 关联已有的素材库，create 新建空素材库并关联（同名的已存在时直接关联），remove 取消关联（素材库本身不受影响，已经锁定、正在使用的文件照常可用）。用户要求时使用；不确定时先问用户。不针对作品、只新建素材库时用 repo 指定作品库（只能 create）。",
+      "增加或移除本作品关联（引用）的素材库（project.ts 的 materials，可以多个）。add 关联已有的素材库，create 新建空素材库并关联（同名的已存在时直接关联），remove 取消关联（素材库本身不受影响，已经锁定、正在使用的文件照常可用）。名称写文件夹名或标题（大小写、空格、标点不同也能认出）；不存在时返回最接近的几个，素材库很多时先用 materials_list 的 query 查找。用户要求时使用；不确定时先问用户。不针对作品、只新建素材库时用 repo 指定作品库（只能 create）。",
     input: {
       work: workArg,
       repo: repoArg,
@@ -954,20 +1094,17 @@ export function materialsPlugin(services) {
         if (add.length || remove.length) throw problem(400, "add / remove 改变的是作品关联的素材库：需要 work；只指定 repo 时只能 create");
         const existing = await materials.libraries(work.repo);
         const created = [];
-        for (const name of create) {
-          const found = existing.find((item) => item.id === name.trim() || item.title === name.trim());
-          if (!found) created.push((await materials.create(work.repo, name)).id);
-        }
+        for (const name of create) if (!findLibrary(name, existing)) created.push((await materials.create(work.repo, name)).id);
         return asJson({ created }, created.length ? `已在作品库 ${work.repo} 新建素材库：${created.map((id) => `「${id}」`).join("")}。用 material_write（repo: "${work.repo}"）往里放文件。README.md 已有模板：把第一段改成一句介绍（work_context 和资源目录里显示），后面写资源清单和用法` : "没有新建素材库（同名的已存在）");
       }
       const published = Boolean(works.published(work));
       if (published && (add.length || remove.length))
         throw problem(423, "作品已发布，不能改变它关联的素材库。素材库本身可以照常整理（material_write），也可以用 create 新建。要改关联，请用户先取消发布或创建副本。", "PUBLISHED");
       const all = await materials.libraries(work.repo);
-      const find = (name) => all.find((item) => item.id === name.trim() || item.title === name.trim())?.id ?? null;
+      // A folder name or title, also written a little differently (case, spaces, a "素材库" ending).
+      const find = (name) => findLibrary(name, all)?.id ?? null;
       const unknown = add.filter((name) => !find(name));
-      if (unknown.length)
-        throw problem(400, `素材库不存在：${unknown.join("、")}。作品库 ${work.repo} 里的素材库：${all.map((item) => `「${item.id}」`).join("") || "（无）"}；新建用 create。素材库属于作品库，别的作品库里的素材库要在那个作品库里新建作品才能用`);
+      if (unknown.length) throw problem(400, `${unknownLibraries("materials", unknown, all)}。素材库属于作品库（这里是 ${work.repo}），别的作品库里的素材库要在那个作品库里新建作品才能用`);
       const adding = add.map(find);
       const created = [];
       for (const name of create) {
@@ -1010,10 +1147,15 @@ export function materialsPlugin(services) {
       const { libraries } = await materials.linked(work);
       const linked = new Set(libraries.map((item) => item.id));
       // Using a library's files means using the library: link it here instead of a separate call.
-      const existing = new Set((await materials.libraries(work.repo)).map((item) => item.id));
+      const all = await materials.libraries(work.repo);
+      const existing = new Set(all.map((item) => item.id));
       const needed = [...new Set(files.map((ref) => ref.split("/")[0]))].filter((id) => !linked.has(id));
       const unknown = needed.filter((id) => !existing.has(id));
-      if (unknown.length) throw problem(404, `作品库 ${work.repo} 里没有素材库：${unknown.join("、")}（素材库属于作品库，用 materials_list 查看这个作品库的素材库）`);
+      if (unknown.length)
+        throw problem(404, `作品库 ${work.repo} 里没有素材库：${unknown.join("、")}${(() => {
+          const close = [...new Set(unknown.flatMap((name) => closestLibraries(name, all).map((item) => item.id)))].slice(0, 5);
+          return close.length ? `。最接近的：${close.map((id) => `「${id}」`).join("")}（地址写 <素材库文件夹名>/<路径>）` : "";
+        })()}（素材库属于作品库，用 materials_list 的 query 查找这个作品库的素材库）`);
       if (needed.length) await works.update(work, { materials: [...materials.names(work), ...needed] });
       const result = await materials.lock(work, files, { update });
       if (result.missing.length) throw problem(404, `素材不存在：${result.missing.join("、")}`);
@@ -1028,9 +1170,18 @@ export function materialsPlugin(services) {
   });
 
   /** A library file as text (current version, or the version this work locked). */
-  const readMaterial = async (work, ref, locked) => {
-    if (!validRef(ref)) throw problem(400, "无效的路径");
+  const readMaterial = async (work, wanted, locked) => {
+    if (!validRef(wanted)) throw problem(400, "无效的路径");
     const versions = locked ? materials.readLocks(work.dir) : {};
+    let ref = wanted;
+    if (!versions[ref]) {
+      // The library written a little differently (case, spaces, punctuation) is the same one;
+      // a name that leads nowhere gets the close ones (the folder names).
+      const [name, ...rest] = ref.split("/");
+      const found = findLibrary(name, await materials.libraries(work.repo));
+      if (found) ref = [found.id, ...rest].join("/");
+      else materials.libraryOf(await materials.dir(work.repo), name);
+    }
     if (locked && !versions[ref]) throw problem(404, `本作品没有锁定 materials/${ref}`);
     if (!TEXT.test(ref)) {
       const info = await probe(await materials.file(work.repo, versions, ref)).catch(() => null);

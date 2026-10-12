@@ -142,7 +142,7 @@ export class Works {
         try {
           summary = metaSummary(summary.slug, readProjectDir(path.join(root, "projects", summary.slug)).meta);
         } catch {}
-      result.set(entry.id, { id: entry.id, repo, ...summary, ...(trashed ? { trashed: true } : {}) });
+      result.set(entry.id, { id: entry.id, repo, ...summary, updatedAt: head.date, ...(trashed ? { trashed: true } : {}) });
     }
     return result;
   }
@@ -858,6 +858,7 @@ function metaSummary(slug, meta) {
     publishedAt: meta.publishedAt || "",
     tags: Array.isArray(meta.tags) ? meta.tags.filter((tag) => typeof tag === "string") : [],
     experiences: Array.isArray(meta.experiences) ? meta.experiences.filter((name) => typeof name === "string") : [],
+    materials: Array.isArray(meta.materials) ? meta.materials.filter((name) => typeof name === "string") : [],
   };
 }
 

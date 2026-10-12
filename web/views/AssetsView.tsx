@@ -13,8 +13,8 @@ import {
   Eye,
   AlertTriangle,
 } from "lucide-react";
-import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, usePrompt, useToast, Dialog } from "../lib/ui";
+import { api, del, formatBytes, formatTime, materialsPath, workPath, useServerEvent } from "../lib/api";
+import { useAction, useConfirm, useContextMenu, useToast, Dialog } from "../lib/ui";
 import type { Asset, ResourceItem } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { assetDrag } from "../workbench/assetDrag";
@@ -23,6 +23,7 @@ import { uploadBlobs, uploadFiles } from "./upload";
 import { MaterialsPanel } from "./MaterialsPanel";
 import { ResourcesPanel } from "./ResourcesPanel";
 import { KindIcon, KIND_NAMES, ServerThumb, isDrawn, isVisual, layerOf } from "./media";
+import { LibraryPicker, type LibraryInfo } from "./LibraryPicker";
 
 export function AssetsView() {
   const { work, stage, addToChat, reload, openFile, readOnly } = useWorkbench();
@@ -33,9 +34,10 @@ export function AssetsView() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [dragging, setDragging] = useState(false);
   const [urlDialog, setUrlDialog] = useState(false);
+  // A file of the work on its way into a material library: the libraries to pick from.
+  const [sharing, setSharing] = useState<{ asset: Asset; libraries: LibraryInfo[] } | null>(null);
   const [run, busy] = useAction();
   const confirm = useConfirm();
-  const prompt = usePrompt();
   const [openMenu, menu] = useContextMenu();
   const base = workPath(work.repo, work.id);
   const load = () => api<Asset[]>(`${base}/assets`).then(setAssets, () => {});
@@ -97,17 +99,13 @@ export function AssetsView() {
       await api(`${base}/audio/place`, { body: { sound: item.id, start: stage.playback.get().time, track: "音效", name: item.title } });
       await reload();
     }, `已把「${item.title}」放到「音效」音轨`);
-  /** Share one of the work's files with other works: copy it into a material library. */
+  /** Share one of the work's files with other works: copy it into a material library (picked, or made there). */
   const toLibrary = (asset: Asset) =>
-    run(async () => {
-      const libraries = await api<{ id: string }[]>(`/api/repos/${encodeURIComponent(work.repo)}/materials/libraries`);
-      const name = (
-        await prompt("存入哪个素材库（名称）", work.meta?.materials?.[0] ?? libraries[0]?.id ?? "", libraries.map((item) => item.id).join("、") || "先在「素材库」中新建一个")
-      )?.trim();
-      if (!name) return;
-      await api(`/api/repos/${encodeURIComponent(work.repo)}/materials/libraries/${encodeURIComponent(name)}/import`, { body: { work: work.id, path: asset.path } });
-      toast(`已存入素材库「${name}」`, "ok");
-    });
+    run(async () => setSharing({ asset, libraries: await api<LibraryInfo[]>(`${materialsPath(work.repo)}/libraries?work=${encodeURIComponent(work.id)}`) }));
+  const share = async (asset: Asset, id: string) => {
+    const saved = await api<{ ref: string }>(`${materialsPath(work.repo)}/libraries/${encodeURIComponent(id)}/import`, { body: { work: work.id, path: asset.path } });
+    toast(`已存入素材库：materials/${saved.ref}`, "ok");
+  };
   const remove = async (asset: Asset) => {
     if (await confirm(`删除素材 ${asset.path}？如果代码还在引用它，预览会报错。`, { confirm: "删除", danger: true }))
       await run(() => del(`${base}/file?path=${encodeURIComponent(asset.path)}`).then(load));
@@ -221,6 +219,19 @@ export function AssetsView() {
         <MaterialsPanel onPlace={(asset, how) => (how === "layer" ? addLayer(asset) : placeAudio(asset))} />
       ) : (
         <ResourcesPanel onPlaceSound={placeSound} />
+      )}
+      {sharing && (
+        <LibraryPicker
+          kind="materials"
+          single
+          title={`把 ${sharing.asset.path.split("/").pop()} 存入素材库`}
+          libraries={sharing.libraries}
+          pinned={work.meta?.materials ?? []}
+          hint="存入后同一作品库的其他作品也能使用它（复制一份，作品里的这个文件不变）。"
+          onApply={([id]) => share(sharing.asset, id)}
+          onCreate={async (name) => ({ ...(await api<{ id: string; title: string }>(`${materialsPath(work.repo)}/libraries`, { body: { name } })), files: 0 })}
+          onClose={() => setSharing(null)}
+        />
       )}
       {urlDialog && (
         <UrlDialog

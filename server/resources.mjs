@@ -8,6 +8,7 @@ import { sendFile, sendJson } from "./http.mjs";
 import { workArg, repoArg, asJson } from "./tools/registry.mjs";
 import { contactSheet } from "./render.mjs";
 import { Thumbnails } from "./thumbnails.mjs";
+import { closestLibraries, offerOrder, SUGGEST } from "./libraries.mjs";
 
 /**
  * The resources of material library code, read without running it (the studio never runs
@@ -573,11 +574,12 @@ export class ResourceCatalog {
    * The library code modules as the libraries have them now — what previews and thumbnails
    * run too. `outdated`: the work locked another version of the file (it runs that one).
    */
-  async modules(work, { library } = {}) {
+  async modules(work, { library, libraries } = {}) {
     const head = await this.materials.headOf(work.repo);
     const locks = this.materials.readLocks(work.dir);
     const result = [];
-    const refs = [...head.keys()].filter((ref) => CODE_FILE.test(ref) && (!library || ref.startsWith(library + "/"))).sort();
+    const wanted = (ref) => (!library || ref.startsWith(library + "/")) && (!libraries || libraries.has(ref.split("/")[0]));
+    const refs = [...head.keys()].filter((ref) => CODE_FILE.test(ref) && wanted(ref)).sort();
     // Every module of the libraries stays parsed, however many there are.
     this.parsed.limit = Math.max(this.parsed.limit, refs.length * 2);
     for (const ref of refs) {
@@ -635,11 +637,13 @@ export class ResourceCatalog {
     if (engine) entries = entries.filter((entry) => entry.type === "resource" && entry.engine === engine);
     // Exported functions and types join the results only when looking for something.
     const code = query && (!kind || kind === "code") && !engine ? modules.flatMap((mod) => mod.exports.filter((item) => item.kind !== "reexport").map((item) => this.codeEntry(mod, item))) : [];
+    // Among equally good matches, the work's own libraries first.
+    const linked = new Set(work.dir ? this.materials.names(work) : []);
     return [...(kind === "code" ? [] : entries), ...code]
       .map((entry) => ({ entry, score: score(entry, query) * (entry.type === "code" ? 0.6 : 1) }))
       .filter((item) => item.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, query ? limit : 1000)
+      .sort((a, b) => b.score - a.score || Number(linked.has(b.entry.library)) - Number(linked.has(a.entry.library)))
+      .slice(0, query ? limit : Infinity)
       .map((item) => item.entry);
   }
 
@@ -682,7 +686,9 @@ export class ResourceCatalog {
     if (!blob) {
       const library = ref.split("/")[0];
       const known = [...new Set([...head.keys()].filter((path) => path.includes("/")).map((path) => path.split("/")[0]))];
-      throw notFound(known.includes(library) ? `素材库「${library}」里没有 ${ref.slice(library.length + 1)}（resources_search 找资源的地址）` : `作品库 ${work.repo} 里没有素材库「${library}」（有：${known.join("、") || "无"}）`);
+      if (known.includes(library)) throw notFound(`素材库「${library}」里没有 ${ref.slice(library.length + 1)}（resources_search 找资源的地址）`);
+      const close = closestLibraries(library, known.map((id) => ({ id, title: id })));
+      throw notFound(`作品库 ${work.repo} 里没有素材库「${library}」${close.length ? `。最接近的：${close.map((item) => `「${item.id}」`).join("")}` : ""}（resources_search 找资源的地址）`);
     }
     const mod = { ...(await this.module(work.repo, ref, blob)), outdated: Boolean(locks[ref] && locks[ref] !== blob) };
     if (!key) return { module: mod };
@@ -757,7 +763,6 @@ export class ResourceCatalog {
   }
   async computeOverview(repo) {
     const head = await this.materials.headOf(repo);
-    const dir = await this.materials.dir(repo);
     const result = [];
     for (const library of await this.materials.libraries(repo)) {
       const kinds = new Map();
@@ -786,40 +791,88 @@ export class ResourceCatalog {
       const canvas = [...canvases].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
       const order = (label) => (Object.values(RESOURCE_KINDS).indexOf(label) + 100) % 100;
       const sorted = Object.fromEntries([...kinds].sort(([a], [b]) => order(a) - order(b)));
-      result.push({ id: library.id, title: library.title, files: library.files, resources, sounds, kinds: sorted, ...(Object.keys(engines).length ? { engines } : {}), canvas, about: readmeLead(path.join(dir, library.id, "README.md")) });
+      result.push({ id: library.id, title: library.title, files: library.files, resources, sounds, kinds: sorted, ...(Object.keys(engines).length ? { engines } : {}), canvas, about: library.about });
     }
     return result;
   }
-  /** work_context's view of the libraries: all of them, which the work links, and how they fit its picture. */
+  /**
+   * Which libraries to describe to an AI for a work: all of a few; of many, the work's own and
+   * the ones that suit it (else the most used). `annotated`: the libraries as the library index
+   * ranked them for the work (null: not known yet). Returns the overview entries and how many
+   * were left out.
+   */
+  pick(work, overview, annotated, { few = 10, offers = 6 } = {}) {
+    const linked = this.materials.names(work);
+    const own = linked.map((id) => overview.find((library) => library.id === id)).filter(Boolean);
+    const info = new Map((annotated ?? []).map((library) => [library.id, library]));
+    // The overview's facts, with how much each library is used and how well it suits the work.
+    const others = offerOrder(overview.filter((library) => !linked.includes(library.id)).map((library) => ({ ...info.get(library.id), ...library })));
+    if (overview.length <= few) return { shown: [...own, ...others], rest: 0 };
+    const suitable = others.filter((library) => library.score >= SUGGEST).slice(0, offers);
+    const shown = [...own, ...(suitable.length ? suitable : others.filter((library) => library.works).slice(0, offers))];
+    return { shown, rest: overview.length - shown.length, offered: suitable.length ? "suitable" : "used" };
+  }
+
+  /** work_context's view of the libraries: the work's own and some others, and how they fit its picture. */
   async librariesFor(work) {
     const linked = new Set(this.materials.names(work));
     const meta = this.services.works.meta(work);
-    const libraries = (await this.overview(work.repo)).map((library) => {
+    const overview = await this.overview(work.repo);
+    const annotated = this.services.libraries ? await this.services.libraries.annotate("materials", work.repo, overview, work) : null;
+    const { shown, rest } = this.pick(work, overview, annotated);
+    const libraries = shown.map((library) => {
       const note = library.canvas && meta.ok ? canvasNote(library.canvas, meta.meta) : "";
-      return { ...library, linked: linked.has(library.id), ...(note ? { canvasNote: note } : {}) };
+      const { score: _score, usedAt: _usedAt, why, linked: _linked, ...facts } = library;
+      return { ...facts, linked: linked.has(library.id), ...(!linked.has(library.id) && why?.length ? { why } : {}), ...(note ? { canvasNote: note } : {}) };
     });
     return {
+      total: overview.length,
       libraries,
-      hint: libraries.some((library) => library.resources || library.sounds)
+      ...(rest ? { more: `作品库里还有 ${rest} 个素材库没有列出：materials_list 的 query 按名称和介绍查找，resources_search 按内容找（角色、效果、音效、图片、模型等）。` } : {}),
+      hint: overview.some((library) => library.resources || library.sounds)
         ? "画角色、场景、道具、效果，配音效之前先用 resources_search 找现成的，resource_view 看用法、参数和预览图；第一次用一个素材库先读它的 README（material_read）。"
         : "素材库里还没有声明资源；共用的文件用 materials_list 查看。",
     };
   }
-  /** The session brief's section on the libraries (from the last overview; the agent manager prepares it). */
+
+  /**
+   * The session brief's section on the libraries (from the last overview and library ranking;
+   * the agent manager prepares both). Kept within a budget however many libraries there are.
+   */
   brief(work) {
     const overview = this.overviewed.get(work.repo);
     if (!overview?.length) return null;
     const linked = new Set(this.materials.names(work));
     const meta = this.services.works.meta(work);
-    const lines = overview.map((library) => {
+    const { shown, rest, offered } = this.pick(work, overview, this.services.libraries?.preparedFor(work)?.materials ?? null);
+    const name = (library) => `「${library.id}」${library.title !== library.id ? `（${library.title}）` : ""}`;
+    const full = (library) => {
       const kinds = Object.entries(library.kinds).map(([label, count]) => `${label} ${count}`).join("、");
       const engines = Object.entries(library.engines ?? {}).map(([label, count]) => `${label} ${count}`).join("、");
       const holds = [library.resources ? `资源 ${library.resources} 个（${kinds}${engines ? `；其中 ${engines}` : ""}）` : "", library.sounds ? `音效 ${library.sounds} 个` : "", `文件 ${library.files} 个`].filter(Boolean).join("、");
       const note = library.canvas && meta.ok ? canvasNote(library.canvas, meta.meta) : "";
-      return `- 「${library.title}」${linked.has(library.id) ? "（本作品已关联）" : ""}：${holds}。${library.about ? library.about + " " : ""}${note}`.trim();
-    });
+      const why = !linked.has(library.id) && library.why?.length ? `（${library.why.join("；")}）` : "";
+      return `- ${name(library)}${linked.has(library.id) ? "（本作品已关联）" : why}：${holds}。${library.about ? library.about + " " : ""}${note}`.trim();
+    };
+    const short = (library) => `- ${name(library)}${linked.has(library.id) ? "（本作品已关联）" : ""}：${[library.resources ? `资源 ${library.resources} 个` : "", library.sounds ? `音效 ${library.sounds} 个` : "", `文件 ${library.files} 个`].filter(Boolean).join("、")}`;
+    // However many libraries the work links, the section stays small: details give way to names.
+    const budget = 6000;
+    const size = (lines) => Buffer.byteLength(lines.join("\n"), "utf8");
+    let lines = shown.map(full);
+    if (size(lines) > budget) lines = shown.map((library) => (linked.has(library.id) ? full(library) : short(library)));
+    if (size(lines) > budget) lines = shown.map(short);
+    let dropped = 0;
+    while (lines.length && size(lines) > budget) {
+      lines.pop();
+      dropped++;
+    }
+    const left = rest + dropped;
+    const label = rest ? `下面是${linked.size ? `本作品关联的和${offered === "suitable" ? "可能适合它的" : "用得最多的"}` : offered === "suitable" ? "可能适合本作品的" : "用得最多的"}` : "";
+    const tail = left
+      ? `\n\n作品库里共有 ${overview.length} 个素材库，${label ? label + "，" : ""}还有 ${left} 个没有列出：materials_list 的 query 按名称和介绍查找，resources_search 按内容找。`
+      : "";
     return {
-      text: `## 素材库\n\n多个作品共用的角色、场景、道具、效果、转场、文字、音效和代码。画一个东西、配一个音效之前先用 resources_search 找，有就导入复用（不合适就给素材库代码加参数）；resource_view 看用法、参数和预览图；第一次用一个素材库先读它的 README（material_read）。\n\n${lines.join("\n")}`,
+      text: `## 素材库\n\n多个作品共用的角色、场景、道具、效果、转场、文字、音效和代码。画一个东西、配一个音效之前先用 resources_search 找，有就导入复用（不合适就给素材库代码加参数）；resource_view 看用法、参数和预览图；第一次用一个素材库先读它的 README（material_read）。地址里写素材库的文件夹名（「」里的第一个名字）。\n\n${lines.join("\n")}${tail}`,
     };
   }
 
@@ -951,42 +1004,48 @@ export function canvasNote(canvas, meta, engine) {
   return `按 ${width}×${height}（${shape(width, height)}）的画布设计，本作品画面是 ${W}×${H}（${shape(W, H)}）：要铺满整个画面时会被裁切或留边（先看素材库 README 的说明）；只用作画面里的局部元素时，按比例换算位置和大小即可。`;
 }
 
-/** The lead paragraph of a library README (the line under its title), shortened. */
-function readmeLead(file) {
-  let text = "";
-  try {
-    text = fs.readFileSync(file, "utf8");
-  } catch {
-    return "";
-  }
-  const line = text.split("\n").find((item) => item.trim() && !item.startsWith("#")) ?? "";
-  return line.length > 160 ? line.slice(0, 159) + "…" : line.trim();
-}
-
 const DIRECTORY_LIMIT = 8000; // characters of the full directory before resources_search lists a summary instead
 
-/** resources_search without a query: every entry by library and kind, or (summary) counts and the first few titles. */
-function directory(entries, linked, summary) {
+/**
+ * resources_search without a query: every entry by library and kind ("full"), counts and the
+ * first few titles of each kind ("summary"), or — for many libraries — that for the work's
+ * own libraries and one line of counts for each other one ("libraries"). The work's libraries
+ * come first.
+ */
+function directory(entries, linked, level) {
   const libraries = new Map();
   for (const entry of entries) libraries.set(entry.library, [...(libraries.get(entry.library) ?? []), entry]);
-  return [...libraries]
-    .map(([name, list]) => {
-      const kinds = new Map();
-      for (const entry of list) kinds.set(entry.kind, [...(kinds.get(entry.kind) ?? []), entry]);
-      const lines = [`## 素材库「${name}」${linked.has(name) ? "（本作品已关联）" : "（本作品未关联，materials_use 时会自动关联）"}`];
-      const order = (kind) => (Object.keys(RESOURCE_KINDS).indexOf(kind) + 100) % 100; // known kinds in their order, others after
-      for (const [kind, group] of [...kinds].sort(([a], [b]) => order(a) - order(b))) {
-        const label = `${group[0].kindLabel}（${group.length}）`;
-        if (summary) {
-          const shown = group.slice(0, kind === "sound" ? 12 : 8).map((entry) => entry.title);
-          lines.push(`${label}：${shown.join("、")}${group.length > shown.length ? `……（kind: "${kind}"）` : ""}`);
-        } else if (kind === "sound")
-          lines.push(`${label}：${[...new Set(group.map((entry) => entry.ref))].map((ref) => `${ref}#…：${group.filter((entry) => entry.ref === ref).map((entry) => `${entry.key} ${entry.title}`).join("、")}`).join("\n")}`);
-        else lines.push(`${label}：${group.map((entry) => `${entry.id} ${entry.title}${ENGINE_TAGS[entry.engine] ? `（${ENGINE_TAGS[entry.engine]}）` : ""}`).join("；")}`);
-      }
-      return lines.join("\n");
-    })
-    .join("\n\n");
+  const order = (kind) => (Object.keys(RESOURCE_KINDS).indexOf(kind) + 100) % 100; // known kinds in their order, others after
+  const byKind = (list) => {
+    const kinds = new Map();
+    for (const entry of list) kinds.set(entry.kind, [...(kinds.get(entry.kind) ?? []), entry]);
+    return [...kinds].sort(([a], [b]) => order(a) - order(b));
+  };
+  const sorted = [...libraries].sort(([a], [b]) => Number(linked.has(b)) - Number(linked.has(a)) || a.localeCompare(b, "zh"));
+  const sections = [];
+  const others = [];
+  for (const [name, list] of sorted) {
+    if (level === "libraries" && !linked.has(name)) {
+      others.push(`- 「${name}」：${byKind(list).map(([, group]) => `${group[0].kindLabel} ${group.length}`).join("、")}`);
+      continue;
+    }
+    const lines = [`## 素材库「${name}」${linked.has(name) ? "（本作品已关联）" : "（本作品未关联，materials_use 时会自动关联）"}`];
+    for (const [kind, group] of byKind(list)) {
+      const label = `${group[0].kindLabel}（${group.length}）`;
+      if (level !== "full") {
+        const shown = group.slice(0, kind === "sound" ? 12 : 8).map((entry) => entry.title);
+        lines.push(`${label}：${shown.join("、")}${group.length > shown.length ? `……（kind: "${kind}"）` : ""}`);
+      } else if (kind === "sound")
+        lines.push(`${label}：${[...new Set(group.map((entry) => entry.ref))].map((ref) => `${ref}#…：${group.filter((entry) => entry.ref === ref).map((entry) => `${entry.key} ${entry.title}`).join("、")}`).join("\n")}`);
+      else lines.push(`${label}：${group.map((entry) => `${entry.id} ${entry.title}${ENGINE_TAGS[entry.engine] ? `（${ENGINE_TAGS[entry.engine]}）` : ""}`).join("；")}`);
+    }
+    sections.push(lines.join("\n"));
+  }
+  if (others.length) {
+    const shown = others.slice(0, 60);
+    sections.push(`## 其他素材库（${others.length} 个，本作品未关联；用 library 看一个的目录）\n${shown.join("\n")}${others.length > shown.length ? `\n……还有 ${others.length - shown.length} 个（用 query 搜索）` : ""}`);
+  }
+  return sections.join("\n\n");
 }
 
 export function resourcesPlugin(services) {
@@ -996,11 +1055,14 @@ export function resourcesPlugin(services) {
   services.repos.beforeRemove.push((repo) => (catalog.overviews.delete(repo), catalog.overviewed.delete(repo)));
   const open = (params) => services.openWork(params.id, params.repo);
 
-  /** The libraries' resources and sounds for the workbench (all libraries, marked when the work links them). */
+  /**
+   * The libraries' resources and sounds for the workbench, marked when the work links their
+   * library: of every library, one (`library`), or the work's own (`scope=linked`).
+   */
   router.get("/api/works/:repo/:id/resources", async ({ params, query }) => {
     const work = await open(params);
     const linked = new Set(services.materials.names(work));
-    const modules = await catalog.modules(work, { library: query.library || undefined });
+    const modules = await catalog.modules(work, { library: query.library || undefined, libraries: query.scope === "linked" ? linked : undefined });
     const versions = new Map();
     for (const mod of modules) if (mod.resources.length) versions.set(mod.ref, await catalog.version(work, mod.ref).catch(() => ""));
     const libraries = (await services.materials.libraries(work.repo)).map((item) => ({ id: item.id, title: item.title, linked: linked.has(item.id) }));
@@ -1065,15 +1127,17 @@ export function resourcesPlugin(services) {
       const partial = words.length > 1 && !found.some((entry) => score(entry, query) >= 100 * words.length);
       if (query) text = `${partial ? `没有同时符合「${words.join("」「")}」的；下面是符合其中一部分的 ` : "找到 "}${found.length} 个：\n${found.map(line).join("\n")}${filesPart}${english}`;
       else {
-        // The directory, by library and kind; once it gets long, only the first few of each kind.
-        text = directory(found, linked, false);
+        // The directory, by library and kind; once it gets long, only the first few of each kind,
+        // and for many libraries only counts of the ones the work does not link.
+        text = directory(found, linked, "full");
         const summary = text.length > DIRECTORY_LIMIT;
-        if (summary) text = directory(found, linked, true);
+        if (summary) text = directory(found, linked, "summary");
+        if (text.length > DIRECTORY_LIMIT && !library) text = directory(found, linked, "libraries");
         text += summary
-          ? `\n\n资源较多，每类只列出前几个：${kind ? "用 query 搜索这一类" : "用 kind 列出一类，或用 query 搜索"}，拿到地址后用 resource_view 看详情。`
+          ? `\n\n资源较多，只列出了一部分：${kind ? "用 query 搜索这一类" : "用 kind 列出一类、library 只看一个素材库，或用 query 搜索"}，拿到地址后用 resource_view 看详情。`
           : "\n\n地址写法 <素材库>/<文件>#<名称>；resource_view 看详情和预览图，音效用 audio_place 的 sound 放到音轨。";
       }
-      return asJson({ items: found.map(({ text: _text, ...entry }) => entry), ...(fileHits.length ? { files: fileHits } : {}) }, text);
+      return asJson({ items: found.slice(0, 500).map(({ text: _text, ...entry }) => entry), ...(fileHits.length ? { files: fileHits } : {}) }, text);
     },
   });
 

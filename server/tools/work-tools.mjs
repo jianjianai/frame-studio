@@ -10,6 +10,7 @@ import { probe } from "../media.mjs";
 import { projectAudioTracks } from "../../src/engine/types.ts";
 import { formatTime, contentStamp } from "../render.mjs";
 import { readVisual, readAudio } from "../documents.mjs";
+import { offerOrder } from "../libraries.mjs";
 
 /** What would run past a new, shorter length: layers, audio clips, subtitles, the cover moment. */
 function pastEnd(work, meta, duration) {
@@ -122,12 +123,14 @@ export function registerWorkTools(registry) {
       if (ctx.scope.work) throw problem(403, "作品内的 AI 会话不能新建其他作品", "FORBIDDEN");
       const work = await works.create(args);
       // Libraries belong to a repository: say which one the work landed in and what it can use.
-      const libraries = services.materials ? await services.materials.libraries(work.repo).catch(() => []) : [];
+      let libraries = services.materials ? await services.materials.libraries(work.repo).catch(() => []) : [];
+      if (services.libraries && libraries.length > 12) libraries = offerOrder(await services.libraries.annotate("materials", work.repo, libraries, work).catch(() => libraries));
       const others = services.repos.list().map((repo) => repo.id).filter((id) => id !== work.repo);
+      const named = libraries.slice(0, 12);
       return asJson({ id: work.id, repo: work.repo, dir: work.dir, materials: libraries.map((item) => item.id) }, [
         `已创建作品 ${work.id}（${args.title}），在作品库 ${work.repo}${args.repo ? "" : "（没有指定 repo，用的是默认作品库）"}。作品文件位于 ${work.dir}`,
         libraries.length
-          ? `这个作品库的素材库：${libraries.map((item) => `「${item.id}」`).join("")}（作品只能用同一作品库里的素材库）`
+          ? `这个作品库的素材库${libraries.length > named.length ? `共 ${libraries.length} 个，适合这个作品的和用得最多的：` : "："}${named.map((item) => `「${item.id}」`).join("")}${libraries.length > named.length ? "；其他的用 materials_list 的 query 查找" : ""}（作品只能用同一作品库里的素材库）`
           : `这个作品库没有素材库（作品只能用同一作品库里的素材库）${others.length ? `。其他作品库：${others.join("、")}；要用它们的素材库，就在那个作品库里新建作品（repo 参数）` : ""}`,
         "还没有混音文档 audio.json：第一次用 audio_place 或 speech_synthesize 放声音时自动创建。",
       ].join("\n"));
@@ -241,7 +244,7 @@ export function registerWorkTools(registry) {
           .slice(0, 5)
           .map(({ name, createdAt, duration, width, height, size }) => ({ name, createdAt, duration, width, height, size })),
         // The production know-how to follow; read it in full with experience_read.
-        experiences: services.experience ? services.experience.summary(work, { inBrief: Boolean(ctx.scope.session) }) : null,
+        experiences: services.experience ? await services.experience.summary(work, { inBrief: Boolean(ctx.scope.session) }) : null,
         // What the shared libraries hold (resources, sounds) and whether they fit this picture.
         materials: services.resources ? await services.resources.librariesFor(work).catch(() => null) : null,
         // Where the work was posted and how it did (only when there is review data).

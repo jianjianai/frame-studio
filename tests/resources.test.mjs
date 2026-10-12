@@ -363,7 +363,8 @@ describe("resources of the material libraries", () => {
     expect((await tool("material_read", { work: other.id, library: "测试", path: "README.md" })).body.text).toContain("素材库「测试」。引用了它的作品可以直接使用其中的文件");
     // One line per re-export statement.
     expect((await tool("resource_view", { work: other.id, id: "测试/code/tools.ts", image: false })).body.text).toContain("- 从 ./shapes 导出 half、ball  // 两个工具");
-    expect((await tool("resource_view", { work: other.id, id: "没有/code/x.ts#a", image: false })).body.error.message).toContain("没有素材库「没有」（有：测试）");
+    expect((await tool("resource_view", { work: other.id, id: "没有/code/x.ts#a", image: false })).body.error.message).toContain("没有素材库「没有」（resources_search");
+    expect((await tool("resource_view", { work: other.id, id: "测试库/code/x.ts#a", image: false })).body.error.message).toContain("最接近的：「测试」");
     expect((await tool("resource_view", { work: other.id, id: "测试/code/nope.ts#a", image: false })).body.error.message).toContain("素材库「测试」里没有 code/nope.ts");
     // work_context: the libraries, what they hold, whether they fit the picture (the ball's 400×300 does not fit 16:9).
     const context = JSON.parse((await tool("work_context", { work: other.id })).body.text);
@@ -374,7 +375,8 @@ describe("resources of the material libraries", () => {
         sounds: 2,
         kinds: expect.objectContaining({ 物品: 2, 场景: 1, 效果: 1 }),
         engines: { 三维: 1, Pixi: 1 },
-        about: expect.stringContaining("素材库「测试」。"),
+        // The README still has the template's introduction, which says nothing about the library.
+        about: "",
         canvasNote: expect.stringContaining("400×300"),
       }),
     ]);
@@ -538,7 +540,7 @@ export const resources = defineResources({
     const items = Array.from({ length: 300 }, (_, i) => `  item${i}: resource({ kind: "prop", title: "道具 ${i}", preview: { width: 10, height: 10, draw() {} } }),`).join("\n");
     await put("code/many.ts", `import { defineResources, resource } from "@frame/engine/resources";\nexport const resources = defineResources({\n${items}\n});\n`);
     const all = await tool("resources_search", { work: work.id });
-    expect(all.body.text).toContain("资源较多，每类只列出前几个");
+    expect(all.body.text).toContain("资源较多，只列出了一部分");
     expect(all.body.text).toMatch(/物品（30\d）：[^\n]*……（kind: "prop"）/);
     expect(all.body.text.length).toBeLessThan(2000);
     const props = await tool("resources_search", { work: work.id, kind: "prop" });
