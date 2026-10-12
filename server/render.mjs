@@ -13,6 +13,12 @@ import { cleanBrowserError, mergeTimedErrors } from "./stack.mjs";
 
 const require = createRequire(import.meta.url);
 
+/**
+ * Page warnings and errors worth keeping. Not Chrome's GL performance notes ("GPU stall due
+ * to ReadPixels"): rendering reads every frame back on purpose, and the AI would chase them.
+ */
+const worthLogging = (message) => ["error", "warning"].includes(message.type()) && !/GL Driver Message \([^)]*Performance/.test(message.text());
+
 export function browserExecutable() {
   const candidates = [process.env.FRAME_BROWSER];
   try {
@@ -160,7 +166,7 @@ export class Renderer {
     // The stack carries the location; cleanBrowserError maps it back to the work's source.
     page.on("pageerror", (error) => errors.push(error.stack || error.message));
     page.on("console", (message) => {
-      if (["error", "warning"].includes(message.type())) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
+      if (worthLogging(message)) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
       if (logs.length > 50) logs.shift();
     });
     page.on("response", (response) => {
@@ -618,7 +624,7 @@ export class Renderer {
       const logs = [];
       page.on("pageerror", (error) => errors.push(error.stack || error.message));
       page.on("console", (message) => {
-        if (["error", "warning"].includes(message.type())) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
+        if (worthLogging(message)) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
         if (logs.length > 50) logs.shift();
       });
       const reoptimized = () => logs.some((line) => line.includes("Outdated Optimize Dep")) || errors.some((line) => line.startsWith("HTTP 504 "));
@@ -715,7 +721,7 @@ export class Renderer {
       const logs = [];
       page.on("pageerror", (error) => errors.push(error.stack || error.message));
       page.on("console", (message) => {
-        if (["error", "warning"].includes(message.type())) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
+        if (worthLogging(message)) logs.push(`[${message.type()}] ${message.text()}`.slice(0, 500));
         if (logs.length > 50) logs.shift();
       });
       const reoptimized = () => logs.some((line) => line.includes("Outdated Optimize Dep")) || errors.some((line) => line.startsWith("HTTP 504 "));
