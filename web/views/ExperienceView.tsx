@@ -14,7 +14,7 @@ export const ORGANIZE = (titles: string[]) =>
 /**
  * The experience libraries the work uses, each with its documents (opened as editor tabs).
  * Finding, linking, creating and deleting libraries happens in the 经验库 tab (管理…); their
- * versions are in the explorer's 版本与同步.
+ * versions are in 版本与同步.
  */
 export function ExperienceView() {
   const { work, reload, openExperience, openTool, addToChat, askAi, readOnly } = useWorkbench();

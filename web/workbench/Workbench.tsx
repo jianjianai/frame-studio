@@ -3,6 +3,7 @@ import {
   Files,
   Image as ImageIcon,
   AudioLines,
+  GitBranch,
   Clapperboard,
   Settings as SettingsIcon,
   PanelLeft,
@@ -24,7 +25,7 @@ import { api, workPath, experiencePath, useServerEvent, sendEvent } from "../lib
 import { Sash, usePersistent, useToast, Dialog, useConfirm, usePrompt } from "../lib/ui";
 import type { CheckResult, WorkInfo, WorkStatus } from "../lib/types";
 import { navigate } from "../App";
-import { StageController, WorkbenchContext, useWorkbench, type ChatAttachment, type Selection, type Tool, type WorkbenchContextValue } from "./store";
+import { StageController, WorkbenchContext, useWorkbench, type ChatAttachment, type Selection, type VersionSource, type WorkbenchContextValue } from "./store";
 import { useTimelineHistory } from "./timelineHistory";
 import { PropertiesView } from "../views/PropertiesView";
 import { ExperienceView } from "../views/ExperienceView";
@@ -35,36 +36,38 @@ import { BottomPanel } from "./BottomPanel";
 import { StatusBar } from "./StatusBar";
 import { RemoteBar } from "./RemoteBar";
 import { ExplorerView } from "../views/ExplorerView";
+import { VersionsView } from "../views/VersionsView";
 import { AssetsView } from "../views/AssetsView";
+import { AudioView } from "../views/AudioView";
 import { ChatPanel, type ChatHandle } from "../chat/ChatPanel";
 import { SettingsView } from "../settings/SettingsView";
 import "./workbench.css";
 
 /**
- * The activity bar: side bar views for lists to pick from (files, assets, the work's libraries,
- * properties of what is selected, prompts), and tools with many options or much data, which
- * open as editor tabs instead.
+ * The activity bar: side bar views for lists to pick from and short forms. Tools with many
+ * options or much data (export, reviews, library management, resources) open as editor tabs
+ * from the title bar and the views.
  */
-const VIEWS: ({ id: string; label: string; icon: typeof Files } & ({ component: () => React.ReactNode; tool?: undefined } | { tool: Tool; component?: undefined }))[] = [
-  { id: "explorer", label: "资源管理器与版本", icon: Files, component: ExplorerView },
+const VIEWS = [
+  { id: "explorer", label: "资源管理器", icon: Files, component: ExplorerView },
+  { id: "versions", label: "版本与同步", icon: GitBranch, component: VersionsView },
   { id: "assets", label: "素材", icon: ImageIcon, component: AssetsView },
+  { id: "experience", label: "经验库", icon: BookOpen, component: ExperienceView },
   { id: "properties", label: "属性", icon: SlidersHorizontal, component: PropertiesView },
-  { id: "experience", label: "经验", icon: BookOpen, component: ExperienceView },
   { id: "prompts", label: "提示词", icon: BookMarked, component: PromptsView },
-  { id: "audio", label: "音频与配音", icon: AudioLines, tool: "audio" },
-  { id: "export", label: "导出", icon: Clapperboard, tool: "export" },
-  { id: "reviews", label: "复盘", icon: BarChart3, tool: "reviews" },
-];
+  { id: "audio", label: "音频与配音", icon: AudioLines, component: AudioView },
+] as const;
 
 export function Workbench({ repo, id, version }: { repo: string; id: string; version: string }) {
   const toast = useToast();
   const [work, setWork] = useState<WorkInfo | null>(null);
   const [error, setError] = useState("");
   const [view, setView] = usePersistent<string>("view", "explorer");
-  // A view remembered from before (版本与同步, 导出…) that opens as a tab now: back to the explorer.
+  // A view remembered from before (导出, 复盘) that opens as a tab now: back to the explorer.
   useEffect(() => {
-    if (!VIEWS.some((item) => item.id === view && item.component)) setView("explorer");
+    if (!VIEWS.some((item) => item.id === view)) setView("explorer");
   }, [view, setView]);
+  const [versionSource, setVersionSource] = usePersistent<VersionSource>("versions-source", "work");
   const [sidebar, setSidebar] = usePersistent("sidebar", { visible: true, width: 260 });
   const [panel, setPanel] = usePersistent("panel", { visible: true, height: 240, tab: "timeline" });
   const [chat, setChat] = usePersistent("chat", { visible: true, width: 400 });
@@ -84,8 +87,6 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   }, [narrow]);
   const editor = useRef<EditorHandle>(null);
   const chatRef = useRef<ChatHandle>(null);
-  // The tool whose tab is shown: its activity bar entry is marked.
-  const [activeTool, setActiveTool] = useState<Tool | null>(null);
   const base = workPath(repo, id);
 
   const reload = useCallback(async () => {
@@ -205,9 +206,13 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     },
     showPanel: (tab) => setPanel((value) => ({ ...value, visible: true, tab })),
     showView: (next) => {
-      const entry = VIEWS.find((item) => item.id === next);
-      if (entry?.tool) return context?.openTool(entry.tool);
       setView(next);
+      setSidebar((value) => ({ ...value, visible: true }));
+    },
+    versionSource,
+    showVersions: (source) => {
+      if (source) setVersionSource(source);
+      setView("versions");
       setSidebar((value) => ({ ...value, visible: true }));
     },
     openSettings: (section) => setSettingsOpen(section || "ai"),
@@ -259,7 +264,6 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
 
   const ActiveView = VIEWS.find((item) => item.id === view)?.component ?? ExplorerView;
   const openView = (item: (typeof VIEWS)[number]) => {
-    if (item.tool) return context.openTool(item.tool);
     if (view === item.id) setSidebar({ ...sidebar, visible: !sidebar.visible });
     else (setView(item.id), setSidebar({ ...sidebar, visible: true }));
   };
@@ -312,6 +316,9 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
               <PanelRight size={16} />
             </button>
             {!readOnly && <PublishButton />}
+            <button className="btn small" title="复盘：作品发到平台后的数据和分析（在选项卡中打开）" onClick={() => context.openTool("reviews")}>
+              <BarChart3 size={14} /> 复盘
+            </button>
             <button className="btn small primary" onClick={() => context.openTool("export")}>
               <Clapperboard size={14} /> 导出
             </button>
@@ -320,14 +327,13 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
         <div className="wb-body">
           <nav className="wb-activity" aria-label="视图">
             {VIEWS.map((item) => {
-              // Like VS Code's Source Control: unsaved changes (the work's and the experience libraries') on the explorer, where versions are saved.
-              const changes = item.id === "explorer" ? (status?.files.length ?? 0) + experienceChanges : 0;
-              const marked = item.tool ? activeTool === item.tool : view === item.id && sidebar.visible;
+              // Like VS Code's Source Control: unsaved changes (the work's and the experience libraries') on 版本与同步.
+              const changes = item.id === "versions" ? (status?.files.length ?? 0) + experienceChanges : 0;
               return (
                 <button
                   key={item.id}
-                  className={marked ? "active" : ""}
-                  title={changes ? `${item.label}（${changes} 个未保存的修改）` : item.tool ? `${item.label}（在选项卡中打开）` : item.label}
+                  className={view === item.id && sidebar.visible ? "active" : ""}
+                  title={changes ? `${item.label}（${changes} 个未保存的修改）` : item.label}
                   onClick={() => openView(item)}
                 >
                   <item.icon size={22} strokeWidth={1.6} />
@@ -363,7 +369,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
             {readOnly && <PublishedBar />}
             <RemoteBar base={`${workPath(work.repo, work.id)}/remote`} repo={work.repo} scope={work.id} onSettled={() => void reload()} />
             <div className="wb-editor">
-              <EditorArea ref={editor} onActiveChange={setEditing} onActiveTool={setActiveTool} />
+              <EditorArea ref={editor} onActiveChange={setEditing} />
             </div>
             {panel.visible && (
               <>
@@ -391,7 +397,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
             </>
           )}
         </div>
-        <StatusBar status={status} version={version} onOpenVersions={() => context.openTool("versions:work")} />
+        <StatusBar status={status} version={version} onOpenVersions={() => context.showVersions("work")} />
       </div>
       {settingsOpen && (
         <Dialog title="设置" onClose={() => setSettingsOpen(null)} width={920}>
@@ -438,9 +444,9 @@ function PublishButton() {
   );
 }
 
-/** Shown on a published work: view-only, with the ways to change it again, and its review. */
+/** Shown on a published work: view-only, with the ways to change it again (its review is in the title bar). */
 function PublishedBar() {
-  const { work, reload, openTool } = useWorkbench();
+  const { work, reload } = useWorkbench();
   const confirm = useConfirm();
   const prompt = usePrompt();
   const toast = useToast();
@@ -450,9 +456,6 @@ function PublishedBar() {
     <div className="published-bar" title="这个作品已发布，只能查看和导出。要修改，先取消发布，或者创建一个副本接着做。">
       <Lock size={14} />
       <span className="grow ellipsis">已发布，只能查看和导出</span>
-      <button className="btn small" title="记录发到了哪些平台和之后的数据，和其他作品对比" onClick={() => openTool("reviews")}>
-        <BarChart3 size={13} /> 复盘
-      </button>
       <button
         className="btn small"
         onClick={async () => {

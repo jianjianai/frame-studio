@@ -55,7 +55,6 @@ import {
 } from "../lib/reviews";
 import { ChartLegend, LineChart } from "../reviews/LineChart";
 import { ImportDialog, PostDialog, SnapshotDialog } from "../reviews/ReviewDialogs";
-import { VersionsPanel } from "./VersionsView";
 import { ViewHeader } from "./ViewHeader";
 import "../reviews/reviews.css";
 
@@ -123,13 +122,12 @@ function Section({
  * review documents. Every change is saved as a version at once; a published work takes them too.
  */
 export function ReviewView() {
-  const { work, stage, openReview, askAi } = useWorkbench();
+  const { work, stage, openReview, askAi, showVersions } = useWorkbench();
   const [detail, setDetail] = useState<ReviewDetail | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [dialog, setDialog] = useState<
     null | { kind: "post"; post?: Post } | { kind: "snapshot"; post: Post; snapshot?: Snapshot } | { kind: "import"; preview: ImportPreview; files: string[] }
   >(null);
-  const [showVersions, setShowVersions] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [run, busy] = useAction();
   const confirm = useConfirm();
@@ -613,14 +611,14 @@ export function ReviewView() {
       )}
 
       {detail && (
-        <section className="view-section">
-          <h3 className="clickable" onClick={() => setShowVersions(!showVersions)}>
-            {showVersions ? <ChevronDown size={14} /> : <ChevronRight size={14} />} 版本
-            <span className="faint small-text">（每次修改自动保存）</span>
-          </h3>
-        </section>
+        <p className="view-hint">
+          复盘资料的每次修改都自动保存为一个版本，
+          <button className="link-btn" onClick={() => showVersions("reviews")}>
+            在「版本与同步」里查看和恢复
+          </button>
+          。
+        </p>
       )}
-      {showVersions && <VersionsPanel source="reviews" />}
 
       {dialog?.kind === "post" && definitions && (
         <PostDialog

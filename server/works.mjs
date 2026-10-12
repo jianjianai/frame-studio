@@ -640,8 +640,10 @@ export class Works {
     return versions;
   }
 
+  /** Files a version changed (a merge: against its first parent, as a history shows it), or the unsaved ones. */
   async changes(work, commit) {
-    const args = commit ? ["show", "--format=", "--name-status", commit] : ["diff", "HEAD", "--name-status"];
+    assertCommit(commit);
+    const args = commit ? ["show", "--format=", "--name-status", "--diff-merges=first-parent", commit] : ["diff", "HEAD", "--name-status"];
     const out = await git(work.root, args);
     return out
       .split("\n")
@@ -653,7 +655,8 @@ export class Works {
   }
 
   async diff(work, { commit, file } = {}) {
-    const args = commit ? ["show", "--format=", commit] : ["diff", "HEAD"];
+    assertCommit(commit);
+    const args = commit ? ["show", "--format=", "--diff-merges=first-parent", commit] : ["diff", "HEAD"];
     const tracked = await git(work.root, [...args, "--", ...(file ? [file] : [])], { maxBytes: 4 * 1024 * 1024 });
     if (commit) return tracked;
     // New files are not in `git diff HEAD`; show them as added in full.
@@ -840,6 +843,11 @@ async function pruneLfs(dir) {
         const file = path.join(store, a, b, oid);
         if (!keep.has(oid) && fs.statSync(file).mtimeMs < recent) fs.rmSync(file, { force: true });
       }
+}
+
+/** A version named by its hash or as HEAD, HEAD~2… (never anything git could take for an option). */
+function assertCommit(commit) {
+  if (commit && !/^(?:[0-9a-f]{4,64}|HEAD(?:[~^]\d*)*)$/i.test(String(commit))) throw problem(400, `无效的版本：${commit}（用 versions_list 查看版本）`);
 }
 
 function metaSummary(slug, meta) {

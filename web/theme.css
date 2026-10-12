@@ -317,54 +317,18 @@ a {
   white-space: nowrap;
 }
 
-/* ---- touch screens ---- */
-/* Controls that appear on hover have no hover to appear on: always shown. */
-@media (hover: none) {
-  .asset-more,
-  .problem-row .icon-btn,
-  .change-row .icon-btn,
-  .version-row .icon-btn,
-  .user-actions .edit-btn,
-  .turn-action {
-    opacity: 1 !important;
-  }
-  .tab-close {
-    opacity: 0.85;
-  }
-}
-/* A finger needs room: larger targets; 16px text in fields keeps iOS from zooming on focus. */
+/* ---- touch screens: the same interface, touch can operate it ---- */
+/* Long presses open menus: no text selection or callout on what is pressed. */
 @media (pointer: coarse) {
-  input,
-  select,
-  textarea,
-  .input,
-  .select,
-  .textarea {
-    font-size: 16px;
-  }
-  .icon-btn {
-    min-width: 34px;
-    min-height: 34px;
-  }
-  .btn {
-    min-height: 34px;
-  }
-  .btn.small {
-    min-height: 30px;
-  }
-  .context-menu button {
-    height: 40px;
-    font-size: 14px;
-  }
-  /* Long presses open menus: no text selection or callout on what is pressed. */
   .tree-row,
   .asset-card,
   .editor-tab,
   .library-card-row,
   .library-doc-row,
-  .versions-summary-row,
+  .branch-row,
   .change-row,
   .version-row,
+  .version-file,
   .sound-row,
   .tl-item,
   .tl-label,

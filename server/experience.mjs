@@ -499,6 +499,7 @@ export function experiencePlugin(services) {
   router.get(`${base}/history`, async ({ params, query }) =>
     works.history(await scope(params), { limit: Number(query.limit || 50), skip: Number(query.skip || 0) }),
   );
+  router.get(`${base}/changes`, async ({ params, query }) => works.changes(await scope(params), query.commit));
   router.get(`${base}/diff`, async ({ params, query }) => ({ diff: await works.diff(await scope(params), { commit: query.commit, file: query.file }) }));
   router.post(`${base}/commit`, async ({ params, req }) => ({ commit: await works.commit(await scope(params), (await readJson(req)).message) }));
   router.post(`${base}/revert`, async ({ params, req }) => {
@@ -724,7 +725,7 @@ export function experiencePlugin(services) {
     published: true, // the experience branch, not the work: allowed on a published work
     title: "保存经验库版本",
     description:
-      "把经验库里未保存的修改保存为一个版本（Git 提交）。同一作品库的经验库在同一个分支上，会一起保存，和用户在资源管理器的「版本与同步」→ 经验库里点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。",
+      "把经验库里未保存的修改保存为一个版本（Git 提交）。同一作品库的经验库在同一个分支上，会一起保存，和用户在「版本与同步」→ 经验库里点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。",
     input: { work: workArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
     async run({ message, push }, ctx) {
       const work = await ctx.work();
@@ -739,7 +740,7 @@ export function experiencePlugin(services) {
         } catch (error) {
           pushed = { ok: false, error: error.message };
         }
-      const pushText = !pushed ? "" : pushed.ok ? "，已推送到 GitHub" : `。推送到 GitHub 失败：${pushed.error}（请用户在资源管理器的「版本与同步」→ 经验库中处理）`;
+      const pushText = !pushed ? "" : pushed.ok ? "，已推送到 GitHub" : `。推送到 GitHub 失败：${pushed.error}（请用户在「版本与同步」→ 经验库中处理）`;
       return asJson(
         { commit, files, pushed },
         commit ? `已保存经验库版本 ${commit.slice(0, 7)}：${files.join("、")}${pushText}` : `经验库没有未保存的修改${pushText}`,
@@ -759,7 +760,7 @@ export function experiencePlugin(services) {
     published: true, // writes outside the work: allowed on a published (view-only) work
     title: "整理经验库",
     description:
-      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名）。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。失败的逐项说明原因，只需重试失败的。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在资源管理器的「版本与同步」中保存）。",
+      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名）。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。失败的逐项说明原因，只需重试失败的。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在「版本与同步」中保存）。",
     destructive: true,
     input: { work: workArg, library: libraryArg, operations: z.array(docOperation).min(1).max(30) },
     async run({ library: name, operations }, ctx) {

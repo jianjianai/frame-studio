@@ -1232,14 +1232,6 @@
   align-items: flex-start;
   padding: 6px 8px;
 }
-.version-dot {
-  width: 9px;
-  height: 9px;
-  margin-top: 5px;
-  border-radius: 50%;
-  border: 2px solid var(--accent);
-  flex: none;
-}
 .track-row input[type="range"] {
   width: 80px;
   accent-color: var(--track-audio);
@@ -2125,62 +2117,12 @@
   }
 }
 
-/* versions: the list on the left, the change picked there on the right */
-.versions-tab {
-  display: flex;
-  overflow: hidden;
+/* 版本与同步: the branches, then the picked one's versions (a version opens to its files) */
+.branch-list {
+  padding: 4px 6px 8px;
+  border-bottom: 1px solid var(--border);
 }
-.versions-side {
-  display: flex;
-  flex-direction: column;
-  width: min(380px, 42%);
-  min-width: 280px;
-  border-right: 1px solid var(--border);
-  background: var(--bg-elev);
-}
-.versions-list {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-}
-.versions-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-.change-row.selected,
-.version-row.selected {
-  background: var(--bg-active);
-}
-@media (max-width: 760px) {
-  .versions-tab {
-    flex-direction: column;
-    overflow: auto;
-  }
-  .versions-side {
-    width: auto;
-    min-width: 0;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
-  }
-  .versions-list {
-    overflow: visible;
-  }
-  .versions-main {
-    min-height: 60vh;
-  }
-}
-
-/* the explorer's 版本与同步: one row per branch */
-.explorer-versions-head {
-  margin-top: 6px;
-  border-top: 1px solid var(--border);
-}
-.versions-summary {
-  padding: 0 6px 10px;
-}
-.versions-summary-row {
+.branch-row {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -2188,15 +2130,51 @@
   border-radius: 6px;
   cursor: pointer;
 }
-.versions-summary-row:hover {
+.branch-row:hover {
   background: var(--bg-hover);
 }
-.versions-summary-row > svg {
+.branch-row.selected {
+  background: var(--bg-active);
+}
+.branch-row > svg {
   flex: none;
   color: var(--fg-muted);
 }
-.versions-summary .view-hint {
-  padding: 0 8px;
+.versions-save {
+  width: 100%;
+}
+.versions-actions {
+  gap: 6px;
+}
+.versions-actions .btn {
+  margin-bottom: 0;
+}
+.version-row.open {
+  background: var(--bg-hover);
+}
+.version-row > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--fg-muted);
+}
+.version-files {
+  padding: 2px 0 6px 18px;
+}
+.version-file {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.version-file:hover {
+  background: var(--bg-hover);
+}
+.versions-more {
+  width: 100%;
+  margin-top: 6px;
 }
 
 /* resources in a tab: bigger cards */
@@ -2233,25 +2211,11 @@
 .tl-scroller {
   touch-action: pan-x pan-y;
 }
+/* Fingers get room to grab without anything looking different: wider invisible hit areas. */
 @media (pointer: coarse) {
-  .tree-row {
-    height: 34px;
-  }
   .editor-tabs {
-    height: 42px;
     overflow-x: auto;
     scrollbar-width: none;
-  }
-  .tab-close {
-    width: 30px;
-    height: 30px;
-  }
-  .wb-activity button {
-    width: 44px;
-    height: 46px;
-  }
-  .view-tabs button {
-    height: 34px;
   }
   .sash.vertical::after {
     inset: 0 -10px;
@@ -2259,30 +2223,22 @@
   .sash.horizontal::after {
     inset: -10px 0;
   }
-  .tl-item.selected .tl-handle {
-    width: 16px;
-    background: rgb(255 255 255 / 0.25);
-  }
   .tl-playhead-grip {
     left: -14px;
     width: 29px;
     height: 30px;
   }
-  .tl-end-grip {
-    height: 26px;
-    line-height: 26px;
+  .tl-item.selected .tl-handle::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 18px;
   }
-  .version-row,
-  .change-row,
-  .versions-summary-row,
-  .library-doc-row {
-    min-height: 40px;
+  .tl-handle.left::after {
+    left: 0;
   }
-  .asset-more {
-    width: 30px;
-    height: 30px;
-  }
-  .sound-row {
-    height: 36px;
+  .tl-handle.right::after {
+    right: 0;
   }
 }

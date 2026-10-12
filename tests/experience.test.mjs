@@ -72,7 +72,17 @@ describe("experience libraries", () => {
     expect(status.body.files.map((file) => file.path).sort()).toEqual(["知识类视频/README.md", "知识类视频/开场.md"]);
     expect((await call(`${lib}/commit`, { method: "POST", body: { message: "开场经验" } })).body.commit).toMatch(/^[0-9a-f]{40}$/);
     expect((await call(`${lib}/history`)).body.map((version) => version.message)).toEqual(["开场经验", "创建经验库"]);
+    // A version's files, and one file's change in it (the 版本与同步 history opens them).
+    const [saved] = (await call(`${lib}/history`)).body;
+    expect((await call(`${lib}/changes?commit=${saved.commit}`)).body).toEqual([
+      { status: "A", path: "知识类视频/README.md" },
+      { status: "A", path: "知识类视频/开场.md" },
+    ]);
+    const one = (await call(`${lib}/diff?commit=${saved.commit}&file=${encodeURIComponent("知识类视频/开场.md")}`)).body.diff;
+    expect(one).toContain("+- 前 2 秒给出问题");
+    expect(one).not.toContain("README.md");
     expect((await call(`${lib}/diff?commit=HEAD`)).body.diff).toContain("+- 前 2 秒给出问题");
+    expect((await call(`${lib}/diff?commit=--output=x`)).status).toBe(400);
     // The template's introduction says nothing about the library: no `about` until someone writes one.
     expect((await call(`${lib}/libraries`)).body).toMatchObject([{ id: "知识类视频", title: "知识类视频", files: 2, aliases: [], about: "", works: 1 }]);
     expect((await call(`${lib}/libraries?work=${work.id}`)).body).toMatchObject([{ id: "知识类视频", linked: true }]);

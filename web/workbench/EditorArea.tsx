@@ -26,7 +26,7 @@ export interface EditorHandle {
   openReview(path: string, options?: { preview?: boolean }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
   openDiff(title: string, query: string, options?: { preview?: boolean; source?: VersionSource }): void;
-  /** A tool in its own tab (export, reviews, audio, resources, versions, library management). */
+  /** A tool in its own tab (export, reviews, resources, library management). */
   openTool(tool: Tool): void;
 }
 type Source = "work" | "experience" | "materials" | "resource" | "reviews";
@@ -94,16 +94,7 @@ export const fileIcon = (path: string, size = 14) => {
  * while another tab is shown, so playback, the timeline and AI captures keep working.
  * Tabs come from the work or from the repository's experience libraries.
  */
-export function EditorArea({
-  ref,
-  onActiveChange,
-  onActiveTool,
-}: {
-  ref?: Ref<EditorHandle>;
-  onActiveChange?: (label: string | null) => void;
-  /** The tool whose tab is shown (the activity bar marks it), or null. */
-  onActiveTool?: (tool: Tool | null) => void;
-}) {
+export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; onActiveChange?: (label: string | null) => void }) {
   const { work, readOnly } = useWorkbench();
   const toast = useToast();
   const confirm = useConfirm();
@@ -311,8 +302,6 @@ export function EditorArea({
           ? `素材库文件 materials/${current.file}`
           : current.file;
   useEffect(() => onActiveChange?.(activeLabel), [activeLabel, onActiveChange]);
-  const activeTool = current?.kind === "tool" ? (current.file as Tool) : null;
-  useEffect(() => onActiveTool?.(activeTool), [activeTool, onActiveTool]);
   const update = (path: string, change: Partial<Tab>) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...change } : item)));
   const tooltip = (tab: Tab) =>
     `${tab.kind === "tool" ? (tab.title ?? "") : tab.kind === "diff" ? `改动：${tab.title}` : tab.kind === "resource" ? `资源：${tab.file}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "reviews" ? `复盘：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
