@@ -50,9 +50,9 @@ import "./workbench.css";
  */
 const VIEWS = [
   { id: "explorer", label: "资源管理器", icon: Files, component: ExplorerView },
-  { id: "versions", label: "版本与同步", icon: GitBranch, component: VersionsView },
   { id: "assets", label: "素材", icon: ImageIcon, component: AssetsView },
   { id: "experience", label: "经验库", icon: BookOpen, component: ExperienceView },
+  { id: "versions", label: "版本与同步", icon: GitBranch, component: VersionsView },
   { id: "properties", label: "属性", icon: SlidersHorizontal, component: PropertiesView },
   { id: "prompts", label: "提示词", icon: BookMarked, component: PromptsView },
   { id: "audio", label: "音频与配音", icon: AudioLines, component: AudioView },
