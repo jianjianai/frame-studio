@@ -303,7 +303,42 @@ export function paramLine(param) {
 }
 
 /** Everything a library code file declares. */
-export function extractModule(code, ref) {
+/**
+ * The constants a module gets from its library neighbours (`import { W } from "./draw"` with
+ * `export const W = 1080` there), so declarations written with them still read statically.
+ */
+export function importedConstants(code, ref, readNeighbour) {
+  const found = new Map();
+  let ast;
+  try {
+    ast = parseCode(code, ref);
+  } catch {
+    return found;
+  }
+  for (const statement of ast.program.body) {
+    if (statement.type !== "ImportDeclaration" || !statement.source.value.startsWith(".")) continue;
+    const neighbour = readNeighbour(path.posix.join(path.posix.dirname(ref), statement.source.value));
+    if (!neighbour) continue;
+    let other;
+    try {
+      other = parseCode(neighbour.code, neighbour.ref).program;
+    } catch {
+      continue;
+    }
+    const constants = new Map();
+    for (const raw of other.body) {
+      const declaration = raw.type === "ExportNamedDeclaration" ? raw.declaration : null;
+      if (declaration?.type === "VariableDeclaration" && declaration.kind === "const")
+        for (const item of declaration.declarations)
+          if (item.id.type === "Identifier" && ["NumericLiteral", "StringLiteral", "BooleanLiteral", "UnaryExpression", "BinaryExpression"].includes(item.init?.type)) constants.set(item.id.name, item.init);
+    }
+    for (const specifier of statement.specifiers)
+      if (specifier.type === "ImportSpecifier" && constants.has(specifier.imported.name ?? specifier.imported.value)) found.set(specifier.local.name, constants.get(specifier.imported.name ?? specifier.imported.value));
+  }
+  return found;
+}
+
+export function extractModule(code, ref, imported = new Map()) {
   let ast;
   try {
     ast = parseCode(code, ref);
@@ -311,7 +346,7 @@ export function extractModule(code, ref) {
     return { ref, doc: "", exports: [], resources: [], sounds: [], errors: [error.message] };
   }
   const program = ast.program;
-  const bindings = new Map();
+  const bindings = new Map(imported);
   for (const raw of program.body) {
     const statement = raw.type === "ExportNamedDeclaration" ? raw.declaration : raw;
     if (statement?.type === "VariableDeclaration")
@@ -514,10 +549,22 @@ export class ResourceCatalog {
   }
 
   async module(repo, ref, blob) {
-    let parsed = this.parsed.get(blob);
+    const code = await this.materials.text(repo, blob);
+    // Constants imported from neighbouring files count, so their versions are part of the key.
+    const head = await this.materials.headOf(repo);
+    const neighbours = new Map();
+    for (const match of code.matchAll(/from\s+["'](\.{1,2}\/[^"']+)["']/g)) {
+      const base = path.posix.join(path.posix.dirname(ref), match[1]);
+      const found = [base, ...[".ts", ".mts", ".js", ".mjs", "/index.ts"].map((ending) => base + ending)].find((candidate) => head.has(candidate));
+      if (found) neighbours.set(base, { ref: found, blob: head.get(found) });
+    }
+    const key = [blob, ...[...neighbours.values()].map((item) => item.blob)].join("+");
+    let parsed = this.parsed.get(key);
     if (!parsed) {
-      parsed = extractModule(await this.materials.text(repo, blob), ref);
-      this.parsed.set(blob, parsed);
+      const texts = new Map();
+      for (const [base, item] of neighbours) texts.set(base, { ref: item.ref, code: await this.materials.text(repo, item.blob) });
+      parsed = extractModule(code, ref, importedConstants(code, ref, (base) => texts.get(base)));
+      this.parsed.set(key, parsed);
     }
     return { ...parsed, ref, library: ref.split("/")[0], blob };
   }

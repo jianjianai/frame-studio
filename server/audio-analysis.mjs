@@ -241,7 +241,11 @@ export function tempoSegments(beats) {
 }
 
 /** Tempo (of the longest steady stretch) and its stretches; beats per bar from the beats between downbeats. */
-export function describeRhythm(beats, downbeats) {
+export function describeRhythm(beats, given) {
+  // A last bar much shorter than the others is the model reading the fade-out, not a bar.
+  let downbeats = given;
+  const bars = given.slice(1).map((time, index) => time - given[index]);
+  if (bars.length >= 3 && bars.at(-1) < 0.8 * median(bars.slice(0, -1))) downbeats = given.slice(0, -1);
   const intervals = beats.slice(1).map((time, index) => time - beats[index]);
   const segments = tempoSegments(beats);
   const main = [...segments].sort((a, b) => b.count - a.count)[0];

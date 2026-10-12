@@ -159,7 +159,7 @@ export function registerWorkTools(registry) {
       const size = meta.ok && meta.meta.composition;
       return asJson(
         { id: copy.id, repo: copy.repo, dir: copy.dir },
-        `已复制为作品 ${copy.id}（${meta.ok ? meta.meta.title : title ?? ""}${size ? `，${size.width}×${size.height}` : ""}），在作品库 ${copy.repo}。之后的工具调用写 work: "${copy.repo}/${copy.id}"`,
+        `已复制为作品 ${copy.id}（${meta.ok ? meta.meta.title : title ?? ""}${size ? `，${size.width}×${size.height}` : ""}），在作品库 ${copy.repo}。之后的工具调用写 work: "${copy.repo}/${copy.id}"。副本沿用原作品的目录名 ${copy.slug}（素材地址 films/${copy.slug}/… 不用改）${width || height ? "。尺寸变了：场景代码里写死的像素坐标要按新尺寸重新排版，先 preview_frames 看一遍" : ""}`,
       );
     },
   });

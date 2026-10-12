@@ -5,7 +5,7 @@ import sharp from "sharp";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
-import { canvasNote, extractModule, paramLine, score } from "../server/resources.mjs";
+import { canvasNote, extractModule, importedConstants, paramLine, score } from "../server/resources.mjs";
 import { browserExecutable } from "../server/render.mjs";
 
 const SHAPES = `/** 测试用的形状。 */
@@ -168,6 +168,13 @@ export const resources = defineResources({ g: resource({ kind: "effect", title: 
       ["seed", 1],
       ["color", "#fff"],
     ]);
+    // Sizes imported from a neighbouring file of the library are read too.
+    const grain = `import { defineResources, resource } from "@frame/engine/resources";
+import { W, H } from "./draw";
+export const resources = defineResources({ g: resource({ kind: "effect", title: "颗粒", preview: { width: W, height: H, draw() {} } }) });`;
+    const draw = { ref: "测试/code/draw.ts", code: "export const W = 1080;\nexport const H = 1920;\nexport function beginFrame() {}" };
+    const constants = importedConstants(grain, "测试/code/grain.ts", (base) => (base === "测试/code/draw" ? draw : undefined));
+    expect(extractModule(grain, "测试/code/grain.ts", constants).resources[0].preview).toMatchObject({ width: 1080, height: 1920 });
     // A preview spread in from an \`as const\` object keeps its size.
     expect(spread.resources[0].preview).toMatchObject({ width: 10, height: 20, duration: 3 });
     const names = Object.fromEntries(shapes.exports.map((item) => [item.name, item]));

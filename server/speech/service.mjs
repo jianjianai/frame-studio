@@ -68,6 +68,17 @@ export class SpeechService {
       list.push({ id: "local:" + model.id, name: `本地 · ${model.name}`, ready: true, detail: "离线运行 · " + model.languages.join(" / ") });
     return list;
   }
+  /** Edge's free service refusing or unreachable: say why and what else there is, not the socket error. */
+  edgeProblem(error) {
+    const message = String(error?.message ?? error);
+    const others = this.providers().filter((item) => item.id !== "edge" && item.ready).map((item) => `${item.name}（provider: "${item.id}"）`);
+    const instead = others.length
+      ? `可以改用：${others.join("、")}。`
+      : "这台 FRAME 没有其他可用的语音引擎：请用户在 设置 → 语音 安装一个本地离线模型，或配置 OpenAI 兼容接口。";
+    if (/\b403\b/.test(message))
+      return problem(502, `Edge 在线语音拒绝了请求（403）：微软的免费接口会暂时限制短时间内请求很多的服务器，也可能是接口有了变化。过一段时间再试；${instead}`, "SPEECH_REFUSED");
+    return problem(502, `Edge 在线语音连接失败（${message}）：检查服务器能否访问 speech.platform.bing.com，或稍后再试；${instead}`, "SPEECH_UNAVAILABLE");
+  }
   defaultProvider() {
     const wanted = this.conf().defaultProvider;
     return this.providers().some((item) => item.id === wanted && item.ready)
@@ -131,11 +142,16 @@ export class SpeechService {
     if (provider === "edge") {
       const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
       const tts = new MsEdgeTTS();
-      await tts.setMetadata(voice || "zh-CN-XiaoxiaoNeural", OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
-      const { audioStream } = tts.toStream(escapeSsml(text), { rate: `${Math.round((rate - 1) * 100) >= 0 ? "+" : ""}${Math.round((rate - 1) * 100)}%` });
       const chunks = [];
-      for await (const chunk of audioStream) chunks.push(chunk);
-      tts.close?.();
+      try {
+        await tts.setMetadata(voice || "zh-CN-XiaoxiaoNeural", OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
+        const { audioStream } = tts.toStream(escapeSsml(text), { rate: `${Math.round((rate - 1) * 100) >= 0 ? "+" : ""}${Math.round((rate - 1) * 100)}%` });
+        for await (const chunk of audioStream) chunks.push(chunk);
+      } catch (error) {
+        throw this.edgeProblem(error);
+      } finally {
+        tts.close?.();
+      }
       if (!chunks.length) throw problem(502, "Edge 语音没有返回音频（检查网络或换一个声音）");
       return { bytes: Buffer.concat(chunks), ext: "mp3" };
     }

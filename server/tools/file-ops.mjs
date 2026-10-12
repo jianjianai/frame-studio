@@ -44,10 +44,12 @@ export function nearMiss(content, oldText, reader) {
 
 /** Exact replacements in order; each oldText must occur once unless replaceAll. */
 export function applyEdits(content, edits, reader) {
+  // All of a file's replacements or none: say so, the others are not applied either.
+  const none = edits.length > 1 ? `（这个文件的 ${edits.length} 处替换都没有应用，改好这一处后整组重发）` : "";
   for (const [index, edit] of edits.entries()) {
     const count = content.split(edit.oldText).length - 1;
-    if (count === 0) throw problem(400, `第 ${index + 1} 处替换找不到 oldText。${nearMiss(content, edit.oldText, reader)}`);
-    if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${index + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll`);
+    if (count === 0) throw problem(400, `第 ${index + 1} 处替换找不到 oldText${none}。${nearMiss(content, edit.oldText, reader)}`);
+    if (count > 1 && !edit.replaceAll) throw problem(400, `第 ${index + 1} 处替换：oldText 出现了 ${count} 次，请提供更多上下文或设置 replaceAll${none}`);
     content = edit.replaceAll ? content.split(edit.oldText).join(edit.newText) : content.replace(edit.oldText, () => edit.newText);
   }
   return content;

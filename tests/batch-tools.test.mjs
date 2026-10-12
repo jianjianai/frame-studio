@@ -277,6 +277,8 @@ describe("tools that save the AI calls", () => {
     const rhythm = describeRhythm(beats, [0.5, 2, 3.5, 5, 6.5]);
     expect(rhythm).toMatchObject({ bpm: 120, beatsPerBar: 3 });
     expect(describeRhythm([], [])).toMatchObject({ bpm: null, beatsPerBar: null });
+    // A bar start in the fade-out, well short of a bar after the last one, is left out.
+    expect(describeRhythm(beats, [0.5, 2, 3.5, 5, 6.5, 7.2]).downbeats).toEqual([0.5, 2, 3.5, 5, 6.5]);
   });
 
   it("keeps a replaced render page open until the tools using it are done", async () => {
