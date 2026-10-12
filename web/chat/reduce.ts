@@ -66,11 +66,23 @@ function terminalMeta(tool: ToolBlock, meta: unknown) {
   if (exit) tool.exitCode = exit.exit_code ?? null;
 }
 
-export function reduceTranscript(entries: Entry[]): Block[] {
-  const blocks: Block[] = [];
-  const tools = new Map<string, ToolBlock>();
-  const permissions = new Map<string, Extract<Block, { kind: "permission" }>>();
-  for (const entry of entries) {
+type PermissionBlock = Extract<Block, { kind: "permission" }>;
+
+/**
+ * Builds display blocks entry by entry. A changed block is replaced by a copy, never mutated,
+ * so unchanged blocks (and the turns made of them) keep their identity and skip re-rendering
+ * while a long conversation streams.
+ */
+export class TranscriptReducer {
+  blocks: Block[] = [];
+  private index = new Map<string, number>();
+
+  private replace<T extends Block>(at: number, change: (block: T) => T) {
+    this.blocks[at] = change(this.blocks[at] as T);
+  }
+
+  add(entry: Entry) {
+    const blocks = this.blocks;
     switch (entry.kind) {
       case "user":
         blocks.push({
@@ -89,7 +101,7 @@ export function reduceTranscript(entries: Entry[]): Block[] {
           const content = update.content as ContentBlock;
           const kind = update.sessionUpdate === "agent_message_chunk" ? "text" : "thought";
           if (content?.type !== "text" || !content.text) break;
-          if (last?.kind === kind) (last as { text: string }).text += content.text;
+          if (last?.kind === kind) blocks[blocks.length - 1] = { kind, text: last.text + content.text };
           else blocks.push({ kind, text: content.text });
         } else if (update.sessionUpdate === "tool_call") {
           const tool: ToolBlock = {
@@ -102,40 +114,49 @@ export function reduceTranscript(entries: Entry[]): Block[] {
             locations: update.locations as ToolBlock["locations"],
             rawInput: update.rawInput,
           };
-          const existing = tools.get(tool.id);
-          if (existing) Object.assign(existing, tool);
+          const at = this.index.get("tool:" + tool.id);
+          if (at !== undefined)
+            this.replace<ToolBlock>(at, (existing) => {
+              const next = { ...existing, ...tool };
+              terminalMeta(next, update._meta);
+              return next;
+            });
           else {
-            tools.set(tool.id, tool);
+            terminalMeta(tool, update._meta);
+            this.index.set("tool:" + tool.id, blocks.length);
             blocks.push(tool);
           }
-          terminalMeta(existing ?? tool, update._meta);
         } else if (update.sessionUpdate === "tool_call_update") {
-          const tool = tools.get(update.toolCallId as string);
-          if (!tool) break;
-          if (update.title) tool.title = update.title as string;
-          if (update.status) tool.status = update.status as string;
-          if (update.kind) tool.toolKind = update.kind as string;
-          if (update.content) tool.content = update.content as ToolContent[];
-          if (update.locations) tool.locations = update.locations as ToolBlock["locations"];
-          if (update.rawInput !== undefined) tool.rawInput = update.rawInput;
-          if (update.rawOutput !== undefined) tool.rawOutput = update.rawOutput;
-          terminalMeta(tool, update._meta);
+          const at = this.index.get("tool:" + (update.toolCallId as string));
+          if (at === undefined) break;
+          this.replace<ToolBlock>(at, (existing) => {
+            const tool = { ...existing };
+            if (update.title) tool.title = update.title as string;
+            if (update.status) tool.status = update.status as string;
+            if (update.kind) tool.toolKind = update.kind as string;
+            if (update.content) tool.content = update.content as ToolContent[];
+            if (update.locations) tool.locations = update.locations as ToolBlock["locations"];
+            if (update.rawInput !== undefined) tool.rawInput = update.rawInput;
+            if (update.rawOutput !== undefined) tool.rawOutput = update.rawOutput;
+            terminalMeta(tool, update._meta);
+            return tool;
+          });
         } else if (update.sessionUpdate === "plan") {
           const entries = (update.entries as { content: string; status: string; priority?: string }[]) ?? [];
-          if (last?.kind === "plan") last.entries = entries;
+          if (last?.kind === "plan") blocks[blocks.length - 1] = { kind: "plan", entries };
           else blocks.push({ kind: "plan", entries });
         }
         break;
       }
       case "permission": {
-        const block = { kind: "permission" as const, id: entry.id as string, toolCall: entry.toolCall as never, options: entry.options as never };
-        permissions.set(block.id, block);
+        const block: PermissionBlock = { kind: "permission", id: entry.id as string, toolCall: entry.toolCall as never, options: entry.options as never };
+        this.index.set("permission:" + block.id, blocks.length);
         blocks.push(block);
         break;
       }
       case "permission_result": {
-        const block = permissions.get(entry.id as string);
-        if (block) block.outcome = entry.outcome as never;
+        const at = this.index.get("permission:" + (entry.id as string));
+        if (at !== undefined) this.replace<PermissionBlock>(at, (block) => ({ ...block, outcome: entry.outcome as never }));
         break;
       }
       case "turn_end":
@@ -152,12 +173,22 @@ export function reduceTranscript(entries: Entry[]): Block[] {
         break;
     }
   }
-  return blocks;
 }
 
-/** Group blocks into turns: a user message followed by the agent's response. A branch divider stands alone. */
-export function groupTurns(blocks: Block[]) {
-  const turns: { user?: Extract<Block, { kind: "user" }>; branch?: Extract<Block, { kind: "branch" }>; items: Block[] }[] = [];
+export function reduceTranscript(entries: Entry[]): Block[] {
+  const reducer = new TranscriptReducer();
+  for (const entry of entries) reducer.add(entry);
+  return reducer.blocks;
+}
+
+export type Turn = { user?: Extract<Block, { kind: "user" }>; branch?: Extract<Block, { kind: "branch" }>; items: Block[] };
+
+/**
+ * Group blocks into turns: a user message followed by the agent's response. A branch divider
+ * stands alone. A turn whose blocks are unchanged since `previous` is returned as the same object.
+ */
+export function groupTurns(blocks: Block[], previous: Turn[] = []) {
+  const turns: Turn[] = [];
   for (const block of blocks) {
     if (block.kind === "user") turns.push({ user: block, items: [] });
     else if (block.kind === "branch") turns.push({ branch: block, items: [] });
@@ -166,5 +197,14 @@ export function groupTurns(blocks: Block[]) {
       turns.at(-1)!.items.push(block);
     }
   }
-  return turns;
+  return turns.map((turn, index) => {
+    const old = previous[index];
+    return old &&
+      old.user === turn.user &&
+      old.branch === turn.branch &&
+      old.items.length === turn.items.length &&
+      old.items.every((item, i) => item === turn.items[i])
+      ? old
+      : turn;
+  });
 }

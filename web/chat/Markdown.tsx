@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useMemo, useRef } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeHighlight from "rehype-highlight";
@@ -8,44 +8,52 @@ const TIME = /(\d{1,2}:\d{2}(?:\.\d{1,3})?)/g;
 
 /** Markdown with clickable time codes ("0:12.5" seeks the player) and file links. */
 export const Markdown = memo(function Markdown({ text }: { text: string }) {
-  const { stage, openFile } = useWorkbench();
-  return (
-    <div className="markdown">
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[[rehypeHighlight, { ignoreMissing: true, detect: false }]]}
-        skipHtml
-        components={{
-          a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer">
-              {children}
-            </a>
-          ),
-          code: ({ className, children, ...props }) => {
-            const text = String(children);
-            const file = !className && /^[\w./-]+\.(ts|tsx|js|json|md|svg|png|jpg|wav|mp3)(:\d+)?$/.test(text) ? text : null;
-            if (file) {
-              const [path, line] = file.split(":");
+  // The workbench context changes on every workbench render; parsing again only when the text
+  // changes keeps long conversations responsive. Handlers read the latest context through a ref.
+  const context = useWorkbench();
+  const workbench = useRef(context);
+  workbench.current = context;
+  return useMemo(() => {
+    const seek = (seconds: number) => workbench.current.stage.seek(seconds);
+    const openFile: ReturnType<typeof useWorkbench>["openFile"] = (path, options) => workbench.current.openFile(path, options);
+    return (
+      <div className="markdown">
+        <ReactMarkdown
+          remarkPlugins={[remarkGfm]}
+          rehypePlugins={[[rehypeHighlight, { ignoreMissing: true, detect: false }]]}
+          skipHtml
+          components={{
+            a: ({ href, children }) => (
+              <a href={href} target="_blank" rel="noreferrer">
+                {children}
+              </a>
+            ),
+            code: ({ className, children, ...props }) => {
+              const text = String(children);
+              const file = !className && /^[\w./-]+\.(ts|tsx|js|json|md|svg|png|jpg|wav|mp3)(:\d+)?$/.test(text) ? text : null;
+              if (file) {
+                const [path, line] = file.split(":");
+                return (
+                  <code className="file-link" onClick={() => openFile(path.replace(/^projects\/[^/]+\//, ""), { line: line ? Number(line) : undefined })}>
+                    {text}
+                  </code>
+                );
+              }
               return (
-                <code className="file-link" onClick={() => openFile(path.replace(/^projects\/[^/]+\//, ""), { line: line ? Number(line) : undefined })}>
-                  {text}
+                <code className={className} {...props}>
+                  {children}
                 </code>
               );
-            }
-            return (
-              <code className={className} {...props}>
-                {children}
-              </code>
-            );
-          },
-          p: ({ children }) => <p>{linkTimes(children, (seconds) => stage.seek(seconds))}</p>,
-          li: ({ children }) => <li>{linkTimes(children, (seconds) => stage.seek(seconds))}</li>,
-        }}
-      >
-        {text}
-      </ReactMarkdown>
-    </div>
-  );
+            },
+            p: ({ children }) => <p>{linkTimes(children, seek)}</p>,
+            li: ({ children }) => <li>{linkTimes(children, seek)}</li>,
+          }}
+        >
+          {text}
+        </ReactMarkdown>
+      </div>
+    );
+  }, [text]);
 });
 
 function linkTimes(children: React.ReactNode, seek: (seconds: number) => void): React.ReactNode {

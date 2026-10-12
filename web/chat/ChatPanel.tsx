@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import {
   Plus,
   History,
@@ -35,7 +35,7 @@ import {
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
 import { useWorkbench, type ChatAttachment } from "../workbench/store";
-import { reduceTranscript, groupTurns, type Entry } from "./reduce";
+import { TranscriptReducer, groupTurns, type Entry, type Turn } from "./reduce";
 import { TurnBlocks } from "./Transcript";
 import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
@@ -220,14 +220,24 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     }, 0);
   };
 
-  const blocks = useMemo(() => reduceTranscript(entries), [entries]);
-  const turns = useMemo(() => groupTurns(blocks), [blocks]);
+  const turns = useTurns(entries);
   const running = session?.status === "running" || session?.status === "waiting";
 
   useLayoutEffect(() => {
     const element = scroller.current;
     if (element && stick.current) element.scrollTop = element.scrollHeight;
-  }, [blocks, running]);
+  }, [turns, running]);
+  // Turns out of view are laid out at an estimated height (content-visibility) and images load
+  // late: keep following the end while their real size arrives.
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element) return;
+    const observer = new ResizeObserver(() => {
+      if (stick.current) element.scrollTop = element.scrollHeight;
+    });
+    for (const child of element.children) observer.observe(child);
+    return () => observer.disconnect();
+  }, [turns]);
 
   const createSession = async () => {
     const { customModel, ...choices } = readPrefs(profile?.id);
@@ -324,6 +334,20 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     const list = sessions.filter((item) => item.id === base || (item.branch?.from === base && item.branch.keep === k));
     return list.length > 1 ? list.sort((a, b) => (a.id === base ? -1 : b.id === base ? 1 : a.createdAt.localeCompare(b.createdAt))) : [];
   };
+  // Turns are memoized: hand them stable callbacks that reach the latest closures.
+  const latest = useRef({ respond, branch, setCurrent, versionsAt });
+  latest.current = { respond, branch, setCurrent, versionsAt };
+  const turnActions = useMemo<TurnActions>(
+    () => ({
+      respond: (id, optionId) => void latest.current.respond(id, optionId),
+      branch: (keep, text, attachments) => void latest.current.branch(keep, text, attachments),
+      goVersion: (k, to) => {
+        const target = latest.current.versionsAt(k)[to];
+        if (target) latest.current.setCurrent(target.id);
+      },
+    }),
+    [],
+  );
   const compact = () => {
     if (!current) return;
     stick.current = true;
@@ -470,42 +494,21 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               // The branch point is after a whole turn, so only its last part offers it.
               const endOfTurn = turnIndex >= 0 && !live && (!next || Boolean(next.branch) || Boolean(next.user && !next.user.steered));
               const versions = turn.user && !turn.user.steered ? versionsAt(turnIndex) : [];
-              const position = versions.findIndex((item) => item.id === session?.id);
               return (
-                <div className="turn" key={turn.user?.id ?? index}>
-                  {turn.user && (
-                    <UserMessage
-                      text={turn.user.text}
-                      attachments={turn.user.attachments}
-                      steered={turn.user.steered}
-                      busy={branching}
-                      onEdit={
-                        turn.user.steered || turn.user.text.trim().startsWith("/")
-                          ? undefined
-                          : (text) => branch(turnIndex, text, turn.user!.attachments)
-                      }
-                      versions={
-                        versions.length > 1
-                          ? { index: Math.max(0, position), count: versions.length, go: (to) => setCurrent(versions[to].id) }
-                          : undefined
-                      }
-                    />
+                <TurnView
+                  key={turn.user?.id ?? index}
+                  turn={turn}
+                  turnIndex={turnIndex}
+                  live={live}
+                  endOfTurn={endOfTurn}
+                  versionIndex={Math.max(
+                    0,
+                    versions.findIndex((item) => item.id === session?.id),
                   )}
-                  {(turn.items.length > 0 || live) && (
-                    <TurnBlocks
-                      items={turn.items}
-                      running={live}
-                      onRespond={respond}
-                      footer={
-                        endOfTurn && turn.items.some((item) => item.kind === "text") ? (
-                          <button className="turn-action" disabled={branching} title="新建一个对话，包含到这里为止的内容，从这里换个方向继续" onClick={() => branch(turnIndex + 1)}>
-                            <GitBranch size={12} /> 从这里分支
-                          </button>
-                        ) : null
-                      }
-                    />
-                  )}
-                </div>
+                  versionCount={versions.length}
+                  branching={branching}
+                  actions={turnActions}
+                />
               );
             });
           })()
@@ -766,6 +769,83 @@ function CacheOptions({ session }: { session: SessionMeta | null }) {
   }, [session?.configOptions, session?.profile]);
   return null;
 }
+
+/** Turns of a growing transcript: appended entries are reduced alone, another transcript from scratch. */
+function useTurns(entries: Entry[]) {
+  const state = useRef<{ entries: Entry[]; reducer: TranscriptReducer; turns: Turn[] } | null>(null);
+  return useMemo(() => {
+    let current = state.current;
+    const appended = current && entries.length >= current.entries.length && entries[current.entries.length - 1] === current.entries.at(-1);
+    if (!current || !appended) current = { entries: [], reducer: new TranscriptReducer(), turns: [] };
+    for (let i = current.entries.length; i < entries.length; i++) current.reducer.add(entries[i]);
+    current.turns = groupTurns(current.reducer.blocks, current.turns);
+    current.entries = entries;
+    state.current = current;
+    return current.turns;
+  }, [entries]);
+}
+
+interface TurnActions {
+  respond: (id: string, optionId?: string) => void;
+  branch: (keep: number, text?: string, attachments?: Record<string, unknown>[]) => void;
+  goVersion: (k: number, to: number) => void;
+}
+
+/** One turn; memoized so typing or streaming into the last turn leaves the others alone. */
+const TurnView = memo(function TurnView({
+  turn,
+  turnIndex,
+  live,
+  endOfTurn,
+  versionIndex,
+  versionCount,
+  branching,
+  actions,
+}: {
+  turn: Turn;
+  turnIndex: number;
+  live: boolean;
+  endOfTurn: boolean;
+  versionIndex: number;
+  versionCount: number;
+  branching: boolean;
+  actions: TurnActions;
+}) {
+  const user = turn.user;
+  return (
+    <div className="turn">
+      {user && (
+        <UserMessage
+          text={user.text}
+          attachments={user.attachments}
+          steered={user.steered}
+          busy={branching}
+          onEdit={user.steered || user.text.trim().startsWith("/") ? undefined : (text) => actions.branch(turnIndex, text, user.attachments)}
+          versions={versionCount > 1 ? { index: versionIndex, count: versionCount, go: (to) => actions.goVersion(turnIndex, to) } : undefined}
+        />
+      )}
+      {(turn.items.length > 0 || live) && (
+        <TurnBlocks
+          items={turn.items}
+          running={live}
+          onRespond={actions.respond}
+          footer={
+            endOfTurn && turn.items.some((item) => item.kind === "text") ? (
+              <button
+                className="turn-action"
+                disabled={branching}
+                title="新建一个对话，包含到这里为止的内容，从这里换个方向继续"
+                onClick={() => actions.branch(turnIndex + 1)}
+              >
+                <GitBranch size={12} /> 从这里分支
+              </button>
+            ) : null
+          }
+        />
+      )}
+    </div>
+  );
+});
 
 // ---- small components -----------------------------------------------------------
 function UserMessage({

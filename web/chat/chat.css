@@ -107,6 +107,9 @@
 }
 .turn {
   padding: 4px 0;
+  /* Long conversations: skip layout and paint of turns scrolled out of view. */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 240px;
 }
 .user-msg {
   margin: 8px 12px;

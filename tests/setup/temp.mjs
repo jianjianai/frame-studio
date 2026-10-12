@@ -16,6 +16,7 @@ export default function setup() {
   process.env.TMPDIR = dir;
   return () => {
     writable(dir);
-    fs.rmSync(dir, { recursive: true, force: true });
+    // Processes started by tests may still be writing their last files: retry.
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   };
 }

@@ -131,17 +131,23 @@ export class AiManager {
     if (Array.isArray(value)) return value.map((item) => this.storeImages(session, item));
     if (!value || typeof value !== "object") return value;
     if (value.type === "image" && typeof value.data === "string" && value.data.length > 256) {
-      const bytes = Buffer.from(value.data, "base64");
-      const ext = { "image/png": "png", "image/webp": "webp", "image/gif": "gif" }[value.mimeType] ?? "jpg";
-      const name = createHash("sha256").update(bytes).digest("hex").slice(0, 24) + "." + ext;
-      const dir = path.join(this.sessionsDir, session.meta.id + ".images");
-      fs.mkdirSync(dir, { recursive: true });
-      const file = path.join(dir, name);
-      if (!fs.existsSync(file)) fs.writeFileSync(file, bytes);
       const { data, ...rest } = value;
-      return { ...rest, uri: `/api/ai/sessions/${session.meta.id}/images/${name}` };
+      return { ...rest, uri: this.saveImage(session, data, value.mimeType) };
     }
+    // Claude's raw tool output uses the Anthropic API shape: { type: "image", source: { type: "base64", data } }.
+    if (value.type === "image" && value.source?.type === "base64" && typeof value.source.data === "string" && value.source.data.length > 256)
+      return { ...value, source: { type: "url", url: this.saveImage(session, value.source.data, value.source.media_type) } };
     return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, this.storeImages(session, item)]));
+  }
+  saveImage(session, base64, mimeType) {
+    const bytes = Buffer.from(base64, "base64");
+    const ext = { "image/png": "png", "image/webp": "webp", "image/gif": "gif" }[mimeType] ?? "jpg";
+    const name = createHash("sha256").update(bytes).digest("hex").slice(0, 24) + "." + ext;
+    const dir = path.join(this.sessionsDir, session.meta.id + ".images");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, name);
+    if (!fs.existsSync(file)) fs.writeFileSync(file, bytes);
+    return `/api/ai/sessions/${session.meta.id}/images/${name}`;
   }
   imageFile(id, name) {
     if (!/^[a-f0-9]{24}\.(png|jpg|webp|gif)$/.test(name)) throw notFound("图片不存在");
@@ -696,7 +702,7 @@ export class AiManager {
       session.meta.context = { ...session.meta.context, experience: session.briefSeen ?? {} };
       this.saveMeta(session);
     }
-    this.append(session, { kind: "update", update });
+    this.append(session, { kind: "update", update: withoutAgentCopy(update) });
   }
   onPermission(params) {
     const session = this.sessionByAcp(params.sessionId);
@@ -805,7 +811,8 @@ export class AiManager {
       if (attachment.type === "asset") references.push(`素材 ${attachment.url}`);
       if (attachment.type === "file") references.push(`文件 ${attachment.path}`);
       if (attachment.type === "experience") references.push(`经验库${attachment.library ? `「${attachment.library}」` : ""}的文档 ${attachment.path}`);
-      if (attachment.type === "resource") references.push(`素材库资源 ${attachment.id}${attachment.title ? `「${attachment.title}」` : ""}（resource_view 看详情和预览图）`);
+      if (attachment.type === "resource")
+        references.push(`素材库资源 ${attachment.id}${attachment.title ? `「${attachment.title}」` : ""}（resource_view 看详情和预览图）`);
       if (attachment.type === "problem") references.push(`问题：${attachment.message}`);
     }
     const images = message.attachments.filter((item) => item.type === "image").length;
@@ -916,6 +923,16 @@ export function authHint(error, process) {
     return new Error(`${message}。${how}`);
   }
   return error instanceof Error ? error : new Error(message);
+}
+
+/**
+ * Claude Code repeats each tool result in `_meta.claudeCode` (with whole files, base64 images
+ * and file contents before an edit); the transcript only shows `content`, so it is not stored.
+ */
+export function withoutAgentCopy(update) {
+  if (!update._meta?.claudeCode) return update;
+  const { claudeCode: _copy, ...meta } = update._meta;
+  return { ...update, _meta: Object.keys(meta).length ? meta : undefined };
 }
 
 /** Merge consecutive text chunks of the same kind (and message id). */

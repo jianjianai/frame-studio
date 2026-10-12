@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { reduceTranscript, groupTurns } from "../web/chat/reduce";
+import { reduceTranscript, groupTurns, TranscriptReducer } from "../web/chat/reduce";
 import { lineDiff, compactDiff } from "../web/chat/lineDiff";
-import { compact } from "../server/ai/manager.mjs";
+import { compact, withoutAgentCopy } from "../server/ai/manager.mjs";
 
 const update = (sessionUpdate: string, extra: Record<string, unknown>) => ({ at: 0, kind: "update", update: { sessionUpdate, ...extra } });
 
@@ -22,6 +22,32 @@ describe("chat transcript", () => {
     expect(blocks[1]).toMatchObject({ text: "想一下" });
     expect(blocks[2]).toMatchObject({ status: "completed", content: [{ type: "content" }] });
     expect(groupTurns(blocks)).toHaveLength(1);
+  });
+  it("keeps unchanged blocks and turns when entries are appended", () => {
+    const reducer = new TranscriptReducer();
+    for (const entry of entries) reducer.add(entry);
+    const before = groupTurns(reducer.blocks);
+    const tool = reducer.blocks[2];
+    reducer.add({ at: 0, kind: "user", id: "u2", text: "再改", attachments: [] });
+    reducer.add(update("agent_message_chunk", { content: { type: "text", text: "好" } }));
+    const after = groupTurns(reducer.blocks, before);
+    expect(after[0]).toBe(before[0]);
+    expect(reducer.blocks[2]).toBe(tool);
+    reducer.add(update("tool_call_update", { toolCallId: "t1", status: "failed" }));
+    expect(reducer.blocks[2]).not.toBe(tool);
+    expect(groupTurns(reducer.blocks, after)[0]).not.toBe(after[0]);
+  });
+  it("shows Codex terminal output and MCP results", () => {
+    const blocks = reduceTranscript([
+      update("tool_call", { toolCallId: "x", title: "ls", kind: "execute", content: [{ type: "terminal", terminalId: "x" }] }),
+      update("tool_call_update", { toolCallId: "x", _meta: { terminal_output_delta: { data: "a\n" } } }),
+      update("tool_call_update", { toolCallId: "x", status: "completed", _meta: { terminal_output_delta: { data: "b\n" }, terminal_exit: { exit_code: 2 } } }),
+    ]);
+    expect(blocks[0]).toMatchObject({ output: "a\nb\n", exitCode: 2 });
+  });
+  it("does not store Claude's own copy of tool results", () => {
+    const stored = withoutAgentCopy({ sessionUpdate: "tool_call_update", _meta: { claudeCode: { toolResponse: "big" } } });
+    expect(stored._meta).toBeUndefined();
   });
   it("compacts stored chunks on the server", () => {
     expect(compact(entries as never).filter((entry) => entry.kind === "update")).toHaveLength(4);
