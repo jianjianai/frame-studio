@@ -84,6 +84,12 @@ body {
   color: var(--fg);
   font: 13px/1.5 var(--font);
   -webkit-font-smoothing: antialiased;
+  /* The app fills the window: a menu sticking out past an edge must never make the page scrollable. */
+  overflow: hidden;
+  overflow: clip;
+  overscroll-behavior: none;
+}
+html {
   overflow: hidden;
 }
 button,
