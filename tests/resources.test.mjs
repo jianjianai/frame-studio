@@ -356,6 +356,8 @@ describe("resources of the material libraries", () => {
     expect((await tool("material_read", { work: other.id, library: "测试", path: "README.md" })).body.text).toContain("素材库「测试」。引用了它的作品可以直接使用其中的文件");
     // One line per re-export statement.
     expect((await tool("resource_view", { work: other.id, id: "测试/code/tools.ts", image: false })).body.text).toContain("- 从 ./shapes 导出 half、ball  // 两个工具");
+    expect((await tool("resource_view", { work: other.id, id: "没有/code/x.ts#a", image: false })).body.error.message).toContain("没有素材库「没有」（有：测试）");
+    expect((await tool("resource_view", { work: other.id, id: "测试/code/nope.ts#a", image: false })).body.error.message).toContain("素材库「测试」里没有 code/nope.ts");
     // work_context: the libraries, what they hold, whether they fit the picture (the ball's 400×300 does not fit 16:9).
     const context = JSON.parse((await tool("work_context", { work: other.id })).body.text);
     expect(context.materials.libraries).toEqual([

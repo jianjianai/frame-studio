@@ -37,6 +37,17 @@ async function checkLayers(services, work, document) {
     const names = info?.animations?.map((item) => item.name);
     if (names && !names.includes(source.animation)) problems.push(`图层「${clip.id}」：模型 ${source.src} 里没有动画「${source.animation}」（有：${names.join("、") || "无"}）`);
   }
+  // A Lottie layer plays its animation's time = offset + (elapsed × rate + phase) [mod loop]: past the end it fails.
+  for (const clip of document.clips) {
+    if (clip.source.kind !== "lottie") continue;
+    const info = await resolveAsset(services, work, clip.source.src).then(probe).catch(() => null);
+    if (!info?.duration) continue;
+    const reach = clip.offset + (clip.loop ? clip.loop : clip.duration * clip.rate + (clip.phase ?? 0));
+    if (reach > info.duration + 1e-3)
+      problems.push(
+        `图层「${clip.id}」要播放到 ${clip.source.src} 的第 ${+reach.toFixed(3)} 秒，但它只有 ${info.duration} 秒（动画时间 = offset + (经过的时间 × rate + phase)，有 loop 时括号部分对 loop 取余）：${clip.loop ? "让 offset + loop 不超过动画时长" : "缩短图层、降低 rate，或加 loop"}`,
+      );
+  }
   const heavy = document.clips.filter((clip) => !clip.hidden && (clip.source.kind === "model" || (clip.source.kind === "scene" && clip.source.engine === "three")));
   for (const at of [...new Set(heavy.map((clip) => clip.start))].sort((a, b) => a - b)) {
     const active = heavy.filter((clip) => clip.start <= at && at < clip.start + clip.duration);

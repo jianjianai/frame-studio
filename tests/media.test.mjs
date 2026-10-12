@@ -239,9 +239,9 @@ describe("models, Lottie and panoramas in works and libraries", () => {
     // The box is 96 px wide in a 320 px picture, the square 30% of the animation: about 29 × 29.
     expect(squarePixels).toBeGreaterThan(650);
     expect(squarePixels).toBeLessThan(1100);
-    // Past the animation's end the error names the layer and the length.
-    await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "square", patch: { offset: 0.5, loop: 1 } }] });
-    const late = await tool("preview_frames", { work: work.id, times: [0.8] });
-    expect(JSON.stringify(late.body)).toMatch(/Lottie 图层「square」.*只有 1\.00 秒/);
+    // Past the animation's end: refused before writing, naming the layer, the length and the formula.
+    const late = await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "square", patch: { offset: 0.5, loop: 1 } }] });
+    expect(late.status).toBe(400);
+    expect(late.body.error.message).toMatch(/图层「square」要播放到 .*square\.json 的第 1\.5 秒，但它只有 1 秒.*offset \+ loop/);
   }, 180000);
 });

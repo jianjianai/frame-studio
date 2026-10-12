@@ -206,6 +206,8 @@ describe("material libraries", () => {
     });
     expect(described.body.data.map((item) => item.ok)).toEqual([true, true, true, true, false, false]);
     expect(described.body.text).toContain("2 条素材来源记录已保留");
+    expect(described.body.text).toContain("README 的来源记录跟着改了 1 条");
+    expect(described.body.text).toContain("README 里它的来源记录也删了 1 条");
     expect(readme()).toMatch(/^# 打击音效\n\n短促的打击声，适合卡点和转场。/);
     expect(readme()).toContain("- `sfx/hit.txt`：来源 https://example.com/hit；许可 CC0");
     expect(readme()).not.toContain("old.txt");

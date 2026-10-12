@@ -129,6 +129,7 @@ export function registerWorkTools(registry) {
         libraries.length
           ? `这个作品库的素材库：${libraries.map((item) => `「${item.id}」`).join("")}（作品只能用同一作品库里的素材库）`
           : `这个作品库没有素材库（作品只能用同一作品库里的素材库）${others.length ? `。其他作品库：${others.join("、")}；要用它们的素材库，就在那个作品库里新建作品（repo 参数）` : ""}`,
+        "还没有混音文档 audio.json：第一次用 audio_place 或 speech_synthesize 放声音时自动创建。",
       ].join("\n"));
     },
   });
@@ -442,7 +443,7 @@ export function registerWorkTools(registry) {
       subtitleStyle: z
         .strictObject({ size: z.number().min(0.01).max(0.08).optional(), y: z.number().min(0.05).max(0.95).optional() })
         .optional()
-        .describe("字幕的样式：size 字高占画面长边的比例（默认 0.022，竖屏短视频常用 0.03–0.035），y 字幕中线的位置（0.05 顶部 – 0.95 底部，默认 0.92）"),
+        .describe("字幕的样式：size 字高占画面长边的比例（默认 0.022，竖屏短视频常用 0.03–0.035），y 字幕中线的位置（0.05 顶部 – 0.95 底部，默认横屏 0.92、竖屏 0.82）"),
     },
     async run({ work: _ignored, posterTime, width, height, ...changes }, ctx) {
       const work = await ctx.work();

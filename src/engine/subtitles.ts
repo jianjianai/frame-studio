@@ -32,7 +32,7 @@ export const toSrt = (cues: readonly Cue[]): string =>
 export interface SubtitleStyle {
   /** Letter height as a share of the picture's long side (default 0.022). */
   size?: number;
-  /** Where the lines' middle sits, 0 top – 1 bottom (default 0.92). */
+  /** Where the lines' middle sits, 0 top – 1 bottom (default 0.92; 0.82 in a vertical picture). */
   y?: number;
 }
 export function paintSubtitle(
@@ -60,7 +60,8 @@ export function paintSubtitle(
   if (line) lines.push(line);
   const lineH = size * 1.5;
   const total = lines.length * lineH;
-  const y = h * (style.y ?? 0.92) - total / 2;
+  // Short-video apps cover the bottom of a vertical picture with buttons and captions.
+  const y = h * (style.y ?? (h > w ? 0.82 : 0.92)) - total / 2;
   const width = Math.max(...lines.map((s) => ctx.measureText(s).width));
   ctx.fillStyle = "rgba(13,21,24,.7)";
   ctx.beginPath();

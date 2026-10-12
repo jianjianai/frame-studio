@@ -226,12 +226,13 @@ export class Materials {
       return named && (named === from || named.startsWith(from + "/")) ? named : null;
     };
     const moved = lines.filter(mine).map((line) => line.replace(/^- `([^`]+)`/, (_, named) => `- \`${to}${named.slice(from.length)}\``));
-    if (!moved.length) return;
+    if (!moved.length) return 0;
     writeFileAtomic(file, lines.filter((line) => !mine(line)).join("\n"));
-    if (!to) return;
+    if (!to) return moved.length;
     if (toLibrary === id) {
       const text = fs.readFileSync(file, "utf8");
-      return writeFileAtomic(file, text.replace(/\n*$/, "\n") + moved.join("\n") + "\n");
+      writeFileAtomic(file, text.replace(/\n*$/, "\n") + moved.join("\n") + "\n");
+      return moved.length;
     }
     for (const line of moved) {
       const [, named, note] = /^- `([^`]+)`：(.*)$/.exec(line);
@@ -239,6 +240,7 @@ export class Materials {
       const license = /许可 (.+)$/.exec(note)?.[1];
       this.credit(dir, toLibrary, named, { source, license });
     }
+    return moved.length;
   }
   /**
    * A new README: the library's title (its first "# " line), introduction (first paragraph)
@@ -293,19 +295,19 @@ export class Materials {
     const target = toLibrary || id;
     this.libraryOf(dir, target);
     if (from === "README.md" || to === "README.md") throw problem(400, "README.md 不能移动或被替换：直接用 put（content）或 edit 修改它");
-    await this.save(repo, [id, target], `素材库：移动 ${id}/${from} → ${target}/${to}`, () => {
+    const notes = await this.save(repo, [id, target], `素材库：移动 ${id}/${from} → ${target}/${to}`, () => {
       movePath(dir, `${id}/${from}`, `${target}/${to}`);
-      this.recredit(dir, id, from, to, target);
+      return this.recredit(dir, id, from, to, target);
     });
-    return { ref: `${target}/${to}`, url: `materials/${target}/${to}` };
+    return { ref: `${target}/${to}`, url: `materials/${target}/${to}`, notes };
   }
   async delete(repo, id, relative) {
     const dir = await this.dir(repo);
     this.libraryOf(dir, id);
     if (relative === "README.md") throw problem(400, "README.md 是素材库的说明并记录素材的来源与许可，不能删除；要改内容用 put（content）或 edit");
-    await this.save(repo, [id], `素材库「${this.title(dir, id)}」：删除 ${relative}`, () => {
+    return this.save(repo, [id], `素材库「${this.title(dir, id)}」：删除 ${relative}`, () => {
       removePath(dir, `${id}/${relative}`);
-      this.recredit(dir, id, relative);
+      return this.recredit(dir, id, relative);
     });
   }
 
@@ -1136,10 +1138,10 @@ export function materialsPlugin(services) {
         }
         if (item.op === "move") {
           const moved = await materials.move(work.repo, library, item.from, item.to, { toLibrary: item.to_library });
-          return { ...moved, line: `materials/${library}/${item.from} → materials/${moved.ref}` };
+          return { ...moved, line: `materials/${library}/${item.from} → materials/${moved.ref}${moved.notes ? `（README 的来源记录跟着改了 ${moved.notes} 条）` : ""}` };
         }
-        await materials.delete(work.repo, library, item.path);
-        return { deleted: `${library}/${item.path}`, line: `已删除 materials/${library}/${item.path}` };
+        const notes = await materials.delete(work.repo, library, item.path);
+        return { deleted: `${library}/${item.path}`, line: `已删除 materials/${library}/${item.path}${notes ? `（README 里它的来源记录也删了 ${notes} 条）` : ""}` };
       };
       // One after another: later operations may depend on earlier ones.
       const results = await eachSettled(operations, one, 1);

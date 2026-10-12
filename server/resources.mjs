@@ -603,7 +603,11 @@ export class ResourceCatalog {
     const head = await this.materials.headOf(work.repo);
     const locks = this.materials.readLocks(work.dir);
     const blob = head.get(ref);
-    if (!blob) throw notFound(`素材库里没有 materials/${ref}`);
+    if (!blob) {
+      const library = ref.split("/")[0];
+      const known = [...new Set([...head.keys()].filter((path) => path.includes("/")).map((path) => path.split("/")[0]))];
+      throw notFound(known.includes(library) ? `素材库「${library}」里没有 ${ref.slice(library.length + 1)}（resources_search 找资源的地址）` : `作品库 ${work.repo} 里没有素材库「${library}」（有：${known.join("、") || "无"}）`);
+    }
     const mod = { ...(await this.module(work.repo, ref, blob)), outdated: Boolean(locks[ref] && locks[ref] !== blob) };
     if (!key) return { module: mod };
     const resource = mod.resources.find((item) => item.key === key);
@@ -959,12 +963,13 @@ export function resourcesPlugin(services) {
         entry.type === "code"
           ? `- [${entry.kindLabel}] ${entry.id} ${entry.signature}${entry.doc ? `  // ${firstLine(entry.doc)}` : ""}`
           : `- [${entry.kindLabel}${engineTag(entry.engine)}] ${entry.id} ${entry.title}${entry.type === "sound" && entry.duration && !/\d\s*秒/.test(entry.title) ? `（${entry.duration} 秒）` : ""}${entry.description ? " — " + firstLine(entry.description) : ""}`;
-      if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源。可以换个说法，或不给 query 看全部目录。` : "素材库里还没有声明资源（见 frame_guide resources）。");
+      const files = "素材库里的文件（Lottie、图片、模型、音频、字体）不是资源，不在这里：用 materials_list 列出、asset_view 查看。";
+      if (!found.length) return asJson({ items: [] }, query ? `没有找到「${query}」相关的资源。可以换个说法，或不给 query 看全部目录。${files}` : `素材库里还没有声明资源（见 frame_guide resources）。${files}`);
       let text;
       // Several words that nothing matches together: say the list is the partial matches.
       const words = terms(query ?? "");
       const partial = words.length > 1 && !found.some((entry) => score(entry, query) >= 100 * words.length);
-      if (query) text = `${partial ? `没有同时符合「${words.join("」「")}」的；下面是符合其中一部分的 ` : "找到 "}${found.length} 个：\n${found.map(line).join("\n")}`;
+      if (query) text = `${partial ? `没有同时符合「${words.join("」「")}」的；下面是符合其中一部分的 ` : "找到 "}${found.length} 个：\n${found.map(line).join("\n")}${partial ? `\n\n${files}` : ""}`;
       else {
         // The directory, by library and kind; once it gets long, only the first few of each kind.
         text = directory(found, linked, false);
@@ -1019,10 +1024,13 @@ export function resourcesPlugin(services) {
       }
       const meta = services.works.meta(work);
       let note = entry.type === "resource" && entry.engine !== "three" && meta.ok ? canvasNote(`${entry.preview.width}×${entry.preview.height}`, meta.meta, entry.engine) : "";
-      // A resource with its own scale parameter: that is the way to size it, not scaling the canvas too.
-      const factor = /（([\d.]+) 倍）/.exec(note)?.[1];
-      if (factor && entry.params?.some((param) => param.name === "scale"))
-        note = `预览按 ${entry.preview.width}×${entry.preview.height} 的画布设计，本作品画面是 ${meta.meta.composition?.width ?? 1920}×${meta.meta.composition?.height ?? 1080}：用资源自己的 scale 参数放大（scale: ${factor}），不要再缩放画布。`;
+      // A resource with its own scale parameter: that is the way to size it, not scaling the canvas
+      // too — whether the picture has the preview's shape or not (then the factor that fits it).
+      if (note && entry.params?.some((param) => param.name === "scale")) {
+        const W = meta.meta.composition?.width ?? 1920, H = meta.meta.composition?.height ?? 1080;
+        const factor = Math.round(Math.min(W / entry.preview.width, H / entry.preview.height) * 100) / 100;
+        note = `预览按 ${entry.preview.width}×${entry.preview.height} 的画布设计，本作品画面是 ${W}×${H}：用资源自己的 scale 参数调大小（按画面放得下算是 scale: ${factor}，只占一部分时按需要的大小换算），不要再缩放画布。`;
+      }
       const text = describeEntry(entry) + (note ? `\n\n注意：${note}` : "");
       if (entry.type !== "resource" || !image) return asJson({ id: entry.id, type: entry.type }, text);
       // An animated resource is shown at a few moments unless asked: one still hides the motion.
