@@ -77,6 +77,10 @@ export function aiPlugin(services) {
   });
 
   // ---- sessions -----------------------------------------------------------------
+  // Conversations about the works of a repository removed from this machine go with it.
+  services.repos.beforeRemove.push(async (repo) => {
+    for (const session of ai.list({ repo })) await ai.remove(session.id);
+  });
   router.get("/api/ai/sessions", ({ query }) => ai.list({ work: query.work, repo: query.repo }));
   router.post("/api/ai/sessions", async ({ req }) => ai.create(await readJson(req)));
   router.get("/api/ai/sessions/:id", ({ params }) => ({

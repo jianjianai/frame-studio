@@ -35,6 +35,7 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
   const server = http.createServer();
   const preview = await createPreview({ config, httpServer: server, events });
   const watcher = new WorkWatcher({ events, preview });
+  repos.beforeRemove.push((id) => watcher.unwatchRepo(id));
   const services = { config, events, settings, auth, github, repos, works, preview, watcher, router, closers: [] };
 
   /** Open a work for editing and start watching it. Used by every route/tool that touches a work. */

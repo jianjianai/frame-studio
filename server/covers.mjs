@@ -192,11 +192,17 @@ export class Covers {
   forget(repo, id) {
     for (const extension of [".webp", ".json"]) fs.rmSync(this.base(repo, id) + extension, { force: true });
   }
+
+  /** A repository removed from this machine: its covers go (covers still queued find no work and stop). */
+  forgetRepo(repo) {
+    fs.rmSync(path.join(this.dir, repo), { recursive: true, force: true });
+  }
 }
 
 export function coversPlugin(services) {
   const { router } = services;
   const covers = (services.covers = new Covers(services));
+  services.repos.beforeRemove.push((repo) => covers.forgetRepo(repo));
   const base = "/api/works/:repo/:id/cover";
 
   /** The cached image; `?v=` is the version from the work list, so a matching one never changes. */

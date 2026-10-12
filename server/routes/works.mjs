@@ -11,14 +11,11 @@ export function workRoutes(services) {
 
   // Covers come from the covers plugin; stale ones are redone in the background.
   const covered = (list) => services.covers?.annotate(list) ?? list;
-  router.get("/api/works", async ({ query }) => covered(await works.list({ repo: query.repo || undefined, trash: query.trash === "1" })));
-  router.get("/api/recent", async () => {
-    const all = covered(await works.list());
-    const byKey = new Map(all.map((work) => [`${work.repo}/${work.id}`, work]));
-    return settings
-      .get("recent")
-      .map((item) => byKey.get(`${item.repo}/${item.id}`) && { ...byKey.get(`${item.repo}/${item.id}`), openedAt: item.openedAt })
-      .filter(Boolean);
+  router.get("/api/works", async ({ query }) => {
+    const list = covered(await works.list({ repo: query.repo || undefined, trash: query.trash === "1" }));
+    // When each work was last opened on this machine (the home page's 最近打开).
+    const opened = new Map(settings.get("recent").map((item) => [`${item.repo}/${item.id}`, item.openedAt]));
+    return list.map((work) => (opened.has(`${work.repo}/${work.id}`) ? { ...work, openedAt: opened.get(`${work.repo}/${work.id}`) } : work));
   });
   router.post("/api/works", async ({ req }) => {
     const body = await readJson(req);

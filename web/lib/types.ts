@@ -11,9 +11,11 @@ export interface WorkSummary {
   height: number;
   accent: string;
   status: string;
+  tags?: string[];
   /** Version of the cached cover image ("" while there is none); see lib/covers.ts. */
   cover?: string;
   updatedAt: string;
+  /** When the work was last opened on this machine. */
   openedAt?: string;
   /** Where the branch is (for the recycle bin: where the trash/<id> branch is). */
   location: "local" | "remote" | "both";

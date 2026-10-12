@@ -14,15 +14,28 @@ interface GitHubRepo {
   description: string;
 }
 
+/** One repository whatever the address looks like (with or without .git, a trailing slash, letter case). */
+const sameRepo = (a: string, b: string) => {
+  const plain = (url: string) =>
+    url
+      .toLowerCase()
+      .replace(/\/+$/, "")
+      .replace(/\.git$/, "");
+  return plain(a) === plain(b);
+};
+
 /** Add a content repository: clone one from GitHub, create a new one, or publish the local one. */
 export function RepoDialog({
   onClose,
   onDone,
   mode: initialMode = "clone",
+  linked = [],
 }: {
   onClose: () => void;
   onDone: () => void;
   mode?: "clone" | "create" | "publish";
+  /** Addresses of the repositories already connected. */
+  linked?: string[];
 }) {
   const toast = useToast();
   const [mode, setMode] = useState(initialMode);
@@ -136,12 +149,16 @@ export function RepoDialog({
           </label>
           {remoteRepos.length > 0 && (
             <div className="repo-pick">
-              {remoteRepos.map((item) => (
-                <button key={item.fullName} className={url === item.url ? "active" : ""} onClick={() => setUrl(item.url)}>
-                  <span className="ellipsis">{item.fullName}</span>
-                  {item.private && <span className="badge">私有</span>}
-                </button>
-              ))}
+              {remoteRepos.map((item) => {
+                const added = linked.some((remote) => sameRepo(remote, item.url));
+                return (
+                  <button key={item.fullName} className={url === item.url ? "active" : ""} disabled={added} onClick={() => setUrl(item.url)}>
+                    <span className="ellipsis">{item.fullName}</span>
+                    {item.private && <span className="badge">私有</span>}
+                    {added && <span className="badge accent">已连接</span>}
+                  </button>
+                );
+              })}
             </div>
           )}
         </>

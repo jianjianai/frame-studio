@@ -166,6 +166,10 @@ export class WorkWatcher {
     this.watchers.get(key)?.close();
     this.watchers.delete(key);
   }
+  /** Every work of a repository (being removed). */
+  unwatchRepo(repo) {
+    for (const key of this.watchers.keys()) if (key.startsWith(repo + "/")) this.unwatch({ repo, id: key.slice(repo.length + 1) });
+  }
   close() {
     for (const watcher of this.watchers.values()) watcher.close();
     this.watchers.clear();

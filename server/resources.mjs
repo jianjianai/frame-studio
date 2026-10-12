@@ -993,6 +993,7 @@ export function resourcesPlugin(services) {
   const { router, tools } = services;
   const catalog = (services.resources = new ResourceCatalog(services));
   services.works.briefProviders.push((work) => catalog.brief(work));
+  services.repos.beforeRemove.push((repo) => (catalog.overviews.delete(repo), catalog.overviewed.delete(repo)));
   const open = (params) => services.openWork(params.id, params.repo);
 
   /** The libraries' resources and sounds for the workbench (all libraries, marked when the work links them). */

@@ -53,7 +53,7 @@
   font-size: 12px;
 }
 
-/* ---- welcome ---- */
+/* ---- standalone page shell (复盘对比) ---- */
 .welcome {
   height: 100%;
   display: flex;
@@ -68,199 +68,6 @@
   border-bottom: 1px solid var(--border);
   background: var(--bg-elev);
   flex: none;
-}
-.welcome-main,
-.welcome-settings {
-  flex: 1;
-  overflow: auto;
-  padding: 32px max(24px, calc((100vw - 1180px) / 2)) 64px;
-}
-.welcome-settings {
-  padding-top: 16px;
-}
-.welcome-main section {
-  margin-bottom: 32px;
-}
-.welcome-main h2 {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 12px;
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--fg-muted);
-}
-.welcome-hero h1 {
-  margin: 8px 0 6px;
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: 0.02em;
-}
-.welcome-hero p {
-  margin: 0 0 20px;
-  max-width: 640px;
-  font-size: 14px;
-}
-.hero-actions {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-  gap: 12px;
-}
-.hero-card {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  padding: 16px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elev);
-  text-align: left;
-  cursor: pointer;
-  transition:
-    border-color 0.12s,
-    transform 0.12s;
-}
-.hero-card:hover {
-  border-color: var(--accent);
-  transform: translateY(-1px);
-}
-.hero-card > svg {
-  flex: none;
-  color: var(--accent);
-}
-.hero-card span {
-  display: grid;
-  gap: 2px;
-}
-.hero-card small {
-  color: var(--fg-muted);
-}
-.hero-card.primary {
-  background: linear-gradient(135deg, var(--accent-strong), #8c6ae8);
-  border-color: transparent;
-  color: #fff;
-}
-.hero-card.primary > svg,
-.hero-card.primary small {
-  color: rgb(255 255 255 / 0.85);
-}
-.section-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 8px;
-}
-.section-head h2 {
-  margin: 0 !important;
-}
-.search {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 30px;
-  width: min(280px, 50vw);
-  padding: 0 10px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius);
-  background: var(--bg-input);
-  color: var(--fg-muted);
-}
-.search input {
-  flex: 1;
-  min-width: 0;
-  border: 0;
-  outline: none;
-  background: transparent;
-  color: var(--fg);
-}
-.repo-group {
-  margin-top: 12px;
-}
-.repo-head {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 12px;
-}
-.work-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-  gap: 14px;
-}
-.work-card {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  background: var(--bg-elev);
-  overflow: hidden;
-  cursor: pointer;
-  transition:
-    border-color 0.12s,
-    box-shadow 0.12s;
-}
-.work-card:hover {
-  border-color: var(--border-strong);
-  box-shadow: var(--shadow);
-}
-.work-thumb {
-  height: 120px;
-  display: grid;
-  place-items: center;
-  background: radial-gradient(circle at 30% 20%, color-mix(in srgb, var(--accent) 30%, transparent), transparent 60%), var(--bg-sunken);
-  padding: 10px;
-}
-.work-thumb-frame {
-  max-width: 100%;
-  max-height: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
-  border-radius: 4px;
-  overflow: hidden;
-  background: #000;
-  color: #fff;
-  font-size: 30px;
-  font-weight: 700;
-}
-/* The initial shows until the cover has loaded (or when there is none). */
-.work-thumb-frame > * {
-  grid-area: 1 / 1;
-}
-.work-thumb-frame img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-.work-info {
-  padding: 8px 8px 10px 12px;
-}
-/* works an AI asked to delete, waiting for the user */
-.delete-request {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 12px;
-  margin-top: 8px;
-  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--danger) 7%, transparent);
-}
-.delete-requests > p {
-  margin: -4px 0 4px;
-}
-.trash-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-}
-.trash-info {
-  display: grid;
-  gap: 2px;
-  min-width: 0;
 }
 
 /* ---- shared dialog bits ---- */
@@ -318,6 +125,13 @@
 .repo-pick button.active {
   background: var(--accent-soft);
   color: var(--accent);
+}
+.repo-pick button:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+.repo-pick button:disabled:hover {
+  background: transparent;
 }
 @media (max-width: 640px) {
   .field-grid {

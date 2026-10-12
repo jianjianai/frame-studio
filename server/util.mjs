@@ -36,6 +36,30 @@ export function writeFileAtomic(file, content) {
   fs.renameSync(temp, file);
 }
 
+/** Bytes used by a directory tree (symbolic links are not followed). */
+export function diskUsage(dir) {
+  let total = 0;
+  const walk = (current) => {
+    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+      const file = path.join(current, entry.name);
+      if (entry.isDirectory()) walk(file);
+      else if (entry.isFile()) total += fs.statSync(file).size;
+    }
+  };
+  try {
+    walk(dir);
+  } catch {}
+  return total;
+}
+
+/** Write permission back on every folder of a tree (published works are read-only on disk), so it can be removed. */
+export function writable(dir) {
+  const stat = fs.lstatSync(dir, { throwIfNoEntry: false });
+  if (!stat?.isDirectory()) return;
+  if (!(stat.mode & 0o200)) fs.chmodSync(dir, (stat.mode | 0o200) & 0o7777);
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) if (entry.isDirectory()) writable(path.join(dir, entry.name));
+}
+
 /** A Map that forgets the least recently used entries beyond `limit` (which may be raised as the working set grows). */
 export class Lru extends Map {
   constructor(limit) {

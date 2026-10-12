@@ -2,7 +2,7 @@ import { Component, useEffect, useState, type ReactNode } from "react";
 import { api, onConnection } from "./lib/api";
 import { ToastProvider, ConfirmProvider, PromptProvider } from "./lib/ui";
 import { Login } from "./pages/Login";
-import { Welcome } from "./pages/Welcome";
+import { Home } from "./home/Home";
 import { Workbench } from "./workbench/Workbench";
 import { ComparePage } from "./reviews/ComparePage";
 
@@ -79,7 +79,7 @@ export function App() {
             ) : path === "/reviews" ? (
               <ComparePage />
             ) : (
-              <Welcome version={state.version} />
+              <Home version={state.version} local={!state.authRequired} />
             )}
             {outdated && (
               <div className="update-bar" role="status">

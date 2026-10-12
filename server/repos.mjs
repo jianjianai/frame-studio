@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { git, gitOk, authEnv, addOrphanWorktree } from "./git.mjs";
+import { git, gitOk, authEnv, addOrphanWorktree, parseStatus } from "./git.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
-import { problem, notFound, Locks } from "./util.mjs";
+import { problem, notFound, Locks, diskUsage, writable } from "./util.mjs";
 
 export const LOCAL_REPO = "local";
 export const MATERIALS_BRANCH = "frame/materials";
@@ -29,6 +29,9 @@ const repoIdFrom = (fullName) =>
  * library are separate worktrees, so their histories and push/pull never interfere.
  */
 export class Repos {
+  /** Run before a repository's folders are removed from this machine, to stop and forget what other parts keep of it: (id) => void. */
+  beforeRemove = [];
+
   constructor({ config, settings, github, events }) {
     this.config = config;
     this.settings = settings;
@@ -159,15 +162,94 @@ export class Repos {
     return { fetched: true };
   }
 
+  /**
+   * What only this machine has of a repository: branches with versions GitHub does not have
+   * (`behind` too when GitHub moved on as well) and checkouts with unsaved changes. Asks GitHub
+   * first; `error` says why that failed.
+   */
+  async localOnly(id) {
+    const repo = this.get(id);
+    if (!fs.existsSync(path.join(repo.dir, "HEAD"))) return { error: "", branches: [], worktrees: [], backups: 0 };
+    let error = "";
+    if (repo.remote)
+      await this.fetch(id).catch(
+        (failure) =>
+          (error = String(failure.stderr || failure.message)
+            .trim()
+            .split("\n")
+            .pop()),
+      );
+    const branches = [];
+    for (const branch of (await git(repo.dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"])).split("\n").filter(Boolean)) {
+      const remote = `refs/remotes/origin/${branch}`;
+      if (repo.remote && (await gitOk(repo.dir, ["show-ref", "--verify", "--quiet", remote]))) {
+        const [ahead, behind] = (await git(repo.dir, ["rev-list", "--left-right", "--count", `refs/heads/${branch}...${remote}`]))
+          .trim()
+          .split(/\s+/)
+          .map(Number);
+        if (ahead) branches.push({ branch, ahead, behind });
+      } else {
+        // Never pushed: the versions no branch on GitHub has.
+        const ahead = Number((await git(repo.dir, ["rev-list", "--count", `refs/heads/${branch}`, "--not", "--remotes=origin"])).trim());
+        if (ahead) branches.push({ branch, ahead, behind: 0 });
+      }
+    }
+    const worktrees = [];
+    for (const { dir, branch } of await this.worktrees(id)) {
+      const { files } = parseStatus(await git(dir, ["status", "--porcelain=v2", "--untracked-files=all"]));
+      if (files.length) worktrees.push({ branch, dir, files: files.length });
+    }
+    const backups = (await git(repo.dir, ["for-each-ref", "--format=%(refname)", "refs/frame-backup/"])).split("\n").filter(Boolean).length;
+    return { error, branches, worktrees, backups };
+  }
+
+  /** Checkouts of the repository's branches (works and the shared library branches). */
+  async worktrees(id) {
+    const out = await git(this.dir(id), ["worktree", "list", "--porcelain"]);
+    const result = [];
+    for (const block of out.split("\n\n")) {
+      const dir = /^worktree (.+)$/m.exec(block)?.[1];
+      const branch = /^branch refs\/heads\/(.+)$/m.exec(block)?.[1];
+      if (dir && branch && fs.existsSync(dir)) result.push({ dir, branch });
+    }
+    return result;
+  }
+
+  /** Where this machine keeps a repository: its clone, the works checked out, the shared branches' checkouts, exported videos. */
+  places(id) {
+    const { works, libraries, experience, reviews, exports } = this.config.dirs;
+    return {
+      clone: this.dir(id),
+      works: path.join(works, id),
+      shared: [libraries, experience, reviews].map((base) => path.join(base, id)),
+      exports: path.join(exports, id),
+    };
+  }
+
+  /**
+   * Remove a repository from this machine (取消链接): everything kept of it here goes, GitHub
+   * is not touched. Returns the space freed.
+   */
   async remove(id) {
     if (id === LOCAL_REPO) throw problem(400, "本地作品库不能移除");
-    const repo = this.get(id);
-    fs.rmSync(path.join(this.config.dirs.works, id), { recursive: true, force: true });
-    for (const shared of [this.config.dirs.libraries, this.config.dirs.experience, this.config.dirs.reviews])
-      fs.rmSync(path.join(shared, id), { recursive: true, force: true });
-    fs.rmSync(repo.dir, { recursive: true, force: true });
+    this.get(id);
+    for (const hook of this.beforeRemove)
+      try {
+        await hook(id);
+      } catch (error) {
+        console.warn(`cleanup before removing ${id} failed:`, error.message);
+      }
+    const { clone, works, shared, exports } = this.places(id);
+    let freed = 0;
+    for (const dir of [clone, works, ...shared, exports]) {
+      freed += diskUsage(dir);
+      writable(dir);
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
     this.settings.update("repos", (repos) => repos.filter((item) => item.id !== id));
+    for (const key of ["recent", "deleteRequests"]) this.settings.update(key, (list) => list.filter((item) => item.repo !== id));
     this.events.emit({ type: "repos" });
+    return { freed };
   }
 
   async setAccount(id, account) {

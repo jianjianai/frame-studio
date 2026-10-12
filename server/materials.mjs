@@ -739,6 +739,16 @@ export class Materials {
         });
     }
   }
+  /** A repository removed from this machine: what was kept of its libraries goes. */
+  forget(repo) {
+    const library = path.join(this.services.config.dirs.tmp, "library", repo);
+    const works = path.join(this.services.config.dirs.works, repo);
+    this.heads.delete(repo);
+    this.excluded.delete(repo);
+    for (const root of this.manifests.keys()) if (root === library || inside(works, root)) this.manifests.delete(root);
+    fs.rmSync(library, { recursive: true, force: true });
+  }
+
   /** After the libraries changed: works running copies of their code follow (where not locked), and so does the library root. */
   async refreshRepo(repo) {
     this.heads.delete(repo);
@@ -815,6 +825,7 @@ export function materialsPlugin(services) {
   const materials = (services.materials = new Materials(services));
   // A version of a work (and its publication) records the material versions it uses, and only those.
   works.beforeSave.push((work) => materials.syncLocks(work));
+  services.repos.beforeRemove.push((repo) => materials.forget(repo));
   // Library code: the preview resolves @materials/… to copies at the versions each work uses,
   // which follow the libraries (unlocked files) and the works' lock files (pull, revert, edits).
   services.preview?.importResolvers?.push((source, importer) => materials.resolveImport(source, importer));

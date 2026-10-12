@@ -34,6 +34,12 @@ export class RemoteSync {
     return next;
   }
 
+  /** A repository removed from this machine: no push waits for it, no state is kept of it. */
+  forget(repo) {
+    for (const [key, timer] of this.timers) if (key.startsWith(repo + "/")) (clearTimeout(timer), this.timers.delete(key));
+    for (const key of this.states.keys()) if (key.startsWith(repo + "/")) this.states.delete(key);
+  }
+
   /** One push or check at a time per branch. */
   serial(scope, task) {
     const key = this.key(scope);
@@ -246,6 +252,7 @@ export function remoteSyncPlugin(services) {
   const { router, works } = services;
   const sync = (services.remoteSync = new RemoteSync(services));
   works.afterSave.push((scope) => sync.pushSoon(scope));
+  services.repos.beforeRemove.push((repo) => sync.forget(repo));
   // Shortly after start, then now and then: what was saved but never reached GitHub goes now.
   const first = setTimeout(() => void sync.sweep(), 20000);
   const later = setInterval(() => void sync.sweep(), 30 * 60 * 1000);

@@ -3,7 +3,7 @@ import path from "node:path";
 import { git, gitOk, parseStatus, addOrphanWorktree } from "./git.mjs";
 import { readProjectSource, readProjectDir, setProjectFields, removeProjectProperty, validSlug } from "./project-meta.mjs";
 import { appRoot } from "./config.mjs";
-import { problem, notFound, conflict, Locks, shortId, writeFileAtomic } from "./util.mjs";
+import { problem, notFound, conflict, Locks, shortId, writeFileAtomic, diskUsage } from "./util.mjs";
 import { createWorkFiles, platformInstructions, workTsconfig, GIT_ATTRIBUTES } from "./templates.mjs";
 import { clip, quote, LIMITS } from "./ai/context.mjs";
 import { LOCAL_REPO } from "./repos.mjs";
@@ -802,22 +802,6 @@ function backupOf(ref) {
   if (migrated) return migrated[1];
   const own = /^refs\/frame-backup\/([^/]+)\//.exec(ref);
   return own && own[1] !== "pre-lfs" ? own[1] : null;
-}
-
-/** Bytes used by a directory tree (symbolic links are not followed). */
-function diskUsage(dir) {
-  let total = 0;
-  const walk = (current) => {
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const file = path.join(current, entry.name);
-      if (entry.isDirectory()) walk(file);
-      else if (entry.isFile()) total += fs.statSync(file).size;
-    }
-  };
-  try {
-    walk(dir);
-  } catch {}
-  return total;
 }
 
 /**
