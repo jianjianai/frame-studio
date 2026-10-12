@@ -189,6 +189,15 @@ describe("models, Lottie and panoramas in works and libraries", () => {
     expect(placed.status).toBe(200);
     await app.services.works.commit(app.services.works.describe("local", work.id), "放模型");
     expect(Object.keys(app.services.materials.readLocks(work.dir)).sort()).toEqual(["三维/env/sky.hdr", "三维/models/cube.glb"]);
+    // Caught before writing: an animation the file lacks, and too many 3D layers at once.
+    const wrong = await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "cube", patch: { source: { animation: "Walk" } } }] });
+    expect(wrong.status).toBe(400);
+    expect(wrong.body.error.message).toContain("没有动画「Walk」（有：Spin）");
+    const crowd = Array.from({ length: 13 }, (_, i) => ({ op: "add", clip: { ...cube, id: `c${i}`, start: 0.5 } }));
+    expect((await tool("layers_edit", { work: work.id, operations: crowd, dryRun: true })).body.error.message).toContain("0.5 秒起同时有 14 个三维图层");
+    // Removing fields needs no patch.
+    expect((await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "cube", unset: ["source.spin"] }] })).status).toBe(200);
+    expect((await tool("asset_view", { work: work.id, files: ["materials/三维/models/cube.glb"], animation: "Walk" })).body.error.message).toContain("没有动画「Walk」");
   });
 
   it.skipIf(!browserExecutable())("draws models, Lottie and panoramas for thumbnails, the AI and the picture", async () => {

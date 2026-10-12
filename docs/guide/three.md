@@ -6,7 +6,7 @@
 import * as THREE from "three";
 import type { SceneOptions } from "@frame/engine/types";
 import { createThreeScene } from "@frame/engine/scene-adapters";
-import { loadModel, studioEnvironment, frameObject } from "@frame/engine/three-assets";
+import { loadModel, studioEnvironment, frameObject, setAnimationTime } from "@frame/engine/three-assets";
 import { smooth, phase } from "@frame/engine/math";
 
 export function createScene(options: SceneOptions) {
@@ -28,7 +28,7 @@ export function createScene(options: SceneOptions) {
       scene,
       camera,
       update(t) {
-        mixer.setTime(t);                            // 骨骼动画按绝对时间求值
+        setAnimationTime(mixer, t);                  // 骨骼动画按绝对时间求值
         // 镜头绕模型慢慢转过 60°
         const turn = THREE.MathUtils.degToRad(60) * smooth(phase(t, 0, 3));
         camera.position.copy(middle).add(offset.clone().applyAxisAngle(new THREE.Vector3(0, 1, 0), turn));
@@ -77,16 +77,35 @@ export async function createScene({ width, height }: SceneOptions): Promise<Scen
     canvas: renderer.domElement,
     render(t) {
       // …按 t 更新…
-      composer.render();
+      composer.render(0);                           // 0：不让后期按自己的时钟推进
     },
     dispose() {
       disposeObject(scene);
-      composer.dispose();
+      composer.dispose();                           // 连同各个 pass 的渲染目标
       renderer.dispose();
+      renderer.forceContextLoss();                  // 立刻交还 WebGL 上下文
     },
   };
 }
 ```
+
+- 辉光后期输出不透明的画面（背景是黑色，不能像普通 three 场景那样透明叠在下层上）：要叠加时给场景画完整的背景，或把辉光图层的 `blend` 设成 `screen`/`lighter`，让黑色部分不起作用。
+- 自己创建的 `AnimationMixer` 用 `mixer.stopAllAction()` 停掉，自建的 `WebGLRenderTarget` 要 `dispose()`；几何体、材质、贴图交给 `disposeObject(scene)`。
+
+## 场景的画布和图层的框
+
+scene 图层的模块按**作品画面的尺寸**创建（`options.width/height`），再按图层的 `transform` 和 `fit` 缩放放进框里。全屏的三维场景直接用；只占画面一角的三维卡片（例如方形的框），相机的 `aspect` 和渲染尺寸要按框的形状来，否则物体按整个画面取景、放进小框后显得很小：
+
+```ts
+// 框是画面的 0.3 × 0.5（1920×1080 里是 576×540，接近方形）
+const w = Math.round(options.width * 0.3), h = Math.round(options.height * 0.5);
+renderer.setSize(w, h);                     // 自己实现 Scene 时；createThreeScene 里用 options 的尺寸
+camera.aspect = w / h;
+camera.updateProjectionMatrix();
+frameObject(camera, object);
+```
+
+只放一个模型时，模型图层会自动按框的形状取景，不用考虑这些。
 
 ## 素材库里的三维资源
 

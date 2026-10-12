@@ -18,6 +18,35 @@ const editOptions = {
 import { readVisual, editVisual, readAudio, editAudio } from "../documents.mjs";
 import { visualOperationSchema, visualClipSchema } from "../../src/engine/visual-document.mjs";
 import { audioOperationSchema, audioClipSchema, audioChannelSchema, audioSourceSchema } from "../../src/engine/audio-document.mjs";
+import { resolveAsset } from "./asset-tools.mjs";
+import { probe } from "../media.mjs";
+import { problem } from "../util.mjs";
+
+/** Most three scenes and model layers at one moment: each holds a WebGL context (a browser keeps ~16). */
+const WEBGL_LAYERS = 12;
+/**
+ * What the format cannot say but rendering would fail on, checked before writing: model
+ * animations the file does not have, and too many 3D layers at one moment.
+ */
+async function checkLayers(services, work, document) {
+  const problems = [];
+  for (const clip of document.clips) {
+    const source = clip.source;
+    if (source.kind !== "model" || !source.animation) continue;
+    const info = await resolveAsset(services, work, source.src).then(probe).catch(() => null);
+    const names = info?.animations?.map((item) => item.name);
+    if (names && !names.includes(source.animation)) problems.push(`图层「${clip.id}」：模型 ${source.src} 里没有动画「${source.animation}」（有：${names.join("、") || "无"}）`);
+  }
+  const heavy = document.clips.filter((clip) => !clip.hidden && (clip.source.kind === "model" || (clip.source.kind === "scene" && clip.source.engine === "three")));
+  for (const at of [...new Set(heavy.map((clip) => clip.start))].sort((a, b) => a - b)) {
+    const active = heavy.filter((clip) => clip.start <= at && at < clip.start + clip.duration);
+    if (active.length > WEBGL_LAYERS) {
+      problems.push(`${at} 秒起同时有 ${active.length} 个三维图层（${active.map((clip) => clip.id).join("、")}）：每个占一个 WebGL 上下文，同一时刻最多 ${WEBGL_LAYERS} 个，把几个物体放进同一个 three 场景`);
+      break;
+    }
+  }
+  if (problems.length) throw problem(400, problems.join("\n"), "INVALID_LAYERS");
+}
 
 /** Field defaults of an object schema (the fields declared with `.default()`). */
 const defaultsOf = (schema) =>
@@ -80,6 +109,7 @@ export function registerDocumentTools(registry) {
     },
     async run(args, ctx) {
       const work = await ctx.work();
+      await checkLayers(registry.services, work, editVisual(work, { ...args, dryRun: true }).document);
       const result = editVisual(work, args);
       if (!args.dryRun) await registry.services.materials?.lockReferenced(work);
       const summary = result.document.clips.map((clip) => `${clip.id} ${round(clip.start)}–${round(clip.start + clip.duration)}s`).join("，");

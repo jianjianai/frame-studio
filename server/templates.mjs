@@ -67,8 +67,6 @@ export default project;
         source: { kind: "scene", module: "title", engine: "canvas" },
         start: 0,
         duration,
-        fadeIn: Math.min(1, duration / 4),
-        fadeOut: Math.min(1, duration / 4),
       },
     ],
   };

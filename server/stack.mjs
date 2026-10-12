@@ -10,7 +10,7 @@ import { appRoot } from "./config.mjs";
  */
 export function cleanBrowserError(text, { work, vite } = {}) {
   const lines = String(text)
-    .replace(/(Error: )?page\.evaluate: /g, "")
+    .replace(/(Error: )?page\.evaluate: (Error: )?/g, "")
     .split("\n");
   const out = [];
   let engineFrames = 0;

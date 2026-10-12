@@ -306,7 +306,7 @@ export const audioOperationSchema = z.discriminatedUnion("op", [
     op: z.literal("update"),
     collection: z.enum(["sources", "tracks", "clips", "buses", "master"]),
     id: id.optional(),
-    patch: z.record(z.string(), z.unknown()),
+    patch: z.record(z.string(), z.unknown()).default({}),
     unset: z.array(z.string().regex(/^[\w-]+(\.[\w-]+)*$/)).optional(),
   }),
   z.strictObject({

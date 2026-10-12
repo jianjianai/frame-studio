@@ -927,15 +927,26 @@ export function materialsPlugin(services) {
     published: true, // creating libraries is fine on a published work; changing its links is checked below
     title: "关联素材库",
     description:
-      "增加或移除本作品关联（引用）的素材库（project.ts 的 materials，可以多个）。add 关联已有的素材库，create 新建空素材库并关联（同名的已存在时直接关联），remove 取消关联（素材库本身不受影响，已经锁定、正在使用的文件照常可用）。用户要求时使用；不确定时先问用户。",
+      "增加或移除本作品关联（引用）的素材库（project.ts 的 materials，可以多个）。add 关联已有的素材库，create 新建空素材库并关联（同名的已存在时直接关联），remove 取消关联（素材库本身不受影响，已经锁定、正在使用的文件照常可用）。用户要求时使用；不确定时先问用户。不针对作品、只新建素材库时用 repo 指定作品库（只能 create）。",
     input: {
       work: workArg,
+      repo: repoArg,
       add: z.array(libraryArg).max(20).default([]),
       remove: z.array(libraryArg).max(20).default([]),
       create: z.array(libraryArg).max(5).default([]),
     },
     async run({ add, remove, create }, ctx) {
-      const work = await ctx.work();
+      const work = await ctx.place();
+      if (!work.dir) {
+        if (add.length || remove.length) throw problem(400, "add / remove 改变的是作品关联的素材库：需要 work；只指定 repo 时只能 create");
+        const existing = await materials.libraries(work.repo);
+        const created = [];
+        for (const name of create) {
+          const found = existing.find((item) => item.id === name.trim() || item.title === name.trim());
+          if (!found) created.push((await materials.create(work.repo, name)).id);
+        }
+        return asJson({ created }, created.length ? `已在作品库 ${work.repo} 新建素材库：${created.map((id) => `「${id}」`).join("")}。用 material_write（repo: "${work.repo}"）往里放文件，第一个是 README.md` : "没有新建素材库（同名的已存在）");
+      }
       const published = Boolean(works.published(work));
       if (published && (add.length || remove.length))
         throw problem(423, "作品已发布，不能改变它关联的素材库。素材库本身可以照常整理（material_write），也可以用 create 新建。要改关联，请用户先取消发布或创建副本。", "PUBLISHED");

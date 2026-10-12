@@ -54,7 +54,7 @@ export class FrameRenderer {
     context.fillRect(0, 0, canvas.width, canvas.height);
     context.drawImage(scene.canvas, 0, 0, canvas.width, canvas.height);
     if (subtitles)
-      paintSubtitle(context, activeSubtitle(project.subtitles, time), canvas.width, canvas.height);
+      paintSubtitle(context, activeSubtitle(project.subtitles, time), canvas.width, canvas.height, project.subtitleStyle);
   }
   async init(width = 1280, height = 720, quality: Quality = "standard"): Promise<void> {
     const prepared = await this.prepareProject(this.project, {

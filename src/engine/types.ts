@@ -78,6 +78,10 @@ export const projectSchema = z
       }),
     ),
     subtitles: z.array(subtitleSchema),
+    /** How the player draws subtitles: letter height as a share of the picture's long side, and the line's middle (0 top – 1 bottom). */
+    subtitleStyle: z
+      .object({ size: z.number().min(0.01).max(0.08).optional(), y: z.number().min(0.05).max(0.95).optional() })
+      .optional(),
     credits: z.array(z.string()),
   })
   .superRefine((p, ctx) => {

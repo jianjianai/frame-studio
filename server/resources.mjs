@@ -142,8 +142,14 @@ function evaluator(bindings) {
   return value;
 }
 const keyOf = (property) => (property.key.type === "Identifier" ? property.key.name : String(property.key.value));
+/** `x as const`, `x satisfies T`, `(x)`, `x!` → x */
+const unwrap = (node) => {
+  while (node && ["TSAsExpression", "TSSatisfiesExpression", "ParenthesizedExpression", "TSNonNullExpression"].includes(node.type)) node = node.expression;
+  return node;
+};
 /** The properties of an object literal, including those spread in from constant object literals (`...SCREEN`). */
 function propertiesOf(object, bindings, depth = 0) {
+  object = unwrap(object);
   const found = new Map();
   if (object?.type === "Identifier" && bindings?.has(object.name) && depth < 8) return propertiesOf(bindings.get(object.name), bindings, depth + 1);
   for (const property of object?.type === "ObjectExpression" ? object.properties : []) {
@@ -241,6 +247,7 @@ function zodDescriber(code, bindings, value) {
   };
   // `{ ...sizes }` and `{ ...base.shape }` (another z.object's fields) count as fields too.
   const shapes = (object, depth) => {
+    object = unwrap(object);
     if (depth > 8) return [];
     if (object?.type === "Identifier" && bindings.has(object.name)) return shapes(bindings.get(object.name), depth + 1);
     if (object?.type === "MemberExpression" && !object.computed && object.property.name === "shape") {

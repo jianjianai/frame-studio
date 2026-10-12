@@ -108,6 +108,10 @@ describe("work covers", () => {
     // The AI sets the cover frame with work_update.
     await call("/api/tools/work_update", { method: "POST", body: { work: work.id, posterTime: 2 } });
     expect(meta(work).posterTime).toBe(2);
+    // Subtitle size and place go through work_update too, within range.
+    await call("/api/tools/work_update", { method: "POST", body: { work: work.id, subtitleStyle: { size: 0.032, y: 0.8 } } });
+    expect(meta(work).subtitleStyle).toEqual({ size: 0.032, y: 0.8 });
+    expect((await call("/api/tools/work_update", { method: "POST", body: { work: work.id, subtitleStyle: { size: 0.5 } } })).status).toBe(400);
   });
 
   it("keeps the last cover when making a new one fails, and refuses changes to published works", async () => {

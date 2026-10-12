@@ -29,16 +29,23 @@ export const toSrt = (cues: readonly Cue[]): string =>
         s.text,
     )
     .join("\n\n") + "\n";
+export interface SubtitleStyle {
+  /** Letter height as a share of the picture's long side (default 0.022). */
+  size?: number;
+  /** Where the lines' middle sits, 0 top – 1 bottom (default 0.92). */
+  y?: number;
+}
 export function paintSubtitle(
   ctx: CanvasRenderingContext2D,
   text: string,
   w: number,
   h: number,
+  style: SubtitleStyle = {},
 ): void {
   if (!text) return;
   ctx.save();
   // By the long side: a vertical picture gets the same lettering as a landscape one, not half of it.
-  const size = Math.round(Math.max(w, h) * 0.022);
+  const size = Math.round(Math.max(w, h) * (style.size ?? 0.022));
   ctx.font = "500 " + size + 'px "Microsoft YaHei", "PingFang SC", sans-serif';
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
@@ -53,7 +60,7 @@ export function paintSubtitle(
   if (line) lines.push(line);
   const lineH = size * 1.5;
   const total = lines.length * lineH;
-  const y = h * 0.92 - total / 2;
+  const y = h * (style.y ?? 0.92) - total / 2;
   const width = Math.max(...lines.map((s) => ctx.measureText(s).width));
   ctx.fillStyle = "rgba(13,21,24,.7)";
   ctx.beginPath();

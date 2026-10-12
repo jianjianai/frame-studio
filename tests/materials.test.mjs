@@ -137,7 +137,13 @@ describe("material libraries", () => {
     expect((await tool("asset_view", { repo: "local", files: ["public/a.png"] })).body.error.message).toMatch(/materials/);
     expect((await tool("materials_list", {})).body.error.message).toMatch(/repo/);
     expect((await tool("materials_list", { repo: "nope" })).status).toBe(404);
-    // Libraries can be kept up without a work too.
+    // Libraries can be made and kept up without a work too.
+    const made = await tool("materials_link", { repo: "local", create: ["图标"] });
+    expect(made.body.data.created).toEqual(["图标"]);
+    expect((await tool("materials_link", { repo: "local", add: ["品牌"] })).status).toBe(400);
+    expect((await tool("search", { repo: "local", pattern: "品牌", scope: ["materials"] })).status).toBe(200);
+    expect((await tool("search", { pattern: "createScene", scope: ["guide"] })).status).toBe(200);
+    expect((await tool("search", { repo: "local", pattern: "x", scope: ["work"] })).status).toBe(400);
     const kept = await tool("material_write", { repo: "local", library: "品牌", operations: [{ op: "put", path: "notes.md", content: "备注" }, { op: "put", path: "x.png", work_file: "a.png" }] });
     expect(kept.body.data.map((item) => item.ok)).toEqual([true, false]);
     expect(kept.body.text).toContain("需要 work");
@@ -161,6 +167,7 @@ describe("material libraries", () => {
     const list = await tool("materials_list", { work: work.id });
     expect(list.body.data.libraries.map((item) => [item.id, item.referenced])).toEqual([
       ["品牌", true],
+      ["图标", false],
       ["音效", true],
     ]);
     expect((await tool("materials_list", { work: work.id, library: "音效" })).body.data).toMatchObject([{ path: "notes/readme.txt", locked: "已锁定" }]);

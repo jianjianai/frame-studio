@@ -5,6 +5,9 @@ import { setTempo } from "../engine/tempo";
 import { importMaterial, setMaterialBase } from "../engine/materials";
 import type { Resource, SoundLibrary, ThreePreview, ThreeStage, PixiPreview } from "../engine/resources";
 
+// Parameter errors are read by Chinese-speaking users and AIs: zod's messages in Chinese.
+z.config(z.locales.zhCN());
+
 /**
  * Preview of one material library module's resources and sounds, as the library has it now
  * (never a work's locked versions), with a work's tempo. The workbench shows it in an editor tab and

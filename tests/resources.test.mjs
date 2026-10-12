@@ -157,8 +157,9 @@ describe("resource declarations, read without running code", () => {
 import { defineResources, resource } from "@frame/engine/resources";
 const sizes = { width: z.number().default(1600).describe("宽"), height: z.number().default(900) };
 const base = z.object({ ...sizes, seed: z.number().int().default(1) });
+const look = { width: 10, height: 20, duration: 3 } as const;
 const glow = z.object({ ...base.shape, color: z.string().default("#fff"), width: z.number().default(800) });
-export const resources = defineResources({ g: resource({ kind: "effect", title: "光", params: glow, preview: { width: 10, height: 10, draw() {} } }) });`,
+export const resources = defineResources({ g: resource({ kind: "effect", title: "光", params: glow, preview: { ...look, draw() {} } }) });`,
       "测试/code/glow.ts",
     );
     expect(spread.resources[0].params.map((param) => [param.name, param.default])).toEqual([
@@ -167,6 +168,8 @@ export const resources = defineResources({ g: resource({ kind: "effect", title: 
       ["seed", 1],
       ["color", "#fff"],
     ]);
+    // A preview spread in from an \`as const\` object keeps its size.
+    expect(spread.resources[0].preview).toMatchObject({ width: 10, height: 20, duration: 3 });
     const names = Object.fromEntries(shapes.exports.map((item) => [item.name, item]));
     expect(names.ball).toMatchObject({ kind: "function", doc: "A ball that bounces on the beat." });
     expect(names.ball.signature).toMatch(/^ball\(ctx: CanvasRenderingContext2D, x: number/);

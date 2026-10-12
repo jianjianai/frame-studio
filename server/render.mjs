@@ -17,6 +17,28 @@ const require = createRequire(import.meta.url);
  * Page warnings and errors worth keeping. Not Chrome's GL performance notes ("GPU stall due
  * to ReadPixels"): rendering reads every frame back on purpose, and the AI would chase them.
  */
+/**
+ * Vite reloads every open page when it re-optimizes dependencies (a page imported one it had
+ * not bundled yet): a call running on another page then fails with "Execution context was
+ * destroyed". Such a call waits for its page to be ready again and runs once more.
+ */
+const reloaded = (error) => /Execution context was destroyed|navigation/i.test(String(error?.message));
+export async function again(page, ready, run) {
+  try {
+    return await run();
+  } catch (error) {
+    if (!reloaded(error)) throw error;
+    await page.waitForLoadState("load", { timeout: 60000 });
+    await page.waitForFunction(ready, null, { timeout: 60000, polling: 50 });
+    return run();
+  }
+}
+const READY = {
+  work: () => window.__FRAME_STUDIO__?.ready || window.__FRAME_RENDER_ERRORS__?.length,
+  resource: () => window.__FRAME_RESOURCE__?.ready || window.__FRAME_RESOURCE__?.error,
+  asset: () => window.__FRAME_ASSET__?.ready || window.__FRAME_ASSET__?.error,
+};
+
 const worthLogging = (message) => ["error", "warning"].includes(message.type()) && !/GL Driver Message \([^)]*Performance/.test(message.text());
 
 export function browserExecutable() {
@@ -333,12 +355,14 @@ export class Renderer {
     for (const raw of times) {
       const time = Math.max(0, Math.min(duration - 1e-3, Number(raw)));
       try {
-        const data = await handle.page.evaluate(
-          async ({ time, subtitles }) => {
-            await window.__FRAME_STUDIO__.frame(time, subtitles);
-            return (await window.__FRAME_STUDIO__.capture()).split(",")[1];
-          },
-          { time, subtitles },
+        const data = await again(handle.page, READY.work, () =>
+          handle.page.evaluate(
+            async ({ time, subtitles }) => {
+              await window.__FRAME_STUDIO__.frame(time, subtitles);
+              return (await window.__FRAME_STUDIO__.capture()).split(",")[1];
+            },
+            { time, subtitles },
+          ),
         );
         result.push({ time, png: Buffer.from(data, "base64") });
       } catch (error) {
@@ -544,6 +568,14 @@ export class Renderer {
       encoder.stderr.on("data", (chunk) => (stderr = (stderr + chunk).slice(-4000)));
       encoder.stdin.on("error", () => {});
       const closed = once(encoder, "close");
+      // Speed and time left in the progress text: WebGL-heavy works render far slower than
+      // canvas ones on a machine without a GPU, and whoever waits wants to know how long.
+      const began = Date.now();
+      const pace = (done) => {
+        const perSecond = done / Math.max(0.001, (Date.now() - began) / 1000);
+        const left = Math.round((plan.frames - done) / Math.max(perSecond, 1e-3));
+        return `，每秒 ${perSecond >= 10 ? Math.round(perSecond) : perSecond.toFixed(1)} 帧，预计还要 ${left >= 60 ? `${Math.floor(left / 60)} 分 ${left % 60} 秒` : `${left} 秒`}`;
+      };
       for (let index = 0; index < plan.frames; index++) {
         signal?.throwIfAborted();
         if (encoder.exitCode !== null) throw new Error("FFmpeg 提前退出：" + stderr);
@@ -555,7 +587,7 @@ export class Renderer {
           { t: plan.start + index / plan.fps, subtitles },
         );
         if (!encoder.stdin.write(Buffer.from(data, "base64"))) await once(encoder.stdin, "drain");
-        if (index % 10 === 0) progress?.(0.15 + 0.85 * (index / plan.frames), `渲染画面 ${index + 1}/${plan.frames}`);
+        if (index % 10 === 0) progress?.(0.15 + 0.85 * (index / plan.frames), `渲染画面 ${index + 1}/${plan.frames}${index ? pace(index + 1) : ""}`);
       }
       encoder.stdin.end();
       const [code] = await closed;
@@ -658,14 +690,14 @@ export class Renderer {
       error.message = this.clean(work, error.message);
       throw error;
     }
-    const info = await handle.page.evaluate((key) => window.__FRAME_RESOURCE__.resources.find((item) => item.key === key) ?? null, key);
+    const info = await again(handle.page, READY.resource, () => handle.page.evaluate((key) => window.__FRAME_RESOURCE__.resources.find((item) => item.key === key) ?? null, key));
     if (!info) throw problem(404, `materials/${ref} 里没有资源 ${key}`, "NOT_FOUND");
     const moments = times?.length ? times : [info.time];
     const frames = [];
     const before = handle.errors.length;
     for (const time of moments) {
       try {
-        const data = await handle.page.evaluate(({ key, options }) => window.__FRAME_RESOURCE__.render(key, options), { key, options: { preset, values, time, width } });
+        const data = await again(handle.page, READY.resource, () => handle.page.evaluate(({ key, options }) => window.__FRAME_RESOURCE__.render(key, options), { key, options: { preset, values, time, width } }));
         frames.push({ time, png: Buffer.from(data.split(",")[1], "base64") });
       } catch (error) {
         throw problem(422, this.clean(work, [error.message, ...handle.errors.slice(before)].join("\n")), "RENDER_FAILED");
@@ -750,7 +782,19 @@ export class Renderer {
    */
   assetFrames({ assetBase, src, kind, views = [{}], width = 640 }) {
     // Opening one file and drawing it is one step: another request would switch the file between.
-    return this.assetQueue.run(assetBase, () => this.assetFramesNow({ assetBase, src, kind, views, width }));
+    // A reload in between loses the opened file: open and draw it again, once.
+    return this.assetQueue.run(assetBase, async () => {
+      const draw = () => this.assetFramesNow({ assetBase, src, kind, views, width });
+      try {
+        return await draw();
+      } catch (error) {
+        if (!reloaded(error)) throw error;
+        const handle = await this.assetPage(assetBase);
+        await handle.page.waitForLoadState("load", { timeout: 60000 });
+        await handle.page.waitForFunction(READY.asset, null, { timeout: 60000, polling: 50 });
+        return draw();
+      }
+    });
   }
   async assetFramesNow({ assetBase, src, kind, views, width }) {
     this.lastUse = Date.now();

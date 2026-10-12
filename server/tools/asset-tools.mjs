@@ -135,6 +135,9 @@ function viewsOf(info, { times, animation, each }) {
   if (info.kind === "lottie") return spread(info.duration ?? 1).map((time) => ({ time: Math.min(time, info.duration ?? time), label: formatTime(time) }));
   if (info.kind === "model") {
     const clip = animation ? info.animations?.find((item) => item.name === animation) : info.animations?.[0];
+    // A name the file does not have is a mistake to point out, not a reason to show the model still.
+    if (animation && info.animations && !clip)
+      throw problem(400, `模型里没有动画「${animation}」（有：${info.animations.map((item) => item.name || "（无名）").join("、") || "无"}）`);
     if (clip?.duration && (times || animation))
       return spread(clip.duration).map((time) => ({ time, animation: clip.name, label: `${clip.name} ${formatTime(time)}` }));
     // Four sides; an animated model in the pose of its first animation's first moment.

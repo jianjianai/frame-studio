@@ -205,7 +205,9 @@ export const visualOperationSchema = z.discriminatedUnion("op", [
         crop: z.record(z.string(), z.unknown()),
       }, { error: misplacedTransform })
       .omit({ id: true })
-      .partial(),
+      .partial()
+      // Removing fields only (unset) needs no patch.
+      .default({}),
     unset: z
       .array(
         z

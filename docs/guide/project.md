@@ -22,6 +22,7 @@ const project: AnimationProject = {
   tempo: { bpm: 118.12, firstBeat: 0.035, beatsPerBar: 4 },   // 配乐的节拍（可选）
   beats: [{ at: 0, title: "开场", detail: "标题从下方升起" }],
   subtitles: [{ start: 1, end: 3.5, text: "夏天，就该这样过" }],
+  subtitleStyle: { size: 0.032, y: 0.8 },                      // 字幕大小和位置（可选，见 subtitles）
   credits: [],
   load: () => import("./scene"),
   loadVisual: () => import("./visual.json"),          // 使用图层时
