@@ -1021,7 +1021,9 @@ export function materialsPlugin(services) {
   });
 
   // ---- AI tools ---------------------------------------------------------------------
-  const refArg = z.string().regex(/^[^/]+\/.+/).describe("<素材库>/<文件路径>，例如 通用素材/logo.svg");
+  const refArg = z.string().regex(/^[^/]+\/.+/).describe("<素材库>/<文件路径>，例如 通用素材/logo.svg（写成 materials/通用素材/logo.svg 也可以）");
+  // Listings, layers and audio write materials/<库>/<文件>: the same file, so take it as written.
+  const bareRef = (ref) => (/^materials\/[^/]+\/./.test(ref) ? ref.slice("materials/".length) : ref);
   const libraryArg = z.string().min(1).max(60).describe("素材库名称");
 
   const KIND_LABELS = { image: "图片", video: "视频", audio: "音频", font: "字体", model: "三维模型", environment: "全景图", lottie: "Lottie", code: "代码", data: "数据", file: "文件" };
@@ -1183,8 +1185,9 @@ export function materialsPlugin(services) {
     description:
       "在作品中使用素材库里的文件前调用：锁定这些文件当前的版本（之后素材库里的改动不会影响作品），作品还没关联的素材库会自动关联。返回用法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。保存版本时只保留作品用到的文件的锁定。",
     input: { work: workArg, files: z.array(refArg).min(1).max(100), update: z.boolean().default(false) },
-    async run({ files, update }, ctx) {
+    async run({ files: given, update }, ctx) {
       const work = await ctx.work();
+      const files = given.map(bareRef);
       const { libraries } = await materials.linked(work);
       const linked = new Set(libraries.map((item) => item.id));
       // Using a library's files means using the library: link it here instead of a separate call.
@@ -1246,18 +1249,20 @@ export function materialsPlugin(services) {
       repo: repoArg,
       library: libraryArg.optional(),
       path: z.string().min(1).max(300).optional(),
-      paths: z.array(z.string().min(3).max(360)).max(30).optional().describe('一次读多个："<素材库>/<路径>"'),
+      paths: z.array(z.string().min(3).max(360)).max(30).optional().describe('一次读多个："<素材库>/<路径>"（或 materials/<素材库>/<路径>）'),
       locked: z.boolean().default(false),
     },
     async run({ library, path: relative, paths, locked }, ctx) {
       const work = await ctx.place();
       if (locked && !work.dir) throw problem(400, "locked 读的是某个作品锁定的版本：需要 work");
+      if (paths?.length && (library || relative)) throw problem(400, "library + path 读一个文件，paths 读多个：二选一（paths 每项写 <素材库>/<路径>）");
       if (!paths?.length) {
         if (!library || !relative) throw problem(400, "需要 library 和 path，或者 paths");
         const read = await readMaterial(work, `${library}/${relative}`, locked);
         if (read.text === null) return asJson({ ref: read.ref, ...read.info }, `materials/${read.ref} 是媒体文件，不能作为文本读取`);
         return { data: { ref: read.ref, version: locked ? "locked" : "current", sha256: sha256(read.text) }, text: read.text };
       }
+      paths = paths.map(bareRef);
       const results = await eachSettled(paths, (ref) => readMaterial(work, ref, locked));
       return {
         data: results.map((result, index) =>

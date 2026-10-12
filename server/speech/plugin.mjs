@@ -95,7 +95,7 @@ export function speechPlugin(services) {
       rate: z.number().min(0.5).max(2).default(1),
       gap: z.number().min(0).max(30).default(0.3).describe("lines 中句与句之间的间隔秒数"),
       name: z.string().max(60).optional().describe("文件名（不含扩展名）；lines 时作为前缀"),
-      place: z.object({ start: z.number().nonnegative(), track: z.string().default("配音") }).optional(),
+      place: z.strictObject({ start: z.number().nonnegative(), track: z.string().default("配音") }).optional(),
       subtitles: z.boolean().default(false).describe("与 place 一起使用：把每句写成字幕（替换同一时间段的旧字幕）"),
     },
     async run({ text, lines, provider, voice, rate, gap, name, place, subtitles }, ctx) {

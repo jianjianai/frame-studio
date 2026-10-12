@@ -99,6 +99,13 @@ describe("tools that save the AI calls", () => {
     // A studio on the network never fetches private addresses for whoever asks (redirects included).
     await expect(importFromUrl(work, `${url}/a.png`, { publicOnly: true })).rejects.toMatchObject({ code: "PRIVATE_ADDRESS" });
     expect((await tool("asset_import", { work: work.id, data: "aGVsbG8=", name: "noext" })).body.error.message).toContain("带扩展名");
+    // A wrong export range is refused at the call, not later in the background task.
+    expect((await tool("export_video", { work: work.id, end: 999 })).body.error.message).toMatch(/end 999 秒超出了作品时长 [\d.]+ 秒/);
+    expect((await tool("export_video", { work: work.id, start: 2, end: 1 })).body.error.message).toContain("start 要小于 end");
+    // A field place does not have is an error, not silently dropped.
+    expect((await tool("speech_synthesize", { work: work.id, text: "你好", place: { start: 0, gain: 0.5 } })).body.error.message).toContain("不认识的字段 gain");
+    // A source beside items would be dropped: refused instead.
+    expect((await tool("asset_import", { work: work.id, url: `${url}/a.png`, items: [{ data: png, name: "x.png" }] })).body.error.message).toContain("写在每一项里");
   });
 
   it("hands out one-time upload addresses for files on the AI's own computer", async () => {
@@ -256,7 +263,7 @@ describe("tools that save the AI calls", () => {
     expect((await sharp(Buffer.from(sheet.body.images[0].data, "base64")).metadata()).width).toBeGreaterThan(480);
     expect((await tool("asset_view", { work: work.id, files: ["films/other-work/a.png"] })).status).toBe(400);
     // Facts only: no picture.
-    const facts = await tool("asset_view", { work: work.id, files: ["public/look/green.png", "public/look/drums.wav"], images: false });
+    const facts = await tool("asset_view", { work: work.id, files: ["public/look/green.png", "public/look/drums.wav"], image: false });
     expect(facts.body.images ?? []).toHaveLength(0);
     expect(facts.body.text).toContain("public/look/green.png：图片 64×32");
     expect(facts.body.text).toContain("public/look/drums.wav：音频");
@@ -341,6 +348,11 @@ describe("tools that save the AI calls", () => {
 
   it.skipIf(!browserExecutable())("measures each track of the mix, and a change counts at once", async () => {
     const src = `films/${work.slug}/look/drums.wav`;
+    // From the middle of the file: the default length is what is left after offset.
+    const late = await tool("audio_place", { work: work.id, src, track: "试", start: 1, offset: 10 });
+    expect(late.body.data.clip).toMatchObject({ start: 1, offset: 10, duration: 2 });
+    expect((await tool("audio_place", { work: work.id, src, offset: 12 })).body.error.message).toContain("超出了文件的长度 12 秒");
+    await tool("audio_edit", { work: work.id, operations: [{ op: "remove", collection: "clips", id: late.body.data.clip.id }, { op: "remove", collection: "tracks", id: (await tool("audio_get", { work: work.id })).body.data.document.tracks.find((track) => track.name === "试").id }] });
     const placed = await tool("audio_place", { work: work.id, src, track: "音乐", start: 0, duration: 2, fadeIn: 0.2, fadeOut: 0.5 });
     expect(placed.body.data.clip).toMatchObject({ fadeIn: 0.2, fadeOut: 0.5 });
     await tool("audio_place", { work: work.id, src, track: "配音", start: 0, duration: 2, gain: 0.1 });
@@ -364,6 +376,9 @@ describe("tools that save the AI calls", () => {
 
     // A voice clip that moves takes its subtitle along (the music clip's start is no voice).
     await tool("subtitles_edit", { work: work.id, set: [{ start: 0.2, end: 1.5, text: "你好" }] });
+    // Two added cues at once that overlap: one would be lost, so nothing changes.
+    const clash = await tool("subtitles_edit", { work: work.id, add: [{ start: 2, end: 3, text: "甲" }, { start: 2.5, end: 3.5, text: "乙" }] });
+    expect(clash.body.error.message).toContain("add 里的字幕时间重叠：「甲」2–3 秒和「乙」2.5–3.5 秒");
     const voiceTrack = audio.tracks.find((track) => track.name === "配音").id;
     const voice = audio.clips.find((clip) => clip.track === voiceTrack);
     const moved = await tool("audio_edit", { work: work.id, operations: [{ op: "update", collection: "clips", id: voice.id, patch: { start: 0.3 } }] });
@@ -392,7 +407,10 @@ describe("tools that save the AI calls", () => {
     const pair = await tool("preview_frames", { work: work.id, times: [0.5, 1], compare: copy.body.data.id });
     expect(pair.body.text).toContain(`右：${copy.body.data.id} 270×480`);
     expect(pair.body.images).toHaveLength(1);
-    expect((await tool("preview_frames", { work: work.id, compare: copy.body.data.id })).status).toBe(400);
+    // Sampled moments work too; options of a single picture do not apply and say so.
+    const sampled = await tool("preview_frames", { work: work.id, count: 2, compare: copy.body.data.id });
+    expect(sampled.body.data.times).toHaveLength(2);
+    expect((await tool("preview_frames", { work: work.id, count: 2, compare: copy.body.data.id, width: 640 })).body.error.message).toContain("不用 sheet、columns、width");
     // Unsetting what a layer does not have says so.
     const layers = JSON.parse(fs.readFileSync(path.join(work.dir, "visual.json"), "utf8"));
     const unset = await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: layers.clips[0].id, unset: ["transform.opacity"] }] });

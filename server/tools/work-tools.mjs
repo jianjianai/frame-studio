@@ -511,12 +511,13 @@ export function registerWorkTools(registry) {
       const overlaps = (cue, start, end) => cue.start < end && cue.end > start;
       if (removeBetween && !(removeBetween.end > removeBetween.start))
         throw problem(400, `removeBetween 的 end 必须大于 start（收到 ${removeBetween.start}–${removeBetween.end}），没有删除任何字幕`);
-      // Overlapping cues would show only one of them: refuse a set that has some.
-      const sorted = [...(set ?? [])].sort((a, b) => a.start - b.start);
-      const clash = sorted.find((cue, index) => index && cue.start < sorted[index - 1].end);
-      if (clash) {
+      // Overlapping cues would show only one of them (in add, the later would drop the earlier): refuse.
+      for (const [name, list] of [["set", set], ["add", add]]) {
+        const sorted = [...(list ?? [])].sort((a, b) => a.start - b.start);
+        const clash = sorted.find((cue, index) => index && cue.start < sorted[index - 1].end);
+        if (!clash) continue;
         const before = sorted[sorted.indexOf(clash) - 1];
-        throw problem(400, `set 里的字幕时间重叠：「${before.text}」${before.start}–${before.end} 秒和「${clash.text}」${clash.start}–${clash.end} 秒（同一时刻只显示一条）`);
+        throw problem(400, `${name} 里的字幕时间重叠：「${before.text}」${before.start}–${before.end} 秒和「${clash.text}」${clash.start}–${clash.end} 秒（同一时刻只显示一条），没有改动字幕`);
       }
       let cues = set ?? meta.meta.subtitles ?? [];
       if (removeBetween) cues = cues.filter((cue) => !overlaps(cue, removeBetween.start, removeBetween.end));

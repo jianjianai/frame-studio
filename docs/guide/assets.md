@@ -34,7 +34,7 @@ import glow from "@materials/特效/glow.frag?raw";
 
 ## 获取素材
 
-- 用户上传或拖入的文件在 `work_context` 的 `assets` 中可以看到（含尺寸、时长，模型的动画，Lottie 的问题）；`asset_view` 看素材本身的样子，挑选和安排之前先看一眼：图片、视频（按时间点抽帧）、三维模型（几个方向的渲染，`times` + `animation` 看动画）、Lottie（几个时刻）、HDR/EXR 全景图、字体（样张）。多个文件拼成一张总览图。`times` 指定看哪几秒（最多 8 个，每个文件都用这组时间）；只要尺寸、时长、动画名这些信息时设 `images: false`，不出图。
+- 用户上传或拖入的文件在 `work_context` 的 `assets` 中可以看到（含尺寸、时长，模型的动画，Lottie 的问题）；`asset_view` 看素材本身的样子，挑选和安排之前先看一眼：图片、视频（按时间点抽帧）、三维模型（几个方向的渲染，`times` + `animation` 看动画）、Lottie（几个时刻）、HDR/EXR 全景图、字体（样张）。多个文件拼成一张总览图。`times` 指定看哪几秒（最多 8 个，每个文件都用这组时间）；只要尺寸、时长、动画名这些信息时设 `image: false`，不出图。
 - `asset_import`：从网址下载（`url`）到作品自己的 `public/`。导入时在 `license` 写清来源和许可，记录在 `production/licenses.md`。别的作品也会用到的素材，放进素材库（`material_write`）。
 - 自己生成的图片（如程序生成的纹理、SVG）可以直接写进 `public/`；SVG 直接写文件（外部 AI 用 `files_batch`）。
 

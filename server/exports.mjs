@@ -49,6 +49,12 @@ export class Exports {
     const { renderer, tasks, works } = this.services;
     const meta = works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error);
+    // Checked now: in the background task a wrong range would only show up as a failed task later.
+    const duration = meta.meta.duration;
+    const from = options.start ?? 0;
+    const to = options.end ?? duration;
+    if (to > duration + 1e-6) throw problem(400, `end ${to} 秒超出了作品时长 ${duration} 秒（导出到结尾时不写 end）`);
+    if (from >= to) throw problem(400, `导出范围 ${from}–${to} 秒无效：start 要小于 end${options.end === undefined ? `（作品 ${duration} 秒）` : ""}`);
     const dir = this.dir(work);
     fs.mkdirSync(dir, { recursive: true });
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");

@@ -34,6 +34,9 @@ describe("experience libraries", () => {
     expect((await tool("experience_read", { work: work.id })).body.error.code).toBe("NO_EXPERIENCE");
     expect((await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experiences: ["知识类视频"] } })).status).toBe(200);
 
+    // Without a work: a library of the repository, named.
+    expect((await tool("experience_read", { repo: "local", library: "知识类视频" })).body.text).toContain("经验库「知识类视频」");
+    expect((await tool("experience_read", { repo: "local" })).body.error.code).toBe("LIBRARY_REQUIRED");
     const overview = await tool("experience_read", { work: work.id });
     expect(overview.body.text).toContain("经验库「知识类视频」");
     expect(overview.body.text).toContain("## 用户偏好");

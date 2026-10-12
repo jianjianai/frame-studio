@@ -530,8 +530,9 @@ export function experiencePlugin(services) {
    * the AI can also organize libraries the work does not link), or the only one the work links.
    */
   const libraryOf = async (ctx, name) => {
-    const work = await ctx.work();
-    const { libraries, missing } = await experience.linked(work);
+    // Without a work (only `repo`), a library of that repository named by `library`.
+    const work = await ctx.place();
+    const { libraries, missing } = work.dir ? await experience.linked(work) : { libraries: [], missing: [] };
     if (name?.trim()) {
       const dir = await experience.dir(work.repo);
       // Linked libraries by name or title first (cheap); any other library of the repository after.
@@ -541,6 +542,7 @@ export function experiencePlugin(services) {
         throw problem(400, unknownLibraries("experiences", [name.trim()], await experience.libraries(work.repo), trashed(dir)).replace(/新建用 create$/, "新建用 experience_link 的 create"), "NO_EXPERIENCE");
       return { work, library: libraries.find((item) => item.id === id) ?? { id, title: experience.title(dir, id), root: path.join(dir, id), dir } };
     }
+    if (!work.dir) throw problem(400, "只指定作品库（repo）时，用 library 写明是哪个经验库（experience_list 查找）", "LIBRARY_REQUIRED");
     if (!libraries.length)
       throw problem(
         409,
@@ -559,10 +561,11 @@ export function experiencePlugin(services) {
     name: "experience_read",
     title: "阅读经验库",
     description:
-      "阅读作品关联的经验库（同类作品积累的制作经验、用户偏好和避坑记录）。传 path 返回该文档全文，一次读多篇用 paths；不传返回首页和文档目录（内置 AI 的会话说明里已经有，通常不需要）。与当前任务相关的文档读全文，照着做。作品关联了多个经验库时，读文档要用 library 指定是哪个。",
+      "阅读作品关联的经验库（同类作品积累的制作经验、用户偏好和避坑记录）。传 path 返回该文档全文，一次读多篇用 paths；不传返回首页和文档目录（内置 AI 的会话说明里已经有，通常不需要）。与当前任务相关的文档读全文，照着做。作品关联了多个经验库时，读文档要用 library 指定是哪个。还没有作品时用 repo 指定作品库，library 写明经验库。",
     readOnly: true,
-    input: { work: workArg, library: libraryArg, path: docPath.optional(), paths: z.array(docPath).max(30).optional().describe("一次读同一经验库的多篇文档") },
+    input: { work: workArg, repo: repoArg, library: libraryArg, path: docPath.optional(), paths: z.array(docPath).max(30).optional().describe("一次读同一经验库的多篇文档") },
     async run({ library: name, path: file, paths }, ctx) {
+      if (file && paths?.length) throw problem(400, "path 读一篇，paths 读多篇：二选一");
       if (paths?.length) {
         const { library } = await libraryOf(ctx, name);
         const parts = [];
@@ -581,7 +584,8 @@ export function experiencePlugin(services) {
       }
       if (!file && !name) {
         // The overview of every linked library.
-        const work = await ctx.work();
+        const work = await ctx.place();
+        if (!work.dir) throw problem(400, "只指定作品库（repo）时，用 library 写明读哪个经验库（experience_list 查找）", "LIBRARY_REQUIRED");
         const { libraries } = await experience.linked(work);
         if (!libraries.length) await libraryOf(ctx); // explains why there is none
         const current = libraries.map(({ id, title, root }) => ({ library: { id, title }, documents: readLibrary(root) }));
@@ -725,10 +729,10 @@ export function experiencePlugin(services) {
     published: true, // the experience branch, not the work: allowed on a published work
     title: "保存经验库版本",
     description:
-      "把经验库里未保存的修改保存为一个版本（Git 提交）。同一作品库的经验库在同一个分支上，会一起保存，和用户在「版本与同步」→ 经验库里点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。",
-    input: { work: workArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
+      "把经验库里未保存的修改保存为一个版本（Git 提交）。同一作品库的经验库在同一个分支上，会一起保存，和用户在「版本与同步」→ 经验库里点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
+    input: { work: workArg, repo: repoArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
     async run({ message, push }, ctx) {
-      const work = await ctx.work();
+      const work = await ctx.place();
       const scope = await experience.scope(work.repo);
       const files = (await works.status(scope)).files.map((file) => file.path);
       const commit = await works.commit(scope, message);
@@ -760,9 +764,9 @@ export function experiencePlugin(services) {
     published: true, // writes outside the work: allowed on a published (view-only) work
     title: "整理经验库",
     description:
-      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名）。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。失败的逐项说明原因，只需重试失败的。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在「版本与同步」中保存）。",
+      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名）。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。失败的逐项说明原因，只需重试失败的。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在「版本与同步」中保存）。还没有作品时用 repo 指定作品库，library 写明经验库。",
     destructive: true,
-    input: { work: workArg, library: libraryArg, operations: z.array(docOperation).min(1).max(30) },
+    input: { work: workArg, repo: repoArg, library: libraryArg, operations: z.array(docOperation).min(1).max(30) },
     async run({ library: name, operations }, ctx) {
       const { work, library } = await libraryOf(ctx, name);
       const outcome = runFileOperations(library.root, operations, {

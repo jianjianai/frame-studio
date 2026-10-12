@@ -113,16 +113,26 @@ export function registerPreviewTools(registry) {
       end: seconds.optional().describe("取样范围：结束秒数"),
       sheet: z.boolean().optional().describe("拼成一张总览图（默认超过 4 张时拼）"),
       columns: z.number().int().min(1).max(8).optional().describe("总览图的列数"),
-      width: z.number().int().min(160).max(1920).multipleOf(2).default(960).describe("分开返回时每张的宽度（像素），高度按画幅计算"),
+      width: z.number().int().min(160).max(1920).multipleOf(2).optional().describe("分开返回时每张的宽度（像素，默认 960），高度按画幅计算"),
       subtitles: z.boolean().default(true),
       format: z.enum(["jpeg", "png"]).default("jpeg").describe("图片格式：jpeg 小，png 无损"),
-      compare: workArg.describe("另一个作品：同样的时刻并排画出两个作品（左边本作品，右边这个），例如对比横屏版和竖屏版"),
+      compare: workArg.describe("另一个作品：同样的时刻并排画出两个作品（左边本作品，右边这个），例如对比横屏版和竖屏版。时刻用 times 或 count 取样（最多 12 个），固定拼成一张图"),
     },
     async run({ times, count, start, end, sheet, columns, width, subtitles, format, compare }, ctx) {
       const work = await ctx.work();
+      if (times && (count !== undefined || start !== undefined || end !== undefined)) throw problem(400, "times 和 count/start/end 二选一");
+      if (!times) {
+        const meta = services.works.meta(work);
+        const duration = meta.ok ? meta.meta.duration : 10;
+        const from = Math.min(start ?? 0, duration),
+          to = Math.min(end ?? duration, duration);
+        if (to <= from) throw problem(400, `取样范围 ${from}–${to} 秒无效（作品 ${duration} 秒）`);
+        const n = count ?? 12;
+        times = Array.from({ length: n }, (_, index) => from + ((to - from) * (index + 0.5)) / n);
+      }
       if (compare) {
         // Two works side by side at the same moments, each fitted into the same cell.
-        if (!times) throw problem(400, "compare 需要 times");
+        if (sheet !== undefined || columns !== undefined || width !== undefined) throw problem(400, "compare 固定拼成一张左右并排的图，不用 sheet、columns、width");
         if (times.length > 12) throw problem(400, "compare 最多 12 个时刻");
         const other = await ctx.work(compare);
         const cell = 480;
@@ -147,16 +157,6 @@ export function registerPreviewTools(registry) {
           images: [{ data: await contactSheet(cells, cell, cell, 2, format), mimeType: `image/${format}` }],
         };
       }
-      if (times && (count !== undefined || start !== undefined || end !== undefined)) throw problem(400, "times 和 count/start/end 二选一");
-      if (!times) {
-        const meta = services.works.meta(work);
-        const duration = meta.ok ? meta.meta.duration : 10;
-        const from = Math.min(start ?? 0, duration),
-          to = Math.min(end ?? duration, duration);
-        if (to <= from) throw problem(400, `取样范围 ${from}–${to} 秒无效（作品 ${duration} 秒）`);
-        const n = count ?? 12;
-        times = Array.from({ length: n }, (_, index) => from + ((to - from) * (index + 0.5)) / n);
-      }
       if (sheet ?? times.length > 4) {
         const cells = columns ?? Math.min(4, Math.ceil(Math.sqrt(times.length)));
         const { image, times: rendered, errors, digests } = await services.renderer.storyboard(work, { times, columns: cells, width: cells > 4 ? 320 : 480, subtitles, format });
@@ -167,7 +167,7 @@ export function registerPreviewTools(registry) {
         };
       }
       if (times.length > SEPARATE_MAX) throw problem(400, `分开返回最多 ${SEPARATE_MAX} 张；更多时用 sheet: true 拼成一张`);
-      const result = await services.renderer.frames(work, { times, width, subtitles });
+      const result = await services.renderer.frames(work, { times, width: width ?? 960, subtitles });
       const images = await Promise.all(
         result.frames.map(async (frame) => ({
           data: format === "png" ? frame.png : await sharp(frame.png).jpeg({ quality: 82 }).toBuffer(),

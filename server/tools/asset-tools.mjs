@@ -178,7 +178,7 @@ export function registerAssetTools(registry) {
     name: "asset_view",
     title: "查看素材",
     description:
-      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了素材，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。还没有作品时用 repo 指定作品库，看素材库的文件。只要文字信息、不需要看画面时设 images: false（快，不抽帧不渲染；FBX/OBJ 模型的三角形数和动画要渲染才知道，这时没有）。",
+      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了素材，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。还没有作品时用 repo 指定作品库，看素材库的文件。只要文字信息、不需要看画面时设 image: false（快，不抽帧不渲染；FBX/OBJ 模型的三角形数和动画要渲染才知道，这时没有）。",
     readOnly: true,
     input: {
       work: workArg,
@@ -191,9 +191,9 @@ export function registerAssetTools(registry) {
         .optional()
         .describe("视频抽帧、Lottie 和模型动画取帧的时间点（文件内秒数），本次查看的每个文件都用这组时间；不给时取开头、中间、结尾附近 3 帧"),
       animation: z.string().max(200).optional().describe("模型的哪个动画（默认第一个）"),
-      images: z.boolean().default(true).describe("false 时只返回文字信息，不出图"),
+      image: z.boolean().default(true).describe("false 时只返回文字信息，不出图"),
     },
-    async run({ files, times, animation, images }, ctx) {
+    async run({ files, times, animation, image: picture }, ctx) {
       const work = await ctx.place();
       if (!work.dir && (!files || files.some((src) => !src.startsWith("materials/"))))
         throw problem(400, "只指定作品库时只能看素材库的文件（materials/<库>/…），作品的素材需要 work");
@@ -206,7 +206,7 @@ export function registerAssetTools(registry) {
         const file = await resolveAsset(services, work, src);
         items.push({ src, file, info: await probe(file) });
       }
-      if (!images) return { data: { items: items.map(({ src, info }) => ({ src, ...info })) }, text: items.map((item) => describeAsset(item.src, item.info)).join("\n") };
+      if (!picture) return { data: { items: items.map(({ src, info }) => ({ src, ...info })) }, text: items.map((item) => describeAsset(item.src, item.info)).join("\n") };
       // Cells: one per image, a few per video, model or Lottie, at most SHEET_CELLS in all.
       const visual = items.filter((item) => viewable(item.info.kind));
       const several = visual.filter((item) => ["video", "model", "lottie"].includes(item.info.kind)).length;
@@ -351,6 +351,8 @@ export function registerAssetTools(registry) {
     },
     async run({ work: _ignored, items, ...single }, ctx) {
       const work = await ctx.work();
+      if (items?.length && (single.url || single.data || single.file || single.name))
+        throw problem(400, "用 items 时，url、data、file、name 写在每一项里（外层只能写 folder、license 作为各项的默认值）");
       const list = items?.length ? items.map((item) => ({ folder: single.folder, license: single.license, ...item })) : [single];
       const results = await eachSettled(list, (item) => importOne(work, item));
       services.events.emit({ type: "assets", work: work.id, repo: work.repo });
@@ -377,35 +379,42 @@ export function registerAssetTools(registry) {
       work: workArg,
       src: z.string().optional().describe("films/<名称>/…、public/… 或 materials/<素材库>/… 地址"),
       sound: z.string().max(300).optional().describe("素材库音效：<素材库>/<文件>#<名称>，例如 s0rrow/code/sfx.ts#slam"),
-      start: z.number().nonnegative().default(0),
-      duration: z.number().positive().optional().describe("默认放到文件结束或作品结束"),
+      start: z.number().nonnegative().default(0).describe("放在作品的第几秒"),
+      offset: z.number().nonnegative().default(0).describe("从音频的第几秒开始用（例如配乐从 30 秒处的副歌开始）"),
+      duration: z.number().positive().optional().describe("默认放到音频结束（从 offset 算）或作品结束"),
       track: z.string().max(60).default("音效").describe("音轨名称"),
       name: z.string().max(100).optional(),
       gain: z.number().min(0).max(4).default(1),
       fadeIn: z.number().min(0).max(60).optional().describe("淡入秒数"),
       fadeOut: z.number().min(0).max(60).optional().describe("淡出秒数"),
     },
-    async run({ src, sound, start, duration, track, name, gain, fadeIn, fadeOut }, ctx) {
+    async run({ src, sound, start, offset, duration, track, name, gain, fadeIn, fadeOut }, ctx) {
       // Cut at the work's end: say so, an explicit length that came out shorter is a surprise.
       const cut = (asked, clip) => (asked && clip.duration < asked - 0.01 ? `（要的是 ${+asked.toFixed(3)} 秒，作品在 ${+(clip.start + clip.duration).toFixed(3)} 秒结束，截到了 ${clip.duration.toFixed(2)} 秒）` : "");
       const work = await ctx.work();
       if (Boolean(src) === Boolean(sound)) throw problem(400, "src 和 sound 必须且只能提供一个");
+      // What is left of the audio after offset: the default length, and the most there is.
+      const rest = (length, what) => {
+        if (!length) return undefined;
+        if (offset >= length - 0.01) throw problem(400, `offset ${offset} 秒超出了${what}的长度 ${+length.toFixed(3)} 秒`);
+        return Math.round((length - offset) * 1000) / 1000;
+      };
       if (sound) {
         const found = await services.resources.sound(work, sound);
-        const result = placeAudio(work, { sound: found, start, duration: duration ?? found.duration, trackName: track, name: name ?? found.title, gain, fadeIn, fadeOut });
+        const result = placeAudio(work, { sound: found, start, offset, duration: duration ?? rest(found.duration, "音效"), trackName: track, name: name ?? found.title, gain, fadeIn, fadeOut });
         await services.materials?.lockReferenced(work);
         return asJson(
           { clip: result.clip, track: result.track.name, sha256: result.sha256 },
-          `已把音效「${found.title}」放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始，时长 ${result.clip.duration.toFixed(2)}s${cut(duration ?? found.duration, result.clip)}。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
+          `已把音效「${found.title}」放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始${offset ? `（从音效的 ${offset}s 处）` : ""}，时长 ${result.clip.duration.toFixed(2)}s${cut(duration ?? rest(found.duration, "音效"), result.clip)}。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
         );
       }
       const info = await probe(await resolveAsset(services, work, src));
       if (src.startsWith("public/")) src = `films/${work.slug}/${src.slice(7)}`;
-      const result = placeAudio(work, { src, start, duration: duration ?? info.duration, trackName: track, name, gain, fadeIn, fadeOut });
+      const result = placeAudio(work, { src, start, offset, duration: duration ?? rest(info.duration, "文件"), trackName: track, name, gain, fadeIn, fadeOut });
       await services.materials?.lockReferenced(work);
       return asJson(
         { clip: result.clip, track: result.track.name, sha256: result.sha256 },
-        `已放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始，时长 ${result.clip.duration.toFixed(2)}s${cut(duration, result.clip)}。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
+        `已放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始${offset ? `（从文件的 ${offset}s 处）` : ""}，时长 ${result.clip.duration.toFixed(2)}s${cut(duration, result.clip)}。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
       );
     },
   });

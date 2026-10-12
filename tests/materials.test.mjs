@@ -160,7 +160,9 @@ describe("material libraries", () => {
     expect(linked.body.data.materials).toEqual(["品牌", "音效"]);
     const written = await tool("material_write", { work: work.id, operations: [{ op: "put", library: "音效", path: "notes/readme.txt", content: "说明" }] });
     expect(written.body.data[0]).toMatchObject({ ok: true, ref: "音效/notes/readme.txt", url: "materials/音效/notes/readme.txt" });
-    const used = await tool("materials_use", { work: work.id, files: ["音效/notes/readme.txt"] });
+    // Written as listings and layers write it, with materials/ in front.
+    const used = await tool("materials_use", { work: work.id, files: ["materials/音效/notes/readme.txt"] });
+    expect((await tool("material_read", { work: work.id, paths: ["materials/音效/notes/readme.txt"] })).body.text).toContain("说明");
     expect(used.body.text).toContain("materials/音效/notes/readme.txt");
     const opened = await app.services.openWork(work.id, "local");
     expect(materials.readLocks(opened.dir)).toHaveProperty(["音效/notes/readme.txt"]);
