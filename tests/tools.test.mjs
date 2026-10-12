@@ -9,7 +9,7 @@ registry.add({
   title: "",
   description: "",
   readOnly: true,
-  input: { work: z.string().optional(), n: z.number().int().min(1) },
+  input: { work: z.string().optional(), n: z.number().int().min(1), limit: z.number().default(10) },
   run: async ({ n }, ctx) => ({ data: { n, work: await ctx.work() } }),
 });
 registry.add({ name: "write", title: "", description: "", input: {}, run: async () => ({ data: { ok: true } }) });
@@ -44,6 +44,8 @@ describe("tool registry", () => {
   it("describes tools as JSON schema", () => {
     const read = registry.describe().find((tool) => tool.name === "read");
     expect(read.inputSchema.properties.n.type).toBe("integer");
+    // Fields with a default are optional for the caller.
+    expect(read.inputSchema.required).toEqual(["n"]);
   });
   it("advertises the compact schema but validates the strict one", async () => {
     const edit = registry.describe().find((tool) => tool.name === "edit");

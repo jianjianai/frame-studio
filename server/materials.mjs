@@ -943,7 +943,7 @@ export function materialsPlugin(services) {
       const find = (name) => all.find((item) => item.id === name.trim() || item.title === name.trim())?.id ?? null;
       const unknown = add.filter((name) => !find(name));
       if (unknown.length)
-        throw problem(400, `素材库不存在：${unknown.join("、")}。现有的素材库：${all.map((item) => `「${item.id}」`).join("") || "（无）"}；新建用 create`);
+        throw problem(400, `素材库不存在：${unknown.join("、")}。作品库 ${work.repo} 里的素材库：${all.map((item) => `「${item.id}」`).join("") || "（无）"}；新建用 create。素材库属于作品库，别的作品库里的素材库要在那个作品库里新建作品才能用`);
       const adding = add.map(find);
       const created = [];
       for (const name of create) {
@@ -989,7 +989,7 @@ export function materialsPlugin(services) {
       const existing = new Set((await materials.libraries(work.repo)).map((item) => item.id));
       const needed = [...new Set(files.map((ref) => ref.split("/")[0]))].filter((id) => !linked.has(id));
       const unknown = needed.filter((id) => !existing.has(id));
-      if (unknown.length) throw problem(404, `素材库不存在：${unknown.join("、")}`);
+      if (unknown.length) throw problem(404, `作品库 ${work.repo} 里没有素材库：${unknown.join("、")}（素材库属于作品库，用 materials_list 查看这个作品库的素材库）`);
       if (needed.length) await works.update(work, { materials: [...materials.names(work), ...needed] });
       const result = await materials.lock(work, files, { update });
       if (result.missing.length) throw problem(404, `素材不存在：${result.missing.join("、")}`);

@@ -32,7 +32,8 @@ export class ToolRegistry {
       readOnly: Boolean(tool.readOnly),
       destructive: Boolean(tool.destructive),
       alwaysLoad: CORE_TOOLS.has(tool.name),
-      inputSchema: z.toJSONSchema(tool.publicSchema, { unrepresentable: "any" }),
+      // What callers send: fields with defaults are optional (the default "output" view lists them as required).
+      inputSchema: z.toJSONSchema(tool.publicSchema, { unrepresentable: "any", io: "input" }),
     }));
   }
   /**

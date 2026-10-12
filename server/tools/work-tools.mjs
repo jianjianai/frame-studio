@@ -96,7 +96,7 @@ export function registerWorkTools(registry) {
     input: {
       title: z.string().min(1).max(120),
       description: z.string().max(4000).optional().describe("需求描述，会写入作品 AGENTS.md"),
-      repo: z.string().optional().describe("作品库 id，默认 local"),
+      repo: z.string().optional().describe("作品库 id（works_list 结果里的 repo），默认 local。素材库属于作品库，要用哪个作品库的素材库就建在哪里"),
       width: z.number().int().min(16).max(7680).optional(),
       height: z.number().int().min(16).max(7680).optional(),
       duration: z.number().positive().max(3600).optional(),
@@ -105,7 +105,15 @@ export function registerWorkTools(registry) {
     async run(args, ctx) {
       if (ctx.scope.work) throw problem(403, "作品内的 AI 会话不能新建其他作品", "FORBIDDEN");
       const work = await works.create(args);
-      return asJson({ id: work.id, repo: work.repo, dir: work.dir }, `已创建作品 ${work.id}（${args.title}）。作品文件位于 ${work.dir}`);
+      // Libraries belong to a repository: say which one the work landed in and what it can use.
+      const libraries = services.materials ? await services.materials.libraries(work.repo).catch(() => []) : [];
+      const others = services.repos.list().map((repo) => repo.id).filter((id) => id !== work.repo);
+      return asJson({ id: work.id, repo: work.repo, dir: work.dir, materials: libraries.map((item) => item.id) }, [
+        `已创建作品 ${work.id}（${args.title}），在作品库 ${work.repo}${args.repo ? "" : "（没有指定 repo，用的是默认作品库）"}。作品文件位于 ${work.dir}`,
+        libraries.length
+          ? `这个作品库的素材库：${libraries.map((item) => `「${item.id}」`).join("")}（作品只能用同一作品库里的素材库）`
+          : `这个作品库没有素材库（作品只能用同一作品库里的素材库）${others.length ? `。其他作品库：${others.join("、")}；要用它们的素材库，就在那个作品库里新建作品（repo 参数）` : ""}`,
+      ].join("\n"));
     },
   });
 
