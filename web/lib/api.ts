@@ -13,6 +13,12 @@ export class ApiError extends Error {
 
 type Options = { method?: string; body?: unknown; raw?: BodyInit; contentType?: string; signal?: AbortSignal };
 
+/** GET requests sent before the page asks for them (the work page's first one, with /api/state). */
+const early = new Map<string, Promise<Response>>();
+export function prefetch(path: string) {
+  early.set(path, fetch(path));
+}
+
 /** JSON API call. Throws ApiError with the server's message. */
 export async function api<T = unknown>(path: string, options: Options = {}): Promise<T> {
   const init: RequestInit = { method: options.method || (options.body !== undefined || options.raw ? "POST" : "GET"), signal: options.signal, headers: {} };
@@ -23,7 +29,11 @@ export async function api<T = unknown>(path: string, options: Options = {}): Pro
     init.body = JSON.stringify(options.body);
     (init.headers as Record<string, string>)["Content-Type"] = "application/json";
   }
-  const response = await fetch(path, init);
+  const sent = init.method === "GET" ? early.get(path) : undefined;
+  early.delete(path);
+  // An early answer that failed (not signed in yet, say) is asked for again.
+  const answered = sent ? await sent.catch(() => null) : null;
+  const response = answered?.ok ? answered : await fetch(path, init);
   const text = await response.text();
   let data: unknown = null;
   try {

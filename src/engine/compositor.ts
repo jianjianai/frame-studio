@@ -182,6 +182,21 @@ export function createCompositionScene(
         throw new Error(
           `同一时刻有 ${contexts.length} 个三维图层（three 场景和模型图层，${contexts.map((c) => c.id).join("、")}），每个占一个 WebGL 上下文，浏览器最多同时保留约 16 个：同一时刻请不超过 12 个，把几个物体放进同一个 three 场景`,
         );
+      // New layers load together (modules, fonts, media): one after another, each would wait
+      // for the network in turn. Drawing below stays in layer order.
+      const opened = await Promise.allSettled(
+        active
+          .filter((clip) => clip.source.kind !== "color" && !sources.has(clip.id))
+          .map(async (clip) => {
+            const current = await source(clip, options, loaders, signal);
+            if (disposed || signal.aborted || sources.has(clip.id)) current.dispose();
+            else sources.set(clip.id, current);
+          }),
+      );
+      signal.throwIfAborted();
+      if (disposed) throw new Error("Composition disposed");
+      const failed = opened.find((result) => result.status === "rejected");
+      if (failed) throw (failed as PromiseRejectedResult).reason;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       if (doc.background !== "transparent") {
         ctx.fillStyle = doc.background;

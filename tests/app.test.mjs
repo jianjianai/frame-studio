@@ -58,20 +58,25 @@ describe("studio API (local mode)", () => {
     fs.mkdirSync(file("sub"), { recursive: true });
     fs.writeFileSync(file("sub/声音.wav"), "RIFFdata");
     fs.writeFileSync(file("copy.wav"), "RIFFdata");
+    const films = `films/${created.body.slug}/`;
     const manifest = async () => {
       const response = await server.call(`/api/works/local/${created.body.id}/precache`);
       return Object.fromEntries(response.body.files.map((item) => [item.path, item]));
     };
     const first = await manifest();
-    expect((await server.call(`/api/works/local/${created.body.id}/precache`)).body.base).toBe(`/files/local/${created.body.id}/films/${created.body.slug}/`);
-    expect(first["sub/声音.wav"]).toMatchObject({ size: 8, version: expect.stringMatching(/^[0-9a-f]{32}$/) });
+    expect((await server.call(`/api/works/local/${created.body.id}/precache`)).body).toMatchObject({
+      key: `local/${created.body.id}`,
+      base: `/files/local/${created.body.id}/`,
+      at: expect.any(Number),
+    });
+    expect(first[films + "sub/声音.wav"]).toMatchObject({ size: 8, version: expect.stringMatching(/^[0-9a-f]{32}$/) });
     // Equal content, equal version: the browser copies instead of downloading again.
-    expect(first["copy.wav"].version).toBe(first["sub/声音.wav"].version);
+    expect(first[films + "copy.wav"].version).toBe(first[films + "sub/声音.wav"].version);
     // A new mtime alone does not make it a new version; new content does.
     fs.utimesSync(file("sub/声音.wav"), new Date(), new Date(Date.now() + 5000));
-    expect((await manifest())["sub/声音.wav"].version).toBe(first["sub/声音.wav"].version);
+    expect((await manifest())[films + "sub/声音.wav"].version).toBe(first[films + "sub/声音.wav"].version);
     fs.writeFileSync(file("sub/声音.wav"), "RIFFother");
-    expect((await manifest())["sub/声音.wav"].version).not.toBe(first["sub/声音.wav"].version);
+    expect((await manifest())[films + "sub/声音.wav"].version).not.toBe(first[films + "sub/声音.wav"].version);
   });
 
   it("bundles small files in one framed response", async () => {
@@ -83,7 +88,8 @@ describe("studio API (local mode)", () => {
     fs.writeFileSync(path.join(dir, "public", "logo.svg"), "<svg/>");
     const url = `${server.base}/api/works/local/${created.body.id}/precache/bundle`;
     const post = (paths) => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths }) });
-    const response = await post(["a.txt", "空.bin", "logo.svg"]);
+    const films = `films/${created.body.slug}/`;
+    const response = await post([films + "a.txt", films + "空.bin", films + "logo.svg"]);
     const bytes = Buffer.from(await response.arrayBuffer());
     const parsed = [];
     for (let offset = 0; offset < bytes.length; ) {
@@ -93,12 +99,48 @@ describe("studio API (local mode)", () => {
       parsed.push({ ...header, body: bytes.subarray(offset, offset + header.size).toString() });
       offset += header.size;
     }
-    expect(parsed.map((item) => item.path)).toEqual(["a.txt", "空.bin", "logo.svg"]);
+    expect(parsed.map((item) => item.path)).toEqual([films + "a.txt", films + "空.bin", films + "logo.svg"]);
     expect(parsed[0]).toMatchObject({ size: 5, body: "hello", type: expect.stringContaining("text/plain"), version: expect.stringMatching(/^[0-9a-f]{32}$/) });
     expect(parsed[1]).toMatchObject({ size: 0, body: "" });
     expect(parsed[2].body).toContain("<svg");
-    expect((await post(["../project.ts"])).status).toBe(400);
-    expect((await post(["missing.png"])).status).toBe(404);
+    expect((await post([films + "../project.ts"])).status).toBe(400);
+    expect((await post(["films/another-work/a.txt"])).status).toBe(404);
+    expect((await post([films + "missing.png"])).status).toBe(404);
+  });
+
+  it("gives the stage page its modules with their versions, and the work's playback files", async () => {
+    const created = await server.call("/api/works", { method: "POST", body: { title: "预加载" } });
+    const work = (await server.call(`/api/works/local/${created.body.id}`)).body;
+    const query = new URLSearchParams({ work: work.id, module: work.preview.module, assetBase: work.preview.assetBase });
+    const response = await fetch(`${server.base}/preview/stage.html?${query}`);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const html = await response.text();
+    const data = JSON.parse(/<script type="application\/json" id="frame-cache">([\s\S]*?)<\/script>/.exec(html)[1]);
+    // The work is imported by address (Vite adds ?import), its scene modules dynamically.
+    const project = work.preview.module + "?import";
+    expect(data.modules).toMatchObject({ "/src/preview/stage.ts": expect.stringMatching(/^W\//), [project]: expect.any(String) });
+    expect(Object.keys(data.modules)).toContain(work.preview.module.replace("project.ts", "scene.ts"));
+    expect(Object.keys(data.modules).some((url) => url.startsWith("/src/engine/player-session.ts"))).toBe(true);
+    // Every module but the page's own scripts is preloaded, so the graph is fetched at once.
+    const preloaded = [...html.matchAll(/<link rel="modulepreload" href="([^"]+)"/g)].map((match) => match[1].replace(/&amp;/g, "&"));
+    expect(preloaded).toContain(project);
+    expect(preloaded).not.toContain("/src/preview/stage.ts");
+    // What the browser serves from its own cache is exactly what the server sends now.
+    const etag = (await fetch(server.base + "/src/engine/player-session.ts")).headers.get("etag");
+    expect(data.modules["/src/engine/player-session.ts"]).toBe(etag);
+    expect(data.precache).toMatchObject({ key: `local/${work.id}`, base: `/files/local/${work.id}/`, files: [] });
+  });
+
+  it("answers revalidation with 304 for weak tags too (proxies that compress send them)", async () => {
+    const created = await server.call("/api/works", { method: "POST", body: { title: "弱标签" } });
+    const dir = (await server.app.services.works.open(created.body.id, "local")).dir;
+    fs.mkdirSync(path.join(dir, "public"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "public", "a.txt"), "hello");
+    const url = `${server.base}/files/local/${created.body.id}/films/${created.body.slug}/a.txt`;
+    const etag = (await fetch(url)).headers.get("etag");
+    expect((await fetch(url, { headers: { "If-None-Match": etag } })).status).toBe(304);
+    expect((await fetch(url, { headers: { "If-None-Match": `"other", W/${etag}` } })).status).toBe(304);
+    expect((await fetch(url, { headers: { "If-None-Match": `"other"` } })).status).toBe(200);
   });
 
   it("answers missing work files with 404 and keeps serving", async () => {

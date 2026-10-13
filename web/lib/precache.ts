@@ -1,9 +1,10 @@
 import { api, workPath } from "./api";
 
 /**
- * Asset precache: a service worker (public/frame-sw.js) keeps every public file
- * of the open work in Cache Storage so preview playback never waits on the
- * network. Needs a secure context (https or localhost); elsewhere it is skipped.
+ * Asset precache: a service worker (public/frame-sw.js) keeps the playback files
+ * of the open work (its public/ folder and the library files it plays) in Cache
+ * Storage so preview playback never waits on the network. Needs a secure context
+ * (https or localhost); elsewhere it is skipped.
  */
 export interface PrecacheProgress {
   key: string;
@@ -16,7 +17,10 @@ export interface PrecacheProgress {
 }
 
 interface Manifest {
+  key: string;
   base: string;
+  /** When the server made the list: the worker keeps the newest. */
+  at: number;
   files: { path: string; size: number; version: string }[];
 }
 
@@ -45,7 +49,7 @@ export async function requestPrecache(repo: string, id: string) {
   const sw = await activeWorker();
   if (!sw) return false;
   const manifest = await api<Manifest>(`${workPath(repo, id)}/precache`);
-  sw.postMessage({ type: "precache", key: `${repo}/${id}`, ...manifest });
+  sw.postMessage({ type: "precache", ...manifest });
   return true;
 }
 

@@ -14,6 +14,7 @@ import { Works } from "./works.mjs";
 import { createPreview } from "./preview.mjs";
 import { WorkWatcher } from "./files.mjs";
 import { workRoutes } from "./routes/works.mjs";
+import { precacheManifest } from "./precache.mjs";
 import { repoRoutes } from "./routes/repos.mjs";
 
 /**
@@ -131,8 +132,10 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
       if (pathname.startsWith("/files/")) return await serveWorkFile(req, res, pathname);
       if (pathname.startsWith("/films/")) return await serveFilmFallback(req, res, pathname);
       if (["/preview/stage.html", "/preview/render.html", "/preview/resource.html", "/preview/asset.html"].includes(pathname)) {
+        const cache = pathname === "/preview/stage.html" ? { precache: await stageAssets(url) } : {};
+        const page = await preview.html(req.url, pathname.slice(1).replace("preview/", "src/preview/"), { preload: true, cache });
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
-        return res.end(await preview.html(req.url, pathname.slice(1).replace("preview/", "src/preview/")));
+        return res.end(page);
       }
       if (!config.dev && fs.existsSync(webDist) && serveStatic(req, res, webDist, pathname)) return;
       if (serveStatic(req, res, path.join(appRoot, "public"), pathname)) return;
@@ -190,6 +193,20 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     const file = path.resolve(base, relative);
     if (!inside(base, file)) throw problem(400, "Invalid path");
     return sendFile(req, res, file, { cache: "public, max-age=86400" });
+  }
+
+  /**
+   * The asset list of the work a stage plays, carried by its page: the browser's service
+   * worker learns which kept files changed before the stage asks for any of them.
+   */
+  async function stageAssets(url) {
+    const match = /^\/files\/([^/]+)\/([^/]+)\/$/.exec(url.searchParams.get("assetBase") || "");
+    if (!match || match[1] === "snapshot") return null;
+    try {
+      return await precacheManifest(services, await services.openWork(decodeURIComponent(match[2]), decodeURIComponent(match[1])));
+    } catch {
+      return null;
+    }
   }
 
   /** Workers cannot see the page's asset base and request /films/<slug>/...; slugs are unique per work. */

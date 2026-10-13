@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { git, gitOk, gitToFile } from "./git.mjs";
-import { tree, writeText, writeStream, removePath, movePath, uniquePath, TEXT_LIMIT } from "./files.mjs";
+import { tree, writeText, writeStream, removePath, movePath, uniquePath, contentVersion, TEXT_LIMIT } from "./files.mjs";
 import { readJson, sendFile } from "./http.mjs";
 import { problem, notFound, conflict, confined, inside, sha256, Locks, Lru, writeFileAtomic } from "./util.mjs";
 import { MATERIALS_BRANCH } from "./repos.mjs";
@@ -112,6 +112,7 @@ export class Materials {
     this.manifests = new Map(); // root → { ref: blob } of its .materials copies
     this.excluded = new Set(); // repositories whose worktrees ignore .materials
     this.listed = new Map(); // repo → { commit, libraries }: the listing walks every file, so it is kept per version
+    this.sizes = new Lru(20000); // blob → size of its content (an LFS pointer's object)
   }
 
   /** The materials worktree of a repository (checked out on first use). */
@@ -488,6 +489,50 @@ export class Materials {
   }
   async references(work) {
     return (await this.usage(work)).refs;
+  }
+
+  /**
+   * The library files a work plays (code runs from .materials, so not code): what it uses or
+   * has locked, and for addresses built at run time every file under the known part. With
+   * their size and a version for the browser's asset precache: the locked blob, else the
+   * content of the file as it is now. Nothing is extracted or downloaded here.
+   */
+  async playback(work) {
+    const head = await this.headOf(work.repo).catch(() => null);
+    if (!head) return [];
+    const dir = await this.dir(work.repo);
+    const locks = this.readLocks(work.dir);
+    const { refs, prefixes } = await this.usage(work);
+    const wanted = new Set([...Object.keys(locks), ...refs]);
+    for (const prefix of prefixes) for (const ref of [...Object.keys(locks), ...head.keys()]) if (ref.startsWith(prefix)) wanted.add(ref);
+    const files = [];
+    for (const ref of [...wanted].sort()) {
+      if (!validRef(ref) || SCRIPT.test(ref) || ref.startsWith(".") || ref.endsWith("/README.md")) continue;
+      if (locks[ref]) {
+        const size = await this.blobSize(dir, locks[ref]);
+        if (size !== null) files.push({ ref, size, version: "git-" + locks[ref] });
+        continue;
+      }
+      const file = path.join(dir, ref);
+      const stat = inside(dir, file) ? fs.statSync(file, { throwIfNoEntry: false }) : null;
+      if (stat?.isFile()) files.push({ ref, size: stat.size, version: await contentVersion(file, stat) });
+    }
+    return files;
+  }
+  /** Size of a blob's content (a Git LFS pointer's object), or null when the blob is not here. */
+  async blobSize(dir, blob) {
+    if (!/^[0-9a-f]{40,64}$/.test(blob)) return null;
+    if (this.sizes.has(blob)) return this.sizes.get(blob);
+    const stored = Number((await git(dir, ["cat-file", "-s", blob]).catch(() => "")).trim() || NaN);
+    if (!Number.isFinite(stored)) return null;
+    let size = stored;
+    if (stored < 1024) {
+      const text = await git(dir, ["cat-file", "blob", blob]).catch(() => "");
+      const pointer = /^version https:\/\/git-lfs\.github\.com\/spec\/v1\n[\s\S]*?^size (\d+)$/m.exec(text);
+      if (pointer) size = Number(pointer[1]);
+    }
+    this.sizes.set(blob, size);
+    return size;
   }
 
   /**

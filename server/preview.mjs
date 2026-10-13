@@ -1,9 +1,53 @@
 import fs from "node:fs";
 import path from "node:path";
-import { createServer } from "vite";
+import { createServer, parseAstAsync } from "vite";
 import react from "@vitejs/plugin-react";
 import { appRoot } from "./config.mjs";
-import { inside } from "./util.mjs";
+import { inside, Lru } from "./util.mjs";
+
+/** A module request as Vite's transform middleware sees it: no timestamp, no ?import. */
+const requestOf = (url) =>
+  decodeURI(url)
+    .replace(/(\?|&)t=\d{13}(?:&|$)/, "$1")
+    .replace(/[?&]$/, "")
+    .replace(/(\?|&)import=?(?:&|$)/, "$1")
+    .replace(/[?&]$/, "");
+
+/** The import specifiers of compiled module code, as [url, dynamic]. */
+async function importsOf(code) {
+  const program = await parseAstAsync(code);
+  const found = [];
+  for (const node of program.body)
+    if (["ImportDeclaration", "ExportAllDeclaration", "ExportNamedDeclaration"].includes(node.type) && typeof node.source?.value === "string")
+      found.push([node.source.value, false]);
+  if (!code.includes("import(")) return found;
+  const stack = [program];
+  while (stack.length) {
+    const node = stack.pop();
+    if (node.type === "ImportExpression") {
+      const source = node.source;
+      if (source.type === "Literal" && typeof source.value === "string") found.push([source.value, true]);
+      else if (source.type === "TemplateLiteral" && !source.expressions.length) found.push([source.quasis[0].value.cooked, true]);
+    }
+    for (const key in node) {
+      const value = node[key];
+      if (Array.isArray(value)) for (const item of value) typeof item?.type === "string" && stack.push(item);
+      else if (typeof value?.type === "string") stack.push(value);
+    }
+  }
+  return found;
+}
+
+/** Whether to follow a dynamic import (an address that cannot be decoded is not followed). */
+const followed = (follow, url) => {
+  try {
+    return follow(url);
+  } catch {
+    return false;
+  }
+};
+
+const escapeAttribute = (text) => text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 /**
  * One Vite dev server compiles the studio UI (in dev) and every opened work.
@@ -126,10 +170,97 @@ export async function createPreview({ config, httpServer, events }) {
     build: { target: "es2022" },
   });
 
-  /** Serve an HTML entry through Vite so it gets the module graph and HMR client. */
-  async function html(url, file) {
+  /**
+   * The modules that importing `entries` brings in, as the URLs the browser requests (Vite's
+   * rewritten imports), each with the etag of its compiled code. Static imports are followed
+   * everywhere, dynamic ones only where `follow` allows: a work's own scene modules, not
+   * optional engine parts such as three or Pixi, which load when a work uses them. Stops
+   * after `budget` ms, so a server that still has to compile everything does not hold the
+   * page up (the compiling goes on regardless).
+   */
+  const importLists = new Lru(5000); // etag of compiled code → its imports
+  async function moduleGraph(entries, { follow = () => false, budget = 2500 } = {}) {
+    const environment = vite.environments.client;
+    const deadline = Date.now() + budget;
+    const modules = new Map(entries.map((url) => [url, null]));
+    let level = [...modules.keys()];
+    while (level.length && Date.now() < deadline) {
+      const next = [];
+      const visit = async (url) => {
+        const result = await Promise.resolve()
+          .then(() => environment.transformRequest(requestOf(url)))
+          .catch(() => null);
+        if (!result?.code) return;
+        modules.set(url, result.etag ?? null);
+        // Compiled code only changes with its etag; big dependencies take long to parse.
+        let imports = result.etag && importLists.get(result.etag);
+        if (!imports) {
+          imports = await importsOf(result.code).catch(() => []);
+          if (result.etag) importLists.set(result.etag, imports);
+        }
+        for (const [specifier, dynamic] of imports) {
+          if (!specifier.startsWith("/") || modules.has(specifier) || (dynamic && !followed(follow, specifier))) continue;
+          modules.set(specifier, null);
+          next.push(specifier);
+        }
+      };
+      let timer;
+      const late = new Promise((resolve) => (timer = setTimeout(resolve, Math.max(0, deadline - Date.now()))));
+      await Promise.race([Promise.all(level.map(visit)), late]);
+      clearTimeout(timer);
+      level = next;
+    }
+    return modules;
+  }
+
+  /**
+   * The project module a stage plays (`module` of its address) and the library sound modules
+   * its audio.json names, as the page imports them: by address, so the browser adds ?import
+   * (Vite's injectQuery); dynamic imports are followed inside the work's folder.
+   */
+  function workModules(module) {
+    const address = module?.split("?")[0];
+    if (!address?.startsWith("/@fs/")) return null;
+    let file = address.slice("/@fs".length);
+    if (/^\/[A-Za-z]:\//.test(file)) file = file.slice(1);
+    if (!/\/projects\/[^/]+\/project\.tsx?$/.test(file) || !roots.some((base) => inside(base, path.resolve(file)))) return null;
+    const root = address.slice(0, address.lastIndexOf("/projects/") + 1);
+    const entries = [address + "?import"];
+    try {
+      const audio = JSON.parse(fs.readFileSync(path.join(path.dirname(file), "audio.json"), "utf8"));
+      for (const source of audio.sources ?? [])
+        if (source.kind === "generated" && /^materials\/[^/]+\/[^?#]+\.(?:m?[jt]sx?)$/.test(String(source.module)))
+          entries.push(root + ".materials/" + source.module.slice("materials/".length).split("/").map(encodeURIComponent).join("/") + "?import");
+    } catch {}
+    let base;
+    try {
+      base = requestOf(root);
+    } catch {
+      return null;
+    }
+    return { entries, follow: (url) => requestOf(url).startsWith(base) };
+  }
+
+  /**
+   * Serve an HTML entry through Vite so it gets the module graph and HMR client. A preview
+   * page also lists every module it will import (for the stage, the work's too):
+   * - as modulepreload links, so the whole graph is fetched, or revalidated, at once instead
+   *   of one round trip per level of imports;
+   * - with the etag of each, in the page's `frame-cache` data, together with `cache` (the
+   *   stage's asset list): the browser's service worker answers unchanged modules from its
+   *   own cache without asking the server at all (public/frame-sw.js).
+   */
+  async function html(url, file, { preload = false, cache = {} } = {}) {
     const source = await fs.promises.readFile(path.join(appRoot, file), "utf8");
-    return vite.transformIndexHtml(url, source);
+    const page = await vite.transformIndexHtml(url, source);
+    if (!preload) return page;
+    const scripts = [...page.matchAll(/<script type="module"[^>]*\ssrc="(\/[^"]+)"|\bfrom\s*"(\/[^"]+)"/g)].map((match) => match[1] ?? match[2]);
+    const work = workModules(new URL(url, "http://local").searchParams.get("module"));
+    const graph = await moduleGraph([...scripts, ...(work?.entries ?? [])], { follow: work?.follow });
+    const modules = Object.fromEntries([...graph].filter(([, etag]) => etag));
+    const data = JSON.stringify({ modules, ...cache }).replace(/</g, "\\u003c");
+    const links = [...graph.keys()].filter((href) => !scripts.includes(href)).map((href) => `<link rel="modulepreload" href="${escapeAttribute(href)}" />`);
+    return page.replace("</head>", `  <script type="application/json" id="frame-cache">${data}</script>\n    ${links.join("\n    ")}\n  </head>`);
   }
 
   /** Path that the stage imports to load a work's project.ts. */

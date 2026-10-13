@@ -31,11 +31,17 @@ export function PrecacheBar() {
     };
   }, [key, work.repo, work.id, toast]);
 
-  // Changed or added files are cached again (only those whose version changed).
+  // Changed or added files are cached again (only those whose version changed): the work's
+  // own, and library files when its locks or the libraries change.
   const debounce = useRef<number>(undefined);
   useServerEvent((event) => {
-    if (event.type !== "work-files" || event.work !== work.id || event.repo !== work.repo) return;
-    if (!(event.files as string[]).some((file) => /^projects\/[^/]+\/public\//.test(file))) return;
+    if (event.repo !== work.repo) return;
+    const changed =
+      event.type === "materials" ||
+      (event.type === "work-files" &&
+        event.work === work.id &&
+        (event.files as string[]).some((file) => /^projects\/[^/]+\/(public\/|materials\.lock\.json$)/.test(file)));
+    if (!changed) return;
     window.clearTimeout(debounce.current);
     debounce.current = window.setTimeout(() => void requestPrecache(work.repo, work.id).catch(() => {}), 400);
   });

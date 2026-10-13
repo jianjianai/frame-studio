@@ -127,6 +127,58 @@ describe("material libraries", () => {
     expect((await works.status(work)).files).toEqual([]);
   });
 
+  it("lets the browser keep the library files a work plays", async () => {
+    await call(`${lib}/libraries`, { method: "POST", body: { name: "缓存" } });
+    const put = (file, raw) =>
+      call(`${lib}/libraries/${encodeURIComponent("缓存")}/upload?path=${encodeURIComponent(file)}&replace=1`, { method: "POST", raw });
+    await put("logo.svg", "<svg>v1</svg>");
+    await put("fonts/a.ttf", "font-a");
+    await put("fonts/b.ttf", "font-b");
+    await put("code/draw.ts", "export const draw = 1;");
+    const work = await works.create({ title: "缓存素材" });
+    const route = `/api/works/local/${work.id}`;
+    await call(route, { method: "PATCH", body: { materials: ["缓存"] } });
+    // A placed file is locked; fonts are named by an address built at run time; code runs from .materials.
+    await call(`${route}/layers`, {
+      method: "POST",
+      body: { operations: [{ op: "add", clip: { id: "logo", source: { kind: "image", src: "materials/缓存/logo.svg" }, start: 0, duration: 2 } }] },
+    });
+    const scene = path.join(work.dir, "scene.ts");
+    fs.writeFileSync(scene, fs.readFileSync(scene, "utf8") + '\nimport "@materials/缓存/code/draw";\n// assetUrl(`materials/缓存/fonts/${name}.ttf`)\n');
+    const listed = async () => Object.fromEntries((await call(`${route}/precache`)).body.files.map((item) => [item.path, item]));
+    const locks = () => materials.readLocks(work.dir);
+    let files = await listed();
+    expect(Object.keys(files).sort()).toEqual(["materials/缓存/fonts/a.ttf", "materials/缓存/fonts/b.ttf", "materials/缓存/logo.svg"]);
+    expect(files["materials/缓存/logo.svg"]).toEqual({ path: "materials/缓存/logo.svg", size: 13, version: "git-" + locks()["缓存/logo.svg"] });
+    expect(files["materials/缓存/fonts/a.ttf"]).toMatchObject({ size: 6, version: expect.stringMatching(/^[0-9a-f]{32}$/) });
+
+    // The bundle sends the version the work uses, with the version the list promised.
+    const response = await fetch(`${base}${route}/precache/bundle`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ paths: ["materials/缓存/logo.svg"] }),
+    });
+    const bytes = Buffer.from(await response.arrayBuffer());
+    const header = JSON.parse(bytes.subarray(4, 4 + bytes.readUInt32BE(0)).toString());
+    expect(header).toMatchObject({ path: "materials/缓存/logo.svg", size: 13, version: files["materials/缓存/logo.svg"].version });
+    expect(bytes.subarray(4 + bytes.readUInt32BE(0)).toString()).toBe("<svg>v1</svg>");
+
+    // A new library version changes nothing until the work locks it.
+    await put("logo.svg", "<svg>v2!</svg>");
+    expect((await listed())["materials/缓存/logo.svg"].version).toBe(files["materials/缓存/logo.svg"].version);
+    await call(`${route}/materials/lock`, { method: "POST", body: { update: true } });
+    files = await listed();
+    expect(files["materials/缓存/logo.svg"]).toMatchObject({ size: 14, version: "git-" + locks()["缓存/logo.svg"] });
+
+    // A Git LFS pointer counts as the size of the object it stands for.
+    const dir = await materials.dir("local");
+    const text = "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a".repeat(64) + "\nsize 12345678\n";
+    const pointer = (await git(dir, ["hash-object", "-w", "--stdin"], { input: text })).trim();
+    expect(await materials.blobSize(dir, pointer)).toBe(12345678);
+    expect(await materials.blobSize(dir, "0".repeat(40))).toBeNull();
+    await call(`${lib}/libraries/${encodeURIComponent("缓存")}`, { method: "DELETE" });
+  });
+
   it("shows libraries before there is a work, by repository", async () => {
     const listed = await tool("materials_list", { repo: "local" });
     expect(listed.body.data.libraries.map((item) => item.id)).toContain("品牌");

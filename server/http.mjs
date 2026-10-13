@@ -85,7 +85,11 @@ export function sendFile(req, res, file, { cache = "no-cache", type } = {}) {
     "Last-Modified": stat.mtime.toUTCString(),
     ETag: `"${stat.size.toString(36)}-${Math.floor(stat.mtimeMs).toString(36)}"`,
   };
-  if (req.headers["if-none-match"] === headers.ETag) {
+  // Weak comparison (RFC 9110): proxies that compress, such as Cloudflare, send our tag back as W/"…".
+  const known = String(req.headers["if-none-match"] || "")
+    .split(",")
+    .map((tag) => tag.trim().replace(/^W\//, ""));
+  if (known.includes(headers.ETag) || known.includes("*")) {
     res.writeHead(304, headers);
     return res.end();
   }

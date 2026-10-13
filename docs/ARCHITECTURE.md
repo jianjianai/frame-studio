@@ -48,7 +48,8 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `repos.mjs` `works.mjs` `git.mjs` `github.mjs` | 作品库与作品分支、版本、推送拉取、GitHub API |
 | `project-meta.mjs` | 不执行代码地读取/修改 `project.ts` 字面量字段 |
 | `documents.mjs` | `visual.json` / `audio.json` 的读取与原子编辑（UI 与 AI 共用） |
-| `preview.mjs` | Vite 中间件；拦截作品文件的热更新，改为向舞台发送 `preview-update` |
+| `preview.mjs` | Vite 中间件；拦截作品文件的热更新，改为向舞台发送 `preview-update`；预览页附带要导入的全部模块（modulepreload 与各模块的 etag） |
+| `precache.mjs` | 浏览器本地缓存的播放文件清单（作品 `public/` 的文件和作品用到的素材库文件，带内容版本）和小文件打包下载 |
 | `render.mjs` | 无界面 Chromium：渲染帧、分镜、封面画面、响度分析、运行检查、MP4 导出（ffmpeg） |
 | `remote-sync.mjs` | 连接 GitHub 的作品库自动同步：保存版本后在后台推送（作品、经验库、素材库、复盘分支）；打开作品、手动刷新和推送被拒时只取这个分支和 GitHub 对比，能快进就自动更新，否则广播 `remote-state`（`behind` / `diverged` / `conflict` / `error`），工作台和 AI 的每条消息都会提示；用户选择更新、合并、采用 GitHub 或保留本机；启动后和每半小时补推只领先于 GitHub 的分支 |
 | `covers.mjs` | 首页封面：`project.ts` 的 `poster` 图片，或作品在 `posterTime`（不写时自动挑选）的画面。按作品文件的版本缓存；列出作品时在后台逐个重做过期的封面，完成后广播 `work-cover` |
@@ -75,6 +76,15 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 素材预览页 `/preview/asset.html` 画浏览器自己显示不了的素材：三维模型（GLB/glTF/FBX/OBJ，引擎的 `loadModel` + 摄影棚光）、Lottie、HDR/EXR 全景图、字体。工作台的标签页用它播放和旋转（`window.__FRAME_ASSET__`）；服务端每个素材地址前缀（一个作品，或 `/files/<库>/-/` 即素材库现在的版本）保留一个页面，`open` 换文件，给缩略图（`asset-previews.mjs`）和 `asset_view` 出图。
 
 保存作品文件时，Vite 的 `hotUpdate` 钩子使改动模块失效并打上时间戳，但阻止整页刷新；服务端合并 120 ms 内的改动后广播 `preview-update`。舞台带时间戳重新导入 `project.ts`，调用 `session.updateProject()` 原地替换场景和音频，播放位置保持不变。素材文件（`public/`）的改动由目录监听发现。
+
+## 高延迟网络下的加载
+
+预览页的代码由 Vite 逐个模块编译下发，一个作品连同引擎有上百个模块，按导入关系逐层发现；作品还要用到素材文件。为了在延迟高的网络里也能很快打开，再次打开时不为没改过的东西发请求：
+
+- 预览页（舞台、资源、素材）生成时附带它要导入的全部模块（`preview.mjs`：从页面脚本和舞台的 `project.ts` 出发，沿 Vite 改写后的导入找出浏览器会请求的地址，静态导入全部跟随，动态导入只跟随作品目录里的）：写成 `modulepreload` 链接，整张模块图一次取完或一次验证，而不是每层导入一个往返；并在页面的 `frame-cache` 数据里写上每个模块编译结果的 etag。舞台页还带上作品的播放文件清单（`precache.mjs`）。
+- 浏览器的 Service Worker（`public/frame-sw.js`）拦截预览页的导航，在页面请求任何东西之前读出这些数据：etag 没变的模块直接从 Cache Storage 返回，变了或不在清单里的才请求服务器（etag 是编译结果的内容哈希，改动过的模块、热更新带的 `?t=` 地址都会重新取）。
+- 播放文件（作品 `public/` 的文件、作品用到或锁定的素材库文件，代码除外）按内容版本保存在 Cache Storage：锁定的素材库文件用 Git blob 作版本，其余用内容哈希。清单先用来丢弃改动过的文件，之后才放行这个作品的素材请求，然后在后台补齐：小文件打包、一次往返，大文件并行分段下载，各段存为 Blob 后整体写入（Chrome 在 Service Worker 里流式写入超过 10 MB 会失败）。工作台打开作品和文件改动后也发送清单，较旧的清单被忽略。
+- 合成器同时加载一帧里新出现的各个图层（模块、字体、媒体），不再一个接一个；工作台把作品信息请求和 `/api/state` 一起发出。
 
 ## AI
 
