@@ -92,7 +92,10 @@ async function serveModule(event, etag) {
   const cache = await caches.open(MODULES);
   const kept = await cache.match(event.request.url);
   if (kept && sameTag(kept.headers.get("etag"), etag)) return kept;
-  const response = await fetch(event.request);
+  let response = await fetch(event.request);
+  // Not the version the page was made with: a copy the browser kept on a proxy's say-so
+  // (Cloudflare turns no-cache into hours), or a change since. Ask the server itself.
+  if (response.ok && !sameTag(response.headers.get("etag"), etag)) response = await fetch(event.request, { cache: "no-cache" });
   if (response.ok && sameTag(response.headers.get("etag"), etag)) event.waitUntil(cache.put(event.request.url, response.clone()).catch(() => {}));
   return response;
 }
