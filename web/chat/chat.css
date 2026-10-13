@@ -881,3 +881,30 @@
   font-size: 12px;
   line-height: 1.5;
 }
+/* Earlier turns of a long conversation load when scrolled back to (or on click). */
+.chat-older {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: calc(100% - 28px);
+  margin: 4px 14px 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  background: none;
+  color: var(--fg-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+.chat-older:hover:not(:disabled) {
+  color: var(--fg);
+  border-color: var(--fg-faint);
+}
+.chat-older:disabled {
+  cursor: default;
+}
+.chat-notice.chat-loading {
+  justify-content: center;
+  margin: 24px 14px;
+}

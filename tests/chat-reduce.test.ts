@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { reduceTranscript, groupTurns, TranscriptReducer } from "../web/chat/reduce";
 import { lineDiff, compactDiff } from "../web/chat/lineDiff";
-import { compact, withoutAgentCopy } from "../server/ai/manager.mjs";
+import { compact, lean, withoutAgentCopy } from "../server/ai/manager.mjs";
 
 const update = (sessionUpdate: string, extra: Record<string, unknown>) => ({ at: 0, kind: "update", update: { sessionUpdate, ...extra } });
 
@@ -44,6 +44,17 @@ describe("chat transcript", () => {
       update("tool_call_update", { toolCallId: "x", status: "completed", _meta: { terminal_output_delta: { data: "b\n" }, terminal_exit: { exit_code: 2 } } }),
     ]);
     expect(blocks[0]).toMatchObject({ output: "a\nb\n", exitCode: 2 });
+  });
+  it("marks a tool call whose texts the conversation cut short", () => {
+    const short = lean(update("tool_call_update", { toolCallId: "y", status: "completed", rawOutput: "o".repeat(5000) }) as never) as Record<string, unknown>;
+    expect(short.cut).toBe(true);
+    expect(lean(update("tool_call", { toolCallId: "y", rawInput: { command: "ls" } }) as never)).not.toHaveProperty("cut");
+    const blocks = reduceTranscript([
+      update("tool_call", { toolCallId: "y", title: "rg", status: "in_progress" }),
+      short as never,
+      update("tool_call_update", { toolCallId: "y", status: "completed" }),
+    ]);
+    expect(blocks[0]).toMatchObject({ cut: true, status: "completed" });
   });
   it("does not store Claude's own copy of tool results", () => {
     const stored = withoutAgentCopy({ sessionUpdate: "tool_call_update", _meta: { claudeCode: { toolResponse: "big" } } });

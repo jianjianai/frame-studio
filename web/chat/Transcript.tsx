@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -176,8 +176,30 @@ function toolArguments(tool: ToolBlock) {
   return json.length > 4000 ? json.slice(0, 4000) + "…" : json;
 }
 
-function ToolCard({ tool }: { tool: ToolBlock }) {
+/** A tool call whole, when the conversation cut its long texts short (null if it cannot be had). */
+export type LoadTool = (id: string) => Promise<ToolBlock | null>;
+
+function ToolCard({ tool: short, load }: { tool: ToolBlock; load?: LoadTool }) {
   const [open, setOpen] = useState(false);
+  // Opened, a finished call whose texts were cut short is shown whole (while it runs, as it
+  // streams in); undefined until asked for, null when it could not be had.
+  const [whole, setWhole] = useState<ToolBlock | null | undefined>(undefined);
+  const running = short.status === "pending" || short.status === "in_progress";
+  const cut = Boolean(short.cut && load) && !running;
+  useEffect(() => {
+    if (!open || !cut) return;
+    let current = true;
+    load!(short.id).then(
+      (found) => current && setWhole(found),
+      () => current && setWhole((value) => value ?? null),
+    );
+    return () => {
+      current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, cut, short.id, short.status]);
+  const tool = open && cut && whole?.id === short.id ? { ...whole, status: short.status } : short;
+  const loading = open && cut && whole === undefined;
   const results = toolResults(tool);
   const images = results.filter((item) => item.content?.type === "image");
   const args = open ? toolArguments(tool) : "";
@@ -192,7 +214,6 @@ function ToolCard({ tool }: { tool: ToolBlock }) {
         input.pattern ||
         (Array.isArray(input.times) ? (input.times as number[]).map((t) => formatTime(t)).join(", ") : "")
       : "") || (tool.toolKind === "edit" && diffPath ? diffPath.split("/").slice(-2).join("/") : "");
-  const running = tool.status === "pending" || tool.status === "in_progress";
   return (
     <div className={`tool-card status-${tool.status}`}>
       <button className="tool-head" onClick={() => setOpen(!open)}>
@@ -206,11 +227,17 @@ function ToolCard({ tool }: { tool: ToolBlock }) {
       </button>
       {open && (
         <div className="tool-body">
-          {args && <pre className="tool-text tool-args">{args}</pre>}
-          {results.map((item, index) => (
-            <ContentView key={index} item={item} />
-          ))}
-          {!args && !results.length && <div className="faint small-text">{running ? "运行中…" : "没有输出"}</div>}
+          {loading ? (
+            <div className="faint small-text">正在载入…</div>
+          ) : (
+            <>
+              {args && <pre className="tool-text tool-args">{args}</pre>}
+              {results.map((item, index) => (
+                <ContentView key={index} item={item} />
+              ))}
+              {!args && !results.length && <div className="faint small-text">{running ? "运行中…" : "没有输出"}</div>}
+            </>
+          )}
         </div>
       )}
       {!open && images.length > 0 && (
@@ -301,11 +328,13 @@ export function TurnBlocks({
   items,
   running,
   onRespond,
+  onLoadTool,
   footer,
 }: {
   items: Block[];
   running: boolean;
   onRespond: (id: string, optionId?: string) => void;
+  onLoadTool?: LoadTool;
   /** Actions shown under a finished reply. */
   footer?: React.ReactNode;
 }) {
@@ -324,7 +353,7 @@ export function TurnBlocks({
           case "thought":
             return <Thought key={index} text={block.text} />;
           case "tool":
-            return <ToolCard key={block.id} tool={block} />;
+            return <ToolCard key={block.id} tool={block} load={onLoadTool} />;
           case "plan":
             return <Plan key={index} entries={block.entries} />;
           case "permission":

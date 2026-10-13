@@ -83,11 +83,26 @@ export function aiPlugin(services) {
   });
   router.get("/api/ai/sessions", ({ query }) => ai.list({ work: query.work, repo: query.repo }));
   router.post("/api/ai/sessions", async ({ req }) => ai.create(await readJson(req)));
-  router.get("/api/ai/sessions/:id", ({ params }) => ({
-    session: ai.publicMeta(ai.get(params.id)),
-    transcript: ai.transcript(params.id),
-    pending: [...ai.permissions].filter(([, item]) => item.session === params.id).map(([id]) => id),
-  }));
+  // The latest turns of a conversation (`turns`), or those before turn `before` when the chat
+  // scrolls back: long conversations open without loading everything said in them.
+  router.get("/api/ai/sessions/:id", ({ params, query }) => {
+    const session = ai.publicMeta(ai.get(params.id));
+    const number = (value) => (value === undefined || value === "" ? undefined : Math.max(0, Math.floor(Number(value)) || 0));
+    const history = ai.history(params.id, { turns: number(query.turns) ?? 8, before: number(query.before) });
+    return {
+      session,
+      transcript: history.entries,
+      turn: history.turn,
+      turns: history.turns,
+      size: history.size,
+      pending: [...ai.permissions].filter(([, item]) => item.session === params.id).map(([id]) => id),
+    };
+  });
+  /** One tool call whole: its output was cut short in the conversation. */
+  router.get("/api/ai/sessions/:id/tools/:tool", ({ params }) => {
+    ai.get(params.id);
+    return { entries: ai.toolCall(params.id, params.tool) };
+  });
   router.patch("/api/ai/sessions/:id", async ({ params, req }) => {
     const body = await readJson(req);
     if (body.title) ai.rename(params.id, body.title);

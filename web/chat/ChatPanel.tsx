@@ -35,7 +35,7 @@ import {
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
 import { useWorkbench, type ChatAttachment } from "../workbench/store";
-import { TranscriptReducer, groupTurns, type Entry, type Turn } from "./reduce";
+import { TranscriptReducer, groupTurns, reduceTranscript, type Entry, type ToolBlock, type Turn } from "./reduce";
 import { TurnBlocks } from "./Transcript";
 import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
@@ -86,6 +86,20 @@ interface Profile {
   defaultModel?: string;
 }
 
+/** A page of a conversation: turns from number `turn` on; `size` is how much of the stored file it covers. */
+interface History {
+  session: SessionMeta;
+  transcript: Entry[];
+  turn: number;
+  turns: number;
+  size: number;
+}
+/** Events sent while a conversation loads: those its page does not have yet are added after it. */
+type Loading = { session: string; events: { entry: Entry; end?: number }[] };
+
+/** A newer copy of a session's state (events and answers can arrive out of order). */
+const newer = (next: SessionMeta, known?: SessionMeta) => !known || next.updatedAt >= known.updatedAt;
+
 const SUGGESTIONS = ["检查作品，发现问题就修复", "做一段 3 秒的开场标题动画", "给作品配一段轻快的背景音乐", "让现在这个画面的配色更有电影感"];
 
 export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: () => void }) {
@@ -94,6 +108,13 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [current, setCurrent] = usePersistent<string | null>(`chat:${work.repo}/${work.id}`, null);
   const [entries, setEntries] = useState<Entry[]>([]);
+  // The loaded part of the conversation: its first turn's number (turn > 0: earlier turns are
+  // loaded when scrolled back to), whether it is loading.
+  const [view, setView] = useState<{ turn: number; loading: boolean; older: boolean }>({ turn: 0, loading: false, older: false });
+  const loading = useRef<Loading | null>(null);
+  // The first turn loaded, as of now (scroll events can come before the next render).
+  const firstTurn = useRef(0);
+  const keepScroll = useRef<number | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [defaultModes, setDefaultModes] = useState<Record<string, string>>({});
   const [profileId, setProfileId] = usePersistent<string>("ai-profile", "");
@@ -144,7 +165,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   }, [session, profile, profileOptions]);
   const newChatOptions = profile ? (profileOptions[profile.id]?.length ? profileOptions[profile.id] : cachedOptions(profile.id)) : [];
   /** The server's answer to a session change is authoritative (also when live updates are slow). */
-  const applyMeta = (meta: SessionMeta) => setSessions((list) => list.map((item) => (item.id === meta.id ? meta : item)));
+  const applyMeta = (meta: SessionMeta) => setSessions((list) => list.map((item) => (item.id === meta.id && newer(meta, item) ? meta : item)));
 
   const loadSessions = useCallback(() => api<SessionMeta[]>(`/api/ai/sessions?work=${encodeURIComponent(work.id)}`).then(setSessions), [work.id]);
   useEffect(() => {
@@ -160,23 +181,83 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         () => {},
       );
   }, [loadSessions, setProfileId]);
+  // A conversation opens at its latest turns; what was said before loads when scrolled back to.
   useEffect(() => {
-    if (!current) return setEntries([]);
-    api<{ transcript: Entry[] }>(`/api/ai/sessions/${current}`).then(
-      (data) => setEntries(data.transcript),
-      () => setCurrent(null),
+    setEntries([]);
+    firstTurn.current = 0;
+    if (!current) {
+      loading.current = null;
+      return setView({ turn: 0, loading: false, older: false });
+    }
+    const mine: Loading = { session: current, events: [] };
+    loading.current = mine;
+    setView({ turn: 0, loading: true, older: false });
+    api<History>(`/api/ai/sessions/${current}`).then(
+      (data) => {
+        if (loading.current !== mine) return;
+        loading.current = null;
+        const later = mine.events.filter((event) => event.end === undefined || event.end > data.size).map((event) => event.entry);
+        firstTurn.current = data.turn;
+        setEntries([...data.transcript, ...later]);
+        setView({ turn: data.turn, loading: false, older: false });
+        applyMeta(data.session);
+      },
+      () => {
+        if (loading.current !== mine) return;
+        loading.current = null;
+        setView({ turn: 0, loading: false, older: false });
+        setCurrent(null);
+      },
     );
+    return () => {
+      if (loading.current === mine) loading.current = null;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, setCurrent]);
+  const latestSession = useRef(current);
+  latestSession.current = current;
+  // Scroll events come faster than renders: one page at a time.
+  const fetchingOlder = useRef(false);
+  const loadOlder = async () => {
+    const id = current;
+    if (!id || loading.current || firstTurn.current <= 0 || fetchingOlder.current) return;
+    fetchingOlder.current = true;
+    setView((value) => ({ ...value, older: true }));
+    try {
+      const data = await api<History>(`/api/ai/sessions/${id}?before=${firstTurn.current}`);
+      if (latestSession.current !== id) return;
+      // Earlier turns go on top: the turns on screen stay where they are.
+      const element = scroller.current;
+      if (element) keepScroll.current = element.scrollHeight - element.scrollTop;
+      firstTurn.current = data.turn;
+      setEntries((list) => [...data.transcript, ...list]);
+      setView({ turn: data.turn, loading: false, older: false });
+    } catch (error) {
+      toast((error as Error).message, "error");
+      setView((value) => ({ ...value, older: false }));
+    } finally {
+      fetchingOlder.current = false;
+    }
+  };
 
   useServerEvent(
     (event) => {
       if (event.type === "ai-session") {
         const meta = event.session as SessionMeta;
         if (meta.work !== work.id) return;
-        setSessions((list) => [meta, ...list.filter((item) => item.id !== meta.id)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+        setSessions((list) =>
+          newer(
+            meta,
+            list.find((item) => item.id === meta.id),
+          )
+            ? [meta, ...list.filter((item) => item.id !== meta.id)].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+            : list,
+        );
       } else if (event.type === "ai-event" && event.session === current) {
-        setEntries((list) => [...list, event.entry as Entry]);
-        if ((event.entry as Entry).kind === "user") setPending(null);
+        const entry = event.entry as Entry;
+        if (loading.current?.session === current) loading.current.events.push({ entry, end: event.end as number | undefined });
+        else setEntries((list) => [...list, entry]);
+        if (entry.kind === "user") setPending(null);
       } else if (event.type === "ai-session-removed") setSessions((list) => list.filter((item) => item.id !== event.session));
       else if (event.type === "settings" && event.key === "ai")
         void api<{ profiles: Profile[]; defaultModes: Record<string, string> }>("/api/ai/profiles").then((data) => {
@@ -225,7 +306,10 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
 
   useLayoutEffect(() => {
     const element = scroller.current;
-    if (element && stick.current) element.scrollTop = element.scrollHeight;
+    if (element && keepScroll.current !== null) {
+      element.scrollTop = element.scrollHeight - keepScroll.current;
+      keepScroll.current = null;
+    } else if (element && stick.current) element.scrollTop = element.scrollHeight;
   }, [turns, running]);
   // Turns out of view are laid out at an estimated height (content-visibility) and images load
   // late: keep following the end while their real size arrives.
@@ -274,7 +358,10 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     setPending({ text: prompt, attachments: extra });
     try {
       const id = current && sessions.some((item) => item.id === current) ? current : await createSession();
-      const result = await api<{ queued: boolean }>(`/api/ai/sessions/${id}/prompt`, { body: { text: prompt, attachments: extra, view: viewNow() } });
+      const result = await api<{ queued: boolean; session?: SessionMeta }>(`/api/ai/sessions/${id}/prompt`, {
+        body: { text: prompt, attachments: extra, view: viewNow() },
+      });
+      if (result.session) applyMeta(result.session);
       if (result.queued) setPending(null); // the queue list shows it instead
     } catch (error) {
       toast((error as Error).message, "error");
@@ -345,6 +432,12 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         const target = latest.current.versionsAt(k)[to];
         if (target) latest.current.setCurrent(target.id);
       },
+      loadTool: async (id) => {
+        const session = latestSession.current;
+        if (!session) return null;
+        const data = await api<{ entries: Entry[] }>(`/api/ai/sessions/${session}/tools/${encodeURIComponent(id)}`);
+        return (reduceTranscript(data.entries).find((block) => block.kind === "tool" && block.id === id) as ToolBlock | undefined) ?? null;
+      },
     }),
     [],
   );
@@ -356,6 +449,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const newChat = () => {
     setCurrent(null);
     setEntries([]);
+    setView({ turn: 0, loading: false, older: false });
     setShowHistory(false);
     input.current?.focus();
   };
@@ -441,9 +535,20 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         onScroll={(event) => {
           const element = event.currentTarget;
           stick.current = element.scrollHeight - element.scrollTop - element.clientHeight < 60;
+          if (element.scrollTop < 200) void loadOlder();
         }}
       >
-        {turns.length === 0 && !pending ? (
+        {view.turn > 0 && !view.loading && (
+          <button className="chat-older" disabled={view.older} onClick={() => void loadOlder()}>
+            {view.older ? <span className="spinner" /> : <History size={13} />}
+            {view.older ? "正在载入更早的对话…" : `更早的对话（${view.turn} 轮）`}
+          </button>
+        )}
+        {view.loading && turns.length === 0 && !pending ? (
+          <div className="chat-notice chat-loading">
+            <span className="spinner" /> {running ? "AI 正在工作，正在载入对话…" : "正在载入对话…"}
+          </div>
+        ) : turns.length === 0 && !pending ? (
           <div className="chat-welcome">
             <div className="chat-welcome-icon">
               <Sparkles size={22} />
@@ -465,8 +570,9 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           </div>
         ) : (
           (() => {
-            // k counts the user's own messages (not ones steered into a running turn): the server's turn index.
-            let k = -1;
+            // k counts the user's own messages (not ones steered into a running turn): the server's turn
+            // index, from the first turn loaded.
+            let k = view.turn - 1;
             return turns.map((turn, index) => {
               if (turn.branch) {
                 const parent = sessions.find((item) => item.id === turn.branch!.from);
@@ -558,7 +664,9 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
             <button
               className="icon-btn tiny"
               title="取消这条消息"
-              onClick={() => del(`/api/ai/sessions/${session.id}/queue/${item.id}`).catch((error) => toast((error as Error).message, "error"))}
+              onClick={() =>
+                del<SessionMeta>(`/api/ai/sessions/${session.id}/queue/${item.id}`).then(applyMeta, (error) => toast((error as Error).message, "error"))
+              }
             >
               <X size={12} />
             </button>
@@ -789,6 +897,8 @@ interface TurnActions {
   respond: (id: string, optionId?: string) => void;
   branch: (keep: number, text?: string, attachments?: Record<string, unknown>[]) => void;
   goVersion: (k: number, to: number) => void;
+  /** A tool call whole (the conversation has its long texts cut short). */
+  loadTool: (id: string) => Promise<ToolBlock | null>;
 }
 
 /** One turn; memoized so typing or streaming into the last turn leaves the others alone. */
@@ -829,6 +939,7 @@ const TurnView = memo(function TurnView({
           items={turn.items}
           running={live}
           onRespond={actions.respond}
+          onLoadTool={actions.loadTool}
           footer={
             endOfTurn && turn.items.some((item) => item.kind === "text") ? (
               <button

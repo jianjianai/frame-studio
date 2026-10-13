@@ -155,8 +155,12 @@ export class AiManager {
   }
   append(session, entry) {
     const line = this.storeImages(session, { at: Date.now(), ...entry });
-    fs.appendFileSync(path.join(this.sessionsDir, session.meta.id + ".jsonl"), JSON.stringify(line) + "\n");
-    this.services.events.emit({ type: "ai-event", session: session.meta.id, work: session.meta.work, entry: line });
+    const file = path.join(this.sessionsDir, session.meta.id + ".jsonl");
+    fs.appendFileSync(file, JSON.stringify(line) + "\n");
+    // Megabytes of command output would hold up every other event on a slow link. `end` (where
+    // the entry ends in the file) tells a chat still loading the conversation whether it has it.
+    const end = fs.statSync(file).size;
+    this.services.events.emit({ type: "ai-event", session: session.meta.id, work: session.meta.work, entry: lean(line), end });
   }
   publish(session) {
     session.meta.updatedAt = new Date().toISOString();
@@ -164,31 +168,119 @@ export class AiManager {
     this.services.events.emit({ type: "ai-session", session: this.publicMeta(session) });
   }
   publicMeta(session) {
-    // What the AI has seen (for per-message changes) is the server's business.
-    const { context: _context, ...meta } = session.meta;
-    return meta;
+    // What the AI has seen (for per-message changes) is the server's business; queued
+    // messages are shown by their text (their pictures stay here until sent).
+    const { context: _context, queue, ...meta } = session.meta;
+    return { ...meta, queue: queue?.map(({ id, text }) => ({ id, text })) };
+  }
+  /**
+   * A transcript as stored: its bytes and where each line (one entry) is in them. Long
+   * conversations are tens of megabytes; only the lines asked for are decoded.
+   */
+  stored(id) {
+    const file = path.join(this.sessionsDir, id + ".jsonl");
+    const bytes = fs.existsSync(file) ? fs.readFileSync(file) : Buffer.alloc(0);
+    const ranges = [];
+    for (let start = 0; start < bytes.length;) {
+      const newline = bytes.indexOf(10, start);
+      const end = newline < 0 ? bytes.length : newline;
+      if (end > start) ranges.push([start, end]);
+      start = end + 1;
+    }
+    return {
+      size: bytes.length,
+      count: ranges.length,
+      entry: (index) => parseLine(bytes.toString("utf8", ranges[index][0], ranges[index][1])),
+      /** The start of a line: an entry's kind comes right after its time. */
+      head: (index) => bytes.toString("utf8", ranges[index][0], Math.min(ranges[index][1], ranges[index][0] + 100)),
+      /** The lines that contain `text`. */
+      containing(text) {
+        const needle = Buffer.from(text);
+        const found = new Set();
+        for (let at = bytes.indexOf(needle); at >= 0; at = bytes.indexOf(needle, at + needle.length)) {
+          let low = 0,
+            high = ranges.length - 1;
+          while (low < high) {
+            const middle = (low + high + 1) >> 1;
+            if (ranges[middle][0] <= at) low = middle;
+            else high = middle - 1;
+          }
+          found.add(low);
+        }
+        return [...found];
+      },
+    };
   }
   transcript(id) {
-    const file = path.join(this.sessionsDir, id + ".jsonl");
-    if (!fs.existsSync(file)) return [];
-    return compact(
-      fs
-        .readFileSync(file, "utf8")
-        .split("\n")
-        .filter(Boolean)
-        .map((line) => JSON.parse(line)),
-    );
+    const stored = this.stored(id);
+    return compact(Array.from({ length: stored.count }, (_, index) => stored.entry(index)).filter(Boolean));
   }
-  /** Merge streamed text chunks so stored transcripts stay small. */
-  compactFile(id) {
+  /**
+   * The conversation as the chat loads it, a few turns at a time: the latest turns, or those
+   * before turn `before` when the chat scrolls back; at most `turns`, and no more than fill
+   * `budget` characters (at least one). A turn starts at a message of the user's own (the
+   * numbering fork() uses; messages steered into a running turn belong to it); `turn` is the
+   * number of the first turn returned, `turns` how many there are, `size` how much of the
+   * file was read (later events end after it). Tool output is cut short (lean).
+   */
+  history(id, { turns = 8, before, budget = 600 * 1024 } = {}) {
+    const stored = this.stored(id);
+    const starts = [];
+    for (let index = 0; index < stored.count; index++) {
+      if (!stored.head(index).includes('"kind":"user"')) continue;
+      const entry = stored.entry(index);
+      if (entry?.kind === "user" && !entry.steered) starts.push(index);
+    }
+    // Turn i is lines bounds[i]..bounds[i + 1]: what comes before the first message goes with it.
+    const bounds = [0, ...starts.slice(1), stored.count];
+    const count = bounds.length - 1;
+    const last = Number.isInteger(before) ? Math.max(0, Math.min(before, count)) : count;
+    let first = last;
+    let size = 0;
+    const pieces = [];
+    while (first > 0 && last - first < turns && (size < budget || first === last)) {
+      first--;
+      const entries = [];
+      for (let index = bounds[first]; index < bounds[first + 1]; index++) entries.push(stored.entry(index));
+      const piece = compact(entries.filter(Boolean)).map(lean);
+      size += JSON.stringify(piece).length;
+      pieces.unshift(piece);
+    }
+    return { entries: pieces.flat(), turn: first, turns: count, size: stored.size };
+  }
+  /** Every stored update of one tool call, whole (what lean() cut short). */
+  toolCall(id, toolCallId) {
+    const stored = this.stored(id);
+    return stored
+      .containing(JSON.stringify(String(toolCallId)))
+      .map((index) => stored.entry(index))
+      .filter((entry) => entry?.kind === "update" && entry.update?.toolCallId === toolCallId)
+      .map((entry) => ({ ...entry, update: unwrapToolResult(entry.update) }));
+  }
+  /**
+   * Merge streamed text chunks so stored transcripts stay small. Only what was written since
+   * `from` (where a turn started): the rest is merged already, and long transcripts are not
+   * read and written again at the end of every turn.
+   */
+  compactFile(id, from = 0) {
     const file = path.join(this.sessionsDir, id + ".jsonl");
-    if (!fs.existsSync(file)) return;
-    writeFileAtomic(
-      file,
-      this.transcript(id)
-        .map((entry) => JSON.stringify(entry))
-        .join("\n") + "\n",
-    );
+    const size = fs.statSync(file, { throwIfNoEntry: false })?.size ?? 0;
+    if (size <= from) return;
+    const tail = Buffer.alloc(size - from);
+    const fd = fs.openSync(file, "r");
+    try {
+      fs.readSync(fd, tail, 0, tail.length, from);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const lines = tail.toString("utf8").split("\n").filter(Boolean);
+    const entries = compact(lines.map(parseLine).filter(Boolean));
+    if (entries.length === lines.length) return;
+    const temp = `${file}.${process.pid}.tmp`;
+    fs.copyFileSync(file, temp);
+    fs.truncateSync(temp, from);
+    fs.appendFileSync(temp, entries.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+    fs.renameSync(temp, file);
   }
 
   // ---- processes ------------------------------------------------------------
@@ -493,19 +585,21 @@ export class AiManager {
     const session = this.get(id);
     if (!text.trim() && !attachments.length) throw problem(400, "消息不能为空");
     const message = { id: randomUUID(), text, attachments, view: view && typeof view === "object" ? view : null };
+    // The answer carries the session as it now is (queued or running): the chat shows it at once.
     if (session.meta.status !== "idle") {
       session.meta.queue.push(message);
       this.publish(session);
-      return { queued: true, id: message.id };
+      return { queued: true, id: message.id, session: this.publicMeta(session) };
     }
     void this.runTurn(session, message);
-    return { queued: false, id: message.id };
+    return { queued: false, id: message.id, session: this.publicMeta(session) };
   }
   async runTurn(session, message) {
     session.meta.status = "running";
     if (session.meta.title === "新对话" && message.text.trim() && !isCommand(session, message.text))
       session.meta.title = message.text.trim().replace(/\s+/g, " ").slice(0, 40);
     this.publish(session);
+    const turnStart = fs.statSync(path.join(this.sessionsDir, session.meta.id + ".jsonl"), { throwIfNoEntry: false })?.size ?? 0;
     const work = await this.services.openWork(session.meta.work, session.meta.repo);
     this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message) });
     try {
@@ -543,7 +637,7 @@ export class AiManager {
       session.meta.status = "idle";
       // The AI's own changes are part of what it knows; later changes are someone else's.
       this.saveFiles(session, work);
-      this.compactFile(session.meta.id);
+      this.compactFile(session.meta.id, turnStart);
       this.publish(session);
       const next = session.meta.queue.shift();
       if (next) void this.runTurn(session, next);
@@ -647,6 +741,7 @@ export class AiManager {
     const session = this.get(id);
     session.meta.queue = session.meta.queue.filter((item) => item.id !== messageId);
     this.publish(session);
+    return this.publicMeta(session);
   }
   rename(id, title) {
     const session = this.get(id);
@@ -702,7 +797,7 @@ export class AiManager {
       session.meta.context = { ...session.meta.context, experience: session.briefSeen ?? {} };
       this.saveMeta(session);
     }
-    this.append(session, { kind: "update", update: withoutAgentCopy(update) });
+    this.append(session, { kind: "update", update: unwrapToolResult(withoutAgentCopy(update)) });
   }
   onPermission(params) {
     const session = this.sessionByAcp(params.sessionId);
@@ -933,6 +1028,60 @@ export function withoutAgentCopy(update) {
   if (!update._meta?.claudeCode) return update;
   const { claudeCode: _copy, ...meta } = update._meta;
   return { ...update, _meta: Object.keys(meta).length ? meta : undefined };
+}
+
+/**
+ * Codex hands over the result of an MCP tool as one text: the JSON of the whole result, with
+ * its pictures as base64 (about a megabyte per preview_frames call). Unwrapped, the pictures
+ * are stored as files like other tool pictures, and the chat shows them.
+ */
+export function unwrapToolResult(update) {
+  const content = update?.rawOutput?.result?.content;
+  if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text") return update;
+  const text = content[0].text;
+  if (typeof text !== "string" || !text.startsWith('{"content":[')) return update;
+  let result;
+  try {
+    result = JSON.parse(text);
+  } catch {
+    return update;
+  }
+  if (!Array.isArray(result?.content) || !result.content.every((item) => typeof item?.type === "string")) return update;
+  return { ...update, rawOutput: { ...update.rawOutput, result: { content: result.content, ...(result.isError ? { isError: true } : {}) } } };
+}
+
+/** A stored transcript line; null for one that cannot be read (cut short by a crash). */
+function parseLine(line) {
+  try {
+    return JSON.parse(line);
+  } catch {
+    return null;
+  }
+}
+
+/** How much of each text of a tool call the chat gets with the conversation. */
+const SHORT_TEXT = 4000;
+
+/**
+ * An entry as the chat gets it: the long texts of a tool call (command output, file
+ * contents, results) cut to SHORT_TEXT characters, and the entry marked `cut`. The chat
+ * shows a tool's output only when its card is opened, and then asks for the whole call.
+ */
+export function lean(entry) {
+  if (entry?.kind !== "update" || !["tool_call", "tool_call_update"].includes(entry.update?.sessionUpdate)) return entry;
+  let cut = false;
+  const shorten = (value) => {
+    if (typeof value === "string") {
+      if (value.length <= SHORT_TEXT) return value;
+      cut = true;
+      return value.slice(0, SHORT_TEXT);
+    }
+    if (Array.isArray(value)) return value.map(shorten);
+    if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, shorten(item)]));
+    return value;
+  };
+  const update = shorten(entry.update);
+  return cut ? { ...entry, update, cut: true } : entry;
 }
 
 /** Merge consecutive text chunks of the same kind (and message id). */

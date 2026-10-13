@@ -29,6 +29,8 @@ export interface ToolBlock {
   /** Streamed terminal output (Codex sends it in `_meta`, not as content). */
   output?: string;
   exitCode?: number | null;
+  /** Long texts were cut short in the conversation: the whole call is asked for when shown. */
+  cut?: boolean;
 }
 export type Block =
   | { kind: "user"; id: string; text: string; attachments: Record<string, unknown>[]; at: number; steered?: boolean }
@@ -114,10 +116,11 @@ export class TranscriptReducer {
             locations: update.locations as ToolBlock["locations"],
             rawInput: update.rawInput,
           };
+          if (entry.cut) tool.cut = true;
           const at = this.index.get("tool:" + tool.id);
           if (at !== undefined)
             this.replace<ToolBlock>(at, (existing) => {
-              const next = { ...existing, ...tool };
+              const next = { ...existing, ...tool, cut: existing.cut || tool.cut };
               terminalMeta(next, update._meta);
               return next;
             });
@@ -138,6 +141,7 @@ export class TranscriptReducer {
             if (update.locations) tool.locations = update.locations as ToolBlock["locations"];
             if (update.rawInput !== undefined) tool.rawInput = update.rawInput;
             if (update.rawOutput !== undefined) tool.rawOutput = update.rawOutput;
+            if (entry.cut) tool.cut = true;
             terminalMeta(tool, update._meta);
             return tool;
           });
