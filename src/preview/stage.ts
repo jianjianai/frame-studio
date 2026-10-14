@@ -27,16 +27,6 @@ export interface StageStatus {
   };
 }
 export interface StageApi {
-  /** Encode a WebM in this browser (uses the local GPU); resolves to the file. */
-  exportWebm(options: {
-    width: number;
-    fps: number;
-    start?: number;
-    end?: number;
-    subtitles: boolean;
-    signal: AbortSignal;
-    onProgress?: (done: number, total: number) => void;
-  }): Promise<Blob | null>;
   player(): StudioApi | undefined;
   project(): AnimationProject | undefined;
   status(): StageStatus;
@@ -212,11 +202,6 @@ async function hotUpdate(timestamp: number, files: string[]) {
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 window.__FRAME_STAGE__ = {
-  async exportWebm({ onProgress, ...options }) {
-    if (!project) throw new Error("作品尚未加载");
-    const { exportWebm } = await import("../engine/browser-export");
-    return exportWebm(project, { ...options, onProgress: (progress) => onProgress?.(progress.completed, progress.total) });
-  },
   player: () => session?.api,
   project: () => project,
   status: () => state,

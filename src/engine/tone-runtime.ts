@@ -7,6 +7,7 @@ import {
 import type * as ToneType from "tone";
 import type * as ToneClasses from "tone/build/esm/classes.js";
 import { toneEffectNames } from "./audio-capabilities.mjs";
+import { nextTask } from "./scheduling";
 let classes: typeof ToneClasses | undefined;
 let preparing: Promise<typeof ToneClasses> | undefined;
 let version = "",
@@ -485,8 +486,8 @@ export async function renderToneClock(
     signal?.throwIfAborted();
     clock.emit("tick");
     clock._currentTime += step;
-    if (++index % yieldEvery === 0)
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    // Not a timer: an export in a background tab would wait a second (later a minute) per yield.
+    if (++index % yieldEvery === 0) await nextTask();
   }
 }
 /** A bounded scheduling pump reads the host AudioContext; it never advances its own time. */

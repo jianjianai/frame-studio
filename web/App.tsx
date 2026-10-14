@@ -5,6 +5,8 @@ import { Login } from "./pages/Login";
 import { Home } from "./home/Home";
 import { Workbench } from "./workbench/Workbench";
 import { ComparePage } from "./reviews/ComparePage";
+import { ExportStatus } from "./components/ExportDock";
+import { initExports } from "./lib/exports";
 
 export function navigate(path: string) {
   history.pushState(null, "", path);
@@ -65,6 +67,11 @@ export function App() {
         );
     });
   }, [build]);
+  // Exports run in the background of whatever page is open; interrupted ones go on.
+  const authenticated = Boolean(state?.authenticated);
+  useEffect(() => {
+    if (authenticated) initExports();
+  }, [authenticated]);
   if (!state) return null;
   const work = /^\/work\/([^/]+)\/([^/]+)/.exec(path);
   return (
@@ -81,6 +88,8 @@ export function App() {
             ) : (
               <Home version={state.version} local={!state.authRequired} />
             )}
+            {/* The workbench shows it in its status bar. */}
+            {state.authenticated && !work && <ExportStatus floating />}
             {outdated && (
               <div className="update-bar" role="status">
                 FRAME 已更新到新版本，刷新页面后生效。

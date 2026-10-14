@@ -131,8 +131,9 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
       }
       if (pathname.startsWith("/files/")) return await serveWorkFile(req, res, pathname);
       if (pathname.startsWith("/films/")) return await serveFilmFallback(req, res, pathname);
-      if (["/preview/stage.html", "/preview/render.html", "/preview/resource.html", "/preview/asset.html"].includes(pathname)) {
-        const cache = pathname === "/preview/stage.html" ? { precache: await stageAssets(url) } : {};
+      if (["/preview/stage.html", "/preview/render.html", "/preview/resource.html", "/preview/asset.html", "/preview/export.html"].includes(pathname)) {
+        // Pages that play a work (the stage, a local export) carry its playback files for the browser's cache.
+        const cache = ["/preview/stage.html", "/preview/export.html"].includes(pathname) ? { precache: await stageAssets(url) } : {};
         const page = await preview.html(req.url, pathname.slice(1).replace("preview/", "src/preview/"), { preload: true, cache });
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
         return res.end(page);

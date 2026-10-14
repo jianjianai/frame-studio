@@ -81,7 +81,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 
 预览页的代码由 Vite 逐个模块编译下发，一个作品连同引擎有上百个模块，按导入关系逐层发现；作品还要用到素材文件。为了在延迟高的网络里也能很快打开，再次打开时不为没改过的东西发请求：
 
-- 预览页（舞台、资源、素材）生成时附带它要导入的全部模块（`preview.mjs`：从页面脚本和舞台的 `project.ts` 出发，沿 Vite 改写后的导入找出浏览器会请求的地址，静态导入全部跟随，动态导入只跟随作品目录里的）：写成 `modulepreload` 链接，整张模块图一次取完或一次验证，而不是每层导入一个往返；并在页面的 `frame-cache` 数据里写上每个模块编译结果的 etag。舞台页还带上作品的播放文件清单（`precache.mjs`）。
+- 预览页（舞台、资源、素材、本机导出）生成时附带它要导入的全部模块（`preview.mjs`：从页面脚本和舞台的 `project.ts` 出发，沿 Vite 改写后的导入找出浏览器会请求的地址，静态导入全部跟随，动态导入只跟随作品目录里的）：写成 `modulepreload` 链接，整张模块图一次取完或一次验证，而不是每层导入一个往返；并在页面的 `frame-cache` 数据里写上每个模块编译结果的 etag。舞台页和本机导出页还带上作品的播放文件清单（`precache.mjs`）。
 - 浏览器的 Service Worker（`public/frame-sw.js`）拦截预览页的导航，在页面请求任何东西之前读出这些数据：etag 没变的模块直接从 Cache Storage 返回，变了或不在清单里的才请求服务器（etag 是编译结果的内容哈希，改动过的模块、热更新带的 `?t=` 地址都会重新取）。
 - 播放文件（作品 `public/` 的文件、作品用到或锁定的素材库文件，代码除外）按内容版本保存在 Cache Storage：锁定的素材库文件用 Git blob 作版本，其余用内容哈希。清单先用来丢弃改动过的文件，之后才放行这个作品的素材请求，然后在后台补齐：小文件打包、一次往返，大文件并行分段下载，各段存为 Blob 后整体写入（Chrome 在 Service Worker 里流式写入超过 10 MB 会失败）。工作台打开作品和文件改动后也发送清单，较旧的清单被忽略。
 - 合成器同时加载一帧里新出现的各个图层（模块、字体、媒体），不再一个接一个；工作台把作品信息请求和 `/api/state` 一起发出。
@@ -101,7 +101,15 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 
 ## 导出
 
-导出时先把作品目录复制为快照（之后的编辑不影响导出），用无界面 Chromium 打开 `/preview/render.html` 逐帧截图，音频由 `OfflineAudioContext` 分段渲染为 PCM，一起送入 ffmpeg 编码为 H.264 + AAC 的 MP4。浏览器：`FRAME_BROWSER` → playwright 浏览器 → 系统 Chrome/Chromium；ffmpeg：`FFMPEG_PATH` → 系统 ffmpeg → `ffmpeg-static`。
+服务器导出 MP4：先把作品目录复制为快照（之后的编辑不影响导出），用无界面 Chromium 打开 `/preview/render.html` 逐帧截图，音频由 `OfflineAudioContext` 分段渲染为 PCM，一起送入 ffmpeg 编码为 H.264 + AAC 的 MP4。浏览器：`FRAME_BROWSER` → playwright 浏览器 → 系统 Chrome/Chromium；ffmpeg：`FFMPEG_PATH` → 系统 ffmpeg → `ffmpeg-static`。任务的进度事件带剩余秒数（`eta`）和速度（`fps`）。
+
+本机导出 WebM 完全在浏览器里进行，不经过服务器（服务器只像预览一样提供作品的代码和素材）：
+
+- 工作台在一个隐藏的框架里打开 `/preview/export.html`（`src/preview/export.ts`），它载入作品，每 4 秒一段：画面编码成单独的 WebM（VP9，不行时 VP8；`src/engine/browser-export.ts`），声音存为 16 位 PCM。全部完成后把各段画面的数据包原样接起来、声音一次编码为 Opus，写成一个 WebM。每段都从关键帧开始，所以接缝不需要重新编码；声音整体编码一次，所以没有接缝。
+- 编码器偶尔会丢帧（Chrome 在别的标签页切到前面时会丢，包括一段开头的关键帧）：一段只有帧数齐全、从关键帧开始才保存，否则这一段重新编码，最多三次。
+- 分段、进度和成品都保存在浏览器的私有文件系统（OPFS，格式见 `src/preview/export-jobs.ts`），页面关闭、刷新或崩溃后从最后完成的一段继续，接着导出的结果和一次导完的逐字节相同。渲染导出的页面持有 Web Lock `frame-export:<id>`：没人持有锁却标着进行中的导出就是中断了；持有锁也让 Chrome 不冻结后台标签页。导出循环和离线音频的让步不用计时器（`src/engine/scheduling.ts`），后台标签页里的计时器节流不会拖慢导出。
+- `web/lib/exports.ts` 管理导出：一个页面一次导出一个，其余排队；打开工作台时（任何页面）继续中断的导出，另一个标签页里的导出页面消失时（关闭、崩溃）由这个标签页接着导出；作品文件（名称、大小、修改时间）和开始导出时不同，先问用户继续还是重新导出；完成后自动下载，成品在浏览器里保留 7 天。各标签页之间用 BroadcastChannel `frame-exports` 传进度和暂停、取消的请求。
+- 左下角的导出状态（`web/components/ExportDock.tsx`：工作台状态栏的最左边，其他页面的左下角）显示本机导出和服务器导出的进度、剩余时间和完成时刻，点开可以暂停、继续、取消、下载。
 
 ## 安全边界
 

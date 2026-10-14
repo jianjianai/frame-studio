@@ -134,7 +134,14 @@ export async function createPreview({ config, httpServer, events }) {
       },
     },
     optimizeDeps: {
-      entries: ["src/preview/stage.ts", "src/preview/render.ts", "src/preview/resource.ts", "src/preview/asset.ts", ...(config.dev ? ["web/main.tsx"] : [])],
+      entries: [
+        "src/preview/stage.ts",
+        "src/preview/render.ts",
+        "src/preview/resource.ts",
+        "src/preview/asset.ts",
+        "src/preview/export.ts",
+        ...(config.dev ? ["web/main.tsx"] : []),
+      ],
       // What works and library code import through the engine, bundled before the first page needs
       // it (a dependency found later makes Vite reload every page).
       include: [

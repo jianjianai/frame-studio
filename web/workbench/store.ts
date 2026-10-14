@@ -35,15 +35,6 @@ interface StudioApi {
   setTrack?(id: string, control: Partial<{ gain: number; muted: boolean }>): void;
 }
 export interface StageApi {
-  exportWebm(options: {
-    width: number;
-    fps: number;
-    start?: number;
-    end?: number;
-    subtitles: boolean;
-    signal: AbortSignal;
-    onProgress?: (done: number, total: number) => void;
-  }): Promise<Blob | null>;
   player(): StudioApi | undefined;
   status(): StageStatus;
   setQuality(quality: "draft" | "standard" | "high"): void;
@@ -100,11 +91,6 @@ export class StageController {
   }
   reload() {
     return this.stage()?.reload();
-  }
-  exportWebm(options: Parameters<StageApi["exportWebm"]>[0]) {
-    const stage = this.stage();
-    if (!stage) throw new Error("预览尚未就绪");
-    return stage.exportWebm(options);
   }
   handleMessage(data: Record<string, unknown>) {
     if (data.type === "playback") this.playback.set(data.snapshot as PlaybackSnapshot);

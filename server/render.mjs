@@ -551,9 +551,9 @@ export class Renderer {
       // canvas ones on a machine without a GPU, and whoever waits wants to know how long.
       const began = Date.now();
       const pace = (done) => {
-        const perSecond = done / Math.max(0.001, (Date.now() - began) / 1000);
-        const left = Math.round((plan.frames - done) / Math.max(perSecond, 1e-3));
-        return `，每秒 ${perSecond >= 10 ? Math.round(perSecond) : perSecond.toFixed(1)} 帧，预计还要 ${left >= 60 ? `${Math.floor(left / 60)} 分 ${left % 60} 秒` : `${left} 秒`}`;
+        const fps = done / Math.max(0.001, (Date.now() - began) / 1000);
+        const eta = Math.round((plan.frames - done) / Math.max(fps, 1e-3));
+        return { fps, eta, text: `，每秒 ${fps >= 10 ? Math.round(fps) : fps.toFixed(1)} 帧，预计还要 ${eta >= 60 ? `${Math.floor(eta / 60)} 分 ${eta % 60} 秒` : `${eta} 秒`}` };
       };
       for (let index = 0; index < plan.frames; index++) {
         signal?.throwIfAborted();
@@ -566,7 +566,10 @@ export class Renderer {
           { t: plan.start + index / plan.fps, subtitles },
         );
         if (!encoder.stdin.write(Buffer.from(data, "base64"))) await once(encoder.stdin, "drain");
-        if (index % 10 === 0) progress?.(0.15 + 0.85 * (index / plan.frames), `渲染画面 ${index + 1}/${plan.frames}${index ? pace(index + 1) : ""}`);
+        if (index % 10 === 0) {
+          const known = index ? pace(index + 1) : null;
+          progress?.(0.15 + 0.85 * (index / plan.frames), `渲染画面 ${index + 1}/${plan.frames}${known?.text ?? ""}`, { eta: known?.eta ?? null, fps: known?.fps ?? null });
+        }
       }
       encoder.stdin.end();
       const [code] = await closed;

@@ -219,12 +219,17 @@ export interface Task {
   kind: string;
   title: string;
   work?: string;
+  repo?: string;
   status: "running" | "done" | "failed" | "cancelled";
   progress: number | null;
   message: string;
+  /** Seconds left and frames a second, for tasks that know them (exports). */
+  eta?: number | null;
+  fps?: number | null;
   error: string | null;
   result: unknown;
   startedAt: string;
+  endedAt?: string | null;
 }
 
 export interface PlaybackSnapshot {

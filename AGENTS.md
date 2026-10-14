@@ -11,7 +11,7 @@
 | `server/ai/` | Claude Code / Codex 的 ACP 接入、账号登录、自定义 API、聊天会话 |
 | `web/` | 工作台界面（React）：`workbench/` 布局与预览、`views/` 侧边栏、`chat/` AI 聊天、`settings/` |
 | `src/engine/` | 作品运行引擎（播放器会话、合成、音频图、各框架适配）。作品通过 `../../src/engine/` 导入，属于公开接口 |
-| `src/preview/` | 预览舞台页（stage）与无界面渲染页（render） |
+| `src/preview/` | 预览舞台页（stage）、无界面渲染页（render）与本机导出页（export） |
 | `bin/frame.mjs` | 命令行：serve、mcp、call、export… |
 | `docs/guide/` | 作品制作指南，同时是 `frame_guide` 工具的内容 |
 | `deploy/` | Dockerfile 与 compose |

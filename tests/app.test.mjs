@@ -131,6 +131,20 @@ describe("studio API (local mode)", () => {
     expect(data.precache).toMatchObject({ key: `local/${work.id}`, base: `/files/local/${work.id}/`, files: [] });
   });
 
+  it("gives the local export page the work's modules and playback files, like the stage", async () => {
+    const created = await server.call("/api/works", { method: "POST", body: { title: "本机导出" } });
+    const work = (await server.call(`/api/works/local/${created.body.id}`)).body;
+    const query = new URLSearchParams({ job: "x", module: work.preview.module, assetBase: work.preview.assetBase });
+    const response = await fetch(`${server.base}/preview/export.html?${query}`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    const html = await response.text();
+    const data = JSON.parse(/<script type="application\/json" id="frame-cache">([\s\S]*?)<\/script>/.exec(html)[1]);
+    expect(Object.keys(data.modules)).toEqual(expect.arrayContaining(["/src/preview/export.ts", work.preview.module + "?import"]));
+    expect(Object.keys(data.modules).some((url) => url.startsWith("/src/engine/browser-export.ts"))).toBe(true);
+    expect(data.precache).toMatchObject({ key: `local/${work.id}`, base: `/files/local/${work.id}/` });
+  });
+
   it("answers revalidation with 304 for weak tags too (proxies that compress send them)", async () => {
     const created = await server.call("/api/works", { method: "POST", body: { title: "弱标签" } });
     const dir = (await server.app.services.works.open(created.body.id, "local")).dir;

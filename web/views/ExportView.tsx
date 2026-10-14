@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
-import { Clapperboard, Download, Trash2, Image as ImageIcon, Captions, Play, Loader2, CircleStop } from "lucide-react";
+import { Clapperboard, Download, Trash2, Image as ImageIcon, Captions, Play, MonitorDown, Server } from "lucide-react";
 import { api, del, formatBytes, formatTime, timeAgo, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, Dialog } from "../lib/ui";
-import type { Task } from "../lib/types";
+import { startLocalExport, unsupportedReason, useExports } from "../lib/exports";
+import { ExportRow, exportItems } from "../components/ExportDock";
 import { useWorkbench } from "../workbench/store";
 import { ViewHeader } from "./ViewHeader";
 
@@ -29,56 +30,28 @@ export function ExportView() {
   const [end, setEnd] = useState(meta?.duration ?? 10);
   const [subtitles, setSubtitles] = useState(true);
   const [files, setFiles] = useState<ExportFile[]>([]);
-  const [task, setTask] = useState<Task | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
-  const [local, setLocal] = useState<{ done: number; total: number; abort: AbortController } | null>(null);
   const [run] = useAction();
   const confirm = useConfirm();
+  // Exports live outside this tab (lib/exports.ts): closing it or switching away keeps them and their progress.
+  const exportsState = useExports();
+  const active = exportItems(exportsState, work);
+  const serverRunning = active.some((item) => item.kind === "server" && item.task.status === "running");
   const base = workPath(work.repo, work.id);
   const scale = longEdge / Math.max(composition.width, composition.height);
   const width = even(composition.width * scale);
   const load = () => api<ExportFile[]>(`${base}/exports`).then(setFiles, () => {});
   useEffect(() => {
     void load();
-    void api<Task[]>(`/api/tasks?work=${work.id}`).then((list) => setTask(list.find((item) => item.kind === "export" && item.status === "running") ?? null));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base]);
   useServerEvent((event) => {
-    if (event.type === "task") {
-      const next = event.task as Task;
-      if (next.work === work.id && next.kind === "export") setTask(next);
-    }
     if (event.type === "exports" && event.work === work.id) void load();
   });
 
-  const startExport = () =>
-    run(async () => {
-      const created = await api<Task>(`${base}/exports`, { body: { width, fps, subtitles, ...(range === "custom" ? { start, end } : {}) } });
-      setTask(created);
-    });
-  const exportInBrowser = () =>
-    run(async () => {
-      const abort = new AbortController();
-      setLocal({ done: 0, total: 1, abort });
-      try {
-        const blob = await stage.exportWebm({
-          width,
-          fps,
-          subtitles,
-          signal: abort.signal,
-          ...(range === "custom" ? { start, end } : {}),
-          onProgress: (done, total) => setLocal({ done, total, abort }),
-        });
-        if (!blob) return;
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `${meta?.title ?? work.id}.webm`;
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(link.href), 60000);
-      } finally {
-        setLocal(null);
-      }
-    });
+  const span = () => (range === "custom" ? { start, end } : {});
+  const startExport = () => run(() => api(`${base}/exports`, { body: { width, fps, subtitles, ...span() } }));
+  const exportInBrowser = () => run(() => startLocalExport(work, { width, fps, subtitles, ...span() }));
   const downloadFrame = () =>
     run(async () => {
       const url = await stage.capture();
@@ -99,14 +72,12 @@ export function ExportView() {
     link.download = `${meta?.title ?? work.id}.srt`;
     link.click();
   };
-  const running = task?.status === "running";
-
   return (
     <div className="view">
       <ViewHeader title="导出" />
       <section className="view-section">
         <h3>
-          <Clapperboard size={14} /> 视频（MP4）
+          <Clapperboard size={14} /> 视频
         </h3>
         <label className="field">
           <span>分辨率</span>
@@ -151,47 +122,37 @@ export function ExportView() {
         <label className="row" style={{ marginBottom: 10 }}>
           <input type="checkbox" checked={subtitles} onChange={(event) => setSubtitles(event.target.checked)} /> 把字幕烧录进画面
         </label>
-        {running ? (
-          <div className="export-progress">
-            <div className="row">
-              <Loader2 size={14} className="spin" />
-              <span className="grow ellipsis">{task.message || "正在导出"}</span>
-              <span className="mono">{Math.round((task.progress ?? 0) * 100)}%</span>
-              <button className="icon-btn" title="取消" onClick={() => api(`/api/tasks/${task.id}/cancel`, { method: "POST" })}>
-                <CircleStop size={14} />
-              </button>
-            </div>
-            <div className="progress">
-              <div style={{ width: `${Math.round((task.progress ?? 0) * 100)}%` }} />
-            </div>
+        <button
+          className="btn primary"
+          style={{ width: "100%" }}
+          disabled={serverRunning}
+          title={serverRunning ? "这个作品正在服务器上导出" : "在服务器上导出 MP4（H.264 + AAC）"}
+          onClick={startExport}
+        >
+          <Server size={14} /> 导出 MP4（服务器）
+        </button>
+        <button
+          className="btn"
+          style={{ width: "100%", marginTop: 8 }}
+          disabled={!exportsState.supported}
+          title={exportsState.supported ? "用这台电脑的显卡渲染、编码，不经过服务器" : unsupportedReason()}
+          onClick={exportInBrowser}
+        >
+          <MonitorDown size={14} /> 在浏览器中导出 WebM（本机显卡，更快）
+        </button>
+        {active.length > 0 && (
+          <div className="export-list" style={{ marginTop: 10 }}>
+            {active.map((item) => (
+              <ExportRow key={item.key} item={item} />
+            ))}
           </div>
-        ) : (
-          <button className="btn primary" style={{ width: "100%" }} onClick={startExport}>
-            导出 MP4
-          </button>
         )}
-        {task?.status === "failed" && <p className="form-error small-text">导出失败：{task.error}</p>}
-        {local ? (
-          <div className="export-progress" style={{ marginTop: 8 }}>
-            <div className="row">
-              <Loader2 size={14} className="spin" />
-              <span className="grow">
-                浏览器编码 {local.done}/{local.total} 帧
-              </span>
-              <button className="icon-btn" title="取消" onClick={() => local.abort.abort()}>
-                <CircleStop size={14} />
-              </button>
-            </div>
-            <div className="progress">
-              <div style={{ width: `${Math.round((local.done / Math.max(1, local.total)) * 100)}%` }} />
-            </div>
-          </div>
-        ) : (
-          <button className="btn" style={{ width: "100%", marginTop: 8 }} onClick={exportInBrowser}>
-            在浏览器中导出 WebM（使用本机显卡，更快）
-          </button>
-        )}
-        <p className="view-hint">MP4 在服务器上用点击时的作品快照导出，期间可以继续修改。浏览器导出需要保持此页面打开。</p>
+        <p className="view-hint">
+          MP4
+          在服务器上用点击时的作品快照导出，期间可以继续修改。浏览器导出完全在这台电脑上进行，在后台运行：可以切换界面或回到首页（进度在左下角），关闭、刷新页面后再打开
+          FRAME 会从中断处接着导出；完成后自动下载。
+          {!exportsState.supported && ` ${unsupportedReason()}。`}
+        </p>
       </section>
       <section className="view-section">
         <h3>其他</h3>

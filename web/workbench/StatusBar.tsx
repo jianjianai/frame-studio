@@ -4,6 +4,7 @@ import { formatTime, onConnection, useServerEvent, workPath } from "../lib/api";
 import { useRemoteState, type RemoteState } from "./RemoteBar";
 import type { WorkStatus } from "../lib/types";
 import { useObservable, useWorkbench } from "./store";
+import { ExportStatus } from "../components/ExportDock";
 
 export function StatusBar({ status, version, onOpenVersions }: { status: WorkStatus | null; version: string; onOpenVersions: () => void }) {
   const { stage, check, showPanel, work } = useWorkbench();
@@ -24,6 +25,7 @@ export function StatusBar({ status, version, onOpenVersions }: { status: WorkSta
   const project = stageStatus.project;
   return (
     <footer className="statusbar">
+      <ExportStatus />
       <button onClick={onOpenVersions} title="版本与同步">
         <GitBranch size={13} /> {work.branch}
         {status && status.files.length > 0 && (

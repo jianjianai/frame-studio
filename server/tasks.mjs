@@ -36,7 +36,11 @@ export class Tasks {
     publish();
     task.done = (async () => {
       try {
-        task.result = await run({ signal: controller.signal, progress: (progress, message = task.message) => update({ progress, message }) });
+        // `extra`: fields a kind of task knows besides its progress (exports: eta, fps).
+        task.result = await run({
+          signal: controller.signal,
+          progress: (progress, message = task.message, extra = {}) => update({ progress, message, ...extra }),
+        });
         update({ status: "done", progress: 1, endedAt: new Date().toISOString() });
       } catch (error) {
         const cancelled = controller.signal.aborted;

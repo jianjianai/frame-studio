@@ -1,0 +1,152 @@
+/* ---- export status (bottom-left) and the list of exports ---- */
+.export-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 100%;
+  padding: 0 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.export-status:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
+}
+.export-status.floating {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 950;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-elev);
+  box-shadow: var(--shadow);
+  color: var(--fg);
+}
+.export-status-eta {
+  color: var(--fg-muted);
+}
+.export-mini {
+  display: inline-block;
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.export-mini > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+.export-panel {
+  position: fixed;
+  z-index: 1000;
+  width: min(420px, calc(100vw - 16px));
+  max-height: min(70vh, 560px);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+}
+.export-panel > header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 6px 14px;
+}
+.export-panel > .export-list {
+  overflow: auto;
+  padding: 0 8px;
+}
+.export-panel > footer {
+  padding: 8px 14px 12px;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.export-list {
+  display: grid;
+  gap: 6px;
+}
+.export-item {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 8px 6px 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.export-item-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.export-item-title {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+}
+button.export-item-title {
+  cursor: pointer;
+}
+button.export-item-title:hover {
+  text-decoration: underline;
+}
+.export-item-actions {
+  display: inline-flex;
+  flex: none;
+  gap: 2px;
+}
+.export-item-meta,
+.export-item-status {
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.export-item-status {
+  overflow-wrap: anywhere;
+}
+.export-item-status.danger-text {
+  color: var(--danger);
+}
+.export-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-active);
+  overflow: hidden;
+}
+.export-bar > div {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.3s;
+}
+.export-item.paused .export-bar > div,
+.export-item.interrupted .export-bar > div,
+.export-item.changed .export-bar > div {
+  background: var(--warn);
+}
+.export-item.failed .export-bar > div {
+  background: var(--danger);
+}
+.export-item.waiting .export-bar > div {
+  background: var(--fg-faint);
+}

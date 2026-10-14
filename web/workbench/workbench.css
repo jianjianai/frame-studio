@@ -1254,13 +1254,6 @@
   flex: 1;
   accent-color: var(--accent);
 }
-.export-progress {
-  display: grid;
-  gap: 6px;
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: var(--accent-soft);
-}
 .export-video {
   width: 100%;
   max-height: 70vh;
