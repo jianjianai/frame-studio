@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { reduceTranscript, groupTurns, TranscriptReducer } from "../web/chat/reduce";
+import { reduceTranscript, groupTurns, TranscriptReducer, textHead, textAmount, OUTPUT_LIMIT, type ToolBlock } from "../web/chat/reduce";
 import { lineDiff, compactDiff } from "../web/chat/lineDiff";
 import { compact, lean, withoutAgentCopy } from "../server/ai/manager.mjs";
 
@@ -55,6 +55,25 @@ describe("chat transcript", () => {
       update("tool_call_update", { toolCallId: "y", status: "completed" }),
     ]);
     expect(blocks[0]).toMatchObject({ cut: true, status: "completed" });
+  });
+  it("shows the beginning of a long tool text and says how much is left out", () => {
+    expect(textHead("短".repeat(4000))).toBeNull();
+    // 300 lines of 39 characters: the card stops at the end of line 100.
+    const text = Array.from({ length: 300 }, () => "x".repeat(39)).join("\n");
+    const cut = textHead(text)!;
+    expect(cut.head).toBe(text.slice(0, 3999));
+    expect(cut.head + "\n" + cut.rest).toBe(text);
+    expect(textAmount(cut.rest)).toBe("200 行（7,999 字）");
+    // Text on one line is cut where the card fills up.
+    expect(textHead("y".repeat(12345))!.rest).toHaveLength(8345);
+    expect(textAmount("y".repeat(12345))).toBe("12,345 字");
+  });
+  it("keeps terminal output up to a limit and marks what it left out", () => {
+    const delta = (data: string) => update("tool_call_update", { toolCallId: "t", _meta: { terminal_output_delta: { data } } });
+    const big = "z".repeat(OUTPUT_LIMIT * 0.75);
+    const [block] = reduceTranscript([update("tool_call", { toolCallId: "t", title: "cat", kind: "execute" }), delta(big), delta(big), delta("more")]) as ToolBlock[];
+    expect(block.output).toHaveLength(OUTPUT_LIMIT);
+    expect(block.outputCut).toBe(true);
   });
   it("does not store Claude's own copy of tool results", () => {
     const stored = withoutAgentCopy({ sessionUpdate: "tool_call_update", _meta: { claudeCode: { toolResponse: "big" } } });

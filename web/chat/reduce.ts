@@ -28,6 +28,8 @@ export interface ToolBlock {
   rawOutput?: unknown;
   /** Streamed terminal output (Codex sends it in `_meta`, not as content). */
   output?: string;
+  /** The terminal output went past OUTPUT_LIMIT; the rest is not kept. */
+  outputCut?: boolean;
   exitCode?: number | null;
   /** Long texts were cut short in the conversation: the whole call is asked for when shown. */
   cut?: boolean;
@@ -57,15 +59,42 @@ export interface Entry {
   [key: string]: unknown;
 }
 
-const OUTPUT_LIMIT = 20000;
+/** Terminal output kept for a card: enough for any command's, short of freezing the page. */
+export const OUTPUT_LIMIT = 200_000;
 
 function terminalMeta(tool: ToolBlock, meta: unknown) {
   const { terminal_output_delta: delta, terminal_exit: exit } = (meta ?? {}) as {
     terminal_output_delta?: { data?: string };
     terminal_exit?: { exit_code?: number | null };
   };
-  if (delta?.data && (tool.output?.length ?? 0) < OUTPUT_LIMIT) tool.output = ((tool.output ?? "") + delta.data).slice(0, OUTPUT_LIMIT);
+  if (delta?.data && !tool.outputCut) {
+    const output = (tool.output ?? "") + delta.data;
+    tool.output = output.slice(0, OUTPUT_LIMIT);
+    if (output.length > OUTPUT_LIMIT) tool.outputCut = true;
+  }
   if (exit) tool.exitCode = exit.exit_code ?? null;
+}
+
+/** How much of a long tool text a card shows until it is expanded. */
+const SHOWN_TEXT = 4000;
+
+/**
+ * A long text as a card shows it at first: its beginning (ending at a line end when one is
+ * near) and the rest; null when it is shown whole.
+ */
+export function textHead(text: string) {
+  if (text.length <= SHOWN_TEXT) return null;
+  const end = text.lastIndexOf("\n", SHOWN_TEXT);
+  const head = text.slice(0, end > SHOWN_TEXT / 2 ? end : SHOWN_TEXT);
+  return { head, rest: text.slice(head.length).replace(/^\n/, "") };
+}
+
+/** "254 行（19,456 字）", or "19,456 字" for text on one line. */
+export function textAmount(text: string) {
+  let lines = 1;
+  for (let at = text.indexOf("\n"); at >= 0 && at < text.length - 1; at = text.indexOf("\n", at + 1)) lines++;
+  const chars = text.length.toLocaleString("zh-CN");
+  return lines > 1 ? `${lines.toLocaleString("zh-CN")} 行（${chars} 字）` : `${chars} 字`;
 }
 
 type PermissionBlock = Extract<Block, { kind: "permission" }>;

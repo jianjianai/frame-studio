@@ -26,7 +26,7 @@ import {
 import { formatTime } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { lineDiff, compactDiff } from "./lineDiff";
-import type { Block, ContentBlock, ToolBlock, ToolContent } from "./reduce";
+import { textAmount, textHead, OUTPUT_LIMIT, type Block, type ContentBlock, type ToolBlock, type ToolContent } from "./reduce";
 
 const kindIcon = (kind?: string, title = "") => {
   if (/frame__|^mcp\.frame\.|frame\./.test(title)) return <Clapperboard size={13} />;
@@ -109,6 +109,24 @@ const StatusIcon = ({ status }: { status?: string }) =>
     <Circle size={13} className="faint" />
   );
 
+/** A tool's text. A long one shows its beginning, says how much is left out, and opens whole. */
+function LongText({ text, className = "" }: { text: string; className?: string }) {
+  const [all, setAll] = useState(false);
+  const cut = textHead(text);
+  if (!cut) return <pre className={`tool-text ${className}`}>{text}</pre>;
+  return (
+    <div className="tool-long">
+      <pre className={`tool-text ${className} ${all ? "all" : ""}`}>{all ? text : cut.head}</pre>
+      <div className="tool-more">
+        <span>{all ? `共 ${textAmount(text)}` : `已截断，还有 ${textAmount(cut.rest)}未显示`}</span>
+        <button className="link-btn" onClick={() => setAll(!all)}>
+          {all ? "收起" : "展开全部"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function ContentView({ item }: { item: ToolContent }) {
   if (item.type === "diff") {
     const lines = compactDiff(lineDiff(item.oldText ?? "", item.newText ?? ""));
@@ -138,8 +156,7 @@ function ContentView({ item }: { item: ToolContent }) {
   if (content.type === "image") return <img className="tool-image" src={content.uri || `data:${content.mimeType};base64,${content.data}`} alt="" />;
   if (content.type === "text") {
     const text = content.text ?? "";
-    if (text.startsWith("```") || text.length < 2000) return <pre className="tool-text">{text.replace(/^```\w*\n?|```$/g, "")}</pre>;
-    return <pre className="tool-text">{text.slice(0, 4000)}…</pre>;
+    return <LongText text={text.startsWith("```") ? text.replace(/^```\w*\n?|```$/g, "") : text} />;
   }
   if (content.type === "resource_link" || content.type === "resource")
     return <div className="faint small-text">{content.name || content.uri || content.resource?.uri}</div>;
@@ -151,7 +168,7 @@ function ContentView({ item }: { item: ToolContent }) {
 function toolResults(tool: ToolBlock): ToolContent[] {
   const items = tool.content.filter((item) => item.type !== "terminal");
   const text = (value: string): ToolContent => ({ type: "content", content: { type: "text", text: value } });
-  if (tool.output) items.push(text(tool.output));
+  if (tool.output) items.push(text(tool.outputCut ? `${tool.output}\n…（输出超过 ${OUTPUT_LIMIT / 10000} 万字，后面的没有保留）` : tool.output));
   if (tool.exitCode) items.push(text(`退出码 ${tool.exitCode}`));
   if (items.some((item) => item.type === "content")) return items;
   const raw = tool.rawOutput as { result?: { content?: unknown }; error?: unknown; output?: unknown; stdout?: unknown } | string | undefined;
@@ -172,8 +189,7 @@ function toolArguments(tool: ToolBlock) {
   const input = tool.rawInput as { arguments?: unknown } | undefined;
   const args = input && typeof input === "object" && "arguments" in input ? input.arguments : input;
   if (!args || typeof args !== "object" || !Object.keys(args).length) return "";
-  const json = JSON.stringify(args, null, 2);
-  return json.length > 4000 ? json.slice(0, 4000) + "…" : json;
+  return JSON.stringify(args, null, 2);
 }
 
 /** A tool call whole, when the conversation cut its long texts short (null if it cannot be had). */
@@ -231,11 +247,16 @@ function ToolCard({ tool: short, load }: { tool: ToolBlock; load?: LoadTool }) {
             <div className="faint small-text">正在载入…</div>
           ) : (
             <>
-              {args && <pre className="tool-text tool-args">{args}</pre>}
+              {args && <LongText text={args} className="tool-args" />}
               {results.map((item, index) => (
                 <ContentView key={index} item={item} />
               ))}
               {!args && !results.length && <div className="faint small-text">{running ? "运行中…" : "没有输出"}</div>}
+              {tool.cut && (
+                <div className="tool-more">
+                  {running ? "内容较长，这里只有开头，运行结束后可查看全部" : "内容较长，这里只有开头：完整内容没有载入成功，收起再展开可重试"}
+                </div>
+              )}
             </>
           )}
         </div>
