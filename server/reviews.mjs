@@ -6,7 +6,7 @@ import sharp from "sharp";
 import { git, gitOk } from "./git.mjs";
 import { tree, readText, writeText, writeStream, removePath, uniquePath } from "./files.mjs";
 import { readJson, sendFile } from "./http.mjs";
-import { problem, notFound, confined, writeFileAtomic, mediaKind } from "./util.mjs";
+import { problem, notFound, conflict, confined, writeFileAtomic, mediaKind } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { readProjectSource, validSlug } from "./project-meta.mjs";
 import { workArg, describeIssues } from "./tools/registry.mjs";
@@ -539,6 +539,43 @@ export class Reviews {
     });
     this.services.events.emit({ type: "reviews", repo, work: id });
     if (saved) this.services.works.saved(scope);
+  }
+
+  /** Whether a work has a review folder in its repository (looking starts no branch). */
+  async has(repo, id) {
+    const dir = await this.existing(repo);
+    return Boolean(dir && validWorkId(id) && fs.existsSync(path.join(dir, id)));
+  }
+
+  /** A work moved to another repository (works.move): its review goes along, saved on both branches. */
+  async move(from, to, id, names) {
+    const source = await this.existing(from);
+    if (!source || !validWorkId(id) || !fs.existsSync(path.join(source, id))) return false;
+    const { works, events } = this.services;
+    const { review } = this.readFrom(source, id);
+    const title = review.title || id;
+    const target = this.handle(to, await this.dir(to));
+    const added = await works.locks.run(`${target.repo}/${target.id}`, async () => {
+      if (fs.existsSync(path.join(target.root, id))) throw conflict(`「${names.to}」里已经有这个作品的复盘`);
+      fs.cpSync(path.join(source, id), path.join(target.root, id), { recursive: true });
+      await git(target.root, ["add", "-A", "--", id]);
+      await git(target.root, ["commit", "-q", "-m", `迁入复盘：${title}（作品从「${names.from}」迁入）`]);
+      return true;
+    });
+    const scope = this.handle(from, source);
+    const removed = await works.locks.run(`${scope.repo}/${scope.id}`, async () => {
+      const tracked = (await git(source, ["ls-files", "--", id])).trim();
+      fs.rmSync(path.join(source, id), { recursive: true, force: true });
+      if (!tracked) return false;
+      await git(source, ["add", "-A", "--", id]);
+      await git(source, ["commit", "-q", "-m", `迁出复盘：${title}（作品迁移到「${names.to}」）`]);
+      return true;
+    });
+    events.emit({ type: "reviews", repo: from, work: id });
+    events.emit({ type: "reviews", repo: to, work: id });
+    if (added) works.saved(target);
+    if (removed) works.saved(scope);
+    return true;
   }
 
   // ---- comparing --------------------------------------------------------------------------

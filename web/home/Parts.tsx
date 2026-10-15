@@ -2,6 +2,7 @@ import type { ReactNode, RefObject } from "react";
 import {
   ArrowUpDown,
   ExternalLink,
+  FolderOutput,
   HardDrive,
   HardDriveDownload,
   LayoutGrid,
@@ -150,8 +151,10 @@ export function SelectionBar({
   total,
   batch,
   free,
+  move,
   onAll,
   onFree,
+  onMove,
   onTrash,
   onClear,
 }: {
@@ -159,8 +162,11 @@ export function SelectionBar({
   total: number;
   batch: string;
   free: number | null;
+  /** How many of them can move to another repository (works of the local one); null: none. */
+  move: number | null;
   onAll: () => void;
   onFree: () => void;
+  onMove: () => void;
   onTrash: () => void;
   onClear: () => void;
 }) {
@@ -187,6 +193,11 @@ export function SelectionBar({
               onClick={onFree}
             >
               <HardDriveDownload size={13} /> 释放本地空间
+            </button>
+          )}
+          {move !== null && (
+            <button className="btn small" title="迁移到另一个作品库（只限本地作品库里的作品）" onClick={onMove}>
+              <FolderOutput size={13} /> 迁移到…
             </button>
           )}
           <button className="btn small danger" onClick={onTrash}>

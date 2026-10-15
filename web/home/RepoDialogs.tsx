@@ -4,6 +4,7 @@ import { api, del, formatBytes, patch } from "../lib/api";
 import { Dialog, useAction, useToast } from "../lib/ui";
 import type { Repo } from "../lib/types";
 import { navigate } from "../App";
+import "../components/dialogs.css";
 
 export interface Account {
   id: string;
@@ -109,14 +110,14 @@ export function UnlinkDialog({ repo, onClose, onDone }: { repo: Repo; onClose: (
         </>
       }
     >
-      <p className="muted unlink-intro">只影响这台电脑：作品库从 FRAME 中移除，它在本机的数据会删除。GitHub 上的仓库和作品不受影响，以后可以随时重新连接。</p>
+      <p className="muted dialog-intro">只影响这台电脑：作品库从 FRAME 中移除，它在本机的数据会删除。GitHub 上的仓库和作品不受影响，以后可以随时重新连接。</p>
       {phase === "checking" && (
-        <div className="unlink-checking">
+        <div className="dialog-checking">
           <span className="spinner" /> 正在对比本机和 GitHub 上的内容…
         </div>
       )}
       {failure && (
-        <div className="home-notice danger">
+        <div className="dialog-notice danger">
           <CircleAlert size={15} />
           <div className="grow">
             {failure}{" "}
@@ -129,7 +130,7 @@ export function UnlinkDialog({ repo, onClose, onDone }: { repo: Repo; onClose: (
       {report && phase !== "checking" && (
         <>
           {blocked && (
-            <div className="home-notice danger">
+            <div className="dialog-notice danger">
               <CircleAlert size={15} />
               <div className="grow">
                 {report.busy.map((line) => (
@@ -140,7 +141,7 @@ export function UnlinkDialog({ repo, onClose, onDone }: { repo: Repo; onClose: (
             </div>
           )}
           {report.error && (
-            <div className="home-notice warn">
+            <div className="dialog-notice warn">
               <TriangleAlert size={15} />
               <div className="grow">
                 无法连接 GitHub，不能确认本机的内容是否都已同步：{report.error}{" "}
@@ -151,11 +152,11 @@ export function UnlinkDialog({ repo, onClose, onDone }: { repo: Repo; onClose: (
             </div>
           )}
           {pending.length > 0 ? (
-            <div className="home-notice warn">
+            <div className="dialog-notice warn">
               <TriangleAlert size={15} />
               <div className="grow">
                 <strong>这些内容只在这台电脑上，取消链接后会丢失：</strong>
-                <ul className="unlink-list">
+                <ul className="dialog-list">
                   {pending.map((item) => (
                     <li key={item.branch}>
                       <span className="grow">
@@ -180,14 +181,14 @@ export function UnlinkDialog({ repo, onClose, onDone }: { repo: Repo; onClose: (
             </div>
           ) : (
             !report.error && (
-              <div className="home-notice ok">
+              <div className="dialog-notice ok">
                 <CircleCheck size={15} />
                 <div className="grow">本机的内容都已经在 GitHub 上。</div>
               </div>
             )
           )}
-          <div className="unlink-label">会从这台电脑删除</div>
-          <ul className="unlink-facts">
+          <div className="dialog-label">会从这台电脑删除</div>
+          <ul className="dialog-facts">
             <li>
               <span className="grow">作品库副本{report.works ? `和已下载的 ${report.works} 个作品` : ""}</span>
               <span className="muted">{formatBytes(report.bytes)}</span>
@@ -212,7 +213,7 @@ export function UnlinkDialog({ repo, onClose, onDone }: { repo: Repo; onClose: (
             )}
           </ul>
           {risky && !blocked && (
-            <label className="row unlink-discard">
+            <label className="row dialog-consent">
               <input type="checkbox" checked={discard} onChange={(event) => setDiscard(event.target.checked)} />
               {report.error ? "仍然取消链接（无法确认的内容可能会丢失）" : "我知道这些内容会丢失，仍然取消链接"}
             </label>

@@ -106,6 +106,7 @@ export function initExports() {
     () => {},
   );
   subscribe((event) => {
+    if (event.type === "work-moved") return void moved(String(event.work), String(event.from), String(event.to));
     if (event.type !== "task") return;
     const task = event.task as Task;
     if (task.kind !== "export") return;
@@ -318,6 +319,16 @@ async function forget(id: string) {
 }
 
 /** Ask the page rendering an export (here or in another tab) to stop. */
+/** A work moved to another repository: its local exports load it from there (one rendering now blocked the move). */
+async function moved(work: string, from: string, to: string) {
+  for (const job of [...jobs.values()])
+    if (job.work === work && job.repo === from)
+      try {
+        jobs.set(job.id, await saveJob({ ...job, repo: to }));
+      } catch {}
+  publish();
+}
+
 function command(id: string, which: "pause" | "cancel") {
   channel?.postMessage({ type: "command", id, command: which } satisfies ExportMessage);
   const entry = active;

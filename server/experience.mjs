@@ -296,6 +296,43 @@ export class Experience {
     return this.linkedSync(work);
   }
 
+  /**
+   * What moving a work to repository `to` means for its linked libraries: those `to` lacks are
+   * copied there as they are now (`copy`); a library of the same name there is linked instead
+   * (`shared`). A link by an earlier name gets that name as an alias there.
+   */
+  async movePlan(work, to) {
+    const names = this.names(work);
+    const source = names.length ? await this.existing(work.repo) : null;
+    const target = names.length ? await this.existing(to) : null;
+    const plan = { copy: [], shared: [], aliases: {} };
+    for (const name of names) {
+      const id = source && this.resolve(source, name);
+      if (!id) continue;
+      const there = target && (this.resolve(target, name) ?? (fs.existsSync(path.join(target, id)) ? id : null));
+      const library = { id, title: this.title(source, id) };
+      if (there) plan.shared.push(library);
+      else if (!plan.copy.some((item) => item.id === id)) plan.copy.push(library);
+      if (name !== id && !(target && this.resolve(target, name))) plan.aliases[name] = id;
+    }
+    return plan;
+  }
+
+  /** Before the work moves: copy the libraries `to` lacks (and the earlier names the work links them by), saved at once. */
+  async carry(work, to, from) {
+    const plan = await this.movePlan(work, to);
+    if (!plan.copy.length && !Object.keys(plan.aliases).length) return plan;
+    const source = await this.dir(work.repo);
+    const target = await this.dir(to);
+    for (const { id } of plan.copy) fs.cpSync(path.join(source, id), path.join(target, id), { recursive: true });
+    if (Object.keys(plan.aliases).length) writeText(target, ALIASES, JSON.stringify({ ...this.aliases(target), ...plan.aliases }, null, 2) + "\n");
+    const ids = plan.copy.map((library) => library.id);
+    const titles = plan.copy.map((library) => library.title).join("、");
+    await this.commitPaths(to, [...ids, ALIASES], titles ? `从「${from}」迁入经验库：${titles}` : `从「${from}」迁入作品关联经验库的旧名称`);
+    this.changed(to, [...ids, ALIASES]);
+    return plan;
+  }
+
   /** Check the libraries out if the work links any (the synchronous readers need the folder). */
   async prepare(work) {
     if (this.names(work).length) await this.dir(work.repo);

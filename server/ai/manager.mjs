@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { Writable, Readable } from "node:stream";
 import { randomUUID, createHash } from "node:crypto";
 import * as acp from "@agentclientprotocol/sdk";
-import { AGENTS, agentEnv, CLAUDE_REFRESH_BUSY, waitForClaudeRefresh } from "./agents.mjs";
+import { AGENTS, agentEnv, CLAUDE_REFRESH_BUSY, moveClaudeConversation, waitForClaudeRefresh } from "./agents.mjs";
 import { Profiles } from "./profiles.mjs";
 import { appVersion } from "../config.mjs";
 import { problem, notFound, writeFileAtomic } from "../util.mjs";
@@ -785,6 +785,40 @@ export class AiManager {
     const session = this.get(id);
     session.meta.title = String(title || "").slice(0, 80) || session.meta.title;
     this.publish(session);
+  }
+  /**
+   * A work moved to another repository (works.move): its conversations go with it. The next
+   * message resumes the agent in the work's new folder with a new FRAME token. `stamps` are
+   * the work's file stamps in the old folder and in the new one: files the AI saw unchanged
+   * take their new stamp, so a fresh checkout is not reported as every file changed.
+   */
+  async moveWork({ id, from, to, roots, stamps }) {
+    for (const session of this.sessions.values()) {
+      if (session.meta.work !== id || session.meta.repo !== from) continue;
+      session.meta.repo = to;
+      // The agent lets go of the conversation first: Claude writes to it as its session ends.
+      const { process } = session;
+      if (process && session.attached && process.capabilities.sessionCapabilities?.close)
+        await process.connection.closeSession({ sessionId: session.meta.acpSessionId }).catch(() => {});
+      process?.sessions.delete(session.meta.id);
+      session.process = null;
+      session.attached = false;
+      if (session.token) this.services.auth.revokeInternal(session.token);
+      session.token = null;
+      if (session.meta.agent === "claude" && session.meta.acpSessionId)
+        try {
+          moveClaudeConversation(session.meta.acpSessionId, roots.from, roots.to);
+        } catch (error) {
+          console.warn("moving a Claude conversation failed:", error.message);
+        }
+      const files = session.files ?? this.readFiles(session);
+      if (files) {
+        for (const [file, stamp] of Object.entries(files)) if (stamps.before[file] === stamp && stamps.after[file]) files[file] = stamps.after[file];
+        session.files = files;
+        writeFileAtomic(path.join(this.sessionsDir, session.meta.id + ".files.json"), JSON.stringify(files));
+      }
+      this.publish(session);
+    }
   }
   async remove(id) {
     const session = this.get(id);

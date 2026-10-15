@@ -4,6 +4,7 @@ import {
   Copy,
   ExternalLink,
   FolderInput,
+  FolderOutput,
   HardDriveDownload,
   ImageUp,
   KeyRound,
@@ -26,6 +27,7 @@ import { useAction, useConfirm, useContextMenu, usePersistent, usePrompt, useToa
 import type { Repo, WorkSummary } from "../lib/types";
 import { NewWorkDialog } from "../components/NewWorkDialog";
 import { RepoDialog } from "../components/RepoDialog";
+import { MoveWorkDialog, type MovableWork } from "../components/MoveWorkDialog";
 import { SettingsView } from "../settings/SettingsView";
 import { HomeSidebar, type RepoState } from "./Sidebar";
 import { WorkCard, WorkListHead, WorkRow } from "./WorkItems";
@@ -59,7 +61,13 @@ const menuPoint = (event: React.MouseEvent) => {
 };
 
 type DialogState =
-  null | { kind: "new"; repo?: string } | { kind: "connect" } | { kind: "publish" } | { kind: "unlink"; repo: Repo } | { kind: "account"; repo: Repo };
+  | null
+  | { kind: "new"; repo?: string }
+  | { kind: "connect" }
+  | { kind: "publish" }
+  | { kind: "unlink"; repo: Repo }
+  | { kind: "account"; repo: Repo }
+  | { kind: "move"; works: MovableWork[] };
 
 /**
  * The home page: works of every connected repository with search, filters, sorting, a grid or
@@ -262,6 +270,9 @@ export function Home({ version, local }: { version: string; local: boolean }) {
   });
 
   // ---- actions on works -----------------------------------------------------------------
+  // Works of the local repository (no GitHub) can move to another repository.
+  const movable = (work: WorkSummary) => Boolean(repoOf(work) && !repoOf(work)?.remote);
+  const moveWorks = (list: WorkSummary[]) => setDialog({ kind: "move", works: list.map(({ repo, id, title }) => ({ repo, id, title })) });
   // The list is reloaded here too, not only on the server's event (a slow or dropped connection).
   const keepWork = (work: WorkSummary) => run(() => del(`/api/works/${work.repo}/${work.id}/delete-request`).then(load), `已保留「${work.title}」`);
   const confirmDelete = (work: WorkSummary) => run(() => del(`/api/works/${work.repo}/${work.id}`).then(load), `已把「${work.title}」移到回收站`);
@@ -288,6 +299,7 @@ export function Home({ version, local }: { version: string; local: boolean }) {
             await run(() => api(`/api/works/${work.repo}/${work.id}/duplicate`, { body: { title: title.trim() } }), `已创建副本「${title.trim()}」`);
         },
       },
+      ...(movable(work) ? [{ label: "迁移到作品库…", icon: <FolderOutput size={14} />, onClick: () => moveWorks([work]) }] : []),
       work.publishedAt
         ? {
             label: "取消发布",
@@ -347,6 +359,7 @@ export function Home({ version, local }: { version: string; local: boolean }) {
   // Batch actions go one work at a time; failures are listed, the rest still happens.
   const chosen = works.filter((work) => selected.has(workKey(work)));
   const freeable = chosen.filter((work) => work.location === "both" && work.synced);
+  const moving = chosen.filter(movable);
   const each = async (list: WorkSummary[], verb: string, action: (work: WorkSummary) => Promise<unknown>) => {
     const failed: string[] = [];
     for (const [index, work] of list.entries()) {
@@ -421,6 +434,9 @@ export function Home({ version, local }: { version: string; local: boolean }) {
       ...(repo.remote
         ? [{ label: "GitHub 账号…", icon: <KeyRound size={14} />, onClick: () => setDialog({ kind: "account", repo }) }]
         : [{ label: "发布到 GitHub…", icon: <CloudUpload size={14} />, onClick: () => setDialog({ kind: "publish" }) }]),
+      ...(!repo.remote && works.some((work) => work.repo === repo.id)
+        ? [{ label: "迁移全部作品到…", icon: <FolderOutput size={14} />, onClick: () => moveWorks(works.filter((work) => work.repo === repo.id)) }]
+        : []),
       { label: "回收站", icon: <Trash2 size={14} />, onClick: () => go({ kind: "trash", repo: repo.id }) },
       ...(repo.id === "local"
         ? []
@@ -586,8 +602,10 @@ export function Home({ version, local }: { version: string; local: boolean }) {
             total={visible.length}
             batch={batch}
             free={chosen.some((work) => repoOf(work)?.remote) ? freeable.length : null}
+            move={moving.length || null}
             onAll={() => setSelected(new Set(visible.map(workKey)))}
             onFree={freeChosen}
+            onMove={() => moveWorks(moving)}
             onTrash={trashChosen}
             onClear={() => setSelected(new Set())}
           />
@@ -631,6 +649,17 @@ export function Home({ version, local }: { version: string; local: boolean }) {
             if (scope.kind === "repo" && scope.repo === unlinking.id) go({ kind: "all" });
             void load();
           }}
+        />
+      )}
+      {dialog?.kind === "move" && (
+        <MoveWorkDialog
+          works={dialog.works}
+          onClose={() => setDialog(null)}
+          onMoved={() => {
+            setSelected(new Set());
+            void load();
+          }}
+          onConnect={() => setDialog({ kind: "connect" })}
         />
       )}
       {account && (

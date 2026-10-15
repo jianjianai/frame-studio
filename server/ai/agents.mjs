@@ -63,6 +63,37 @@ export function agentEnv(config, extra = {}) {
   return { ...env, ...extra };
 }
 
+/** Where the agents' Claude keeps its login and conversations. */
+export function claudeHome() {
+  const env = agentEnv();
+  return env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), ".claude");
+}
+
+/**
+ * Claude files a conversation under its working folder (projects/<folder with every other
+ * character than a letter or digit as "-">/<session>.jsonl, plus a folder of the same name).
+ * When a work's folder moves, its conversations go along, so each stays in one place next to
+ * the work's other conversations; the emptied folder goes.
+ */
+export function moveClaudeConversation(sessionId, from, to) {
+  const folder = (dir) => path.join(claudeHome(), "projects", dir.replace(/[^a-zA-Z0-9]/g, "-"));
+  // Longer folder names are shortened with a hash by Claude; those conversations start anew.
+  if (!/^[\w-]+$/.test(sessionId) || Math.max(from.length, to.length) > 200) return false;
+  let moved = false;
+  for (const name of [sessionId + ".jsonl", sessionId]) {
+    const source = path.join(folder(from), name);
+    const target = path.join(folder(to), name);
+    if (!fs.existsSync(source) || fs.existsSync(target)) continue;
+    fs.mkdirSync(folder(to), { recursive: true });
+    fs.renameSync(source, target);
+    moved = true;
+  }
+  try {
+    fs.rmdirSync(folder(from)); // only when nothing else is left in it
+  } catch {}
+  return moved;
+}
+
 /** Claude's answer when another part of it is refreshing the login (or died doing so). */
 export const CLAUDE_REFRESH_BUSY = /another Claude Code process is refreshing|exited mid-refresh/i;
 
@@ -72,8 +103,7 @@ export const CLAUDE_REFRESH_BUSY = /another Claude Code process is refreshing|ex
  * next attempt takes it over). Resolves to "free", "stale", "timeout" or "aborted".
  */
 export async function waitForClaudeRefresh({ signal, timeoutMs = 75000, intervalMs = 2000, settleMs = 1500 } = {}) {
-  const env = agentEnv();
-  const lock = path.join(env.CLAUDE_CONFIG_DIR || path.join(env.HOME || os.homedir(), ".claude"), ".oauth_refresh.lock");
+  const lock = path.join(claudeHome(), ".oauth_refresh.lock");
   const until = Date.now() + timeoutMs;
   const pause = (ms) =>
     new Promise((resolve) => {

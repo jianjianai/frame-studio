@@ -1,0 +1,102 @@
+/* Dialogs that check with the server first and list what will happen (取消链接, 迁移作品). */
+.dialog-intro {
+  margin: 0 0 12px;
+  line-height: 1.6;
+}
+.dialog-checking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 0;
+  color: var(--fg-muted);
+}
+.dialog-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  line-height: 1.55;
+}
+.dialog-notice > svg {
+  flex: none;
+  margin-top: 3px;
+}
+.dialog-notice.warn {
+  border-color: color-mix(in srgb, var(--warn) 40%, var(--border));
+  background: var(--warn-soft);
+}
+.dialog-notice.warn > svg {
+  color: var(--warn);
+}
+.dialog-notice.danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+  background: var(--danger-soft);
+}
+.dialog-notice.danger > svg {
+  color: var(--danger);
+}
+.dialog-notice.ok {
+  border-color: color-mix(in srgb, var(--ok) 40%, var(--border));
+  background: var(--ok-soft);
+}
+.dialog-notice.ok > svg {
+  color: var(--ok);
+}
+.dialog-list {
+  display: grid;
+  gap: 4px;
+  margin: 6px 0 10px;
+  padding: 0;
+  list-style: none;
+}
+.dialog-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.dialog-list li::before {
+  content: "•";
+  color: var(--fg-faint);
+}
+.dialog-label {
+  margin: 4px 0 6px;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.dialog-facts {
+  margin: 0 0 12px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  list-style: none;
+}
+.dialog-facts li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+}
+.dialog-facts li + li {
+  border-top: 1px solid var(--border);
+}
+.dialog-consent {
+  align-items: flex-start;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.dialog-consent input {
+  margin-top: 3px;
+}
+/* 迁移作品: one row per work, what goes along under its title. */
+.dialog-facts li.move-work {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.dialog-facts li.move-work > span {
+  line-height: 1.5;
+}

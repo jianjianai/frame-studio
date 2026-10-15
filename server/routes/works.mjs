@@ -2,10 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { readJson, sendFile } from "../http.mjs";
 import { tree, readText, writeText, removePath, movePath, writeStream, uniquePath } from "../files.mjs";
-import { problem, confined, conflict } from "../util.mjs";
+import { problem, confined, conflict, diskUsage } from "../util.mjs";
+import { snapshotFiles } from "../ai/context.mjs";
 
 export function workRoutes(services) {
-  const { router, works, settings, preview, events } = services;
+  const { router, works, repos, settings, preview, events } = services;
   const open = (params) => services.openWork(params.id, params.repo);
   const editable = (params) => services.openEditable(params.id, params.repo);
 
@@ -97,6 +98,111 @@ export function workRoutes(services) {
     await services.reviews?.forget(repo, id);
     for (const session of services.ai?.list({ work: id, repo }) ?? []) await services.ai.remove(session.id);
   };
+
+  // ---- moving a work of the local repository to another one -------------------------------
+
+  /**
+   * Before a work moves: what goes along (libraries the other repository lacks, its review,
+   * exported videos, AI conversations), what changes (material files the other repository has
+   * in another version or not at all) and what is in the way (`blocked`). `error`: GitHub could
+   * not be asked which works it has.
+   */
+  async function moveReport(from, id, to) {
+    const source = repos.get(from);
+    if (source.remote) throw problem(400, "只能迁移本地作品库里的作品");
+    if (!to) throw problem(400, "请选择要迁移到的作品库");
+    if (to === from) throw problem(400, "作品已经在这个作品库里");
+    const target = repos.get(to);
+    if (!fs.existsSync(path.join(target.dir, "HEAD"))) throw problem(400, `作品库「${target.name}」还没有准备好`);
+    const work = await works.open(id, from);
+    let error = "";
+    // Which ids GitHub has; asked once for several works moving in a row.
+    if (target.remote && !(Date.now() - Date.parse(target.fetchedAt || "") < 15000))
+      await repos.fetch(to).catch(
+        (failure) =>
+          (error = String(failure.stderr || failure.message)
+            .trim()
+            .split("\n")
+            .pop()),
+      );
+    const blocked = [];
+    const taken = await works.taken(to, id);
+    if (taken) blocked.push(`「${target.name}」里已经有 id 为 ${id} 的${taken}`);
+    if (services.ai?.list({ work: id, repo: from }).some((session) => session.status !== "idle")) blocked.push("AI 正在这个作品里工作，先停止它");
+    for (const task of services.tasks?.list() ?? []) if (task.work === id && task.repo === from && task.status === "running") blocked.push(`正在进行：${task.title}`);
+    if (await services.reviews?.has(to, id)) blocked.push(`「${target.name}」里已经有这个作品的复盘`);
+    const exports = path.join(services.config.dirs.exports, from, id);
+    const videos = fs.existsSync(exports)
+      ? fs
+          .readdirSync(exports, { recursive: true })
+          .map(String)
+          .filter((name) => /\.(mp4|webm)$/i.test(name) && !name.includes(".partial."))
+      : [];
+    const meta = works.meta(work);
+    return {
+      id,
+      title: meta.ok ? String(meta.meta.title || work.slug) : work.slug,
+      from: { id: from, name: source.name },
+      to: { id: to, name: target.name, remote: target.remote },
+      published: Boolean(works.published(work)),
+      unsaved: (await works.status(work)).files.length,
+      blocked,
+      error,
+      materials: (await services.materials?.movePlan(work, to)) ?? { copy: [], shared: [], changed: [], missing: [] },
+      experiences: (await services.experience?.movePlan(work, to)) ?? { copy: [], shared: [], aliases: {} },
+      review: Boolean(await services.reviews?.has(from, id)),
+      exports: { count: videos.length, bytes: diskUsage(exports) },
+      sessions: services.ai?.list({ work: id, repo: from }).length ?? 0,
+    };
+  }
+  router.get("/api/works/:repo/:id/move", ({ params, query }) => moveReport(params.repo, params.id, String(query.to || "")));
+  router.post("/api/works/:repo/:id/move", async ({ params, req }) => {
+    const { repo: from, id } = params;
+    const to = String((await readJson(req)).to || "");
+    const report = await moveReport(from, id, to);
+    if (report.blocked.length) throw conflict(report.blocked.join("；"), { report });
+    const names = { from: report.from.name, to: report.to.name };
+    services.watcher.unwatch({ repo: from, id });
+    const work = await works.open(id, from);
+    if (!report.published) await works.commit(work, "迁移前自动保存");
+    // The libraries the work uses go first, so it finds them there at once.
+    await services.materials?.carry(work, to, names.from);
+    await services.experience?.carry(work, to, names.from);
+    const before = snapshotFiles(work.dir);
+    const moved = await works.move(work, to);
+    const after = snapshotFiles(moved.dir);
+    // The work has moved: whatever follows it is tried one by one, and what failed is reported.
+    const problems = [];
+    const step = async (what, action) => {
+      try {
+        return await action();
+      } catch (error) {
+        console.warn(`moving ${from}/${id} to ${to}: ${what}:`, error.message);
+        problems.push(`${what}：${error.message}`);
+      }
+    };
+    const relocked = (await step("素材改用这个作品库的版本", () => services.materials?.relock(moved))) ?? [];
+    works.saved(moved);
+    services.watcher.watch(moved);
+    // What is kept of the work outside its branch.
+    await step("复盘资料", () => services.reviews?.move(from, to, id, names));
+    await step("封面", () => services.covers?.move(from, to, id));
+    await step("导出的视频", () => {
+      const exports = path.join(services.config.dirs.exports, from, id);
+      const exported = path.join(services.config.dirs.exports, to, id);
+      if (!fs.existsSync(exports)) return;
+      fs.mkdirSync(path.dirname(exported), { recursive: true });
+      if (fs.existsSync(exported)) fs.cpSync(exports, exported, { recursive: true });
+      else fs.renameSync(exports, exported);
+      fs.rmSync(exports, { recursive: true, force: true });
+    });
+    await step("AI 对话", () => services.ai?.moveWork({ id, from, to, roots: { from: work.root, to: moved.root }, stamps: { before, after } }));
+    services.checks?.delete(`${from}/${id}`);
+    events.emit({ type: "work-moved", work: id, from, to, name: names.to });
+    await works.reclaim(from).catch((error) => console.warn("reclaim after moving a work:", error.message));
+    return { id, repo: to, relocked, problems };
+  });
+
   router.delete("/api/trash/:repo/:id", async ({ params }) => {
     const result = await works.purge(params.id, params.repo);
     await forget(params.repo, params.id);

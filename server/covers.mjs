@@ -193,6 +193,13 @@ export class Covers {
     for (const extension of [".webp", ".json"]) fs.rmSync(this.base(repo, id) + extension, { force: true });
   }
 
+  /** A work moved to another repository: its cover shows there at once (and is redone when stale). */
+  move(from, to, id) {
+    fs.mkdirSync(path.dirname(this.base(to, id)), { recursive: true });
+    for (const extension of [".webp", ".json"])
+      if (fs.existsSync(this.base(from, id) + extension)) fs.renameSync(this.base(from, id) + extension, this.base(to, id) + extension);
+  }
+
   /** A repository removed from this machine: its covers go (covers still queued find no work and stop). */
   forgetRepo(repo) {
     fs.rmSync(path.join(this.dir, repo), { recursive: true, force: true });

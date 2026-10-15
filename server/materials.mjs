@@ -691,6 +691,78 @@ export class Materials {
     return { ...result, dropped };
   }
 
+  // ---- a work moving to another repository (works.move) ----------------------------------
+
+  /**
+   * What moving a work to repository `to` means for its materials: the libraries it uses that
+   * `to` lacks are copied there as they are now (`copy`); same-named libraries there are used
+   * instead (`shared`). Files the work uses that `to` will have in another version than the one
+   * it uses now (`changed`: locked earlier, or a different library of that name) or not at all
+   * (`missing`).
+   */
+  async movePlan(work, to) {
+    const source = await this.existing(work.repo);
+    if (!source) return { copy: [], shared: [], changed: [], missing: [] };
+    const head = await this.head(source);
+    const used = new Map(Object.entries(this.readLocks(work.dir)));
+    for (const ref of await this.references(work)) if (!used.has(ref) && head.has(ref)) used.set(ref, head.get(ref));
+    const names = [...new Set([...this.names(work), ...[...used.keys()].map((ref) => ref.split("/")[0])])].filter((id) =>
+      fs.existsSync(path.join(source, id)),
+    );
+    const target = await this.existing(to);
+    const there = target ? await this.head(target) : new Map();
+    const copied = (id) => !target || !fs.existsSync(path.join(target, id));
+    const changed = [];
+    const missing = [];
+    for (const [ref, blob] of [...used].sort(([a], [b]) => a.localeCompare(b))) {
+      const id = ref.split("/")[0];
+      const after = names.includes(id) && copied(id) ? head.get(ref) : there.get(ref);
+      if (!after) missing.push(ref);
+      else if (after !== blob) changed.push(ref);
+    }
+    const describe = (id) => ({ id, title: this.title(source, id) });
+    return { copy: names.filter(copied).map(describe), shared: names.filter((id) => !copied(id)).map(describe), changed, missing };
+  }
+
+  /** Before the work moves: copy the libraries it uses that `to` lacks there, as one version. */
+  async carry(work, to, from) {
+    const plan = await this.movePlan(work, to);
+    if (!plan.copy.length) return plan;
+    const source = await this.dir(work.repo);
+    const ids = plan.copy.map((library) => library.id);
+    await this.save(to, ids, `从「${from}」迁入素材库：${plan.copy.map((library) => library.title).join("、")}`, (dir) => {
+      for (const id of ids) fs.cpSync(path.join(source, id), path.join(dir, id), { recursive: true });
+    });
+    return plan;
+  }
+
+  /**
+   * After the work moved: its locks name the versions of its old repository; lock the files
+   * at the versions this repository has (none when it lacks a file), and save that as a
+   * version (published works too). Returns the files whose lock changed.
+   */
+  async relock(work) {
+    const locks = this.readLocks(work.dir);
+    if (!Object.keys(locks).length) return [];
+    const head = await this.head(await this.dir(work.repo));
+    const changed = Object.keys(locks).filter((ref) => head.get(ref) !== locks[ref]);
+    if (!changed.length) return [];
+    for (const ref of changed) {
+      if (head.has(ref)) locks[ref] = head.get(ref);
+      else delete locks[ref];
+    }
+    const { works } = this.services;
+    const published = works.published(work);
+    if (published) works.lockFiles(work.root, false);
+    try {
+      await this.saveLocks(work, locks);
+      if (await works.locks.run(`${work.repo}/${work.id}`, () => works.commitAll(work.root, "迁移后改用这个作品库里的素材版本"))) works.saved(work);
+    } finally {
+      if (published) works.lockFiles(work.root, true);
+    }
+    return changed;
+  }
+
   // ---- .materials: the library code a work (or export snapshot) runs ---------------------
 
   /**

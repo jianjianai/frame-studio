@@ -23,6 +23,7 @@ import { useAction, useConfirm, useContextMenu, useToast } from "../lib/ui";
 import type { Version, WorkStatus } from "../lib/types";
 import { useWorkbench, type VersionSource } from "../workbench/store";
 import { RepoDialog } from "../components/RepoDialog";
+import { MoveWorkDialog } from "../components/MoveWorkDialog";
 import { RemoteBar, useRemoteState } from "../workbench/RemoteBar";
 import { reviewsPath } from "../lib/reviews";
 import { ViewHeader } from "./ViewHeader";
@@ -168,6 +169,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
   const [changes, setChanges] = useState<Record<string, { status: string; path: string }[]>>({});
   const [message, setMessage] = useState("");
   const [publish, setPublish] = useState(false);
+  const [moving, setMoving] = useState(false);
   const [diverged, setDiverged] = useState(false);
   const [run, busy] = useAction();
   const confirm = useConfirm();
@@ -321,6 +323,14 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
             <RefreshCw size={13} /> 刷新
           </button>
         </div>
+        {!shared && status && !status.remote && (
+          <p className="view-hint">
+            作品在本地作品库，只保存在这台电脑上。{" "}
+            <button className="link-btn" onClick={() => setMoving(true)}>
+              迁移到其他作品库…
+            </button>
+          </p>
+        )}
         {diverged && (
           <div className="diverged">
             <p>本地和 GitHub 上都有新的修改：</p>
@@ -461,6 +471,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
         )}
       </section>
       {publish && <RepoDialog mode="publish" onClose={() => setPublish(false)} onDone={() => void load()} />}
+      {moving && <MoveWorkDialog works={[{ repo: work.repo, id: work.id, title: work.meta?.title ?? work.id }]} onClose={() => setMoving(false)} />}
       {menu}
     </>
   );

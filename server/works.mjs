@@ -595,6 +595,58 @@ export class Works {
     });
   }
 
+  // ---- moving a work to another repository -------------------------------------------
+  //
+  // A work made in the local repository (no GitHub) can move to another repository: its
+  // branch goes there with the whole history and its Git LFS files, then its checkout and
+  // branch here are removed. The work keeps its id.
+
+  /** What in a repository already uses a work id (a work, one in the recycle bin, a leftover folder), or "". */
+  async taken(repo, id) {
+    const { dir } = this.repos.get(repo);
+    for (const prefix of [WORK_PREFIX, TRASH_PREFIX])
+      for (const ref of [`refs/heads/${prefix}${id}`, `refs/remotes/origin/${prefix}${id}`])
+        if (await this.tip(dir, ref)) return prefix === WORK_PREFIX ? "作品" : "回收站里的作品";
+    return fs.existsSync(this.root(repo, id)) ? "作品文件夹" : "";
+  }
+
+  /** Move a saved work (no unsaved changes) to the repository `to`; returns it there, checked out. */
+  async move(work, to) {
+    const from = this.repos.get(work.repo);
+    const target = this.repos.get(to);
+    const branch = WORK_PREFIX + work.id;
+    await this.locks.run(`${work.repo}/${work.id}`, async () => {
+      const tip = await this.tip(from.dir, "refs/heads/" + branch);
+      if (!tip) throw notFound(`作品不存在：${work.id}`);
+      const taken = await this.taken(to, work.id);
+      if (taken) throw conflict(`「${target.name}」里已经有 id 为 ${work.id} 的${taken}`);
+      if (fs.existsSync(work.root) && parseStatus(await git(work.root, ["status", "--porcelain=v2", "--untracked-files=all"])).files.length)
+        throw conflict("作品有未保存的修改，先保存版本再迁移");
+      // The media first, so the checkout there and its push to GitHub find them.
+      copyLfs(from.dir, target.dir, await lfsObjects(from.dir, ["refs/heads/" + branch]));
+      await git(target.dir, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", from.dir, `refs/heads/${branch}:refs/heads/${branch}`]);
+      try {
+        if ((await this.tip(target.dir, "refs/heads/" + branch)) !== tip) throw problem(500, "作品没有完整地复制到目标作品库");
+        if (fs.existsSync(work.root)) {
+          lockFiles(work.root, false);
+          await git(from.dir, ["worktree", "remove", "--force", "--", work.root]);
+        }
+      } catch (error) {
+        // The work stays where it was, and only there.
+        await git(target.dir, ["branch", "-D", branch]).catch(() => {});
+        if (fs.existsSync(work.root) && this.published(work)) lockFiles(work.root, true);
+        throw error;
+      }
+      await git(from.dir, ["branch", "-D", branch]);
+    });
+    this.lockChecked.delete(`${work.repo}/${work.id}`);
+    for (const key of ["recent", "deleteRequests"])
+      this.settings.update(key, (list) => list.map((item) => (item.repo === work.repo && item.id === work.id ? { ...item, repo: to } : item)));
+    this.events.emit({ type: "works", repo: work.repo });
+    this.events.emit({ type: "works", repo: to });
+    return this.open(work.id, to);
+  }
+
   touch(repo, id) {
     this.settings.update("recent", (recent) =>
       [{ repo, id, openedAt: new Date().toISOString() }, ...recent.filter((item) => !(item.id === id && item.repo === repo))].slice(0, 30),
@@ -815,27 +867,14 @@ function backupOf(ref) {
 async function pruneLfs(dir) {
   const store = path.join(dir, "lfs", "objects");
   if (!fs.existsSync(store)) return;
-  const reachable = (await git(dir, ["rev-list", "--objects", "--no-object-names", "--branches", "--glob=refs/frame-backup/*"], { maxBytes: 512 * 1024 * 1024 }))
-    .split("\n")
-    .filter(Boolean);
+  const reachable = await revObjects(dir, ["--branches", "--glob=refs/frame-backup/*"]);
   // Staged but not yet committed files of every checkout.
   const worktrees = (await git(dir, ["worktree", "list", "--porcelain"])).split("\n").filter((line) => line.startsWith("worktree ")).map((line) => line.slice(9));
   for (const tree of worktrees) {
     if (!fs.existsSync(path.join(tree, ".git"))) continue;
     for (const line of (await git(tree, ["ls-files", "-s"]).catch(() => "")).split("\n")) if (line) reachable.push(line.split(" ")[1]);
   }
-  // Pointer files are small blobs; read those and collect their oids.
-  const checked = await git(dir, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], { input: reachable.join("\n") + "\n", maxBytes: 512 * 1024 * 1024 });
-  const small = checked
-    .split("\n")
-    .map((line) => line.split(" "))
-    .filter(([, type, size]) => type === "blob" && Number(size) < 1024)
-    .map(([oid]) => oid);
-  const keep = new Set();
-  if (small.length) {
-    const contents = await git(dir, ["cat-file", "--batch"], { input: [...new Set(small)].join("\n") + "\n", maxBytes: 512 * 1024 * 1024 });
-    for (const match of contents.matchAll(/^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})$/gm)) keep.add(match[1]);
-  }
+  const keep = await pointerOids(dir, reachable);
   const recent = Date.now() - 60 * 60 * 1000;
   for (const a of fs.readdirSync(store))
     for (const b of fs.readdirSync(path.join(store, a)))
@@ -843,6 +882,45 @@ async function pruneLfs(dir) {
         const file = path.join(store, a, b, oid);
         if (!keep.has(oid) && fs.statSync(file).mtimeMs < recent) fs.rmSync(file, { force: true });
       }
+}
+
+const revObjects = async (dir, revs) =>
+  (await git(dir, ["rev-list", "--objects", "--no-object-names", ...revs], { maxBytes: 512 * 1024 * 1024 })).split("\n").filter(Boolean);
+
+/** The LFS files (sha256 oids) named by the pointer files among these objects. */
+async function pointerOids(dir, objects) {
+  // Pointer files are small blobs; read those and collect their oids.
+  const checked = await git(dir, ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"], { input: objects.join("\n") + "\n", maxBytes: 512 * 1024 * 1024 });
+  const small = checked
+    .split("\n")
+    .map((line) => line.split(" "))
+    .filter(([, type, size]) => type === "blob" && Number(size) < 1024)
+    .map(([oid]) => oid);
+  const oids = new Set();
+  if (small.length) {
+    const contents = await git(dir, ["cat-file", "--batch"], { input: [...new Set(small)].join("\n") + "\n", maxBytes: 512 * 1024 * 1024 });
+    for (const match of contents.matchAll(/^version https:\/\/git-lfs\.github\.com\/spec\/v1\noid sha256:([0-9a-f]{64})$/gm)) oids.add(match[1]);
+  }
+  return oids;
+}
+
+/** The LFS files every version of these refs names. */
+const lfsObjects = async (dir, refs) => pointerOids(dir, await revObjects(dir, refs));
+
+/** Put LFS files of one repository into another's store (linked: they never change). Files this copy lacks are skipped. */
+function copyLfs(from, to, oids) {
+  for (const oid of oids) {
+    const part = path.join("lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
+    const source = path.join(from, part);
+    const target = path.join(to, part);
+    if (fs.existsSync(target) || !fs.existsSync(source)) continue;
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    try {
+      fs.linkSync(source, target);
+    } catch {
+      fs.copyFileSync(source, target);
+    }
+  }
 }
 
 /** A version named by its hash or as HEAD, HEAD~2… (never anything git could take for an option). */

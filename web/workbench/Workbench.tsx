@@ -25,6 +25,7 @@ import { api, workPath, experiencePath, useServerEvent, sendEvent } from "../lib
 import { Sash, usePersistent, useToast, Dialog, useConfirm, usePrompt } from "../lib/ui";
 import type { CheckResult, WorkInfo, WorkStatus } from "../lib/types";
 import { navigate } from "../App";
+import { movedHere } from "../components/MoveWorkDialog";
 import { StageController, WorkbenchContext, useWorkbench, type ChatAttachment, type Selection, type VersionSource, type WorkbenchContextValue } from "./store";
 import { useTimelineHistory } from "./timelineHistory";
 import { PropertiesView } from "../views/PropertiesView";
@@ -129,6 +130,12 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   useServerEvent(
     (event) => {
       if (event.work !== id) return;
+      // Moved to another repository (here or from another window): follow it there.
+      if (event.type === "work-moved" && event.from === repo) {
+        if (!movedHere(repo, id)) toast(`作品已迁移到「${String(event.name || event.to)}」`, "ok");
+        navigate(`/work/${encodeURIComponent(String(event.to))}/${encodeURIComponent(id)}`, { replace: true });
+        return;
+      }
       if (event.type === "work-files" || event.type === "preview-update") {
         void reload();
         void reloadStatus();
@@ -136,7 +143,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
       if (event.type === "work-versions") void reloadStatus();
       if (event.type === "work-check") setCheck(event.result as CheckResult);
     },
-    [id],
+    [id, repo],
   );
 
   // Tell the server (and so the AI) where the user is looking: at once on a change, then every second.
