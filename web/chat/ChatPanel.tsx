@@ -35,8 +35,8 @@ import {
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
 import { useWorkbench, type ChatAttachment } from "../workbench/store";
-import { TranscriptReducer, groupTurns, reduceTranscript, type Entry, type ToolBlock, type Turn } from "./reduce";
-import { TurnBlocks } from "./Transcript";
+import { TranscriptReducer, formatTokens, groupTurns, reduceTranscript, runningTurn, writtenTokens, type Entry, type ToolBlock, type Turn } from "./reduce";
+import { TurnBlocks, activity, type TurnProgress } from "./Transcript";
 import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
 import { insertPrompt, newPromptId, usePrompts, type PromptNode } from "../lib/prompts";
@@ -303,6 +303,12 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
 
   const turns = useTurns(entries);
   const running = session?.status === "running" || session?.status === "waiting";
+  // The turn being worked on, once its message is in the transcript.
+  const progress = useMemo<TurnProgress | null>(() => {
+    const turn = running ? runningTurn(turns) : null;
+    if (!turn) return null;
+    return { state: activity(turn.items, session?.status === "waiting"), startedAt: turn.startedAt, tokens: writtenTokens(turn.items), context: session?.usage };
+  }, [turns, running, session?.status, session?.usage]);
 
   useLayoutEffect(() => {
     const element = scroller.current;
@@ -595,7 +601,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               }
               if (turn.user && !turn.user.steered) k += 1;
               const turnIndex = k;
-              const live = running && index === turns.length - 1;
+              const live = Boolean(progress) && index === turns.length - 1;
               const next = turns[index + 1];
               // The branch point is after a whole turn, so only its last part offers it.
               const endOfTurn = turnIndex >= 0 && !live && (!next || Boolean(next.branch) || Boolean(next.user && !next.user.steered));
@@ -606,6 +612,8 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
                   turn={turn}
                   turnIndex={turnIndex}
                   live={live}
+                  progress={live ? progress : null}
+                  agent={session?.agent}
                   endOfTurn={endOfTurn}
                   versionIndex={Math.max(
                     0,
@@ -906,6 +914,8 @@ const TurnView = memo(function TurnView({
   turn,
   turnIndex,
   live,
+  progress,
+  agent,
   endOfTurn,
   versionIndex,
   versionCount,
@@ -915,6 +925,8 @@ const TurnView = memo(function TurnView({
   turn: Turn;
   turnIndex: number;
   live: boolean;
+  progress: TurnProgress | null;
+  agent?: string;
   endOfTurn: boolean;
   versionIndex: number;
   versionCount: number;
@@ -938,6 +950,8 @@ const TurnView = memo(function TurnView({
         <TurnBlocks
           items={turn.items}
           running={live}
+          progress={progress}
+          agent={agent}
           onRespond={actions.respond}
           onLoadTool={actions.loadTool}
           footer={
@@ -1291,8 +1305,6 @@ function PromptPicker({ draft, onPick, onManage }: { draft: string; onPick: (tex
   );
 }
 
-const tokens = (value: number) => (value >= 1000 ? `${(value / 1000).toFixed(value >= 100_000 ? 0 : 1)}k` : String(value));
-
 /** How full the AI's context is, as a ring; the popover offers a manual compaction. */
 function ContextRing({ usage, busy, onCompact }: { usage?: SessionMeta["usage"]; busy: boolean; onCompact: () => void }) {
   if (!usage?.size || usage.used == null) return null;
@@ -1324,7 +1336,7 @@ function ContextRing({ usage, busy, onCompact }: { usage?: SessionMeta["usage"];
             <i className={level} style={{ width: `${used * 100}%` }} />
           </div>
           <div className="muted small-text">
-            已用 {tokens(usage.used!)} / {tokens(usage.size!)} tokens
+            已用 {formatTokens(usage.used!)} / {formatTokens(usage.size!)} tokens
           </div>
           <p className="faint small-text">快满时 AI 会自动压缩。也可以现在手动压缩：AI 把之前的对话总结成摘要，在摘要的基础上继续。</p>
           <button

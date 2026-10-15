@@ -414,6 +414,8 @@ export class AiManager {
         queue: [],
         choices: { ...parent.meta.choices },
         usage: keep === starts.length ? (parent.meta.usage ?? null) : null,
+        // Claude's fork copies the messages, not the cost total: it counts from zero (see noteCost).
+        spent: 0,
         // Turns dropped from the branch may have changed files: said once in the first message.
         branch: { from: parent.meta.id, title: parent.meta.title, keep, dropped: starts.length - keep },
       },
@@ -503,6 +505,7 @@ export class AiManager {
       if (!session.meta.acpSessionId) {
         result = await process.connection.newSession({ ...common, ...meta });
         session.meta.acpSessionId = result.sessionId;
+        session.meta.spent = 0; // a new agent session has cost nothing yet
       } else if (!result) {
         try {
           if (process.capabilities.sessionCapabilities?.resume)
@@ -521,6 +524,7 @@ export class AiManager {
           if (error?.code !== -32002 && !/not found/i.test(error?.message || "")) throw error;
           result = await process.connection.newSession({ ...common, ...meta });
           session.meta.acpSessionId = result.sessionId;
+          session.meta.spent = 0;
           this.append(session, { kind: "notice", message: "AI 的上下文已无法恢复，已在新的上下文中继续（对话记录仍保留在这里）" });
         }
       }
@@ -596,6 +600,7 @@ export class AiManager {
   }
   async runTurn(session, message) {
     session.meta.status = "running";
+    session.turnCost = undefined;
     if (session.meta.title === "新对话" && message.text.trim() && !isCommand(session, message.text))
       session.meta.title = message.text.trim().replace(/\s+/g, " ").slice(0, 40);
     this.publish(session);
@@ -625,7 +630,11 @@ export class AiManager {
           }
         }
       }
-      this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null });
+      // What the agent sent just before its answer (the turn's cost) can still be on its way
+      // through the connection, which hands answers over sooner than notifications.
+      await new Promise((resolve) => setImmediate(resolve));
+      const cost = session.turnCost && this.pricedByClaude(session) ? { cost: session.turnCost } : {};
+      this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null, ...cost });
     } catch (error) {
       this.append(session, { kind: "error", message: authHint(error, session.process).message });
     } finally {
@@ -786,6 +795,7 @@ export class AiManager {
       return this.publish(session);
     }
     if (update.sessionUpdate === "usage_update") {
+      if (update.cost) this.noteCost(session, update.cost);
       session.meta.usage = update;
       return this.publish(session);
     }
@@ -798,6 +808,28 @@ export class AiManager {
       this.saveMeta(session);
     }
     this.append(session, { kind: "update", update: unwrapToolResult(withoutAgentCopy(update)) });
+  }
+  /**
+   * Claude reports what its session has cost so far, and a resumed session goes on from the
+   * total Claude saved for it as its process ended: a turn costs what the total grew by while
+   * it ran. Unknown (null) when there is no earlier total or it went down (it was not saved).
+   */
+  noteCost(session, cost) {
+    const amount = Number(cost.amount);
+    if (!Number.isFinite(amount)) return;
+    const before = session.meta.spent;
+    session.meta.spent = amount;
+    if (session.meta.status === "idle" || session.turnCost === null) return;
+    session.turnCost =
+      typeof before === "number" && amount >= before ? { amount: (session.turnCost?.amount ?? 0) + amount - before, currency: cost.currency || "USD" } : null;
+  }
+  /**
+   * Whether Claude's cost is right: it knows Anthropic's prices, and prices another vendor's
+   * model behind an Anthropic-compatible endpoint as its own default model.
+   */
+  pricedByClaude(session) {
+    const profile = this.profiles.list().find((item) => item.id === session.meta.profile);
+    return profile?.kind === "account" || (profile?.kind === "anthropic" && !profile.baseUrl);
   }
   onPermission(params) {
     const session = this.sessionByAcp(params.sessionId);

@@ -34,6 +34,25 @@ export interface ToolBlock {
   /** Long texts were cut short in the conversation: the whole call is asked for when shown. */
   cut?: boolean;
 }
+/** Tokens of a turn as the agent reports them: Claude for the whole turn, Codex for its last request. */
+export interface Usage {
+  totalTokens?: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedReadTokens?: number;
+  cachedWriteTokens?: number;
+  thoughtTokens?: number;
+}
+export interface TurnEnd {
+  kind: "turn_end";
+  stopReason: string;
+  usage?: Usage | null;
+  /** What the turn cost, when the agent tells (Claude). */
+  cost?: { amount: number; currency: string };
+  /** When the turn's message was sent (undefined if it is not in the transcript) and when the turn ended. */
+  startedAt?: number;
+  at: number;
+}
 export type Block =
   | { kind: "user"; id: string; text: string; attachments: Record<string, unknown>[]; at: number; steered?: boolean }
   | { kind: "text"; text: string }
@@ -47,7 +66,7 @@ export type Block =
       options: { optionId: string; name: string; kind: string }[];
       outcome?: { outcome: { outcome: string; optionId?: string } };
     }
-  | { kind: "turn_end"; stopReason: string; usage?: { totalTokens?: number; inputTokens?: number; outputTokens?: number } | null }
+  | TurnEnd
   | { kind: "error"; message: string }
   | { kind: "notice"; message: string }
   /** Where a branch starts: what came before is the parent conversation's first `keep` turns. */
@@ -107,6 +126,8 @@ type PermissionBlock = Extract<Block, { kind: "permission" }>;
 export class TranscriptReducer {
   blocks: Block[] = [];
   private index = new Map<string, number>();
+  /** When the turn being read started: at a message of the user's own (steered ones join a turn). */
+  private turnStart?: number;
 
   private replace<T extends Block>(at: number, change: (block: T) => T) {
     this.blocks[at] = change(this.blocks[at] as T);
@@ -116,6 +137,7 @@ export class TranscriptReducer {
     const blocks = this.blocks;
     switch (entry.kind) {
       case "user":
+        if (!entry.steered) this.turnStart = entry.at;
         blocks.push({
           kind: "user",
           id: entry.id as string,
@@ -193,7 +215,14 @@ export class TranscriptReducer {
         break;
       }
       case "turn_end":
-        blocks.push({ kind: "turn_end", stopReason: entry.stopReason as string, usage: entry.usage as never });
+        blocks.push({
+          kind: "turn_end",
+          stopReason: entry.stopReason as string,
+          usage: entry.usage as Usage | null,
+          cost: entry.cost as TurnEnd["cost"],
+          startedAt: this.turnStart,
+          at: entry.at,
+        });
         break;
       case "error":
         blocks.push({ kind: "error", message: entry.message as string });
@@ -240,4 +269,71 @@ export function groupTurns(blocks: Block[], previous: Turn[] = []) {
       ? old
       : turn;
   });
+}
+
+/**
+ * The turn the AI is working on: what it has done since the user's message (messages steered
+ * into the turn belong to it) and when that was sent. Null when the last turn has ended: the
+ * next message is on its way.
+ */
+export function runningTurn(turns: Turn[]): { startedAt: number; items: Block[] } | null {
+  const last = turns.at(-1)?.items.at(-1);
+  if (last?.kind === "turn_end" || last?.kind === "error") return null;
+  const items: Block[] = [];
+  for (let index = turns.length - 1; index >= 0 && !turns[index].branch; index--) {
+    const turn = turns[index];
+    items.unshift(...turn.items);
+    if (turn.user && !turn.user.steered) return { startedAt: turn.user.at, items };
+  }
+  return null;
+}
+
+/** Roughly how many tokens a text takes: one per CJK character, one per four other characters. */
+export function estimateTokens(text: string) {
+  let wide = 0;
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) >= 0x2e80) wide++;
+  return wide + (text.length - wide) / 4;
+}
+
+const written = new WeakMap<Block, number>();
+/**
+ * Roughly how many tokens the AI wrote in these blocks (replies, thoughts, tool inputs), for
+ * while a turn runs: the agents count tokens only when a request is done. Blocks are never
+ * changed in place, so each one is measured once.
+ */
+export function writtenTokens(items: Block[]) {
+  let sum = 0;
+  for (const block of items) {
+    let tokens = written.get(block);
+    if (tokens === undefined) {
+      if (block.kind === "text" || block.kind === "thought") tokens = estimateTokens(block.text);
+      else if (block.kind === "tool") tokens = block.rawInput === undefined ? 0 : estimateTokens(JSON.stringify(block.rawInput));
+      else if (block.kind === "plan") tokens = estimateTokens(block.entries.map((entry) => entry.content).join("\n"));
+      else tokens = 0;
+      written.set(block, tokens);
+    }
+    sum += tokens;
+  }
+  return Math.round(sum);
+}
+
+/** "980", "23.1k", "197k", "1.2M". */
+export function formatTokens(value: number) {
+  const [scaled, unit] = value >= 1e6 ? [value / 1e6, "M"] : value >= 1000 ? [value / 1000, "k"] : [value, ""];
+  return (unit ? scaled.toFixed(scaled >= 100 ? 0 : 1).replace(/\.0$/, "") : String(Math.round(scaled))) + unit;
+}
+
+/** "8 秒", "2 分 5 秒", "1 小时 3 分". */
+export function formatDuration(ms: number) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  if (total < 60) return `${total} 秒`;
+  const minutes = Math.floor(total / 60);
+  if (minutes < 60) return `${minutes} 分 ${total % 60} 秒`;
+  return `${Math.floor(minutes / 60)} 小时 ${minutes % 60} 分`;
+}
+
+/** "$0.42", "<$0.01"; another currency with its code. */
+export function formatCost({ amount, currency }: { amount: number; currency: string }) {
+  if (currency !== "USD") return `${amount.toFixed(2)} ${currency}`;
+  return amount < 0.01 ? "<$0.01" : `$${amount.toFixed(2)}`;
 }

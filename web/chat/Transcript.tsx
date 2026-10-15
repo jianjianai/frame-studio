@@ -26,7 +26,19 @@ import {
 import { formatTime } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { lineDiff, compactDiff } from "./lineDiff";
-import { textAmount, textHead, OUTPUT_LIMIT, type Block, type ContentBlock, type ToolBlock, type ToolContent } from "./reduce";
+import {
+  formatCost,
+  formatDuration,
+  formatTokens,
+  textAmount,
+  textHead,
+  OUTPUT_LIMIT,
+  type Block,
+  type ContentBlock,
+  type ToolBlock,
+  type ToolContent,
+  type TurnEnd,
+} from "./reduce";
 
 const kindIcon = (kind?: string, title = "") => {
   if (/frame__|^mcp\.frame\.|frame\./.test(title)) return <Clapperboard size={13} />;
@@ -96,6 +108,27 @@ export function toolTitle(title: string) {
   const match = /(?:mcp__frame__|mcp\.frame\.|frame[.:])([a-z_]+)/.exec(title);
   if (match) return FRAME_TOOL_NAMES[match[1]] ?? match[1];
   return title;
+}
+
+const KIND_ACTIVITY: Record<string, string> = {
+  read: "读取文件",
+  edit: "修改文件",
+  delete: "删除文件",
+  move: "移动文件",
+  execute: "运行命令",
+  search: "搜索",
+  fetch: "访问网页",
+};
+/** What the AI is doing, in a word or two, from the last thing it did. */
+export function activity(items: Block[], waiting: boolean) {
+  if (waiting) return "等待你确认";
+  const last = items.at(-1);
+  if (last?.kind === "text") return "回复中";
+  if (last?.kind === "notice") return "等待中";
+  if (last?.kind !== "tool" || (last.status !== "pending" && last.status !== "in_progress")) return "思考中";
+  const name = toolTitle(last.title);
+  if (name !== last.title && !name.includes("_")) return name; // compaction, a FRAME tool with a name
+  return KIND_ACTIVITY[last.toolKind ?? ""] ?? "调用工具";
 }
 
 const StatusIcon = ({ status }: { status?: string }) =>
@@ -345,20 +378,110 @@ function Plan({ entries }: { entries: { content: string; status: string }[] }) {
   );
 }
 
+/** The running turn, as the CLI shows it while it works. */
+export interface TurnProgress {
+  /** What the AI is doing ("思考中", "运行命令"…). */
+  state: string;
+  startedAt: number;
+  /** Roughly how many tokens it has written so far. */
+  tokens: number;
+  context?: { used?: number; size?: number } | null;
+}
+
+function useNow(interval: number) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), interval);
+    return () => clearInterval(timer);
+  }, [interval]);
+  return now;
+}
+
+/** "思考中… · 1 分 12 秒 · ↓ 约 3.4k tokens" and the context in use, ticking every second. */
+function TurnStatus({ progress }: { progress: TurnProgress }) {
+  const now = useNow(1000);
+  const { used, size } = progress.context ?? {};
+  return (
+    <div className="turn-status">
+      <span className="dots">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span className="turn-state">{progress.state}…</span>
+      <span className="turn-meta">{formatDuration(now - progress.startedAt)}</span>
+      {progress.tokens >= 10 && (
+        <span className="turn-meta" title="按 AI 已写出的文字估算；Claude 的回复结束后显示准确数字">
+          ↓ 约 {formatTokens(progress.tokens)} tokens
+        </span>
+      )}
+      {used != null && size ? (
+        <span className="turn-context">
+          上下文 {formatTokens(used)} / {formatTokens(size)}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * What a finished turn took: its time, the tokens it wrote (Claude counts them for the whole
+ * turn; Codex only for its last request, so not shown) and its cost.
+ */
+function turnStats(end: TurnEnd, agent?: string) {
+  const usage = agent === "claude" ? end.usage : null;
+  const cost = end.cost && end.cost.amount > 0 ? end.cost : null;
+  const parts = [
+    end.startedAt !== undefined ? `用时 ${formatDuration(end.at - end.startedAt)}` : "",
+    usage?.outputTokens ? `输出 ${formatTokens(usage.outputTokens)} tokens` : "",
+    cost ? formatCost(cost) : "",
+  ].filter(Boolean);
+  if (!parts.length) return null;
+  const detail = [
+    usage
+      ? [
+          usage.inputTokens != null ? `输入 ${formatTokens(usage.inputTokens)}` : "",
+          usage.cachedReadTokens ? `缓存读取 ${formatTokens(usage.cachedReadTokens)}` : "",
+          usage.cachedWriteTokens ? `缓存写入 ${formatTokens(usage.cachedWriteTokens)}` : "",
+          usage.outputTokens != null ? `输出 ${formatTokens(usage.outputTokens)}（含思考）` : "",
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : "",
+    cost ? "费用由 Claude 按 API 价格计算，用订阅账号时只作参考" : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  return (
+    <span className="turn-stats" title={detail || undefined}>
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
 export function TurnBlocks({
   items,
   running,
+  progress,
+  agent,
   onRespond,
   onLoadTool,
   footer,
 }: {
   items: Block[];
   running: boolean;
+  /** For the turn the AI is working on. */
+  progress?: TurnProgress | null;
+  /** "claude" or "codex": whose figures the turn ends carry. */
+  agent?: string;
   onRespond: (id: string, optionId?: string) => void;
   onLoadTool?: LoadTool;
   /** Actions shown under a finished reply. */
   footer?: React.ReactNode;
 }) {
+  let end: TurnEnd | undefined;
+  for (const block of items) if (block.kind === "turn_end") end = block;
+  const stats = end && turnStats(end, agent);
   return (
     <div className="assistant">
       <div className="msg-head">
@@ -405,16 +528,13 @@ export function TurnBlocks({
             return null;
         }
       })}
-      {running && (
-        <div className="working">
-          <span className="dots">
-            <i />
-            <i />
-            <i />
-          </span>
+      {running && progress && <TurnStatus progress={progress} />}
+      {!running && (stats || footer) && (
+        <div className="turn-footer">
+          {stats}
+          {footer}
         </div>
       )}
-      {!running && footer && <div className="turn-footer">{footer}</div>}
     </div>
   );
 }

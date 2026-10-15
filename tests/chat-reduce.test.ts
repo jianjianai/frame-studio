@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { reduceTranscript, groupTurns, TranscriptReducer, textHead, textAmount, OUTPUT_LIMIT, type ToolBlock } from "../web/chat/reduce";
+import {
+  reduceTranscript,
+  groupTurns,
+  TranscriptReducer,
+  textHead,
+  textAmount,
+  runningTurn,
+  writtenTokens,
+  formatTokens,
+  formatDuration,
+  formatCost,
+  OUTPUT_LIMIT,
+  type ToolBlock,
+} from "../web/chat/reduce";
 import { lineDiff, compactDiff } from "../web/chat/lineDiff";
 import { compact, lean, withoutAgentCopy } from "../server/ai/manager.mjs";
 
@@ -81,6 +94,45 @@ describe("chat transcript", () => {
   });
   it("compacts stored chunks on the server", () => {
     expect(compact(entries as never).filter((entry) => entry.kind === "update")).toHaveLength(4);
+  });
+  it("times a turn from its message, steered messages included", () => {
+    const blocks = reduceTranscript([
+      { at: 1000, kind: "user", id: "u1", text: "做个标题", attachments: [] },
+      update("agent_message_chunk", { content: { type: "text", text: "好" } }),
+      { at: 5000, kind: "user", id: "u2", text: "顺便", attachments: [], steered: true },
+      { at: 75000, kind: "turn_end", stopReason: "end_turn", usage: { outputTokens: 1200 }, cost: { amount: 0.42, currency: "USD" } },
+    ]);
+    expect(blocks.at(-1)).toEqual({
+      kind: "turn_end",
+      stopReason: "end_turn",
+      usage: { outputTokens: 1200 },
+      cost: { amount: 0.42, currency: "USD" },
+      startedAt: 1000,
+      at: 75000,
+    });
+  });
+  it("finds the turn being worked on and estimates what the AI wrote", () => {
+    const say = (id: string, at: number, steered = false) => ({ at, kind: "user", id, text: id, attachments: [], steered });
+    const thought = update("agent_thought_chunk", { content: { type: "text", text: "a".repeat(400) } });
+    const reply = update("agent_message_chunk", { content: { type: "text", text: "好的，标题做好了" } });
+    const tool = update("tool_call", { toolCallId: "w", title: "Write", kind: "edit", status: "in_progress", rawInput: { content: "b".repeat(398) } });
+    const turns = (list: unknown[]) => groupTurns(reduceTranscript(list as never));
+    expect(runningTurn(turns([say("u1", 10), thought, { at: 20, kind: "turn_end", stopReason: "end_turn" }]))).toBeNull();
+    expect(runningTurn(turns([say("u1", 10), { at: 20, kind: "error", message: "x" }]))).toBeNull();
+    // Just sent: nothing written yet.
+    expect(runningTurn(turns([say("u1", 10)]))).toEqual({ startedAt: 10, items: [] });
+    const running = runningTurn(turns([say("u1", 10), thought, { at: 20, kind: "turn_end", stopReason: "end_turn" }, say("u2", 30), thought, say("u3", 40, true), tool, reply]))!;
+    expect(running.startedAt).toBe(30);
+    expect(running.items.map((block) => block.kind)).toEqual(["thought", "tool", "text"]);
+    // 400 letters: 100; the tool input as JSON, 412 characters: 103; eight CJK characters: 8.
+    expect(writtenTokens(running.items)).toBe(211);
+  });
+  it("formats token counts, durations and costs", () => {
+    expect([980, 23_100, 23_000, 197_400, 1_000_000, 28_380_715].map(formatTokens)).toEqual(["980", "23.1k", "23k", "197k", "1M", "28.4M"]);
+    expect([0, 8_900, 72_000, 125_000, 3_725_000].map(formatDuration)).toEqual(["0 秒", "8 秒", "1 分 12 秒", "2 分 5 秒", "1 小时 2 分"]);
+    expect(formatCost({ amount: 1.2049, currency: "USD" })).toBe("$1.20");
+    expect(formatCost({ amount: 0.0025, currency: "USD" })).toBe("<$0.01");
+    expect(formatCost({ amount: 3, currency: "CNY" })).toBe("3.00 CNY");
   });
   it("diffs lines with context", () => {
     const lines = lineDiff("a\nb\nc\nd\ne\nf\ng", "a\nb\nC\nd\ne\nf\ng");

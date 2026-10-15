@@ -27,7 +27,7 @@ describe("conversation branches", () => {
   const image = "a".repeat(24) + ".png";
   function parentSession() {
     const id = "parent-" + Math.random().toString(36).slice(2);
-    const meta = { id, work: work.id, repo: "local", profile: "claude-account", profileName: "Claude", agent: "claude", model: "", title: "原对话", createdAt: "", updatedAt: "", status: "idle", queue: [], choices: { model: "haiku" }, acpSessionId: "acp-1", usage: { used: 10, size: 100 } };
+    const meta = { id, work: work.id, repo: "local", profile: "claude-account", profileName: "Claude", agent: "claude", model: "", title: "原对话", createdAt: "", updatedAt: "", status: "idle", queue: [], choices: { model: "haiku" }, acpSessionId: "acp-1", usage: { used: 10, size: 100 }, spent: 3.2 };
     const say = (text, extra = {}) => ({ at: 1, kind: "user", id: text, text, attachments: [], ...extra });
     const reply = (text, messageId) => ({ at: 1, kind: "update", update: { sessionUpdate: "agent_message_chunk", messageId, content: { type: "text", text } } });
     const entries = [
@@ -55,6 +55,8 @@ describe("conversation branches", () => {
     expect(transcript.map((entry) => entry.kind)).toEqual(["user", "update", "turn_end", "branch"]);
     expect(transcript.at(-1)).toMatchObject({ from: parent, title: "原对话", keep: 1 });
     expect(prompts.some((item) => item.id === branch.id)).toBe(false);
+    // Claude's fork starts its cost total over: the branch's first turn is charged from zero.
+    expect(ai.get(branch.id).meta.spent).toBe(0);
   });
 
   it("edits a message: the branch keeps what came before and sends the new text with the old images", async () => {

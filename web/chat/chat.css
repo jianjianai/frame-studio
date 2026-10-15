@@ -455,8 +455,29 @@
   flex: none;
   margin-top: 2px;
 }
-.working {
+/* The running turn: "思考中… · 1 分 12 秒 · ↓ 约 3.4k tokens", then the context in use. */
+.turn-status {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  row-gap: 2px;
   padding: 6px 0;
+  color: var(--fg-faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.turn-state {
+  margin-left: 8px;
+  color: var(--fg-muted);
+}
+.turn-meta::before {
+  content: "·";
+  margin: 0 6px;
+}
+/* At the end of the line, or of the next one in a narrow panel. */
+.turn-context {
+  margin-left: auto;
+  padding-left: 12px;
 }
 .dots {
   display: inline-flex;
@@ -850,8 +871,18 @@
 }
 .turn-footer {
   display: flex;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 4px;
   margin-top: 2px;
+}
+.turn-stats {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  margin-right: 4px;
+  color: var(--fg-faint);
+  font-size: 12px;
 }
 .turn-action {
   display: inline-flex;
