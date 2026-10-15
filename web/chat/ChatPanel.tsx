@@ -36,7 +36,7 @@ import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
 import { useWorkbench, type ChatAttachment } from "../workbench/store";
 import { TranscriptReducer, formatTokens, groupTurns, reduceTranscript, runningTurn, writtenTokens, type Entry, type ToolBlock, type Turn } from "./reduce";
-import { TurnBlocks, activity, type TurnProgress } from "./Transcript";
+import { TurnBlocks, activity, runningTool, type TurnProgress } from "./Transcript";
 import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
 import { insertPrompt, newPromptId, usePrompts, type PromptNode } from "../lib/prompts";
@@ -108,6 +108,8 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [current, setCurrent] = usePersistent<string | null>(`chat:${work.repo}/${work.id}`, null);
   const [entries, setEntries] = useState<Entry[]>([]);
+  // When the running turn's agent last heard from the model; only sent where the server can tell.
+  const [heartbeat, setHeartbeat] = useState<{ session: string; at: number | null } | null>(null);
   // The loaded part of the conversation: its first turn's number (turn > 0: earlier turns are
   // loaded when scrolled back to), whether it is loading.
   const [view, setView] = useState<{ turn: number; loading: boolean; older: boolean }>({ turn: 0, loading: false, older: false });
@@ -258,7 +260,8 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         if (loading.current?.session === current) loading.current.events.push({ entry, end: event.end as number | undefined });
         else setEntries((list) => [...list, entry]);
         if (entry.kind === "user") setPending(null);
-      } else if (event.type === "ai-session-removed") setSessions((list) => list.filter((item) => item.id !== event.session));
+      } else if (event.type === "ai-heartbeat" && event.session === current) setHeartbeat({ session: event.session as string, at: event.at as number | null });
+      else if (event.type === "ai-session-removed") setSessions((list) => list.filter((item) => item.id !== event.session));
       else if (event.type === "settings" && event.key === "ai")
         void api<{ profiles: Profile[]; defaultModes: Record<string, string> }>("/api/ai/profiles").then((data) => {
           setProfiles(data.profiles);
@@ -303,12 +306,16 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
 
   const turns = useTurns(entries);
   const running = session?.status === "running" || session?.status === "waiting";
+  const lastAt = entries.at(-1)?.at;
   // The turn being worked on, once its message is in the transcript.
   const progress = useMemo<TurnProgress | null>(() => {
     const turn = running ? runningTurn(turns) : null;
     if (!turn) return null;
-    return { state: activity(turn.items, session?.status === "waiting"), startedAt: turn.startedAt, tokens: writtenTokens(turn.items), context: session?.usage };
-  }, [turns, running, session?.status, session?.usage]);
+    const waiting = session?.status === "waiting";
+    // Whatever the agent sends also comes from the model; heartbeats fill the silence between.
+    const heard = heartbeat?.session === current && !waiting && !runningTool(turn.items) ? Math.max(heartbeat.at ?? 0, lastAt ?? 0, turn.startedAt) : undefined;
+    return { state: activity(turn.items, waiting), startedAt: turn.startedAt, tokens: writtenTokens(turn.items), context: session?.usage, heard };
+  }, [turns, running, session?.status, session?.usage, heartbeat, current, lastAt]);
 
   useLayoutEffect(() => {
     const element = scroller.current;

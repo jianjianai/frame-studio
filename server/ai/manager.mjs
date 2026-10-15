@@ -10,8 +10,10 @@ import { appVersion } from "../config.mjs";
 import { problem, notFound, writeFileAtomic } from "../util.mjs";
 import { formatTime } from "../render.mjs";
 import { experienceDelta, filesNotice, noteSeen, rebaseSeen, referencedExperience, selectionText, snapshotFiles } from "./context.mjs";
+import { lastReceived } from "./heartbeat.mjs";
 
 const IDLE_MS = 15 * 60 * 1000;
+const HEARTBEAT_MS = 3000;
 /** FRAME permission levels mapped to each agent's own session modes. */
 export const PERMISSION_MODES = {
   ask: { claude: "default", codex: "read-only" },
@@ -119,6 +121,8 @@ export class AiManager {
     }
     this.timer = setInterval(() => this.sweep(), 60000);
     this.timer.unref();
+    this.pulse = setInterval(() => void this.heartbeat(), HEARTBEAT_MS);
+    this.pulse.unref();
   }
 
   // ---- persistence --------------------------------------------------------
@@ -309,6 +313,30 @@ export class AiManager {
         session.meta.status = "idle";
         this.publish(session);
       }
+    }
+  }
+  /**
+   * Tell the chat when each running Claude turn last heard from the model (see heartbeat.mjs):
+   * thinking it doesn't show looks the same as a stalled connection otherwise.
+   */
+  async heartbeat() {
+    const running = [...this.sessions.values()].filter(
+      (session) => session.meta.status === "running" && session.process?.agent === "claude" && session.process.child?.pid,
+    );
+    if (this.probing || !running.length) return;
+    this.probing = true;
+    try {
+      const times = await lastReceived(
+        running.map((session) => ({ id: session.meta.id, sessionId: session.meta.acpSessionId, root: session.process.child.pid })),
+      );
+      for (const session of running) {
+        if (!times.has(session.meta.id) || session.meta.status !== "running") continue;
+        const at = times.get(session.meta.id);
+        if (at !== null) session.heartbeat = Math.max(session.heartbeat ?? 0, at);
+        this.services.events.emit({ type: "ai-heartbeat", session: session.meta.id, work: session.meta.work, at: session.heartbeat ?? null });
+      }
+    } finally {
+      this.probing = false;
     }
   }
   sweep() {
@@ -601,6 +629,7 @@ export class AiManager {
   async runTurn(session, message) {
     session.meta.status = "running";
     session.turnCost = undefined;
+    session.heartbeat = undefined;
     if (session.meta.title === "新对话" && message.text.trim() && !isCommand(session, message.text))
       session.meta.title = message.text.trim().replace(/\s+/g, " ").slice(0, 40);
     this.publish(session);
@@ -1025,6 +1054,7 @@ export class AiManager {
 
   close() {
     clearInterval(this.timer);
+    clearInterval(this.pulse);
     for (const entry of this.processes.values()) entry.process.kill();
     this.processes.clear();
   }

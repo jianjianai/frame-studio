@@ -119,13 +119,16 @@ const KIND_ACTIVITY: Record<string, string> = {
   search: "搜索",
   fetch: "访问网页",
 };
+/** The tool the AI waits on: the last thing it did, still running. */
+export function runningTool(items: Block[]) {
+  const last = items.at(-1);
+  return last?.kind === "tool" && (last.status === "pending" || last.status === "in_progress") ? last : null;
+}
 /** What the AI is doing, in a word or two, from the last thing it did. */
 export function activity(items: Block[], waiting: boolean) {
   if (waiting) return "等待你确认";
-  const last = items.at(-1);
-  if (last?.kind === "text") return "回复中";
-  if (last?.kind === "notice") return "等待中";
-  if (last?.kind !== "tool" || (last.status !== "pending" && last.status !== "in_progress")) return "思考中";
+  const last = runningTool(items);
+  if (!last) return items.at(-1)?.kind === "text" ? "回复中" : items.at(-1)?.kind === "notice" ? "等待中" : "思考中";
   const name = toolTitle(last.title);
   if (name !== last.title && !name.includes("_")) return name; // compaction, a FRAME tool with a name
   return KIND_ACTIVITY[last.toolKind ?? ""] ?? "调用工具";
@@ -386,6 +389,24 @@ export interface TurnProgress {
   /** Roughly how many tokens it has written so far. */
   tokens: number;
   context?: { used?: number; size?: number } | null;
+  /** When the model last sent anything, heartbeats included, while the AI waits on it (not on a tool or the user). */
+  heard?: number;
+}
+
+/** No data from the model for this long: the connection may have stalled. */
+const SILENT_MS = 30000;
+
+/** "心跳 2 秒前", or how long nothing has come once that looks like a stall. */
+function Heartbeat({ age }: { age: number }) {
+  return age < SILENT_MS ? (
+    <span className="turn-meta" title="AI 服务上次发来数据的时间，包括保持连接的心跳。模型思考时不显示内容，但连接正常时每隔一两秒就会收到心跳">
+      心跳 {formatDuration(age)}前
+    </span>
+  ) : (
+    <span className="turn-meta turn-silent" title="这么久没有收到 AI 服务的任何数据，连心跳也没有，连接可能卡住了；可以停止后重发这条消息">
+      已 {formatDuration(age)}没有收到数据
+    </span>
+  );
 }
 
 function useNow(interval: number) {
@@ -410,6 +431,7 @@ function TurnStatus({ progress }: { progress: TurnProgress }) {
       </span>
       <span className="turn-state">{progress.state}…</span>
       <span className="turn-meta">{formatDuration(now - progress.startedAt)}</span>
+      {progress.heard !== undefined && <Heartbeat age={now - progress.heard} />}
       {progress.tokens >= 10 && (
         <span className="turn-meta" title="按 AI 已写出的文字估算；Claude 的回复结束后显示准确数字">
           ↓ 约 {formatTokens(progress.tokens)} tokens
