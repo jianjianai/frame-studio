@@ -31,6 +31,7 @@ import {
   GitBranch,
   ChevronLeft,
   Shapes,
+  Target,
 } from "lucide-react";
 import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
@@ -40,6 +41,7 @@ import { TurnBlocks, activity, runningTool, type TurnProgress } from "./Transcri
 import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
 import { insertPrompt, newPromptId, usePrompts, type PromptNode } from "../lib/prompts";
+import { COMMAND_TEXT, GoalBar, GoalCommandMessage, GoalTip, goalCommand, type GoalAction, type GoalState } from "./Goal";
 import "./chat.css";
 
 export interface ChatHandle {
@@ -76,6 +78,8 @@ interface SessionMeta {
   commands?: { name: string; description: string; hint?: string }[];
   /** Context window occupancy, from the agent's last usage report. */
   usage?: { used?: number; size?: number } | null;
+  /** The goal the AI keeps working toward ("/goal"), while there is one. */
+  goal?: GoalState | null;
 }
 interface Profile {
   id: string;
@@ -480,6 +484,24 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     }
   };
   const commands = text.startsWith("/") && !text.includes(" ") ? (session?.commands ?? []).filter((command) => command.name.startsWith(text.slice(1))) : [];
+  const goalAction = (action: GoalAction) => {
+    if (!session) return;
+    stick.current = true;
+    api<{ session?: SessionMeta }>(`/api/ai/sessions/${session.id}/goal`, { method: "POST", body: { action } })
+      .then((result) => result.session && applyMeta(result.session))
+      .catch((error) => toast((error as Error).message, "error"));
+  };
+  // The last turn ended short of a goal that stays (stopped by the user, or Claude's limit of
+  // checks in a row): the bar says what happens next.
+  const lastItems = turns.at(-1)?.items ?? [];
+  const lastEnd = [...lastItems].reverse().find((block) => block.kind === "turn_end");
+  const goalHalted =
+    lastEnd?.kind === "turn_end" && lastEnd.stopReason === "cancelled"
+      ? "stopped"
+      : lastItems.some((block) => block.kind === "goal" && block.event === "capped")
+        ? "capped"
+        : null;
+  const typingGoal = goalCommand(text)?.action === "set";
 
   return (
     <div className="chat">
@@ -531,6 +553,10 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
             >
               {item.status !== "idle" ? (
                 <span className="spinner" />
+              ) : item.goal ? (
+                <span title="有进行中的目标">
+                  <Target size={13} className="goal-icon" />
+                </span>
               ) : item.branch ? (
                 <GitBranch size={13} className="faint" />
               ) : (
@@ -688,6 +714,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           </div>
         ))}
       </div>
+      {session?.goal && <GoalBar goal={session.goal} agent={session.agent} running={running} halted={goalHalted} onAction={goalAction} />}
       <div
         className={`chat-input ${dropping ? "dropping" : ""}`}
         onDragOver={(event) => {
@@ -705,11 +732,17 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
       >
         {commands.length > 0 && (
           <div className="command-list">
-            {commands.slice(0, 8).map((command) => (
-              <button key={command.name} onClick={() => setText("/" + command.name + " ")}>
-                <strong>/{command.name}</strong> <span className="muted ellipsis">{command.description}</span>
-              </button>
-            ))}
+            {commands.slice(0, 8).map((command) => {
+              const own = COMMAND_TEXT[command.name];
+              const hint = own?.hint ?? command.hint;
+              return (
+                <button key={command.name} onClick={() => setText("/" + command.name + " ")}>
+                  <strong>/{command.name}</strong>
+                  {hint && <span className="faint">{hint}</span>}
+                  <span className="muted ellipsis">{own?.description ?? command.description}</span>
+                </button>
+              );
+            })}
           </div>
         )}
         {attachments.length > 0 && (
@@ -719,6 +752,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
             ))}
           </div>
         )}
+        {typingGoal && <GoalTip />}
         {readOnly && <div className="chat-locked">作品已发布：AI 只能查看和讨论，不会修改作品；可以复盘、整理经验。</div>}
         <textarea
           ref={input}
@@ -999,6 +1033,7 @@ function UserMessage({
 }) {
   const { stage } = useWorkbench();
   const [draft, setDraft] = useState<string | null>(null);
+  if (goalCommand(text) && !attachments.length) return <GoalCommandMessage text={text} />;
   if (text.trim() === "/compact")
     return (
       <div className="command-msg">

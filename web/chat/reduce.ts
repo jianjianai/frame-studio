@@ -53,8 +53,22 @@ export interface TurnEnd {
   startedAt?: number;
   at: number;
 }
+/** A goal event: set, checked and not met yet (with why), met, failed, cleared, or a Codex status. */
+export interface GoalBlock {
+  kind: "goal";
+  event: string;
+  objective?: string;
+  reason?: string | null;
+  checks?: number;
+  iterations?: number;
+  durationMs?: number;
+  tokens?: number;
+  byUser?: boolean;
+  at: number;
+}
 export type Block =
   | { kind: "user"; id: string; text: string; attachments: Record<string, unknown>[]; at: number; steered?: boolean }
+  | GoalBlock
   | { kind: "text"; text: string }
   | { kind: "thought"; text: string }
   | ToolBlock
@@ -230,6 +244,20 @@ export class TranscriptReducer {
       case "notice":
         blocks.push({ kind: "notice", message: entry.message as string });
         break;
+      case "goal":
+        blocks.push({
+          kind: "goal",
+          event: entry.event as string,
+          objective: entry.objective as string | undefined,
+          reason: entry.reason as string | null | undefined,
+          checks: entry.checks as number | undefined,
+          iterations: entry.iterations as number | undefined,
+          durationMs: entry.durationMs as number | undefined,
+          tokens: entry.tokens as number | undefined,
+          byUser: entry.byUser as boolean | undefined,
+          at: entry.at,
+        });
+        break;
       case "branch":
         blocks.push({ kind: "branch", from: entry.from as string, title: entry.title as string, keep: entry.keep as number });
         break;
@@ -277,7 +305,11 @@ export function groupTurns(blocks: Block[], previous: Turn[] = []) {
  * next message is on its way.
  */
 export function runningTurn(turns: Turn[]): { startedAt: number; items: Block[] } | null {
-  const last = turns.at(-1)?.items.at(-1);
+  // A goal's last line can come just after the turn's end.
+  const last = turns
+    .at(-1)
+    ?.items.filter((block) => block.kind !== "goal")
+    .at(-1);
   if (last?.kind === "turn_end" || last?.kind === "error") return null;
   const items: Block[] = [];
   for (let index = turns.length - 1; index >= 0 && !turns[index].branch; index--) {

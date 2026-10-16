@@ -11,9 +11,17 @@ import { problem, notFound, writeFileAtomic } from "../util.mjs";
 import { formatTime } from "../render.mjs";
 import { experienceDelta, filesNotice, noteSeen, rebaseSeen, referencedExperience, selectionText, snapshotFiles } from "./context.mjs";
 import { lastReceived } from "./heartbeat.mjs";
+import { ClaudeGoalReader, CODEX_STATUSES, goalCommand, goalOutput, hookCap } from "./goal.mjs";
 
 const IDLE_MS = 15 * 60 * 1000;
 const HEARTBEAT_MS = 3000;
+/**
+ * How often a running Claude turn's goal checks are read from its conversation file (also
+ * before each update the agent sends, so a check shows before the reply that follows it).
+ */
+const GOAL_POLL_MS = 1000;
+// What "continue" says to the AI for the user.
+const GOAL_CONTINUE = "继续朝目标做";
 /** FRAME permission levels mapped to each agent's own session modes. */
 export const PERMISSION_MODES = {
   ask: { claude: "default", codex: "read-only" },
@@ -630,15 +638,20 @@ export class AiManager {
     session.meta.status = "running";
     session.turnCost = undefined;
     session.heartbeat = undefined;
-    if (session.meta.title === "新对话" && message.text.trim() && !isCommand(session, message.text))
-      session.meta.title = message.text.trim().replace(/\s+/g, " ").slice(0, 40);
+    // A conversation is named by its first message; one started with a goal, by the goal.
+    const named = goalCommand(message.text)?.objective ?? (isCommand(session, message.text) ? "" : message.text);
+    if (session.meta.title === "新对话" && named.trim()) session.meta.title = named.trim().replace(/\s+/g, " ").slice(0, 40);
     this.publish(session);
     const turnStart = fs.statSync(path.join(this.sessionsDir, session.meta.id + ".jsonl"), { throwIfNoEntry: false })?.size ?? 0;
     const work = await this.services.openWork(session.meta.work, session.meta.repo);
     this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message) });
+    let goalPoll = null;
     try {
       await this.attach(session, work);
       const prompt = this.turnPrompt(session, message, work);
+      this.noteGoalCommand(session, message.text);
+      // Claude writes each goal check to its conversation file; read them as the turn goes.
+      if (session.process?.agent === "claude") goalPoll = setInterval(() => this.readGoal(session), GOAL_POLL_MS);
       let response;
       for (let attempt = 1; ; attempt++) {
         try {
@@ -662,11 +675,20 @@ export class AiManager {
       // What the agent sent just before its answer (the turn's cost) can still be on its way
       // through the connection, which hands answers over sooner than notifications.
       await new Promise((resolve) => setImmediate(resolve));
+      // The goal's last check (achieved, say) belongs before the turn's end, and after it why
+      // Claude ended the turn anyway.
+      if (goalPoll) this.readGoal(session);
+      if (session.goalCapped) this.applyGoal(session, { type: "capped", count: session.goalCapped });
       const cost = session.turnCost && this.pricedByClaude(session) ? { cost: session.turnCost } : {};
       this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null, ...cost });
     } catch (error) {
       this.append(session, { kind: "error", message: authHint(error, session.process).message });
     } finally {
+      if (goalPoll) {
+        clearInterval(goalPoll);
+        this.readGoal(session);
+      }
+      session.goalCapped = null;
       for (const [requestId, pending] of this.permissions)
         if (pending.session === session.meta.id) {
           pending.resolve({ outcome: { outcome: "cancelled" } });
@@ -751,6 +773,7 @@ export class AiManager {
       throw problem(409, "这个 AI 不支持中途引导，消息会在这一轮结束后发送");
     }
     const work = await this.services.openWork(session.meta.work, session.meta.repo);
+    this.noteGoalCommand(session, message.text);
     let result;
     try {
       result = await session.process.connection.request("_session/steering", {
@@ -774,6 +797,122 @@ export class AiManager {
     }
     this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message), steered: true });
     return { outcome: "injected" };
+  }
+  /**
+   * Goal mode from the chat's controls: the agents' own "/goal" commands. While the AI works
+   * the command goes into the running turn (as the CLI takes /goal at once), else it is a
+   * message of its own. Pause and resume are Codex's. "continue" asks the AI to go on toward
+   * the goal after a turn ended short of it (stopped, or Claude's limit of checks in a row).
+   */
+  async goal(id, { action, objective = "" } = {}) {
+    const session = this.get(id);
+    if (!["set", "clear", "pause", "resume", "continue"].includes(action)) throw problem(400, "action 是 set、clear、pause、resume 或 continue");
+    if (action === "continue") {
+      if (!session.meta.goal) throw problem(400, "没有进行中的目标");
+      return this.prompt(id, { text: GOAL_CONTINUE });
+    }
+    if (action === "set" && !String(objective).trim()) throw problem(400, "目标不能为空");
+    if (action === "set" && String(objective).trim().length > 4000) throw problem(400, "目标最多 4000 字");
+    if ((action === "pause" || action === "resume") && session.meta.agent !== "codex") throw problem(400, "只有 Codex 的目标可以暂停和继续");
+    const text = action === "set" ? `/goal ${String(objective).trim()}` : `/goal ${action}`;
+    if (session.meta.status !== "idle" && session.process?.steering) {
+      const message = { id: randomUUID(), text, attachments: [], view: null };
+      session.meta.queue.unshift(message);
+      return this.steer(id, message.id);
+    }
+    return this.prompt(id, { text });
+  }
+  /** A goal command on its way to the agent: Claude's checks will be in its file from now on. */
+  noteGoalCommand(session, text) {
+    const command = goalCommand(text);
+    if (!command) return;
+    if (session.meta.agent === "claude" && session.meta.acpSessionId) session.goalReader ??= new ClaudeGoalReader(session.meta.acpSessionId);
+    if (command.action === "clear") session.goalClearing = true;
+  }
+  /** Claude's goal checks written since the last look. */
+  readGoal(session) {
+    if (session.meta.agent !== "claude" || !session.meta.acpSessionId) return;
+    // A goal that outlived a restart of the studio: read on from where the file is now.
+    if (!session.goalReader && session.meta.goal) session.goalReader = new ClaudeGoalReader(session.meta.acpSessionId);
+    if (!session.goalReader) return;
+    try {
+      for (const event of session.goalReader.read()) this.applyGoal(session, event);
+    } catch (error) {
+      console.warn("goal read failed", error.message);
+    }
+  }
+  /**
+   * One goal event: the goal the chat shows changes, and the conversation gets the line the
+   * CLI prints for it (set, not met yet and why, achieved, could not be achieved, cleared).
+   */
+  applyGoal(session, event) {
+    const goal = session.meta.goal ?? null;
+    const at = event.at ?? Date.now();
+    const line = (entry) => this.append(session, { kind: "goal", ...entry });
+    switch (event.type) {
+      case "set":
+        if (goal && goal.objective === event.objective) return;
+        session.meta.goal = { objective: event.objective, status: "active", setAt: at, checks: 0 };
+        session.goalClearing = false;
+        line({ event: "set", objective: event.objective });
+        break;
+      case "check":
+        if (!goal) return;
+        session.meta.goal = { ...goal, checks: (goal.checks ?? 0) + 1, lastReason: event.reason ?? null, checkedAt: at };
+        line({ event: "check", objective: goal.objective, reason: event.reason ?? null, checks: session.meta.goal.checks });
+        break;
+      case "met":
+      case "failed":
+        line({
+          event: event.type,
+          objective: goal?.objective ?? event.objective,
+          reason: event.reason ?? null,
+          iterations: event.iterations ?? (goal ? (goal.checks ?? 0) + 1 : undefined),
+          durationMs: event.durationMs ?? (goal ? at - goal.setAt : undefined),
+          tokens: event.tokens,
+        });
+        session.meta.goal = null;
+        break;
+      case "cleared":
+        // The user's own "/goal clear" says so even when no goal was known (a restart lost it).
+        if (!goal && !session.goalClearing) return;
+        line({ event: "cleared", objective: goal?.objective ?? event.objective ?? "", byUser: Boolean(session.goalClearing) });
+        session.meta.goal = null;
+        session.goalClearing = false;
+        break;
+      case "capped":
+        // The goal stays: the next message goes on toward it.
+        if (!goal) return;
+        line({ event: "capped", objective: goal.objective, checks: event.count });
+        break;
+      case "none":
+        // Asked for its status, the agent has no goal: one ended unseen (the studio restarted).
+        if (!goal) return;
+        session.meta.goal = null;
+        break;
+      default:
+        return;
+    }
+    this.publish(session);
+  }
+  /** Codex's goal as its adapter reports it (null: there is none any more). */
+  codexGoal(session, snapshot) {
+    const goal = session.meta.goal ?? null;
+    if (!snapshot) return this.applyGoal(session, { type: goal?.status === "complete" ? "none" : "cleared" });
+    if (!goal || goal.objective !== snapshot.objective) this.applyGoal(session, { type: "set", objective: snapshot.objective, at: snapshot.createdAt });
+    const current = session.meta.goal;
+    const status = CODEX_STATUSES.has(snapshot.status) ? snapshot.status : "active";
+    const stats = { tokensUsed: snapshot.tokensUsed ?? null, timeUsedSeconds: snapshot.timeUsedSeconds ?? null, tokenBudget: snapshot.tokenBudget ?? null };
+    if (status === "complete")
+      return this.applyGoal(session, {
+        type: "met",
+        objective: current.objective,
+        tokens: stats.tokensUsed ?? undefined,
+        durationMs: stats.timeUsedSeconds != null ? stats.timeUsedSeconds * 1000 : undefined,
+      });
+    if (status !== current.status) this.append(session, { kind: "goal", event: status, objective: current.objective });
+    session.meta.goal = { ...current, ...stats, status };
+    this.publish(session);
   }
   removeQueued(id, messageId) {
     const session = this.get(id);
@@ -849,18 +988,48 @@ export class AiManager {
       return this.publish(session);
     }
     if (update.sessionUpdate === "session_info_update") {
+      const air = update._meta?.jetbrains?.air;
+      if (air && "goal" in air) this.codexGoal(session, air.goal);
       // Claude marks forked conversations "(fork)"; branches have their own icon instead.
       const title = String(update.title || "")
         .split("[FRAME]")[0]
         .replace(/\s*\(fork\)\s*$/i, "")
         .trim();
-      if (title) session.meta.title = title.slice(0, 80);
+      // A command is no title ("/goal" after a goal's status was asked), nor "go on": when
+      // Claude cannot make a title it falls back on the first message that is not a command.
+      if (title && !title.startsWith("/") && title !== GOAL_CONTINUE) session.meta.title = title.slice(0, 80);
       return this.publish(session);
     }
     if (update.sessionUpdate === "usage_update") {
       if (update.cost) this.noteCost(session, update.cost);
       session.meta.usage = update;
       return this.publish(session);
+    }
+    if (session.goalReader) this.readGoal(session);
+    // What Claude prints for a goal command is shown as the goal's own line, not as a reply.
+    // Its message id is none or a UUID; the model's words come in messages "msg_…".
+    if (
+      update.sessionUpdate === "agent_message_chunk" &&
+      !/^msg_/.test(update.messageId ?? "") &&
+      update.content?.type === "text" &&
+      session.meta.agent === "claude"
+    ) {
+      const output = goalOutput(update.content.text.trim());
+      if (output) {
+        this.applyGoal(session, output);
+        if (output.type !== "none") return;
+      }
+    }
+    // Claude's own notices (a warning; why a hook ended the turn) come as text marked
+    // "informational": a line of their own, not words run on into the reply.
+    if (update.sessionUpdate === "agent_message_chunk" && update._meta?.claudeCode?.kind === "informational" && update.content?.type === "text") {
+      const text = update.content.text.replace(/^\*\*[A-Z][a-z]+:\*\*\s*/, "").trim();
+      const capped = hookCap(text);
+      // The goal's checks kept the AI going until Claude's limit: told with the goal's lines,
+      // after the last check (still on its way from Claude's file).
+      if (capped && session.meta.goal) session.goalCapped = capped;
+      else if (text) this.append(session, { kind: "notice", message: text });
+      return;
     }
     // Both agents report a compaction (manual or automatic) as a "Compact conversation" tool call.
     if (update.sessionUpdate === "tool_call" && update.title === "Compact conversation") session.compacting = update.toolCallId;
@@ -1097,10 +1266,13 @@ export class AiManager {
 const isModel = (options, id) => options.some((option) => option.id === id && (option.category === "model" || option.id === "model"));
 
 /** Attachments as stored in the transcript: image data becomes an image entry (saved to a file by storeImages). */
-/** "/compact", "/review …": a command the agent offers (both offer compact). */
+/**
+ * "/compact", "/review …": a command the agent offers. Both offer compact and goal, also before
+ * a new conversation's list of commands has arrived (a goal is often its first message).
+ */
 function isCommand(session, text) {
   const name = /^\/([a-z][\w-]*)(\s|$)/i.exec(text.trim())?.[1];
-  return Boolean(name) && (name === "compact" || Boolean(session.meta.commands?.some((command) => command.name === name)));
+  return Boolean(name) && (name === "compact" || name === "goal" || Boolean(session.meta.commands?.some((command) => command.name === name)));
 }
 
 const userAttachments = (message) => message.attachments.map((item) => (item.data ? { ...item, type: "image", kind: item.type } : item));

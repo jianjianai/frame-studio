@@ -26,6 +26,7 @@ import {
 import { formatTime } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { lineDiff, compactDiff } from "./lineDiff";
+import { GoalLine } from "./Goal";
 import {
   formatCost,
   formatDuration,
@@ -128,7 +129,10 @@ export function runningTool(items: Block[]) {
 export function activity(items: Block[], waiting: boolean) {
   if (waiting) return "等待你确认";
   const last = runningTool(items);
-  if (!last) return items.at(-1)?.kind === "text" ? "回复中" : items.at(-1)?.kind === "notice" ? "等待中" : "思考中";
+  if (!last) {
+    const kind = items.at(-1)?.kind;
+    return kind === "text" ? "回复中" : kind === "notice" ? "等待中" : kind === "goal" ? "继续朝目标做" : "思考中";
+  }
   const name = toolTitle(last.title);
   if (name !== last.title && !name.includes("_")) return name; // compaction, a FRAME tool with a name
   return KIND_ACTIVITY[last.toolKind ?? ""] ?? "调用工具";
@@ -536,6 +540,8 @@ export function TurnBlocks({
                 <Info size={13} /> {block.message}
               </div>
             );
+          case "goal":
+            return <GoalLine key={index} block={block} />;
           case "turn_end":
             return block.stopReason === "cancelled" ? (
               <div key={index} className="chat-notice">

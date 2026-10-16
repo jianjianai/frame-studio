@@ -17,6 +17,8 @@ RUN corepack enable && git lfs install --system
 
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+# The agents' adapters carry small patches (patches/, pnpm patchedDependencies).
+COPY patches ./patches
 RUN pnpm install --frozen-lockfile
 COPY . .
 RUN pnpm build && pnpm prune --prod && chown -R node:node /app

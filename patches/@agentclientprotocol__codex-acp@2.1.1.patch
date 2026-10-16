@@ -1,0 +1,13 @@
+diff --git a/dist/index.js b/dist/index.js
+index 16daa15df86bfa40062889c8bec02c8881354a18..80e41be0e018ebd0791e16ac243357e37c5010d4 100755
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -29140,7 +29140,7 @@ function sameThreadGoalSnapshot(left, right) {
+   return left.objective === right.objective && left.status === right.status && left.tokenBudget === right.tokenBudget && left.createdAt === right.createdAt;
+ }
+ function goalSessionInfoUpdate(goal, airClient) {
+-  if (!airClient) return null;
++  // FRAME Studio shows the goal as the CLI does: every client gets it.
+   return {
+     sessionUpdate: "session_info_update",
+     _meta: withAirMeta(void 0, AIR_GOAL_KEY, goal)

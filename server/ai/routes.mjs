@@ -118,6 +118,8 @@ export function aiPlugin(services) {
   router.post("/api/ai/sessions/:id/prompt", async ({ params, req }) => ai.prompt(params.id, await readJson(req)));
   router.post("/api/ai/sessions/:id/cancel", ({ params }) => ai.cancel(params.id));
   router.post("/api/ai/sessions/:id/compact", ({ params }) => ai.compact(params.id));
+  /** Goal mode: { action: "set" | "clear" | "pause" | "resume" | "continue", objective }. */
+  router.post("/api/ai/sessions/:id/goal", async ({ params, req }) => ai.goal(params.id, await readJson(req)));
   router.post("/api/ai/sessions/:id/fork", async ({ params, req }) => ai.fork(params.id, await readJson(req)));
   router.post("/api/ai/sessions/:id/queue/:message/steer", ({ params }) => ai.steer(params.id, params.message));
   router.delete("/api/ai/sessions/:id/queue/:message", ({ params }) => ai.removeQueued(params.id, params.message));
