@@ -1030,6 +1030,22 @@
   text-transform: uppercase;
   color: var(--fg-muted);
 }
+.explorer-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.explorer-picked {
+  flex: none;
+  margin-left: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-weight: 400;
+  cursor: pointer;
+}
 .view-hint {
   margin: 8px 0;
   padding: 0 14px;
@@ -1101,9 +1117,14 @@
   cursor: pointer;
   color: var(--fg);
   white-space: nowrap;
+  /* Shift-click picks rows, not text. */
+  user-select: none;
 }
 .tree-row:hover {
   background: var(--bg-hover);
+}
+.tree-row.selected {
+  background: var(--bg-active);
 }
 .tree-row svg {
   flex: none;

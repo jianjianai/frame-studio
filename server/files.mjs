@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { Zip, ZipPassThrough } from "fflate";
 import { confined, problem, writeFileAtomic, mediaKind, sha256 } from "./util.mjs";
 
 const HIDDEN = new Set([".git", "node_modules", ".cache", "exports", ".DS_Store"]);
@@ -120,6 +121,103 @@ export function uniquePath(dir, relative) {
   let candidate = relative;
   for (let index = 2; fs.existsSync(confined(dir, candidate)); index++) candidate = `${stem}-${index}${ext}`;
   return candidate;
+}
+
+/**
+ * What a download of picked paths holds. One file goes as it is (`file`); more, or a folder, go
+ * as a zip of `entries`, named from the folder the picks share: files picked in one folder unpack
+ * without it, a picked folder keeps its name. What a picked folder holds is picked with it.
+ */
+export function downloadPlan(dir, paths, fallbackName) {
+  const picked = [...new Set((Array.isArray(paths) ? paths : []).map((item) => String(item).replace(/^\/+|\/+$/g, "")))].filter(Boolean);
+  if (!picked.length) throw problem(400, "没有选中要导出的文件");
+  const roots = picked.filter((item) => !picked.some((other) => item.startsWith(other + "/")));
+  const found = roots.map((relative) => {
+    const file = confined(dir, relative);
+    const stat = fs.statSync(file, { throwIfNoEntry: false });
+    if (!stat || !(stat.isFile() || stat.isDirectory()) || relative.split("/").some((part) => HIDDEN.has(part)))
+      throw problem(404, `文件不存在：${relative}`, "NOT_FOUND");
+    return { relative, file, stat };
+  });
+  if (found.length === 1 && found[0].stat.isFile()) return { file: found[0].file, name: path.basename(found[0].file), size: found[0].stat.size, count: 1 };
+  const shared = found
+    .map((item) => item.relative.split("/").slice(0, -1))
+    .reduce((common, parts) => common.slice(0, [...common, null].findIndex((part, index) => part !== parts[index])));
+  const cut = shared.length ? shared.join("/").length + 1 : 0;
+  const entries = [];
+  for (const { relative, file, stat } of found) {
+    const name = relative.slice(cut);
+    if (stat.isFile()) {
+      entries.push({ name, file, type: "file", size: stat.size, mtime: stat.mtimeMs });
+      continue;
+    }
+    entries.push({ name, file, type: "dir", size: 0, mtime: stat.mtimeMs });
+    for (const entry of tree(file, { maxEntries: Infinity })) {
+      const inner = path.join(file, entry.path);
+      if (entry.type === "file") entries.push({ name: `${name}/${entry.path}`, file: inner, type: "file", size: entry.size, mtime: entry.mtime });
+      else entries.push({ name: `${name}/${entry.path}`, file: inner, type: "dir", size: 0, mtime: fs.statSync(inner).mtimeMs });
+    }
+  }
+  const title = found.length === 1 ? path.basename(found[0].file) : shared.at(-1) || fallbackName;
+  return { entries, name: `${title}.zip`, size: entries.reduce((sum, entry) => sum + entry.size, 0), count: entries.filter((entry) => entry.type === "file").length };
+}
+
+/** The exact length of a stored (uncompressed) zip of `entries`, as fflate writes it. */
+function zipLength(entries) {
+  let length = 22;
+  for (const entry of entries) {
+    const name = Buffer.byteLength(entry.name) + (entry.type === "dir" ? 1 : 0);
+    length += 30 + name + entry.size + 16 + 46 + name;
+  }
+  return length;
+}
+
+/** Refuse what a zip without its 64-bit extension cannot hold. */
+export function assertZippable(entries) {
+  if (entries.length > 65535) throw problem(413, `选中的内容有 ${entries.length} 个文件和文件夹，超过 zip 的 65535 个上限，请分几次导出`);
+  const length = zipLength(entries);
+  if (length > 2 ** 32 - 1) throw problem(413, `选中的内容共 ${(length / 2 ** 30).toFixed(1)} GB，超过 zip 的 4 GB 上限，请分几次导出`);
+}
+
+/**
+ * Stream `entries` as a zip download. Stored, not compressed: media is compressed already, and
+ * the exact length lets the browser show progress. Read as the network takes it, never whole.
+ */
+export async function sendZip(req, res, entries, name) {
+  assertZippable(entries);
+  res.writeHead(200, {
+    "Content-Type": "application/zip",
+    "Content-Length": zipLength(entries),
+    "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+    "Cache-Control": "no-store",
+  });
+  if (req.method === "HEAD") return res.end();
+  const drained = () =>
+    new Promise((resolve) => {
+      const done = () => (res.off("drain", done), res.off("close", done), resolve());
+      res.on("drain", done);
+      res.on("close", done);
+    });
+  const zip = new Zip((error, chunk) => (error ? res.destroy(error) : res.write(chunk)));
+  for (const entry of entries) {
+    const item = new ZipPassThrough(entry.type === "dir" ? entry.name + "/" : entry.name);
+    // Zip times start in 1980; files dated before (a clock at zero) would stop the archive.
+    item.mtime = Math.max(entry.mtime, Date.UTC(1980, 0, 2));
+    zip.add(item);
+    let read = 0;
+    if (entry.size)
+      for await (const chunk of fs.createReadStream(entry.file, { end: entry.size - 1 })) {
+        if (res.destroyed) return;
+        read += chunk.length;
+        item.push(chunk);
+        if (res.writableNeedDrain) await drained();
+      }
+    // A file that shrank after it was measured would break the announced length: fail, not a bad zip.
+    if (read !== entry.size) return res.destroy(new Error(`${entry.name} changed during the download`));
+    item.push(new Uint8Array(0), true);
+  }
+  zip.end();
+  res.end();
 }
 
 /**

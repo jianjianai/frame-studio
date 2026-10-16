@@ -1,7 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronRight, ChevronDown, Folder, FolderOpen, FilePlus, Upload, RefreshCw, Sparkles, Trash2, Pencil, ChevronsDownUp } from "lucide-react";
-import { api, del, workPath, useServerEvent } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, usePrompt, type MenuItem } from "../lib/ui";
+import {
+  ChevronRight,
+  ChevronDown,
+  Folder,
+  FolderOpen,
+  FilePlus,
+  Upload,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+  Pencil,
+  ChevronsDownUp,
+  Download,
+  ListPlus,
+  ListMinus,
+  SquareDashed,
+} from "lucide-react";
+import { api, del, formatBytes, workPath, useServerEvent } from "../lib/api";
+import { useAction, useConfirm, useContextMenu, usePrompt, useToast, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { fileIcon } from "../workbench/EditorArea";
@@ -31,9 +47,13 @@ export function ExplorerView() {
   const { work, openFile, addToChat, readOnly } = useWorkbench();
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [open, setOpen] = useState<Set<string>>(new Set(["scenes"]));
+  // Picked rows, like VS Code: a click picks one, Ctrl/⌘ adds or drops one, Shift picks a run.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [anchor, setAnchor] = useState<string | null>(null);
   const [run] = useAction();
   const confirm = useConfirm();
   const prompt = usePrompt();
+  const toast = useToast();
   const [openMenu, menu] = useContextMenu();
   const base = workPath(work.repo, work.id);
   const load = () => api<FileEntry[]>(`${base}/tree`).then(setEntries, () => {});
@@ -45,6 +65,49 @@ export function ExplorerView() {
     if ((event.type === "work-files" || event.type === "assets") && event.work === work.id) void load();
   });
   const tree = useMemo(() => buildTree(entries), [entries]);
+  // Rows on screen, top to bottom: what a Shift click picks between.
+  const visible = useMemo(() => {
+    const list: string[] = [];
+    const walk = (nodes: Node[]) =>
+      nodes.forEach((node) => {
+        list.push(node.path);
+        if (node.type === "dir" && open.has(node.path)) walk(node.children);
+      });
+    walk(tree);
+    return list;
+  }, [tree, open]);
+  // Picks that were deleted or moved away drop out.
+  useEffect(() => {
+    const known = new Set(entries.map((entry) => entry.path));
+    setSelected((current) => ([...current].every((item) => known.has(item)) ? current : new Set([...current].filter((item) => known.has(item)))));
+  }, [entries]);
+  /** Picked paths in the explorer's order. */
+  const picked = (paths: Set<string>) => entries.map((entry) => entry.path).filter((item) => paths.has(item));
+  const pick = (event: React.MouseEvent, node: Node) => {
+    if (event.shiftKey && anchor && visible.includes(anchor)) {
+      const [from, to] = [visible.indexOf(anchor), visible.indexOf(node.path)].sort((a, b) => a - b);
+      const span = visible.slice(from, to + 1);
+      setSelected(new Set(event.ctrlKey || event.metaKey ? [...selected, ...span] : span));
+      return true;
+    }
+    setAnchor(node.path);
+    if (event.ctrlKey || event.metaKey) {
+      const next = new Set(selected);
+      if (next.has(node.path)) next.delete(node.path);
+      else next.add(node.path);
+      setSelected(next);
+      return true;
+    }
+    setSelected(new Set([node.path]));
+    return false;
+  };
+  const toggleSelected = (path: string, on: boolean) =>
+    setSelected((current) => {
+      const next = new Set(current);
+      if (on) next.add(path);
+      else next.delete(path);
+      return next;
+    });
 
   const newFile = async (dir = "") => {
     const name = await prompt("新文件（可包含子目录）", dir ? dir + "/" : "scenes/new-scene.ts");
@@ -60,35 +123,76 @@ export function ExplorerView() {
     if (!to || to === node.path) return;
     await run(() => api(`${base}/move`, { body: { from: node.path, to } }).then(load), "已重命名。如有代码引用请同步修改。");
   };
-  const remove = async (node: Node) => {
-    if (!(await confirm(`删除 ${node.path}？可以从版本历史中恢复。`, { confirm: "删除", danger: true }))) return;
-    await run(() => del(`${base}/file?path=${encodeURIComponent(node.path)}`).then(load));
+  const remove = async (paths: string[]) => {
+    const what = paths.length === 1 ? paths[0] : `选中的 ${paths.length} 项`;
+    if (!(await confirm(`删除 ${what}？可以从版本历史中恢复。`, { confirm: "删除", danger: true }))) return;
+    await run(async () => {
+      // A folder's own picks go with it.
+      for (const item of paths.filter((item) => !paths.some((other) => item.startsWith(other + "/"))))
+        await del(`${base}/file?path=${encodeURIComponent(item)}`);
+      await load();
+    });
   };
-  const menuFor = (event: React.MouseEvent, node: Node) =>
+  /** Download picked files and folders: one file as it is, more or a folder as a zip. */
+  const exportPaths = (paths: string[]) =>
+    run(async () => {
+      const download = await api<{ url: string; name: string; size: number; count: number }>(`${base}/download`, { body: { paths } });
+      const link = document.createElement("a");
+      link.href = download.url;
+      link.download = download.name;
+      link.click();
+      return download;
+    }).then((download) => download && toast(`正在下载 ${download.name}（${download.count > 1 ? `${download.count} 个文件，` : ""}${formatBytes(download.size)}）`, "ok"));
+  const menuFor = (event: React.MouseEvent, node: Node) => {
+    // On a picked row the menu is for all picks, as in VS Code.
+    if (selected.has(node.path) && selected.size > 1) {
+      const paths = picked(selected);
+      return openMenu(event, [
+        { label: `导出选中的 ${paths.length} 项`, icon: <Download size={14} />, onClick: () => exportPaths(paths) },
+        ...(readOnly
+          ? []
+          : [{ label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => paths.forEach((item) => addToChat({ type: "file", path: item })) }]),
+        { label: "移出选择", icon: <ListMinus size={14} />, onClick: () => toggleSelected(node.path, false) },
+        { label: "取消选择", icon: <SquareDashed size={14} />, onClick: () => setSelected(new Set()) },
+        ...(readOnly
+          ? []
+          : ([
+              "separator",
+              { label: `删除选中的 ${paths.length} 项`, icon: <Trash2 size={14} />, danger: true, onClick: () => remove(paths), disabled: paths.includes("project.ts") },
+            ] as MenuItem[])),
+      ]);
+    }
     openMenu(event, [
       ...(node.type === "file"
         ? [{ label: "打开", onClick: () => openFile(node.path) }]
         : readOnly
           ? []
           : [{ label: "新建文件", icon: <FilePlus size={14} />, onClick: () => newFile(node.path) }]),
+      { label: node.type === "file" ? "导出（下载）" : "导出为 zip", icon: <Download size={14} />, onClick: () => exportPaths([node.path]) },
+      // Touch has no Ctrl or Shift: a long press adds the row to the picks.
+      ...(selected.size && !selected.has(node.path)
+        ? [{ label: `加入选择（已选 ${selected.size} 项）`, icon: <ListPlus size={14} />, onClick: () => toggleSelected(node.path, true) }]
+        : []),
       ...(readOnly
         ? []
         : ([
             { label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => addToChat({ type: "file", path: node.path }) },
             "separator",
             { label: "重命名 / 移动", icon: <Pencil size={14} />, onClick: () => rename(node), disabled: node.path === "project.ts" },
-            { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(node), disabled: node.path === "project.ts" },
+            { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => remove([node.path]), disabled: node.path === "project.ts" },
           ] as MenuItem[])),
     ]);
+  };
 
   const renderNodes = (nodes: Node[], depth: number): React.ReactNode =>
     nodes.map((node) => (
       <div key={node.path}>
         <div
-          className="tree-row"
+          className={`tree-row ${selected.has(node.path) ? "selected" : ""}`}
           style={{ paddingLeft: 8 + depth * 12 }}
-          onClick={() =>
-            node.type === "dir"
+          onClick={(event) =>
+            pick(event, node) ||
+            (node.type === "dir"
               ? setOpen((current) => {
                   const next = new Set(current);
                   if (next.has(node.path)) next.delete(node.path);
@@ -96,9 +200,9 @@ export function ExplorerView() {
                   return next;
                 })
               : // Like VS Code: a click previews the file, a double-click (or an edit) keeps the tab.
-                openFile(node.path, { preview: true })
+                openFile(node.path, { preview: true }))
           }
-          onDoubleClick={() => node.type === "file" && openFile(node.path)}
+          onDoubleClick={(event) => node.type === "file" && !event.shiftKey && !event.ctrlKey && !event.metaKey && openFile(node.path)}
           onContextMenu={(event) => menuFor(event, node)}
           title={node.path}
         >
@@ -132,6 +236,14 @@ export function ExplorerView() {
             </button>
           </>
         )}
+        <button
+          className="icon-btn"
+          title={selected.size ? `导出选中的 ${selected.size} 项（一个文件直接下载，多个或文件夹打包成 zip）` : "导出：先选中文件或文件夹（Ctrl/⌘ 或 Shift 点击可多选）"}
+          disabled={!selected.size}
+          onClick={() => exportPaths(picked(selected))}
+        >
+          <Download size={15} />
+        </button>
         <button className="icon-btn" title="刷新" onClick={load}>
           <RefreshCw size={15} />
         </button>
@@ -139,8 +251,13 @@ export function ExplorerView() {
           <ChevronsDownUp size={15} />
         </button>
       </ViewHeader>
-      <div className="view-section-title">
+      <div className="view-section-title explorer-title">
         <span className="ellipsis">{work.meta?.title ?? work.slug}</span>
+        {selected.size > 1 && (
+          <button className="explorer-picked" title="取消选择" onClick={() => setSelected(new Set())}>
+            已选 {selected.size} 项 ✕
+          </button>
+        )}
       </div>
       <div className="tree">{renderNodes(tree, 0)}</div>
       <p className="view-hint">作品代码与素材都在这里。大部分修改交给 AI；也可以直接编辑文件，保存后预览立即更新。</p>

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { unzipSync, strFromU8 } from "fflate";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
 
@@ -162,6 +163,46 @@ describe("studio API (local mode)", () => {
     for (const route of [`/files/local/${created.body.id}/films/${created.body.slug}/missing.png`, "/files/local/nope/films/x/y.png", "/films/nope/missing.png"])
       expect((await server.call(route)).status).toBe(404);
     expect((await server.call("/api/state")).status).toBe(200);
+  });
+
+  it("downloads picked files: one as it is, more or a folder as a zip", async () => {
+    const created = await server.call("/api/works", { method: "POST", body: { title: "导出选中" } });
+    const base = `/api/works/local/${created.body.id}`;
+    const dir = (await server.app.services.works.open(created.body.id, "local")).dir;
+    fs.mkdirSync(path.join(dir, "public/sub/empty"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "public/a.png"), Buffer.from([137, 80, 78, 71, 0, 1, 2]));
+    fs.writeFileSync(path.join(dir, "public/sub/声音.wav"), "RIFFdata");
+    const pick = (paths) => server.call(`${base}/download`, { method: "POST", body: { paths } });
+
+    const one = await pick(["public/a.png"]);
+    expect(one.body).toMatchObject({ name: "a.png", size: 7, count: 1 });
+    const file = await fetch(server.base + one.body.url);
+    expect(file.headers.get("content-disposition")).toContain("attachment");
+    expect([...new Uint8Array(await file.arrayBuffer())]).toEqual([137, 80, 78, 71, 0, 1, 2]);
+
+    // Files picked in one folder unpack without it; a picked folder keeps its name, what it holds goes with it.
+    const many = await pick(["public/a.png", "public/sub", "public/sub/声音.wav"]);
+    expect(many.body).toMatchObject({ name: "public.zip", count: 2, size: 15 });
+    const zip = await fetch(server.base + many.body.url);
+    expect(zip.headers.get("content-type")).toBe("application/zip");
+    expect(zip.headers.get("content-disposition")).toContain("public.zip");
+    const bytes = new Uint8Array(await zip.arrayBuffer());
+    expect(Number(zip.headers.get("content-length"))).toBe(bytes.length);
+    const unpacked = unzipSync(bytes);
+    expect(Object.keys(unpacked).sort()).toEqual(["a.png", "sub/", "sub/empty/", "sub/声音.wav"]);
+    expect(strFromU8(unpacked["sub/声音.wav"])).toBe("RIFFdata");
+    expect([...unpacked["a.png"]]).toEqual([137, 80, 78, 71, 0, 1, 2]);
+
+    const folder = await pick(["public"]);
+    expect(folder.body.name).toBe("public.zip");
+    expect(Object.keys(unzipSync(new Uint8Array(await (await fetch(server.base + folder.body.url)).arrayBuffer())))).toContain("public/sub/声音.wav");
+    const mixed = await pick(["scene.ts", "public/a.png"]);
+    expect(mixed.body.name).toBe(`${created.body.slug}.zip`);
+
+    expect((await pick(["public/missing.png"])).status).toBe(404);
+    expect((await pick([])).status).toBe(400);
+    expect((await pick(["../../etc/passwd"])).status).toBe(400);
+    expect((await server.call(`${base}/download/not-a-token`)).status).toBe(404);
   });
 
   it("exposes the tool registry", async () => {

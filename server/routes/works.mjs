@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { readJson, sendFile } from "../http.mjs";
-import { tree, readText, writeText, removePath, movePath, writeStream, uniquePath } from "../files.mjs";
+import { tree, readText, writeText, removePath, movePath, writeStream, uniquePath, downloadPlan, assertZippable, sendZip } from "../files.mjs";
 import { problem, confined, conflict, diskUsage } from "../util.mjs";
 import { snapshotFiles } from "../ai/context.mjs";
 
@@ -265,6 +266,34 @@ export function workRoutes(services) {
   router.post("/api/works/:repo/:id/push", async ({ params }) => works.push(await open(params)));
   router.post("/api/works/:repo/:id/pull", async ({ params }) => works.pull(await open(params)));
   router.post("/api/works/:repo/:id/resolve", async ({ params, req }) => works.resolve(await open(params), (await readJson(req)).strategy));
+
+  /**
+   * Download picked files and folders (the explorer's 导出): the POST checks the picks and hands
+   * out a link the browser downloads from, so long picks fit and problems show before it starts.
+   * One file comes as it is, more or a folder as a zip.
+   */
+  const downloads = new Map(); // token -> { work, paths, expires }
+  router.post("/api/works/:repo/:id/download", async ({ req, params }) => {
+    const work = await open(params);
+    const { paths } = await readJson(req);
+    const plan = downloadPlan(work.dir, paths, work.slug);
+    if (plan.entries) assertZippable(plan.entries);
+    const now = Date.now();
+    for (const [key, item] of downloads) if (item.expires < now) downloads.delete(key);
+    const token = randomUUID();
+    downloads.set(token, { work: `${work.repo}/${work.id}`, paths, expires: now + 10 * 60_000 });
+    const url = `/api/works/${encodeURIComponent(work.repo)}/${encodeURIComponent(work.id)}/download/${token}`;
+    return { url, name: plan.name, size: plan.size, count: plan.count };
+  });
+  router.get("/api/works/:repo/:id/download/:token", async ({ req, res, params }) => {
+    const work = await open(params);
+    const item = downloads.get(params.token);
+    if (!item || item.expires < Date.now() || item.work !== `${work.repo}/${work.id}`) throw problem(404, "下载链接已过期，请重新导出", "NOT_FOUND");
+    const plan = downloadPlan(work.dir, item.paths, work.slug);
+    if (!plan.file) return sendZip(req, res, plan.entries, plan.name);
+    res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(plan.name)}`);
+    sendFile(req, res, plan.file);
+  });
 
   /** Raw bytes of a work file for media previews in the studio. */
   router.get("/api/works/:repo/:id/raw", async ({ req, res, params, query }) => {
