@@ -237,44 +237,145 @@
   gap: 2px;
 }
 
-/* ---- editor area ---- */
+/* ---- editor area: groups in a grid (VS Code), stages laid over the group that shows them ---- */
 .editor-area {
+  position: relative;
   height: 100%;
   display: flex;
   min-width: 0;
 }
+.editor-split {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+.editor-split.split-column {
+  flex-direction: column;
+}
+.editor-cell {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
 .editor-group {
   flex: 1;
   min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   background: var(--bg);
 }
-/* Tab contents stacked; the preview stays laid out (and running) under an open file. */
-.editor-stack {
+.editor-body {
   position: relative;
   flex: 1;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
-.editor-layer {
+.editor-hosts {
   position: absolute;
   inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+.editor-host {
+  position: absolute;
   display: flex;
   flex-direction: column;
   background: var(--bg);
+  pointer-events: auto;
 }
-.editor-layer.covered {
+.editor-host.covered {
   visibility: hidden;
   pointer-events: none;
 }
-.editor-tabs {
+/* While a tab or a file is dragged: where it would go. */
+.editor-drop-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  pointer-events: none;
+}
+.editor-drop {
+  position: absolute;
+  pointer-events: auto;
+}
+.editor-drop-hint {
+  position: absolute;
+  inset: 0;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  outline-offset: -1px;
+  transition:
+    left 0.08s,
+    top 0.08s,
+    right 0.08s,
+    bottom 0.08s;
+  pointer-events: none;
+}
+.editor-drop-hint.left {
+  right: 50%;
+}
+.editor-drop-hint.right {
+  left: 50%;
+}
+.editor-drop-hint.up {
+  bottom: 50%;
+}
+.editor-drop-hint.down {
+  top: 50%;
+}
+.editor-tabbar {
   display: flex;
   height: 34px;
   flex: none;
   background: var(--bg-sunken);
   border-bottom: 1px solid var(--border);
+}
+.editor-tabs {
+  display: flex;
+  flex: 1;
+  min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
+}
+.editor-tabs-fill {
+  flex: 1;
+  min-width: 24px;
+}
+.editor-tab.drop-before {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.editor-tabs.drop-end .editor-tabs-fill {
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.editor-tab.dragging {
+  opacity: 0.5;
+}
+.editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  flex: none;
+}
+.sync-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+/* A narrow group keeps its tabs readable: the sync button shows only its icon. */
+.editor-group {
+  container-type: inline-size;
+}
+@container (max-width: 360px) {
+  .sync-label {
+    display: none;
+  }
+  .sync-btn {
+    padding: 0 6px;
+  }
 }
 .editor-tabs::-webkit-scrollbar {
   height: 3px;
@@ -298,6 +399,15 @@
   background: var(--bg);
   color: var(--fg);
   box-shadow: inset 0 2px 0 var(--accent);
+}
+/* With several groups, only the focused group's tab carries the accent. */
+.editor-split .editor-group:not(.focused) .editor-tab.active {
+  box-shadow: inset 0 2px 0 var(--border-strong);
+}
+.editor-tab.active.drop-before {
+  box-shadow:
+    inset 2px 0 0 var(--accent),
+    inset 0 2px 0 var(--accent);
 }
 .tab-close {
   display: grid;
@@ -387,87 +497,6 @@ a.btn.disabled {
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-/* The film, and a sample compared beside it: side by side, one above the other when narrow. */
-.preview-pair {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  container-type: inline-size;
-}
-.preview-row {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-.preview-row > .preview,
-.compare-pane {
-  flex: 1 1 0;
-  min-width: 0;
-  min-height: 0;
-}
-.compare-pane {
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--border);
-}
-@container (max-width: 560px) {
-  .preview-pair.comparing .preview-row {
-    flex-direction: column;
-  }
-  .compare-pane {
-    border-left: 0;
-    border-top: 1px solid var(--border);
-  }
-}
-.compare-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 4px 0 10px;
-  flex: none;
-  border-bottom: 1px solid var(--border);
-  color: var(--fg-muted);
-  font-size: 12px;
-}
-.compare-head > svg {
-  flex: none;
-  color: var(--accent);
-}
-.compare-pick {
-  min-width: 0;
-  padding: 2px 4px;
-  border: 0;
-  border-radius: 4px;
-  background: none;
-  color: var(--fg);
-  font-size: 12px;
-  cursor: pointer;
-}
-.compare-pick:hover {
-  background: var(--bg-hover);
-}
-.compare-video {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-}
-.compare-volume {
-  display: flex;
-  align-items: center;
-  flex: none;
-}
-.compare-volume input {
-  width: 72px;
-  accent-color: var(--accent);
-}
-.transport.compact .transport-row .small-text {
-  min-width: 0;
-  margin-left: 6px;
 }
 .preview-stage {
   position: relative;
@@ -1737,26 +1766,11 @@ a.btn.disabled {
   .transport-row .mini-select {
     display: none;
   }
-  /* Beside a sample the film keeps its mute button: to hear the sample alone. */
-  .preview-pair.comparing .preview-row > .preview .transport-row .volume {
-    display: flex;
-  }
-  .preview-pair.comparing .preview-row > .preview .transport-row .volume input {
-    display: none;
-  }
 }
 @container (max-width: 440px) {
   .transport-row .icon-btn[title^="回到开头"],
   .transport-row .icon-btn[title="循环"],
   .transport-row .icon-btn[title="全屏"] {
-    display: none;
-  }
-}
-/* Half of a narrow editor beside a sample: the film keeps playing, the compare toggle and capture. */
-@container (max-width: 360px) {
-  .preview-pair.comparing .preview-row > .preview .transport-row .icon-btn[title^="从当前位置录音"],
-  .preview-pair.comparing .preview-row > .preview .transport-row .icon-btn[title="把当前画面设为封面"],
-  .preview-pair.comparing .preview-row > .preview .transport-row .time .faint {
     display: none;
   }
 }

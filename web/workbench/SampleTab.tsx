@@ -1,8 +1,9 @@
 import { useEffect, useMemo } from "react";
-import { Clapperboard, Columns2, FileCode2 } from "lucide-react";
-import { formatTime } from "../lib/api";
+import { Clapperboard, FileCode2 } from "lucide-react";
+import { formatTime, sampleName } from "../lib/api";
 import { exportTarget } from "../views/ExportView";
 import { StagePane, sampleStageSrc } from "./PreviewPane";
+import { registerPlayer, stagePlayer } from "./players";
 import { StageController, useObservable, useWorkbench } from "./store";
 
 /** Exports createScene: a module that can play on its own (as the explorer tells from the tree). */
@@ -11,13 +12,15 @@ export const playable = (code: string | undefined) =>
 
 /**
  * A module of the work played on its own (a sample, a sheet) on a stage of its own, beside the
- * film's. The tab keeps its stage while it is open, so going back to it does not load the work
- * again; hidden, it pauses. In front, the shortcuts and the AI's view follow it.
+ * film's. It keeps its stage while its tab is open, wherever the tab is moved, so showing it again
+ * does not load the work again; out of sight (`visible` false) it pauses. In the focused group the
+ * shortcuts and the AI's view follow it.
  */
-export function SampleTab({ file, active }: { file: string; active: boolean }) {
-  const { work, openFile, openTool, focusStage, compareSample } = useWorkbench();
+export function SampleTab({ file, visible, focused }: { file: string; visible: boolean; focused: boolean }) {
+  const { work, openFile, openTool, focusStage } = useWorkbench();
   const stage = useMemo(() => new StageController(), []);
   useEffect(() => () => stage.dispose(), [stage]);
+  useEffect(() => registerPlayer(`sample:${file}`, stagePlayer(stage, sampleName(file))), [stage, file]);
   const src = useMemo(
     () => sampleStageSrc(work, file),
     // The stage hot-reloads itself.
@@ -25,10 +28,14 @@ export function SampleTab({ file, active }: { file: string; active: boolean }) {
     [work.id, work.repo, file],
   );
   useEffect(() => {
-    if (!active) return void stage.pause();
+    stage.visible = visible;
+    if (!visible) stage.pause();
+  }, [visible, stage]);
+  useEffect(() => {
+    if (!focused) return;
     focusStage({ stage, path: file });
     return () => focusStage(null);
-  }, [active, stage, file, focusStage]);
+  }, [focused, stage, file, focusStage]);
   const project = useObservable(stage.status).project;
   const sample = project?.sample;
   const note = !project
@@ -43,9 +50,6 @@ export function SampleTab({ file, active }: { file: string; active: boolean }) {
           {file}
           {note && ` · ${note}`}
         </span>
-        <button className="btn small" title="回到成片预览，把这个样片放在旁边一起播放" onClick={() => compareSample(file)}>
-          <Columns2 size={13} /> 和成片对比
-        </button>
         <button className="btn small" title="打开这个模块的代码" onClick={() => openFile(file)}>
           <FileCode2 size={13} /> 代码
         </button>

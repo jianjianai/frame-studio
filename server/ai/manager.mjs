@@ -1166,8 +1166,6 @@ export class AiManager {
       const selected = selectionText(view.selection, meta);
       if (selected) lines.push(`用户在时间轴上选中了：${selected}`);
       if (view.editing) lines.push(`用户在编辑器中打开着：${view.editing}`);
-      if (view.compare)
-        lines.push(`用户在预览里把${/\.(mp4|m4v|webm|mov)$/i.test(view.compare.path) ? "视频" : "样片"} ${view.compare.path} 放在成片旁边对比（随成片一起播放、暂停）`);
       if (view.sample)
         lines.push(
           `用户正在看样片 ${view.sample.path}（单独播放，不在时间轴上），样片里的 ${formatTime(view.sample.time ?? 0)}${view.sample.playing ? "（播放中）" : ""}`,

@@ -15,17 +15,18 @@ import {
   ListPlus,
   ListMinus,
   SquareDashed,
+  PanelRight,
   Clapperboard,
   Play,
   FileCode2,
-  Columns2,
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { fileIcon } from "../workbench/EditorArea";
-import { isVideo } from "../workbench/PreviewPane";
+import { editorDrag } from "../workbench/EditorArea";
+import { coarsePointer } from "../lib/touch";
 import { ViewHeader } from "./ViewHeader";
 import { uploadFiles } from "./upload";
 
@@ -52,7 +53,7 @@ export function buildTree(entries: FileEntry[]) {
 }
 
 export function ExplorerView() {
-  const { work, openFile, openSample, compareSample, addToChat, readOnly } = useWorkbench();
+  const { work, openFile, openSample, addToChat, readOnly } = useWorkbench();
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [open, setOpen] = useState<Set<string>>(new Set(["scenes"]));
   // Picked rows, like VS Code: a click picks one, Ctrl/⌘ adds or drops one, Shift picks a run.
@@ -180,10 +181,22 @@ export function ExplorerView() {
         ? [{ label: "打开", onClick: () => openFile(node.path) }]
         : readOnly
           ? []
-          : [{ label: "新建文件", icon: <FilePlus size={14} />, onClick: () => newFile(node.path) }]),
-      // A sample or a video of the work (one the user uploaded, say) beside the film.
-      ...(node.scene === "sample" || isVideo(node.path)
-        ? [{ label: "和成片对比", icon: <Columns2 size={14} />, onClick: () => compareSample(node.path) }]
+          : [
+              { label: "新建文件", icon: <FilePlus size={14} />, onClick: () => newFile(node.path) },
+              // The server takes uploads into public/, production/ and sheets/.
+              ...(/^(public|production|sheets)(\/|$)/.test(node.path)
+                ? [{ label: "上传文件到这里", icon: <Upload size={14} />, onClick: () => uploadFiles(work, node.path).then(load) }]
+                : []),
+            ]),
+      // Like VS Code's "Open to the Side" (and what a finger has instead of dragging the file).
+      ...(node.type === "file"
+        ? [
+            {
+              label: "在右侧打开",
+              icon: <PanelRight size={14} />,
+              onClick: () => (node.scene === "sample" ? openSample(node.path, { split: "right" }) : openFile(node.path, { split: "right" })),
+            },
+          ]
         : []),
       { label: node.type === "file" ? "导出（下载）" : "导出为 zip", icon: <Download size={14} />, onClick: () => exportPaths([node.path]) },
       // Touch has no Ctrl or Shift: a long press adds the row to the picks.
@@ -225,6 +238,14 @@ export function ExplorerView() {
             node.type === "file" && !event.shiftKey && !event.ctrlKey && !event.metaKey && (node.scene === "sample" ? openSample(node.path) : openFile(node.path))
           }
           onContextMenu={(event) => menuFor(event, node)}
+          // Files drag into the editor area: onto a group, its tab bar, or a side of it (a split).
+          draggable={node.type === "file" && !coarsePointer()}
+          onDragStart={(event) => {
+            event.dataTransfer.effectAllowed = "copy";
+            event.dataTransfer.setData("text/plain", node.path);
+            editorDrag.set({ type: "file", path: node.path, sample: node.scene === "sample" });
+          }}
+          onDragEnd={() => editorDrag.set(null)}
           title={
             node.scene === "sample"
               ? `${node.path}\n样片${node.duration ? ` ${formatTime(node.duration)}` : ""}，不在时间轴上：点开播放，右键可打开代码`
@@ -258,7 +279,20 @@ export function ExplorerView() {
             <button className="icon-btn" title="新建文件" onClick={() => newFile()}>
               <FilePlus size={15} />
             </button>
-            <button className="icon-btn" title="上传素材到 public/" onClick={() => uploadFiles(work, "public").then(load)}>
+            <button
+              className="icon-btn"
+              title="上传文件"
+              onClick={(event) =>
+                openMenu(event, [
+                  { label: "上传素材到 public/（在成片里用）", icon: <Upload size={14} />, onClick: () => uploadFiles(work, "public").then(load) },
+                  {
+                    label: "上传到 sheets/（参考视频等，不进成片）",
+                    icon: <Upload size={14} />,
+                    onClick: () => uploadFiles(work, "sheets").then(load),
+                  },
+                ])
+              }
+            >
               <Upload size={15} />
             </button>
           </>

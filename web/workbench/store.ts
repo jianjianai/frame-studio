@@ -44,15 +44,17 @@ export interface StageApi {
 
 /**
  * Controls a stage iframe: the film's preview, which every part of the workbench uses to
- * seek/play/capture, a sample's tab, or a sample compared beside the film. One plays at a
- * time, but a compared sample plays and pauses with the film it follows.
+ * seek/play/capture, or a sample's tab. Stages side by side (split editors) can play together;
+ * starting one stops the ones out of sight, which would otherwise be heard and not seen.
  */
 export class StageController {
-  private static playing = new Set<StageController>();
+  private static all = new Set<StageController>();
   frame: HTMLIFrameElement | null = null;
-  /** The stage this one plays and pauses with (the film, for a sample compared beside it). */
-  private leader: StageController | null = null;
-  private unfollow?: () => void;
+  /** Shown in an editor group now (the editor area keeps it up to date). */
+  visible = true;
+  constructor() {
+    StageController.all.add(this);
+  }
   playback = new Observable<PlaybackSnapshot>({ time: 0, playing: false, buffering: false, rate: 1, loop: false, volume: 1, muted: false });
   status = new Observable<StageStatus>({ status: "loading", revision: 0 });
   fps = new Observable<number>(0);
@@ -71,30 +73,13 @@ export class StageController {
     return this.api?.seek(clamped);
   }
   async play() {
-    StageController.playing.add(this);
-    for (const other of StageController.playing) if (other !== this && other !== this.leader && other.leader !== this) other.pause();
+    for (const other of StageController.all) if (other !== this && !other.visible) other.pause();
     await this.api?.play();
-  }
-  /** Play and pause whenever `leader` does, however it was started (button, keys, timeline); null: on its own again. */
-  follow(leader: StageController | null) {
-    this.unfollow?.();
-    this.unfollow = undefined;
-    this.leader = leader;
-    if (!leader) return;
-    let playing = leader.playback.get().playing;
-    this.unfollow = leader.playback.subscribe(() => {
-      const now = leader.playback.get().playing;
-      if (now === playing) return;
-      playing = now;
-      if (now) void this.play();
-      else this.pause();
-    });
   }
   /** The stage goes away (a closed tab). */
   dispose() {
-    this.follow(null);
     this.pause();
-    StageController.playing.delete(this);
+    StageController.all.delete(this);
     this.frame = null;
   }
   pause() {
@@ -172,11 +157,9 @@ export interface WorkbenchContextValue {
   check: CheckResult | null;
   runCheck: () => Promise<void>;
   /** `preview`: a VS Code preview tab, replaced by the next preview until it is kept (double-click or edit). */
-  openFile: (path: string, options?: { line?: number; preview?: boolean }) => void;
+  openFile: (path: string, options?: { line?: number; preview?: boolean; split?: "left" | "right" | "up" | "down" }) => void;
   /** Play a module of the work on its own (a sample, a sheet) in its tab. */
-  openSample: (path: string, options?: { preview?: boolean }) => void;
-  /** Show the film's preview with this sample beside it (null: the film alone). */
-  compareSample: (path: string | null) => void;
+  openSample: (path: string, options?: { preview?: boolean; split?: "left" | "right" | "up" | "down" }) => void;
   /** Open a document of the repository's experience libraries (path relative to the experience branch). */
   openExperience: (path: string, options?: { preview?: boolean }) => void;
   /** Open a file of the material libraries (`<library>/<path>`) in a viewer tab. */
@@ -207,8 +190,6 @@ export interface WorkbenchContextValue {
     selection: Selection | null;
     editing: string | null;
     sample?: { path: string; time: number; playing: boolean };
-    /** A sample beside the film in the preview, playing along with it. */
-    compare?: { path: string };
   };
   showPanel: (tab: string) => void;
   showView: (view: string) => void;

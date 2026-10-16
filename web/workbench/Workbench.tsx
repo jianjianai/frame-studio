@@ -27,7 +27,6 @@ import type { CheckResult, WorkInfo, WorkStatus } from "../lib/types";
 import { navigate } from "../App";
 import { movedHere } from "../components/MoveWorkDialog";
 import { StageController, WorkbenchContext, useWorkbench, type ChatAttachment, type Selection, type VersionSource, type WorkbenchContextValue } from "./store";
-import { compareTarget, setCompare } from "./PreviewPane";
 import { useTimelineHistory } from "./timelineHistory";
 import { PropertiesView } from "../views/PropertiesView";
 import { ExperienceView } from "../views/ExperienceView";
@@ -159,10 +158,6 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     const playback = focus.stage.playback.get();
     return { path: focus.path, time: Math.round(playback.time * 10) / 10, playing: playback.playing };
   };
-  const compareView = () => {
-    const path = compareTarget.get();
-    return path ? { compare: { path } } : {};
-  };
   // Tell the server (and so the AI) where the user is looking: at once on a change, then every second.
   const [editing, setEditing] = useState<string | null>(null);
   useEffect(() => {
@@ -170,10 +165,10 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     const publish = () => {
       const snapshot = stage.playback.get();
       const sample = sampleView();
-      const key = `${snapshot.time.toFixed(1)}:${snapshot.playing}:${JSON.stringify(selection)}:${editing}:${JSON.stringify(sample)}:${compareTarget.get()}`;
+      const key = `${snapshot.time.toFixed(1)}:${snapshot.playing}:${JSON.stringify(selection)}:${editing}:${JSON.stringify(sample)}`;
       if (key === last) return;
       last = key;
-      sendEvent({ type: "preview-state", work: id, repo, time: snapshot.time, playing: snapshot.playing, selection, editing, ...(sample ? { sample } : {}), ...compareView() });
+      sendEvent({ type: "preview-state", work: id, repo, time: snapshot.time, playing: snapshot.playing, selection, editing, ...(sample ? { sample } : {}) });
     };
     publish();
     const timer = setInterval(publish, 1000);
@@ -204,10 +199,6 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     runCheck,
     openFile: (path, options) => editor.current?.openFile(path, options),
     openSample: (path, options) => editor.current?.openSample(path, options),
-    compareSample: (path) => {
-      setCompare(work, path);
-      editor.current?.showPreview();
-    },
     openExperience: (path, options) => editor.current?.openExperience(path, options),
     openMaterial: (ref, options) => editor.current?.openMaterial(ref, options),
     openResource: (id, options) => editor.current?.openResource(id, options),
@@ -235,7 +226,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     viewNow: () => {
       const snapshot = stage.playback.get();
       const sample = sampleView();
-      return { time: snapshot.time, playing: snapshot.playing, selection, editing, ...(sample ? { sample } : {}), ...compareView() };
+      return { time: snapshot.time, playing: snapshot.playing, selection, editing, ...(sample ? { sample } : {}) };
     },
     showPanel: (tab) => setPanel((value) => ({ ...value, visible: true, tab })),
     showView: (next) => {
@@ -266,6 +257,9 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
       } else if (mod && event.key.toLowerCase() === "j") {
         event.preventDefault();
         setPanel((value) => ({ ...value, visible: !value.visible }));
+      } else if (mod && (event.key === "\\" || event.code === "Backslash")) {
+        event.preventDefault();
+        editor.current?.split(event.altKey ? "down" : "right");
       } else if (mod && event.key.toLowerCase() === "i") {
         event.preventDefault();
         setChat((value) => ({ ...value, visible: true }));
