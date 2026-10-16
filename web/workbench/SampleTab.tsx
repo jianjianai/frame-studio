@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from "react";
-import { Clapperboard, FileCode2 } from "lucide-react";
+import { Clapperboard, Columns2, FileCode2 } from "lucide-react";
 import { formatTime } from "../lib/api";
 import { exportTarget } from "../views/ExportView";
-import { StagePane } from "./PreviewPane";
+import { StagePane, sampleStageSrc } from "./PreviewPane";
 import { StageController, useObservable, useWorkbench } from "./store";
 
 /** Exports createScene: a module that can play on its own (as the explorer tells from the tree). */
@@ -15,25 +15,15 @@ export const playable = (code: string | undefined) =>
  * again; hidden, it pauses. In front, the shortcuts and the AI's view follow it.
  */
 export function SampleTab({ file, active }: { file: string; active: boolean }) {
-  const { work, openFile, openTool, focusStage } = useWorkbench();
+  const { work, openFile, openTool, focusStage, compareSample } = useWorkbench();
   const stage = useMemo(() => new StageController(), []);
   useEffect(() => () => stage.dispose(), [stage]);
-  const src = useMemo(() => {
-    let quality = "standard";
-    try {
-      quality = JSON.parse(localStorage.getItem("frame:quality") || '"standard"');
-    } catch {}
-    const params = new URLSearchParams({
-      work: work.id,
-      module: work.preview.module,
-      assetBase: work.preview.assetBase,
-      scene: work.preview.module.replace(/project\.ts$/, file),
-      quality,
-    });
-    return `/preview/stage.html?${params}`;
+  const src = useMemo(
+    () => sampleStageSrc(work, file),
     // The stage hot-reloads itself.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [work.id, work.repo, file]);
+    [work.id, work.repo, file],
+  );
   useEffect(() => {
     if (!active) return void stage.pause();
     focusStage({ stage, path: file });
@@ -53,6 +43,9 @@ export function SampleTab({ file, active }: { file: string; active: boolean }) {
           {file}
           {note && ` · ${note}`}
         </span>
+        <button className="btn small" title="回到成片预览，把这个样片放在旁边一起播放" onClick={() => compareSample(file)}>
+          <Columns2 size={13} /> 和成片对比
+        </button>
         <button className="btn small" title="打开这个模块的代码" onClick={() => openFile(file)}>
           <FileCode2 size={13} /> 代码
         </button>

@@ -388,6 +388,80 @@ a.btn.disabled {
   display: flex;
   flex-direction: column;
 }
+/* The film, and a sample compared beside it: side by side, one above the other when narrow. */
+.preview-pair {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+}
+.preview-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+.preview-row > .preview,
+.compare-pane {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+}
+.compare-pane {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+}
+@container (max-width: 560px) {
+  .preview-pair.comparing .preview-row {
+    flex-direction: column;
+  }
+  .compare-pane {
+    border-left: 0;
+    border-top: 1px solid var(--border);
+  }
+}
+.compare-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 4px 0 10px;
+  flex: none;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+.compare-head > svg {
+  flex: none;
+  color: var(--accent);
+}
+.compare-pick {
+  min-width: 0;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--fg);
+  font-size: 12px;
+  cursor: pointer;
+}
+.compare-pick:hover {
+  background: var(--bg-hover);
+}
+.compare-volume {
+  display: flex;
+  align-items: center;
+  flex: none;
+}
+.compare-volume input {
+  width: 72px;
+  accent-color: var(--accent);
+}
+.transport.compact .transport-row .small-text {
+  min-width: 0;
+  margin-left: 6px;
+}
 .preview-stage {
   position: relative;
   flex: 1;
@@ -1656,11 +1730,26 @@ a.btn.disabled {
   .transport-row .mini-select {
     display: none;
   }
+  /* Beside a sample the film keeps its mute button: to hear the sample alone. */
+  .preview-pair.comparing .preview-row > .preview .transport-row .volume {
+    display: flex;
+  }
+  .preview-pair.comparing .preview-row > .preview .transport-row .volume input {
+    display: none;
+  }
 }
 @container (max-width: 440px) {
   .transport-row .icon-btn[title^="回到开头"],
   .transport-row .icon-btn[title="循环"],
   .transport-row .icon-btn[title="全屏"] {
+    display: none;
+  }
+}
+/* Half of a narrow editor beside a sample: the film keeps playing, the compare toggle and capture. */
+@container (max-width: 360px) {
+  .preview-pair.comparing .preview-row > .preview .transport-row .icon-btn[title^="从当前位置录音"],
+  .preview-pair.comparing .preview-row > .preview .transport-row .icon-btn[title="把当前画面设为封面"],
+  .preview-pair.comparing .preview-row > .preview .transport-row .time .faint {
     display: none;
   }
 }

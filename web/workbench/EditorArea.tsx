@@ -32,6 +32,8 @@ export interface EditorHandle {
   openDiff(title: string, query: string, options?: { preview?: boolean; source?: VersionSource }): void;
   /** A tool in its own tab (export, reviews, resources, library management). */
   openTool(tool: Tool): void;
+  /** Bring the film's preview to the front. */
+  showPreview(): void;
 }
 type Source = "work" | "experience" | "materials" | "resource" | "reviews";
 interface Tab {
@@ -234,6 +236,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       openReview: (path, options) => void openReview(path, options),
       openDiff,
       openTool,
+      showPreview: () => setActive(null),
     }),
     [openFile, openSample, openExperience, openMaterial, openResource, openReview, openDiff, openTool],
   );

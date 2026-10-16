@@ -44,11 +44,15 @@ export interface StageApi {
 
 /**
  * Controls a stage iframe: the film's preview, which every part of the workbench uses to
- * seek/play/capture, or a sample's tab. One plays at a time.
+ * seek/play/capture, a sample's tab, or a sample compared beside the film. One plays at a
+ * time, but a compared sample plays and pauses with the film it follows.
  */
 export class StageController {
   private static playing = new Set<StageController>();
   frame: HTMLIFrameElement | null = null;
+  /** The stage this one plays and pauses with (the film, for a sample compared beside it). */
+  private leader: StageController | null = null;
+  private unfollow?: () => void;
   playback = new Observable<PlaybackSnapshot>({ time: 0, playing: false, buffering: false, rate: 1, loop: false, volume: 1, muted: false });
   status = new Observable<StageStatus>({ status: "loading", revision: 0 });
   fps = new Observable<number>(0);
@@ -68,11 +72,27 @@ export class StageController {
   }
   async play() {
     StageController.playing.add(this);
-    for (const other of StageController.playing) if (other !== this) other.pause();
+    for (const other of StageController.playing) if (other !== this && other !== this.leader && other.leader !== this) other.pause();
     await this.api?.play();
+  }
+  /** Play and pause whenever `leader` does, however it was started (button, keys, timeline); null: on its own again. */
+  follow(leader: StageController | null) {
+    this.unfollow?.();
+    this.unfollow = undefined;
+    this.leader = leader;
+    if (!leader) return;
+    let playing = leader.playback.get().playing;
+    this.unfollow = leader.playback.subscribe(() => {
+      const now = leader.playback.get().playing;
+      if (now === playing) return;
+      playing = now;
+      if (now) void this.play();
+      else this.pause();
+    });
   }
   /** The stage goes away (a closed tab). */
   dispose() {
+    this.follow(null);
     this.pause();
     StageController.playing.delete(this);
     this.frame = null;
@@ -155,6 +175,8 @@ export interface WorkbenchContextValue {
   openFile: (path: string, options?: { line?: number; preview?: boolean }) => void;
   /** Play a module of the work on its own (a sample, a sheet) in its tab. */
   openSample: (path: string, options?: { preview?: boolean }) => void;
+  /** Show the film's preview with this sample beside it (null: the film alone). */
+  compareSample: (path: string | null) => void;
   /** Open a document of the repository's experience libraries (path relative to the experience branch). */
   openExperience: (path: string, options?: { preview?: boolean }) => void;
   /** Open a file of the material libraries (`<library>/<path>`) in a viewer tab. */
@@ -185,6 +207,8 @@ export interface WorkbenchContextValue {
     selection: Selection | null;
     editing: string | null;
     sample?: { path: string; time: number; playing: boolean };
+    /** A sample beside the film in the preview, playing along with it. */
+    compare?: { path: string };
   };
   showPanel: (tab: string) => void;
   showView: (view: string) => void;
