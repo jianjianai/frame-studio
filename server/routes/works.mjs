@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { readJson, sendFile } from "../http.mjs";
 import { tree, readText, writeText, removePath, movePath, writeStream, uniquePath, downloadPlan, assertZippable, sendZip } from "../files.mjs";
 import { problem, confined, conflict, diskUsage } from "../util.mjs";
@@ -294,6 +294,36 @@ export function workRoutes(services) {
     res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(plan.name)}`);
     sendFile(req, res, plan.file);
   });
+
+  /**
+   * A work's HTML pages shown in the studio. They run in a sandboxed frame, an origin of their
+   * own that gets no session cookie, so they are served under a signed address of the work:
+   * read-only, for a day, and the page's own pictures and scripts load by their relative paths.
+   */
+  const PAGE_LINK_MS = 24 * 3600_000;
+  const pageSignature = (repo, id, expires) => services.auth.sign(`page:${repo}/${id}:${expires}`);
+  router.get("/api/works/:repo/:id/page-link", async ({ params }) => {
+    const work = await open(params);
+    const expires = Date.now() + PAGE_LINK_MS;
+    return { base: `/api/works/${encodeURIComponent(work.repo)}/${encodeURIComponent(work.id)}/page/${expires}.${pageSignature(work.repo, work.id, expires)}/` };
+  });
+  router.get(
+    "/api/works/:repo/:id/page/:token/:path*",
+    async ({ req, res, params }) => {
+      // Checked before the work is opened: the address needs no login.
+      const [expires, signature = ""] = params.token.split(".");
+      const expected = pageSignature(params.repo, params.id, expires);
+      if (signature.length !== expected.length || !timingSafeEqual(Buffer.from(signature), Buffer.from(expected)) || !(Number(expires) > Date.now()))
+        throw problem(403, "页面地址已过期，请重新打开", "FORBIDDEN");
+      const work = await open(params);
+      const file = confined(work.dir, params.path);
+      // Also sandboxed when opened by itself in a browser tab.
+      res.setHeader("Content-Security-Policy", "sandbox allow-scripts allow-popups allow-modals allow-downloads");
+      res.setHeader("X-Content-Type-Options", "nosniff");
+      sendFile(req, res, file);
+    },
+    { public: true },
+  );
 
   /** Raw bytes of a work file for media previews in the studio. */
   router.get("/api/works/:repo/:id/raw", async ({ req, res, params, query }) => {

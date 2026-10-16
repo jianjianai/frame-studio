@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { Zip, ZipPassThrough } from "fflate";
-import { confined, problem, writeFileAtomic, mediaKind, sha256 } from "./util.mjs";
+import { confined, problem, writeFileAtomic, mediaKind, sha256, inside } from "./util.mjs";
 
 const HIDDEN = new Set([".git", "node_modules", ".cache", "exports", ".DS_Store"]);
 const versions = new Map(); // file -> { size, mtimeMs, ino, version }
@@ -26,6 +26,42 @@ export const TEXT_LIMIT = 2 * 1024 * 1024;
 const textExtensions = /\.(ts|tsx|js|mjs|cjs|jsx|json|md|txt|css|html|svg|glsl|frag|vert|srt|vtt|csv|yaml|yml|toml)$/i;
 export const isText = (file) => textExtensions.test(file);
 
+const scenes = new Map(); // file -> { size, mtimeMs, info }
+const sceneCode = /\.(ts|tsx|js|mjs)$/i;
+const exportsCreateScene = /export\s+(?:async\s+)?function\s+createScene\b|export\s+(?:const|let)\s+createScene\b|export\s*\{[^}]*\bcreateScene\b/;
+const exportsSample = /export\s+const\s+sample\b(?:\s*:[^=]+)?\s*=\s*(\{[^}]*\})?/;
+/**
+ * A module that can play on its own: "sample" when it declares itself one (`export const
+ * sample`, with its literal duration when it has one), "module" when it only exports
+ * createScene. Read without running it; remembered until the file changes.
+ */
+export function sceneInfo(file, stat = fs.statSync(file)) {
+  const known = scenes.get(file);
+  if (known && known.size === stat.size && known.mtimeMs === stat.mtimeMs) return known.info;
+  let info = null;
+  if (stat.size <= 512 * 1024) {
+    const code = fs.readFileSync(file, "utf8");
+    if (exportsCreateScene.test(code)) {
+      const sample = exportsSample.exec(code);
+      const duration = sample?.[1] && /\bduration\s*:\s*(\d+(?:\.\d+)?)\b/.exec(sample[1]);
+      info = sample ? { scene: "sample", ...(duration ? { duration: Number(duration[1]) } : {}) } : { scene: "module" };
+    }
+  }
+  scenes.set(file, { size: stat.size, mtimeMs: stat.mtimeMs, info });
+  return info;
+}
+
+/** A module of the work drawn on its own: a path inside the work's folder (or from the repo root). */
+export function sceneModule(work, scene) {
+  let relative = path.posix.normalize(scene.replaceAll("\\", "/")).replace(/^\.\//, "");
+  if (relative.startsWith(`projects/${work.slug}/`)) relative = relative.slice(`projects/${work.slug}/`.length);
+  const file = path.join(work.dir, relative);
+  if (relative.startsWith("../") || path.isAbsolute(relative) || !inside(work.dir, file)) throw problem(400, "scene 是作品文件夹里的文件，例如 sheets/人物.ts");
+  if (!/\.(ts|tsx|js|mjs)$/.test(relative)) throw problem(400, "scene 要是导出 createScene(options) 的 .ts 或 .js 文件");
+  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw problem(404, `作品里没有 ${relative}`, "NOT_FOUND");
+  return relative;
+}
+
 /** File tree of a work directory, relative paths with "/" separators. */
 export function tree(dir, { maxEntries = 5000 } = {}) {
   const entries = [];
@@ -47,7 +83,9 @@ export function tree(dir, { maxEntries = 5000 } = {}) {
         walk(full, relative);
       } else if (entry.isFile()) {
         const stat = fs.statSync(full);
-        entries.push({ path: relative, type: "file", size: stat.size, mtime: stat.mtimeMs, kind: isText(entry.name) ? "text" : mediaKind(entry.name) });
+        // The work's own composition (scene.ts) is the film, not something to play apart.
+        const scene = sceneCode.test(entry.name) && relative !== "scene.ts" && relative !== "project.ts" ? sceneInfo(full, stat) : null;
+        entries.push({ path: relative, type: "file", size: stat.size, mtime: stat.mtimeMs, kind: isText(entry.name) ? "text" : mediaKind(entry.name), ...scene });
       }
     }
   };

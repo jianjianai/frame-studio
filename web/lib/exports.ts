@@ -1,5 +1,5 @@
 import { useSyncExternalStore } from "react";
-import { api, formatBytes, subscribe, workPath } from "./api";
+import { api, formatBytes, sampleName, subscribe, workPath } from "./api";
 import type { Task, WorkInfo } from "./types";
 import {
   EXPORT_CHANNEL,
@@ -252,6 +252,7 @@ async function start(id: string) {
   if (job.done.length && (await fingerprintOf(job.repo, job.work).catch(() => job.fingerprint)) !== job.fingerprint)
     return settle({ ...job, status: "changed" });
   const query = new URLSearchParams({ job: id, module: work.preview.module, assetBase: work.preview.assetBase });
+  if (job.options.scene) query.set("scene", work.preview.module.replace(/project\.ts$/, job.options.scene));
   const frame = document.createElement("iframe");
   frame.title = "本机导出";
   frame.tabIndex = -1;
@@ -359,21 +360,26 @@ async function ensureSpace(work: WorkInfo, options: ExportOptions, seconds: numb
     throw new Error(`浏览器的存储空间不够：这次导出约需 ${formatBytes(needed)}，还能用 ${formatBytes(free)}。清理磁盘或移除不用的本机导出后再试`);
 }
 
-/** Queue a local export of the work as it is now. */
-export async function startLocalExport(work: WorkInfo, options: ExportOptions) {
+/**
+ * Queue a local export of the work as it is now. A sample (`options.scene`) knows its length once
+ * its page has loaded it; `sampleLength` is what the explorer read from it, if anything.
+ */
+export async function startLocalExport(work: WorkInfo, options: ExportOptions, sampleLength?: number) {
   if (!state.supported) throw new Error(unsupportedReason());
-  const duration = work.meta?.duration ?? 0;
+  const duration = options.scene ? (sampleLength ?? options.end ?? 60) : (work.meta?.duration ?? 0);
   const from = options.start ?? 0;
   const to = options.end ?? duration;
-  if (!(to > from) || from < 0 || to > duration + 1e-6) throw new Error(`导出范围无效：作品长 ${duration} 秒，开始时间要小于结束时间`);
+  if (!(to > from) || from < 0 || to > duration + 1e-6)
+    throw new Error(`导出范围无效：${options.scene ? "样片" : "作品"}长 ${duration} 秒，开始时间要小于结束时间`);
   await ensureSpace(work, options, to - from);
+  const title = work.meta?.title ?? work.id;
   const id = crypto.randomUUID();
   const now = new Date().toISOString();
   await settle({
     id,
     repo: work.repo,
     work: work.id,
-    title: work.meta?.title ?? work.id,
+    title: options.scene ? `${title} · 样片 ${sampleName(options.scene)}` : title,
     options,
     fingerprint: await fingerprintOf(work.repo, work.id),
     createdAt: now,

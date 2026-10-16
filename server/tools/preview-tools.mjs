@@ -6,7 +6,8 @@ import sharp from "sharp";
 import { workArg, asJson } from "./registry.mjs";
 import { resolveAsset } from "./asset-tools.mjs";
 import { formatTime, ffmpegExecutable, digest, contactSheet } from "../render.mjs";
-import { problem, inside } from "../util.mjs";
+import { problem } from "../util.mjs";
+import { sceneModule } from "../files.mjs";
 import { probe } from "../media.mjs";
 import { decodeAudio, loudness, loudnessStretches, beatThis, mixDown, voiceBalance, VOICE_TRACK } from "../audio-analysis.mjs";
 import { MotionTrack, analyzeMotion, motionText, motionChart } from "../motion.mjs";
@@ -25,17 +26,6 @@ const FRAME_LIMIT = 3840;
 const MOTION_FRAMES = 240;
 const MOTION_EDGE = 320;
 const MOTION_BUDGET_MS = 45000;
-
-/** A module of the work drawn on its own: a path inside the work's folder (or from the repo root). */
-export function sceneModule(work, scene) {
-  let relative = path.posix.normalize(scene.replaceAll("\\", "/")).replace(/^\.\//, "");
-  if (relative.startsWith(`projects/${work.slug}/`)) relative = relative.slice(`projects/${work.slug}/`.length);
-  const file = path.join(work.dir, relative);
-  if (relative.startsWith("../") || path.isAbsolute(relative) || !inside(work.dir, file)) throw problem(400, "scene 是作品文件夹里的文件，例如 sheets/人物.ts");
-  if (!/\.(ts|tsx|js|mjs)$/.test(relative)) throw problem(400, "scene 要是导出 createScene(options) 的 .ts 或 .js 文件");
-  if (!fs.existsSync(file) || !fs.statSync(file).isFile()) throw problem(404, `作品里没有 ${relative}`, "NOT_FOUND");
-  return relative;
-}
 
 /**
  * A close look at `region` ([x, y, width, height] in the work's picture pixels): the frame
@@ -152,7 +142,7 @@ export function registerPreviewTools(registry) {
     description:
       "在浏览器中渲染作品画面给你看，用来亲眼确认修改效果。times 指定绝对时间（秒，超出 0–作品时长的按 0 或最后一刻 时长−0.001 秒画）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张；取的是等分后每一份的中点，不含首尾两端，看首尾和切点用 times）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。默认 JPEG；format 设为 png 时返回无损 PNG（看细小文字、颜色）。每张都有画面指纹（同一时刻两次渲染指纹相同，画面就完全一样）和服务器画这一帧的毫秒数（服务器没有 GPU，只用来比较快慢；整片哪里慢用 work_check 的 timing）。" +
       "region 放大看一块（脸、手、细线、小字）：[x, y, 宽, 高] 按作品画面像素，scale 是放大倍数（默认放到长边约 1000 像素，最多到画面长边 3840）。" +
-      "scene 单独画作品里的另一个模块（例如 sheets/人物.ts，导出 createScene，写法和 scenes/*.ts 一样）：人物设定图、表情和动作表、一个组件单独看，不用放进时间轴、不影响用户的预览；不给 times 时画 0 秒那一刻，不叠字幕。",
+      "scene 单独画作品里的另一个模块（例如 sheets/人物.ts，导出 createScene，写法和 scenes/*.ts 一样）：人物设定图、表情和动作表、一个组件单独看、样片，不用放进时间轴、不影响用户的预览；时间是这个模块自己的（0 到它 sample 的 duration，没写就是作品时长），不给 times 时样片均匀取样、其他模块画 0 秒那一刻，不叠字幕。",
     readOnly: true,
     input: {
       work: workArg,
@@ -181,12 +171,14 @@ export function registerPreviewTools(registry) {
       const zoom = region ? (meta.ok ? regionPlan(meta.meta, region, scale) : null) : null;
       if (region && !zoom) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
       if (!times) {
-        const duration = meta.ok ? meta.meta.duration : 10;
-        if (scene && count === undefined && start === undefined && end === undefined) times = [0];
+        // A sample is sampled over its own length; a module without one (a sheet) shows 0 s.
+        const info = scene ? await services.renderer.sceneInfo(work, scene) : null;
+        const duration = info ? info.duration : meta.ok ? meta.meta.duration : 10;
+        if (scene && !info.sample?.duration && count === undefined && start === undefined && end === undefined) times = [0];
         else {
           const from = Math.min(start ?? 0, duration),
             to = Math.min(end ?? duration, duration);
-          if (to <= from) throw problem(400, `取样范围 ${from}–${to} 秒无效（作品 ${duration} 秒）`);
+          if (to <= from) throw problem(400, `取样范围 ${from}–${to} 秒无效（${scene ? `${scene} ` : "作品 "}${duration} 秒）`);
           const n = count ?? 12;
           times = Array.from({ length: n }, (_, index) => from + ((to - from) * (index + 0.5)) / n);
         }

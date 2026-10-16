@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { problem, notFound } from "./util.mjs";
+import { sceneModule } from "./files.mjs";
 
 const slugify = (text) =>
   String(text || "video")
@@ -44,26 +45,34 @@ export class Exports {
     fs.rmSync(file);
     fs.rmSync(file + ".json", { force: true });
   }
-  /** Start an MP4 export task from a frozen copy of the work. */
+  /**
+   * Start an MP4 export task from a frozen copy of the work; `scene` (a path in the work, e.g.
+   * sheets/x.ts) exports that module played on its own, as long as its sample says.
+   */
   start(work, options = {}) {
     const { renderer, tasks, works } = this.services;
     const meta = works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error);
+    const scene = options.scene ? sceneModule(work, options.scene) : undefined;
     // Checked now: in the background task a wrong range would only show up as a failed task later.
+    // A sample's length is known once its page has loaded it: the task checks that.
     const duration = meta.meta.duration;
     const from = options.start ?? 0;
     const to = options.end ?? duration;
-    if (to > duration + 1e-6) throw problem(400, `end ${to} 秒超出了作品时长 ${duration} 秒（导出到结尾时不写 end）`);
-    if (from >= to) throw problem(400, `导出范围 ${from}–${to} 秒无效：start 要小于 end${options.end === undefined ? `（作品 ${duration} 秒）` : ""}`);
+    if (!scene && to > duration + 1e-6) throw problem(400, `end ${to} 秒超出了作品时长 ${duration} 秒（导出到结尾时不写 end）`);
+    if ((options.end !== undefined || !scene) && from >= to)
+      throw problem(400, `导出范围 ${from}–${to} 秒无效：start 要小于 end${options.end === undefined ? `（作品 ${duration} 秒）` : ""}`);
     const dir = this.dir(work);
     fs.mkdirSync(dir, { recursive: true });
     const stamp = new Date().toISOString().slice(0, 19).replace(/[T:]/g, "-");
-    const name = `${slugify(meta.meta.title)}-${stamp}.mp4`;
+    const sample = scene && path.basename(scene).replace(/\.[^.]+$/, "");
+    const title = sample ? `${meta.meta.title} · 样片 ${sample}` : meta.meta.title;
+    const name = `${slugify(meta.meta.title)}${sample ? `-${slugify(sample)}` : ""}-${stamp}.mp4`;
     const output = path.join(dir, name);
-    return tasks.start({ kind: "export", title: `导出 ${meta.meta.title}`, work: work.id, repo: work.repo }, async ({ signal, progress }) => {
+    return tasks.start({ kind: "export", title: `导出 ${title}`, work: work.id, repo: work.repo }, async ({ signal, progress }) => {
       const status = await works.status(work);
-      const result = await renderer.exportVideo(work, { ...options, output, signal, progress });
-      const info = { ...result, file: undefined, name, title: meta.meta.title, version: status.head?.commit, unsavedChanges: status.files.length };
+      const result = await renderer.exportVideo(work, { ...options, scene, output, signal, progress });
+      const info = { ...result, file: undefined, name, title, ...(scene ? { scene } : {}), version: status.head?.commit, unsavedChanges: status.files.length };
       fs.writeFileSync(output + ".json", JSON.stringify(info, null, 2));
       this.services.events.emit({ type: "exports", work: work.id, repo: work.repo });
       return info;

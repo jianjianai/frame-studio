@@ -2,11 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
 import { browserExecutable } from "../server/render.mjs";
-import { regionPlan, sceneModule } from "../server/tools/preview-tools.mjs";
+import { regionPlan } from "../server/tools/preview-tools.mjs";
+import { sceneModule } from "../server/files.mjs";
+import { ensureAudioDocument } from "../server/documents.mjs";
 import { timingReport } from "../server/tools/work-tools.mjs";
 
 /**
@@ -61,6 +63,30 @@ export function createScene({ width, height }: SceneOptions): Scene {
   };
 }
 `;
+
+/** A sample (样片): red until 1 s, then white; 1.5 s long, with the work's sound from 2 s on. */
+const SAMPLE = SHEET.replace('"#00ff00" : "#0000ff"', '"#ff0000" : "#ffffff"') + "export const sample = { duration: 1.5, audioFrom: 2 };\n";
+
+/** A 440 Hz tone, 16-bit mono WAV. */
+const tone = (seconds, rate = 48000) => {
+  const samples = Math.round(seconds * rate);
+  const data = Buffer.alloc(44 + samples * 2);
+  data.write("RIFF", 0);
+  data.writeUInt32LE(36 + samples * 2, 4);
+  data.write("WAVEfmt ", 8);
+  data.writeUInt32LE(16, 16);
+  data.writeUInt16LE(1, 20);
+  data.writeUInt16LE(1, 22);
+  data.writeUInt32LE(rate, 24);
+  data.writeUInt32LE(rate * 2, 28);
+  data.writeUInt16LE(2, 32);
+  data.writeUInt16LE(16, 34);
+  data.write("data", 36);
+  data.writeUInt32LE(samples * 2, 40);
+  for (let i = 0; i < samples; i++) data.writeInt16LE(Math.round(Math.sin((2 * Math.PI * 440 * i) / rate) * 12000), 44 + i * 2);
+  return data;
+};
+const loud = (channel) => Math.sqrt(channel.reduce((sum, value) => sum + value * value, 0) / channel.length);
 
 const pixel = async (data, x, y) => {
   const { data: raw, info } = await sharp(Buffer.from(data, "base64")).raw().toBuffer({ resolveWithObject: true });
@@ -150,6 +176,58 @@ describe("pictures for the AI: modules on their own, close looks, timing, motion
       );
     },
     120000,
+  );
+
+  it.skipIf(!browserExecutable())(
+    "plays a sample as long as it says, with the work's sound from where it says, and exports only it",
+    async () => {
+      fs.writeFileSync(path.join(work.dir, "sheets", "sample.ts"), SAMPLE);
+      fs.mkdirSync(path.join(work.dir, "public"), { recursive: true });
+      fs.writeFileSync(path.join(work.dir, "public", "tone.wav"), tone(2));
+      const audio = {
+        schemaVersion: 1,
+        sources: [{ id: "tone", kind: "file", src: `films/${work.slug}/tone.wav` }],
+        tracks: [{ id: "music", name: "配乐" }],
+        clips: [{ id: "t", track: "music", source: "tone", start: 2, duration: 2 }],
+      };
+      ensureAudioDocument(work);
+      const silent = fs.readFileSync(path.join(work.dir, "audio.json"), "utf8");
+      fs.writeFileSync(path.join(work.dir, "audio.json"), JSON.stringify(audio));
+      onTestFinished(() => fs.writeFileSync(path.join(work.dir, "audio.json"), silent));
+      // The explorer knows samples and modules without running them.
+      const tree = await (await fetch(`${base}/api/works/local/${work.id}/tree`)).json();
+      const entry = (file) => tree.find((item) => item.path === file);
+      expect(entry("sheets/sample.ts")).toMatchObject({ scene: "sample", duration: 1.5 });
+      expect(entry("sheets/sheet.ts")).toMatchObject({ scene: "module" });
+      expect(entry("sheets/sheet.ts").duration).toBeUndefined();
+      expect(entry("scene.ts").scene).toBeUndefined();
+      expect(entry("scenes/title.ts")).toMatchObject({ scene: "module" });
+      // Sampled over its own 1.5 s; later moments are its last one.
+      const spread = await tool("preview_frames", { work: work.id, scene: "sheets/sample.ts" });
+      expect(spread.body.data.times).toHaveLength(12);
+      expect(Math.max(...spread.body.data.times)).toBeLessThan(1.5);
+      const shots = await tool("preview_frames", { work: work.id, scene: "sheets/sample.ts", times: [0.5, 3], format: "png" });
+      expect(shots.body.data.times).toEqual([0.5, 1.499]);
+      expect(await pixel(shots.body.images[0].data, 0.5, 0.5)).toEqual([255, 0, 0]);
+      expect(await pixel(shots.body.images[1].data, 0.5, 0.5)).toEqual([255, 255, 255]);
+      // From its 0 s it sounds as the work does from 2 s; the film is silent before 2 s.
+      const lease = await app.services.renderer.lease(work, { scene: "sheets/sample.ts" });
+      try {
+        expect(lease.handle.sample).toEqual({ duration: 1.5, audioFrom: 2 });
+        expect(loud((await app.services.renderer.pcmOn(lease.handle, { start: 0.2, duration: 0.5 })).left)).toBeGreaterThan(0.1);
+      } finally {
+        lease.release();
+      }
+      expect(loud((await app.services.renderer.audioPcm(work, { start: 0.2, duration: 0.5 })).left)).toBeLessThan(0.001);
+      // An export of only the sample: its length, its sound, its name.
+      const task = app.services.exports.start(work, { scene: "sheets/sample.ts", width: 320, fps: 12 });
+      const done = await app.services.tasks.wait(task.id, 110000);
+      expect([done.status, done.error]).toEqual(["done", null]);
+      expect(done.result).toMatchObject({ frames: 18, duration: 1.5, audio: true, scene: "sheets/sample.ts", title: "画面检查 · 样片 sample" });
+      expect(done.result.name).toMatch(/^画面检查-sample-.+\.mp4$/);
+      expect(() => app.services.exports.start(work, { scene: "sheets/none.ts" })).toThrow("作品里没有 sheets/none.ts");
+    },
+    180000,
   );
 
   it.skipIf(!browserExecutable())(

@@ -132,6 +132,9 @@ export interface FileEntry {
   size?: number;
   mtime?: number;
   kind?: string;
+  /** Plays on its own: "sample" declares itself a 样片 (its literal duration, when given); "module" only exports createScene. */
+  scene?: "sample" | "module";
+  duration?: number;
 }
 
 export interface Asset {
@@ -257,5 +260,7 @@ export interface StageStatus {
     tracks: { id: string; name: string; kind: string }[];
     beats: Beat[];
     subtitles: Subtitle[];
+    /** A module playing on its own: what it declared as a sample (null: nothing). */
+    sample?: { duration?: number; audioFrom?: number } | null;
   };
 }

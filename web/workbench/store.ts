@@ -42,8 +42,12 @@ export interface StageApi {
   reload(): Promise<void>;
 }
 
-/** Controls the preview iframe; every part of the workbench uses this to seek/play/capture. */
+/**
+ * Controls a stage iframe: the film's preview, which every part of the workbench uses to
+ * seek/play/capture, or a sample's tab. One plays at a time.
+ */
 export class StageController {
+  private static playing = new Set<StageController>();
   frame: HTMLIFrameElement | null = null;
   playback = new Observable<PlaybackSnapshot>({ time: 0, playing: false, buffering: false, rate: 1, loop: false, volume: 1, muted: false });
   status = new Observable<StageStatus>({ status: "loading", revision: 0 });
@@ -63,7 +67,15 @@ export class StageController {
     return this.api?.seek(clamped);
   }
   async play() {
+    StageController.playing.add(this);
+    for (const other of StageController.playing) if (other !== this) other.pause();
     await this.api?.play();
+  }
+  /** The stage goes away (a closed tab). */
+  dispose() {
+    this.pause();
+    StageController.playing.delete(this);
+    this.frame = null;
   }
   pause() {
     this.api?.pause();
@@ -104,7 +116,7 @@ export class StageController {
 }
 
 export type ChatAttachment =
-  | { type: "frame"; time: number; data: string; mimeType: string }
+  | { type: "frame"; time: number; data: string; mimeType: string; scene?: string }
   | { type: "image"; data: string; mimeType: string }
   | { type: "range"; start: number; end: number }
   | { type: "layer"; id: string; name?: string }
@@ -133,10 +145,16 @@ export interface WorkbenchContextValue {
   work: WorkInfo;
   reload: () => Promise<void>;
   stage: StageController;
+  /** A sample's tab is in front (`null`: it is not any more): the shortcuts and the AI follow its stage. */
+  focusStage: (focus: { stage: StageController; path: string } | null) => void;
+  /** The stage the user looks at: a sample's (`scene` is its file) when its tab is in front, else the film's. */
+  currentStage: () => { stage: StageController; scene?: string };
   check: CheckResult | null;
   runCheck: () => Promise<void>;
   /** `preview`: a VS Code preview tab, replaced by the next preview until it is kept (double-click or edit). */
   openFile: (path: string, options?: { line?: number; preview?: boolean }) => void;
+  /** Play a module of the work on its own (a sample, a sheet) in its tab. */
+  openSample: (path: string, options?: { preview?: boolean }) => void;
   /** Open a document of the repository's experience libraries (path relative to the experience branch). */
   openExperience: (path: string, options?: { preview?: boolean }) => void;
   /** Open a file of the material libraries (`<library>/<path>`) in a viewer tab. */
@@ -161,7 +179,13 @@ export interface WorkbenchContextValue {
   selection: Selection | null;
   select: (selection: Selection | null) => void;
   /** Exactly what the user is looking at now; sent with each chat message for the AI. */
-  viewNow: () => { time: number; playing: boolean; selection: Selection | null; editing: string | null };
+  viewNow: () => {
+    time: number;
+    playing: boolean;
+    selection: Selection | null;
+    editing: string | null;
+    sample?: { path: string; time: number; playing: boolean };
+  };
   showPanel: (tab: string) => void;
   showView: (view: string) => void;
   openSettings: (section?: string) => void;

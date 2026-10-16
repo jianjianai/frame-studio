@@ -1166,6 +1166,10 @@ export class AiManager {
       const selected = selectionText(view.selection, meta);
       if (selected) lines.push(`用户在时间轴上选中了：${selected}`);
       if (view.editing) lines.push(`用户在编辑器中打开着：${view.editing}`);
+      if (view.sample)
+        lines.push(
+          `用户正在看样片 ${view.sample.path}（单独播放，不在时间轴上），样片里的 ${formatTime(view.sample.time ?? 0)}${view.sample.playing ? "（播放中）" : ""}`,
+        );
     }
     if (!steering) {
       const files = snapshotFiles(work.dir);
@@ -1175,7 +1179,12 @@ export class AiManager {
     }
     const references = [];
     for (const attachment of message.attachments) {
-      if (attachment.type === "frame") references.push(`画面 ${formatTime(attachment.time)}（截图见附图）`);
+      if (attachment.type === "frame")
+        references.push(
+          attachment.scene
+            ? `样片 ${attachment.scene} 在它自己的 ${formatTime(attachment.time)} 的画面（截图见附图，不是成片的时间）`
+            : `画面 ${formatTime(attachment.time)}（截图见附图）`,
+        );
       if (attachment.type === "range") references.push(`片段 ${formatTime(attachment.start)}–${formatTime(attachment.end)}`);
       if (attachment.type === "layer") references.push(`图层 ${attachment.id}${attachment.name ? "「" + attachment.name + "」" : ""}`);
       if (attachment.type === "asset") references.push(`素材 ${attachment.url}`);

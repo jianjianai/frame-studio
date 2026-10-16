@@ -19,6 +19,8 @@ export interface ExportOptions {
   start?: number;
   end?: number;
   subtitles: boolean;
+  /** A module of the work played on its own (a sample, e.g. sheets/x.ts) instead of the film. */
+  scene?: string;
 }
 
 export interface ExportPlan {

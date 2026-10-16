@@ -24,6 +24,7 @@ export interface StageStatus {
     tracks: { id: string; name: string; kind: string }[];
     beats: AnimationProject["beats"];
     subtitles: AnimationProject["subtitles"];
+    sample?: AnimationProject["sample"] | null;
   };
 }
 export interface StageApi {
@@ -91,6 +92,7 @@ function summary(p: AnimationProject): StageStatus["project"] {
     tracks: projectAudioTracks(p).map((track) => ({ id: track.id, name: track.name, kind: track.kind })),
     beats: p.beats,
     subtitles: p.subtitles,
+    sample: p.sample ?? null,
   };
 }
 function setStatus(next: Partial<StageStatus>) {
@@ -180,7 +182,9 @@ async function hotUpdate(timestamp: number, files: string[]) {
       const kinds = changeKinds(files);
       if (!session || state.status === "error" || next.renderer !== project?.renderer) start(next, lastSnapshot);
       else {
-        await session.updateProject(next, { visualChanged: kinds.visual, audioChanged: kinds.audio, quality });
+        // A sample that plays the work's sound from elsewhere hears another part of it.
+        const audioChanged = kinds.audio || JSON.stringify(next.sample) !== JSON.stringify(project?.sample);
+        await session.updateProject(next, { visualChanged: kinds.visual, audioChanged, quality });
         project = next;
       }
       setStatus({

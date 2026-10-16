@@ -1,7 +1,10 @@
+import type { Sample } from "./types";
 export interface StudioApi {
   ready: boolean;
   projectId: string;
   duration: number;
+  /** A module playing on its own: what it declared as a sample (render page). */
+  sample?: Sample | null;
   frame(time: number, subtitles?: boolean): Promise<void>;
   seek(time: number): Promise<void>;
   play(): Promise<void>;

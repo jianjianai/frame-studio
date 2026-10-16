@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
 import { Clapperboard, Download, Trash2, Image as ImageIcon, Captions, Play, MonitorDown, Server } from "lucide-react";
-import { api, del, formatBytes, formatTime, timeAgo, workPath, useServerEvent } from "../lib/api";
+import { api, del, formatBytes, formatTime, sampleName, timeAgo, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, Dialog } from "../lib/ui";
 import { startLocalExport, unsupportedReason, useExports } from "../lib/exports";
 import { ExportRow, exportItems } from "../components/ExportDock";
-import { useWorkbench } from "../workbench/store";
+import type { FileEntry } from "../lib/types";
+import { Observable, useObservable, useWorkbench } from "../workbench/store";
 import { ViewHeader } from "./ViewHeader";
+
+/** What the export tab exports: the film (null), or a module of the work played on its own (a sample's tab sets it). */
+export const exportTarget = new Observable<string | null>(null);
 
 interface ExportFile {
   name: string;
@@ -29,6 +33,10 @@ export function ExportView() {
   const [start, setStart] = useState(0);
   const [end, setEnd] = useState(meta?.duration ?? 10);
   const [subtitles, setSubtitles] = useState(true);
+  const target = useObservable(exportTarget);
+  // A sample picked from its tab belongs to this work: with the tab (the work) gone, the film again.
+  useEffect(() => () => exportTarget.set(null), []);
+  const [modules, setModules] = useState<FileEntry[]>([]);
   const [files, setFiles] = useState<ExportFile[]>([]);
   const [playing, setPlaying] = useState<string | null>(null);
   const [run] = useAction();
@@ -41,17 +49,34 @@ export function ExportView() {
   const scale = longEdge / Math.max(composition.width, composition.height);
   const width = even(composition.width * scale);
   const load = () => api<ExportFile[]>(`${base}/exports`).then(setFiles, () => {});
+  // The samples of the work (and the module a tab asked for): what can be exported besides the film.
+  const loadModules = () =>
+    api<FileEntry[]>(`${base}/tree`).then(
+      (list) => setModules(list.filter((entry) => entry.scene)),
+      () => {},
+    );
   useEffect(() => {
     void load();
+    void loadModules();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base]);
   useServerEvent((event) => {
     if (event.type === "exports" && event.work === work.id) void load();
+    if (event.type === "work-files" && event.work === work.id) void loadModules();
   });
+  const choices = modules.filter((entry) => entry.scene === "sample" || entry.path === target);
+  const length = target ? modules.find((entry) => entry.path === target)?.duration : meta?.duration;
+  // Another thing to export starts over at its whole length.
+  useEffect(() => {
+    setRange("all");
+    setStart(0);
+    setEnd(length ?? 10);
+  }, [target, length]);
 
   const span = () => (range === "custom" ? { start, end } : {});
-  const startExport = () => run(() => api(`${base}/exports`, { body: { width, fps, subtitles, ...span() } }));
-  const exportInBrowser = () => run(() => startLocalExport(work, { width, fps, subtitles, ...span() }));
+  const scene = target ? { scene: target } : {};
+  const startExport = () => run(() => api(`${base}/exports`, { body: { width, fps, subtitles, ...span(), ...scene } }));
+  const exportInBrowser = () => run(() => startLocalExport(work, { width, fps, subtitles, ...span(), ...scene }, target ? length : undefined));
   const downloadFrame = () =>
     run(async () => {
       const url = await stage.capture();
@@ -79,6 +104,20 @@ export function ExportView() {
         <h3>
           <Clapperboard size={14} /> 视频
         </h3>
+        {(choices.length > 0 || target) && (
+          <label className="field">
+            <span>内容</span>
+            <select className="select" value={target ?? ""} onChange={(event) => exportTarget.set(event.target.value || null)}>
+              <option value="">成片</option>
+              {choices.map((entry) => (
+                <option key={entry.path} value={entry.path}>
+                  样片：{sampleName(entry.path)}
+                  {entry.duration ? `（${formatTime(entry.duration, false)}）` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label className="field">
           <span>分辨率</span>
           <select className="select" value={longEdge} onChange={(event) => setLongEdge(Number(event.target.value))}>
@@ -102,7 +141,7 @@ export function ExportView() {
           <label className="field">
             <span>范围</span>
             <select className="select" value={range} onChange={(event) => setRange(event.target.value as "all")}>
-              <option value="all">全片</option>
+              <option value="all">{target ? "整个样片" : "全片"}</option>
               <option value="custom">自定义</option>
             </select>
           </label>

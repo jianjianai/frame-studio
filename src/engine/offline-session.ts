@@ -31,6 +31,7 @@ export async function installOffline(project: AnimationProject) {
     ready: false,
     projectId: project.id,
     duration: project.duration,
+    sample: project.sample ?? null,
     async frame(t, subtitles = false) {
       if (!Number.isFinite(t) || t < 0 || t > project.duration)
         throw new Error("Invalid frame time");

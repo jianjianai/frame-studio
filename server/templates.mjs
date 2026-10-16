@@ -186,6 +186,7 @@ export function platformInstructions() {
 - \`visual.json\`：图层时间轴（图片/视频/颜色/scene 模块），人工也会在界面上编辑它。
 - \`audio.json\`：多轨音频；\`audio.ts\` 可以写代码生成的声音。
 - \`public/\`：素材，代码里用 \`assetUrl("films/<名称>/文件")\` 引用。
+- \`sheets/\`：不进时间轴、单独播放的模块（设定图、组件、样片）。样片导出 createScene 和 \`sample = { duration, audioFrom? }\`，用户在资源管理器点开就能播放和导出；不要把画面渲染成图片序列或打包成 HTML 网页给用户看（见 \`frame_guide scene\`）。
 - 引擎导入：任何文件都写 \`"@frame/engine/<模块>"\`（例如 \`"@frame/engine/types"\`、\`"@frame/engine/tempo"\`）。
 - \`project.ts\` 的 \`tempo\` 是配乐的节拍（\`preview_audio\` 的 beats 分析后用 \`work_update\` 写入），代码用 \`@frame/engine/tempo\` 的 \`beatAt\` / \`barAt\` / \`pulse\` 卡点。
 
@@ -194,7 +195,7 @@ export function platformInstructions() {
 - \`search\`：在作品之外搜文字或正则——作品用到的素材库代码（scope used，按锁定的版本）、素材库、经验库、制作指南、引擎源码，返回 文件:行号 和上下文。作品里的文件用你自己的搜索工具即可。
 - \`work_context\`：作品现状：文件、素材、图层与音轨、未保存的修改、最近一次检查结果。
 - \`work_check\`：类型与结构检查，并在浏览器里实际加载，报告运行错误（位置是作品源码的 文件:行:列）。加 \`frames: true\` 同时返回开头、1/4、1/2、3/4、结尾的分镜图；预览卡、导出慢时加 \`timing: true\` 找出画得慢的地方。
-- \`preview_frames\`：渲染画面给你看：\`times\` 看指定时刻，或用 \`count\`（可加 \`start\`/\`end\`）均匀取样看整体节奏，多张时拼成一张总览图。改完画面后务必用它确认效果。\`region\` 放大看一块；\`scene\` 单独画作品里另一个导出 createScene 的模块（人物设定图、组件，放在 sheets/ 下，不进时间轴、不影响用户的预览）。不要往 visual.json 加临时图层看东西，也不要自己另起浏览器渲染。
+- \`preview_frames\`：渲染画面给你看：\`times\` 看指定时刻，或用 \`count\`（可加 \`start\`/\`end\`）均匀取样看整体节奏，多张时拼成一张总览图。改完画面后务必用它确认效果。\`region\` 放大看一块；\`scene\` 单独画作品里另一个导出 createScene 的模块（人物设定图、组件、样片，放在 sheets/ 下，不进时间轴、不影响用户的预览）。不要往 visual.json 加临时图层看东西，也不要自己另起浏览器渲染。
 - \`preview_motion\`：逐帧分析一段画面的运动：每段运镜的最快速度、起步收尾有没有缓，单帧跳动、抖动、局部突变、重复帧、长时间静止。一次看一个镜头或转场（2–6 秒）。
 - \`preview_audio\`：分析一段声音的响度，确认声音存在且不过载；分析混音时分别给出各音轨的响度和人声是否被盖住；\`src\` + \`beats: true\` 给出配乐的节奏、每个节拍和每小节第一拍（Beat This! 模型），让剪辑点和画面变化对上音乐。
 - \`layers_edit\`、\`audio_place\`/\`audio_edit\`：图层和混音的原子修改，\`update\` 只改给出的字段（格式见 frame_guide layers / audio）。

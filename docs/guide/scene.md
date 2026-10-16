@@ -80,9 +80,9 @@ document.fonts.add(await font.load());
 - 一个作品可以有多个场景模块：放在 `scenes/` 下，通过 `visual.json` 的 scene 图层组合（见 `layers`），或在 `scene.ts` 里自己按时间切换。模块的名称在三处要一致：文件 `scenes/<名称>.ts`、`scene.ts` 里 `createCompositionScene` 的第三个参数（`<名称>: () => import("./scenes/<名称>")`）、图层的 `source.module`。新作品自带的 `title` 模块可以直接改内容，改名要三处一起改。
 - `Scene` 还可以提供 `debug.parameters()/setParameters()` 暴露可调参数，visual.json 的 scene 图层可用 `parameters` 设置它们。
 
-## 单独画一个模块：设定图、组件
+## 单独画一个模块：设定图、组件、样片
 
-人物设定图（阵容、表情、动作、走路循环）、一个道具或组件单独调，不用放进时间轴：写一个导出 `createScene` 的模块（写法和 `scenes/*.ts` 一样），用 `preview_frames` 的 `scene` 画出来。它不在 `visual.json` 里，不影响成片和用户的预览；`work_check` 照样检查它的类型。约定放在 `sheets/` 下，`t` 可以当页码或动画时间用（不能超过作品时长）。
+人物设定图（阵容、表情、动作、走路循环）、一个道具或组件单独调、一段样片，不用放进时间轴：写一个导出 `createScene` 的模块（写法和 `scenes/*.ts` 一样），用 `preview_frames` 的 `scene` 画出来。它不在 `visual.json` 里，不影响成片和用户的预览；`work_check` 照样检查它的类型。约定放在 `sheets/` 下，`t` 可以当页码或动画时间用（0 到下面 `sample` 的 `duration`，没写就是作品时长）。用户在资源管理器里右键它选「单独播放」就能看到。
 
 ```ts
 // sheets/人物.ts：preview_frames { scene: "sheets/人物.ts", times: [0, 1] }
@@ -112,3 +112,23 @@ export function createScene({ width, height }: SceneOptions): Scene {
 
 - 看细节（脸、手、发丝、小字）用 `region` 放大一块：`[x, y, 宽, 高]` 按作品画面像素，`scale` 是倍数（最多到画面长边 3840 像素，1080×1920 的作品是 2 倍）。
 - 不要为了看设定图去改 `scene.ts`、往 `visual.json` 里加临时图层，也不要自己另起浏览器渲染。
+
+### 样片
+
+用户想先看一个想法、一段效果（“做个样片”），又不想放进成片时，在 `sheets/` 下写这样一个模块，并导出 `sample` 说明它是样片：
+
+```ts
+// sheets/剪纸.ts
+import type { Sample, Scene, SceneOptions } from "@frame/engine/types";
+
+export const sample: Sample = { duration: 4.2, audioFrom: 12.04 };
+
+export function createScene(options: SceneOptions): Scene {
+  // 和 scenes/*.ts 一样；render(t) 的 t 从 0 到 4.2
+}
+```
+
+- `duration`：样片的秒数（不写就是作品时长）。只写字面量数字：资源管理器不运行代码就要读出它。
+- `audioFrom`（可选）：作品时间里的秒数。样片从这一刻接着放作品的声音（audio.json 的配乐、音效、配音），`@frame/engine/tempo` 的节拍（`beatAt`、`pulse`）和字幕也换算到样片的时间，和声音对齐。不写就没有声音。
+- 用户在资源管理器里点开这个文件就是样片播放器：实时播放、拖动、逐帧、循环、慢放，代码保存后立即更新；可以截图发给你（消息里写明是样片的画面），也可以在「导出」里只导出这个样片。你自己看用 `preview_frames` 的 `scene`（不给 `times` 时在样片里均匀取样），导出用 `export_video` 的 `scene`。
+- 样片本身就是给用户看的：不要把它的画面渲染成图片序列、GIF，或打包进 HTML 网页给用户看。做好后告诉用户在资源管理器里打开 `sheets/剪纸.ts`。用户确定要用时，再把代码挪进 `scenes/`、放上时间轴。

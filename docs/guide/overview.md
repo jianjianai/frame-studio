@@ -36,6 +36,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 配音和字幕 | `speech_synthesize`（`lines` + `place` + `subtitles: true` 一次完成整段旁白）、`subtitles_edit`（见 `speech`、`subtitles`） |
 | 标题、时长、画面尺寸、节拍、镜头标记、字幕样式 | `work_update`（配乐节拍写进 `tempo`，见 `project`） |
 | 看局部细节；不放进时间轴单独看设定图、组件 | `preview_frames` 的 `region`（放大一块）、`scene`（画作品里导出 `createScene` 的另一个模块，见 `scene`） |
+| 做个样片（先看效果，不放进成片） | `sheets/<名称>.ts` 导出 `createScene` 和 `sample`（时长、从哪里接着放作品的声音，见 `scene`）；用户在资源管理器点开就能播放，`export_video` 的 `scene` 只导出它。不要做成图片序列或 HTML 网页 |
 | 动作、运镜顺不顺（急起急停、跳帧、抖动、重复帧、静止太久） | `preview_motion`：一次看一个镜头或转场（2–6 秒）；整段只看节奏时 `fps` 降到 10–15 |
 | 预览卡、导出慢：哪里画得慢 | `work_check` 的 `timing: true`，列出最慢的地方和那里的图层、镜头；改完再测一次对比 |
 | 参考同一作品库的其他作品（故事、场景代码、画面、素材） | `works_list` 找作品，`work_read` 读它的文件，`search` 的 `scope: ["works"]` 在它们的代码里搜，`preview_frames`、`work_context` 等读取类工具填 `work` 看画面和结构，`asset_import` 的 `fromWork` 把素材复制过来；其他作品只能读，只修改当前作品 |

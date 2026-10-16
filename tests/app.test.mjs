@@ -259,6 +259,34 @@ describe("studio API (password mode)", () => {
     expect((await server.call("/api/tools/work_create", { method: "POST", body: { title: "x" }, headers: auth })).status).toBe(403);
   });
 
+  it("serves a work's HTML pages under a signed address that needs no cookie, sandboxed", async () => {
+    const login = await server.call("/api/login", { method: "POST", body: { password: "secret-pass" } });
+    const cookie = login.headers.get("set-cookie").split(";")[0];
+    const work = await server.app.services.works.create({ title: "页面" });
+    fs.mkdirSync(path.join(work.dir, "public", "page"), { recursive: true });
+    fs.writeFileSync(path.join(work.dir, "public", "page", "样片.html"), '<img src="a.svg">');
+    fs.writeFileSync(path.join(work.dir, "public", "page", "a.svg"), "<svg xmlns='http://www.w3.org/2000/svg'/>");
+    const route = `/api/works/local/${work.id}`;
+    expect((await server.call(`${route}/page-link`)).status).toBe(401);
+    const { base } = (await server.call(`${route}/page-link`, { headers: { Cookie: cookie } })).body;
+    expect(base).toMatch(new RegExp(`^${route}/page/\\d+\\.[\\w-]+/$`));
+    // The page and the files it names by relative paths, without the session cookie.
+    const page = await fetch(server.base + base + "public/page/" + encodeURIComponent("样片.html"));
+    expect(page.status).toBe(200);
+    expect(page.headers.get("content-type")).toContain("text/html");
+    expect(page.headers.get("content-security-policy")).toBe("sandbox allow-scripts allow-popups allow-modals allow-downloads");
+    expect(await page.text()).toBe('<img src="a.svg">');
+    expect((await fetch(server.base + base + "public/page/a.svg")).status).toBe(200);
+    // Another work, a forged or expired signature, a path out of the work: refused.
+    const other = await server.app.services.works.create({ title: "别的" });
+    const token = base.split("/").at(-2);
+    expect((await fetch(`${server.base}/api/works/local/${other.id}/page/${token}/project.ts`)).status).toBe(403);
+    expect((await fetch(`${server.base}${route}/page/${Date.now() + 1000}.forged/project.ts`)).status).toBe(403);
+    const expired = Date.now() - 1000;
+    expect((await fetch(`${server.base}${route}/page/${expired}.${server.app.services.auth.sign(`page:local/${work.id}:${expired}`)}/project.ts`)).status).toBe(403);
+    expect((await fetch(server.base + base + "..%2F..%2F..%2Fsettings.json")).status).toBe(400);
+  });
+
   it("does not hand outside AIs the server's own folder", async () => {
     const work = await server.app.services.works.create({ title: "外部" });
     const context = JSON.parse((await server.app.services.tools.call("work_context", { work: work.id })).text);

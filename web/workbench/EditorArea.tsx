@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useState, type Ref } from "react";
-import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes, BarChart3, Box, Globe2, Type } from "lucide-react";
-import { api, formatTime, workPath, experiencePath, useServerEvent, materialsPath } from "../lib/api";
+import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes, BarChart3, Box, Globe2, Type, Clapperboard, Play, ExternalLink, Download } from "lucide-react";
+import { api, ApiError, formatTime, sampleName, workPath, experiencePath, useServerEvent, materialsPath } from "../lib/api";
 import { reviewsPath } from "../lib/reviews";
 import { RawViewer } from "../reviews/RawViewer";
 import { Markdown } from "../chat/Markdown";
@@ -12,10 +12,14 @@ import { CodeEditor } from "./CodeEditor";
 import { DiffEditor } from "./DiffEditor";
 import { ResourceViewer } from "./ResourceViewer";
 import { AssetViewer } from "./AssetViewer";
+import { SampleTab, playable } from "./SampleTab";
+import { PageViewer, usePageUrl } from "./PageViewer";
 import { isLottieText } from "../views/media";
 
 export interface EditorHandle {
   openFile(path: string, options?: { line?: number; preview?: boolean }): void;
+  /** A module of the work played on its own (a sample, a sheet). */
+  openSample(path: string, options?: { preview?: boolean }): void;
   /** A document of the work's experience libraries (path relative to the experience branch). */
   openExperience(path: string, options?: { preview?: boolean }): void;
   /** A file of the repository's material libraries (`<library>/<path>`): viewed, not edited here. */
@@ -31,12 +35,12 @@ export interface EditorHandle {
 }
 type Source = "work" | "experience" | "materials" | "resource" | "reviews";
 interface Tab {
-  /** Unique key: the work file path, `exp:<path>` for experience documents, `mat:<ref>` for material files, `rev:<path>` for review files, `diff:…` for diffs, `tool:<tool>` for tools. */
+  /** Unique key: the work file path, `sample:<path>` for a module played on its own, `exp:<path>` for experience documents, `mat:<ref>` for material files, `rev:<path>` for review files, `diff:…` for diffs, `tool:<tool>` for tools. */
   path: string;
   /** Path inside its source (sent to the source's file API). */
   file: string;
   source: Source;
-  kind: "text" | "image" | "audio" | "video" | "model" | "environment" | "font" | "file" | "diff" | "resource" | "raw" | "tool";
+  kind: "text" | "image" | "audio" | "video" | "model" | "environment" | "font" | "file" | "diff" | "resource" | "raw" | "tool" | "sample";
   title?: string;
   diff?: string;
   content?: string;
@@ -46,9 +50,15 @@ interface Tab {
   line?: number;
   /** VS Code preview tab: the next preview replaces it until it is kept. */
   preview?: boolean;
-  /** Markdown shown rendered instead of as source. */
+  /** Markdown, an HTML page or a Lottie animation shown rendered instead of as source. */
   rendered?: boolean;
+  /** Why the text cannot be opened (too large): the tab stays and says so. */
+  unreadable?: string;
+  /** When the file last changed on disk: a page shown rendered loads it again. */
+  stamp?: number;
 }
+
+const isPage = (path: string) => /\.html?$/i.test(path);
 
 const kindOf = (path: string): Tab["kind"] =>
   /\.(png|jpe?g|webp|gif|svg|avif)$/i.test(path)
@@ -136,25 +146,40 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     [tabs],
   );
 
-  const openTab = useCallback(
-    async (tab: Tab, options: { line?: number; preview?: boolean }) => {
-      if (!place(tab, options)) return;
-      // Material files are read by their viewer (raw, current or locked version).
-      if (tab.kind !== "text" || tab.source === "materials") return;
+  /** Read a text tab's content; a file too large for the editor keeps its tab, which says so. */
+  const fill = useCallback(
+    async (tab: Tab) => {
       try {
         const loaded = await load(tab);
-        setTabs((list) => list.map((item) => (item.path === tab.path ? { ...item, ...loaded } : item)));
+        setTabs((list) => list.map((item) => (item.path === tab.path ? { ...item, ...loaded, unreadable: undefined } : item)));
       } catch (error) {
+        if (error instanceof ApiError && error.status === 413) return setTabs((list) => list.map((item) => (item.path === tab.path ? { ...item, unreadable: error.message } : item)));
         toast((error as Error).message, "error");
         setTabs((list) => list.filter((item) => item.path !== tab.path));
       }
     },
-    [place, load, toast],
+    [load, toast],
+  );
+  const openTab = useCallback(
+    async (tab: Tab, options: { line?: number; preview?: boolean }) => {
+      if (!place(tab, options)) return;
+      // Material files are read by their viewer (raw, current or locked version); a page shown
+      // rendered is read when its code is asked for (it may be too large for the editor).
+      if (tab.kind !== "text" || tab.source === "materials" || (tab.rendered && isPage(tab.file))) return;
+      await fill(tab);
+    },
+    [place, fill],
   );
   const openFile = useCallback(
     (path: string, options: { line?: number; preview?: boolean } = {}) =>
-      openTab({ path, file: path, source: "work", kind: kindOf(path), line: options.line, preview: Boolean(options.preview) }, options),
+      // An HTML file opens as the page it is.
+      openTab({ path, file: path, source: "work", kind: kindOf(path), line: options.line, preview: Boolean(options.preview), rendered: isPage(path) && options.line === undefined }, options),
     [openTab],
+  );
+  const openSample = useCallback(
+    (path: string, options: { preview?: boolean } = {}) =>
+      place({ path: `sample:${path}`, file: path, source: "work", kind: "sample", title: sampleName(path), preview: Boolean(options.preview) }, options),
+    [place],
   );
   const openExperience = useCallback(
     (path: string, options: { preview?: boolean } = {}) =>
@@ -202,6 +227,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     ref,
     () => ({
       openFile: (path, options) => void openFile(path, options),
+      openSample,
       openExperience: (path, options) => void openExperience(path, options),
       openMaterial: (ref, options) => void openMaterial(ref, options),
       openResource,
@@ -209,13 +235,13 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       openDiff,
       openTool,
     }),
-    [openFile, openExperience, openMaterial, openResource, openReview, openDiff, openTool],
+    [openFile, openSample, openExperience, openMaterial, openResource, openReview, openDiff, openTool],
   );
 
   // Files changed by the AI or other tools: refresh clean tabs, flag dirty ones.
   const refresh = (matches: (tab: Tab) => boolean) => {
     for (const tab of tabs) {
-      if (tab.kind !== "text" || !matches(tab)) continue;
+      if (tab.kind !== "text" || tab.content === undefined || !matches(tab)) continue;
       void load(tab).then(
         (loaded) =>
           setTabs((list) =>
@@ -233,6 +259,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       if (event.type === "work-files" && event.work === work.id) {
         const changed = new Set((event.files as string[]).map((file) => file.replace(/^projects\/[^/]+\//, "")));
         refresh((tab) => tab.source === "work" && changed.has(tab.file));
+        const stamp = Date.now();
+        setTabs((list) => (list.some((tab) => tab.source === "work" && changed.has(tab.file)) ? list.map((tab) => (tab.source === "work" && changed.has(tab.file) ? { ...tab, stamp } : tab)) : list));
       } else if (event.type === "experience-files" && event.repo === work.repo) {
         // A renamed library or document: its open tabs follow it.
         const moved = event.moved as { from: string; to: string } | undefined;
@@ -285,9 +313,12 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     () => Boolean(current && current.source === "work" && current.kind === "text" && /^public\/.+\.json$/i.test(current.file) && isLottieText(current.content)),
     [current?.source, current?.kind, current?.file, current?.content],
   );
+  const page = Boolean(current && current.kind === "text" && isPage(current.file));
   // The AI is told which file the user has open ("这个文件").
   const activeLabel = !current
     ? null
+    : current.kind === "sample"
+      ? `样片 ${current.file}（单独播放，不在时间轴上）`
     : current.kind === "tool"
       ? `「${current.title}」选项卡`
     : current.kind === "diff"
@@ -304,7 +335,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   useEffect(() => onActiveChange?.(activeLabel), [activeLabel, onActiveChange]);
   const update = (path: string, change: Partial<Tab>) => setTabs((list) => list.map((item) => (item.path === path ? { ...item, ...change } : item)));
   const tooltip = (tab: Tab) =>
-    `${tab.kind === "tool" ? (tab.title ?? "") : tab.kind === "diff" ? `改动：${tab.title}` : tab.kind === "resource" ? `资源：${tab.file}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "reviews" ? `复盘：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
+    `${tab.kind === "sample" ? `样片：${tab.file}` : tab.kind === "tool" ? (tab.title ?? "") : tab.kind === "diff" ? `改动：${tab.title}` : tab.kind === "resource" ? `资源：${tab.file}` : tab.source === "experience" ? `经验库：${tab.file}` : tab.source === "reviews" ? `复盘：${tab.file}` : tab.source === "materials" ? `素材库：materials/${tab.file}` : tab.file}${tab.preview ? "（预览，双击保持打开）" : ""}`;
 
   return (
     <div className="editor-area">
@@ -322,7 +353,9 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               onDoubleClick={() => update(tab.path, { preview: false })}
               onMouseDown={(event) => event.button === 1 && (event.preventDefault(), void close(tab.path))}
             >
-              {tab.kind === "tool" ? (
+              {tab.kind === "sample" ? (
+                <Clapperboard size={14} />
+              ) : tab.kind === "tool" ? (
                 toolIcon(tab.file as Tool)
               ) : tab.kind === "diff" ? (
                 <FileDiff size={14} />
@@ -353,7 +386,15 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
           <div className={`editor-layer ${current ? "covered" : ""}`} aria-hidden={Boolean(current)}>
             <PreviewPane />
           </div>
-          {current && (
+          {/* Like the film's preview, a sample keeps its stage while its tab is open. */}
+          {tabs
+            .filter((tab) => tab.kind === "sample")
+            .map((tab) => (
+              <div key={tab.path} className={`editor-layer editor-content ${tab.path === active ? "" : "covered"}`} aria-hidden={tab.path !== active}>
+                <SampleTab file={tab.file} active={tab.path === active} />
+              </div>
+            ))}
+          {current && current.kind !== "sample" && (
             <div className="editor-layer editor-content">
               {current.external && (
                 <div className="editor-banner">
@@ -366,20 +407,35 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
                   </button>
                 </div>
               )}
-              {current.kind === "text" && (/\.md$/i.test(current.file) || lottie) && current.content !== undefined && (
+              {current.kind === "text" && (((/\.md$/i.test(current.file) || lottie) && current.content !== undefined) || (page && current.source === "work")) && (
                 <div className="editor-toolbar">
                   <span className="faint small-text ellipsis grow">
                     {current.source === "experience" ? `经验库 · ${current.file}` : current.source === "reviews" ? `复盘 · ${current.file}` : current.file}
                     {lottie ? " · Lottie 动画" : ""}
                   </span>
+                  {page && current.rendered && <PageLink file={current.file} version={current.stamp} />}
                   <div className="segmented">
-                    <button className={current.rendered ? "" : "active"} onClick={() => update(current.path, { rendered: false })}>
-                      <Pencil size={12} /> {lottie ? "源码" : "编辑"}
+                    <button
+                      className={current.rendered ? "" : "active"}
+                      onClick={() => {
+                        update(current.path, { rendered: false });
+                        if (current.content === undefined && !current.unreadable) void fill(current);
+                      }}
+                    >
+                      <Pencil size={12} /> {lottie || page ? "代码" : "编辑"}
                     </button>
                     <button className={current.rendered ? "active" : ""} onClick={() => update(current.path, { rendered: true })}>
-                      <Eye size={12} /> {lottie ? "动画" : "预览"}
+                      <Eye size={12} /> {lottie ? "动画" : page ? "页面" : "预览"}
                     </button>
                   </div>
+                </div>
+              )}
+              {current.kind === "text" && current.source === "work" && !current.rendered && playable(current.content) && !/^(scene|project)\.ts$/.test(current.file) && (
+                <div className="editor-toolbar">
+                  <span className="faint small-text ellipsis grow">{current.file} 导出了 createScene，可以不放进时间轴单独播放</span>
+                  <button className="btn small" onClick={() => openSample(current.file)}>
+                    <Play size={13} /> {/export\s+const\s+sample\b/.test(current.content ?? "") ? "播放样片" : "单独播放"}
+                  </button>
                 </div>
               )}
               {current.kind === "tool" ? (
@@ -393,7 +449,11 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
               ) : current.source === "materials" ? (
                 <MaterialViewer key={current.file} fileRef={current.file} kind={current.kind} />
               ) : current.kind === "text" ? (
-                current.content === undefined ? (
+                current.rendered && page && current.source === "work" ? (
+                  <PageViewer work={work} file={current.file} version={current.stamp} />
+                ) : current.unreadable ? (
+                  <TooLarge path={current.file} message={current.unreadable} onPage={page ? () => update(current.path, { rendered: true }) : undefined} />
+                ) : current.content === undefined ? (
                   <div className="empty">正在读取…</div>
                 ) : current.rendered && lottie ? (
                   <AssetViewer assetBase={work.preview.assetBase} src={`films/${work.slug}/${current.file.slice("public/".length)}`} version={current.hash ?? undefined} />
@@ -419,6 +479,37 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
             </div>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Open the page in a browser tab of its own (still sandboxed by the server). */
+function PageLink({ file, version }: { file: string; version?: number }) {
+  const { work } = useWorkbench();
+  const { url } = usePageUrl(work, file, version);
+  return (
+    <a className={`btn small ${url ? "" : "disabled"}`} href={url ?? undefined} target="_blank" rel="noopener" title="在浏览器的新标签页里打开这个页面">
+      <ExternalLink size={13} /> 新标签页
+    </a>
+  );
+}
+
+/** A text file too large for the editor: it can still be downloaded (and an HTML file seen as a page). */
+function TooLarge({ path, message, onPage }: { path: string; message: string; onPage?: () => void }) {
+  const { work } = useWorkbench();
+  return (
+    <div className="empty">
+      <p>{message}</p>
+      <div className="row">
+        {onPage && (
+          <button className="btn small" onClick={onPage}>
+            <Eye size={13} /> 看页面
+          </button>
+        )}
+        <a className="btn small" href={`${workPath(work.repo, work.id)}/raw?path=${encodeURIComponent(path)}`} download={path.split("/").pop()}>
+          <Download size={13} /> 下载
+        </a>
       </div>
     </div>
   );

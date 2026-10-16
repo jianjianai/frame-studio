@@ -78,6 +78,11 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   const [settingsOpen, setSettingsOpen] = useState<string | null>(null);
   const [theme, setTheme] = useState(document.documentElement.dataset.theme || "");
   const stage = useMemo(() => new StageController(), []);
+  // A sample's tab in front: the shortcuts play it, and the AI is told the user looks at it.
+  const focused = useRef<{ stage: StageController; path: string } | null>(null);
+  const focusStage = useCallback((focus: { stage: StageController; path: string } | null) => {
+    focused.current = focus;
+  }, []);
   const narrow = useMediaQuery("(max-width: 900px)");
   // On small screens side bar and chat are overlays and start closed.
   useEffect(() => {
@@ -146,16 +151,24 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     [id, repo],
   );
 
+  /** The sample in front and where it plays, rounded like the film's position. */
+  const sampleView = () => {
+    const focus = focused.current;
+    if (!focus) return undefined;
+    const playback = focus.stage.playback.get();
+    return { path: focus.path, time: Math.round(playback.time * 10) / 10, playing: playback.playing };
+  };
   // Tell the server (and so the AI) where the user is looking: at once on a change, then every second.
   const [editing, setEditing] = useState<string | null>(null);
   useEffect(() => {
     let last = "";
     const publish = () => {
       const snapshot = stage.playback.get();
-      const key = `${snapshot.time.toFixed(1)}:${snapshot.playing}:${JSON.stringify(selection)}:${editing}`;
+      const sample = sampleView();
+      const key = `${snapshot.time.toFixed(1)}:${snapshot.playing}:${JSON.stringify(selection)}:${editing}:${JSON.stringify(sample)}`;
       if (key === last) return;
       last = key;
-      sendEvent({ type: "preview-state", work: id, repo, time: snapshot.time, playing: snapshot.playing, selection, editing });
+      sendEvent({ type: "preview-state", work: id, repo, time: snapshot.time, playing: snapshot.playing, selection, editing, ...(sample ? { sample } : {}) });
     };
     publish();
     const timer = setInterval(publish, 1000);
@@ -180,9 +193,12 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     readOnly,
     reload,
     stage,
+    focusStage,
+    currentStage: () => (focused.current ? { stage: focused.current.stage, scene: focused.current.path } : { stage }),
     check,
     runCheck,
     openFile: (path, options) => editor.current?.openFile(path, options),
+    openSample: (path, options) => editor.current?.openSample(path, options),
     openExperience: (path, options) => editor.current?.openExperience(path, options),
     openMaterial: (ref, options) => editor.current?.openMaterial(ref, options),
     openResource: (id, options) => editor.current?.openResource(id, options),
@@ -209,7 +225,8 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     select: setSelection,
     viewNow: () => {
       const snapshot = stage.playback.get();
-      return { time: snapshot.time, playing: snapshot.playing, selection, editing };
+      const sample = sampleView();
+      return { time: snapshot.time, playing: snapshot.playing, selection, editing, ...(sample ? { sample } : {}) };
     },
     showPanel: (tab) => setPanel((value) => ({ ...value, visible: true, tab })),
     showView: (next) => {
@@ -246,15 +263,16 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
         setTimeout(() => chatRef.current?.focus(), 0);
       } else if (!typing && event.key === " ") {
         event.preventDefault();
-        stage.toggle();
+        player().toggle();
       } else if (!typing && event.key === "ArrowLeft") {
         event.preventDefault();
-        void (event.shiftKey ? stage.seek(stage.playback.get().time - 1) : stage.step(-1));
+        void (event.shiftKey ? player().seek(player().playback.get().time - 1) : player().step(-1));
       } else if (!typing && event.key === "ArrowRight") {
         event.preventDefault();
-        void (event.shiftKey ? stage.seek(stage.playback.get().time + 1) : stage.step(1));
-      } else if (!typing && event.key === "Home") stage.seek(0);
+        void (event.shiftKey ? player().seek(player().playback.get().time + 1) : player().step(1));
+      } else if (!typing && event.key === "Home") player().seek(0);
     };
+    const player = () => focused.current?.stage ?? stage;
     window.addEventListener("keydown", key);
     return () => window.removeEventListener("keydown", key);
   }, [setSidebar, setPanel, setChat, stage]);

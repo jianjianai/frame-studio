@@ -381,6 +381,32 @@ export function editAudioDocument(value, operations, context) {
   }
   return validateAudioDocument(d, context);
 }
+/**
+ * The part of a document from work time `from`, `length` seconds long, moved to start at 0:
+ * what a sample playing the work's sound from `from` hears. Clips are cut as by a split, so the
+ * source position, fades and automation stay where they were.
+ */
+export function audioWindow(value, from, length) {
+  const d = structuredClone(validateAudioDocument(value));
+  const end = from + length;
+  d.clips = d.clips.flatMap((c) => {
+    const clipEnd = c.start + c.duration;
+    if (clipEnd <= from + 1e-9 || c.start >= end - 1e-9) return [];
+    const cut = Math.max(0, from - c.start);
+    return [
+      {
+        ...c,
+        start: Math.max(0, c.start - from),
+        duration: Math.min(clipEnd, end) - Math.max(c.start, from),
+        phase: c.phase + cut * c.rate,
+        fadeOffset: c.fadeOffset + cut,
+        // A clip cut at the end still fades out where it did, not at the cut.
+        fadeDuration: c.fadeDuration ?? c.duration,
+      },
+    ];
+  });
+  return validateAudioDocument(d, { duration: length });
+}
 export function audioSegments(track, projectDuration, from, length) {
   const start = Math.max(from, track.start ?? 0),
     end = Math.min(

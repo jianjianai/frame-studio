@@ -15,8 +15,11 @@ import {
   ListPlus,
   ListMinus,
   SquareDashed,
+  Clapperboard,
+  Play,
+  FileCode2,
 } from "lucide-react";
-import { api, del, formatBytes, workPath, useServerEvent } from "../lib/api";
+import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
@@ -29,6 +32,9 @@ export interface Node {
   path: string;
   type: "file" | "dir";
   children: Node[];
+  /** Plays on its own (see FileEntry). */
+  scene?: FileEntry["scene"];
+  duration?: number;
 }
 
 export function buildTree(entries: FileEntry[]) {
@@ -36,7 +42,7 @@ export function buildTree(entries: FileEntry[]) {
   const dirs = new Map<string, Node>([["", root]]);
   for (const entry of entries) {
     const parent = dirs.get(entry.path.split("/").slice(0, -1).join("/")) ?? root;
-    const node: Node = { name: entry.path.split("/").pop()!, path: entry.path, type: entry.type, children: [] };
+    const node: Node = { name: entry.path.split("/").pop()!, path: entry.path, type: entry.type, children: [], scene: entry.scene, duration: entry.duration };
     parent.children.push(node);
     if (entry.type === "dir") dirs.set(entry.path, node);
   }
@@ -44,7 +50,7 @@ export function buildTree(entries: FileEntry[]) {
 }
 
 export function ExplorerView() {
-  const { work, openFile, addToChat, readOnly } = useWorkbench();
+  const { work, openFile, openSample, addToChat, readOnly } = useWorkbench();
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [open, setOpen] = useState<Set<string>>(new Set(["scenes"]));
   // Picked rows, like VS Code: a click picks one, Ctrl/⌘ adds or drops one, Shift picks a run.
@@ -163,7 +169,12 @@ export function ExplorerView() {
       ]);
     }
     openMenu(event, [
-      ...(node.type === "file"
+      ...(node.scene
+        ? [
+            { label: node.scene === "sample" ? "播放样片" : "单独播放", icon: <Play size={14} />, onClick: () => openSample(node.path) },
+            { label: "打开代码", icon: <FileCode2 size={14} />, onClick: () => openFile(node.path) },
+          ]
+        : node.type === "file"
         ? [{ label: "打开", onClick: () => openFile(node.path) }]
         : readOnly
           ? []
@@ -199,12 +210,22 @@ export function ExplorerView() {
                   else next.add(node.path);
                   return next;
                 })
-              : // Like VS Code: a click previews the file, a double-click (or an edit) keeps the tab.
-                openFile(node.path, { preview: true }))
+              : // Like VS Code: a click previews the file, a double-click (or an edit) keeps the tab. A sample opens playing.
+                node.scene === "sample"
+                ? openSample(node.path, { preview: true })
+                : openFile(node.path, { preview: true }))
           }
-          onDoubleClick={(event) => node.type === "file" && !event.shiftKey && !event.ctrlKey && !event.metaKey && openFile(node.path)}
+          onDoubleClick={(event) =>
+            node.type === "file" && !event.shiftKey && !event.ctrlKey && !event.metaKey && (node.scene === "sample" ? openSample(node.path) : openFile(node.path))
+          }
           onContextMenu={(event) => menuFor(event, node)}
-          title={node.path}
+          title={
+            node.scene === "sample"
+              ? `${node.path}\n样片${node.duration ? ` ${formatTime(node.duration)}` : ""}，不在时间轴上：点开播放，右键可打开代码`
+              : node.scene === "module"
+                ? `${node.path}\n导出了 createScene：右键「单独播放」`
+                : node.path
+          }
         >
           {node.type === "dir" ? (
             <>
@@ -214,7 +235,7 @@ export function ExplorerView() {
           ) : (
             <>
               <span style={{ width: 14 }} />
-              {fileIcon(node.path)}
+              {node.scene === "sample" ? <Clapperboard size={14} className="sample-icon" /> : fileIcon(node.path)}
             </>
           )}
           <span className="ellipsis">{node.name}</span>

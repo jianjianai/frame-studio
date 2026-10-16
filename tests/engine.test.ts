@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { createExportPlan } from "../src/engine/export-plan.mjs";
 import { frameDimensions, fitComposition } from "../src/engine/dimensions.mjs";
 import { validateVisualDocument, editVisualDocument, clipTime } from "../src/engine/visual-document.mjs";
-import { validateAudioDocument, compileAudioTracks, editAudioDocument } from "../src/engine/audio-document.mjs";
+import { validateAudioDocument, compileAudioTracks, editAudioDocument, audioWindow, audioSegments } from "../src/engine/audio-document.mjs";
 import { activeSubtitle } from "../src/engine/subtitles";
 import { setTempo, beatAt, barAt, beatIndex, sinceBeat, pulse, beatLength } from "../src/engine/tempo";
 import { materialBaseOf, MATERIAL_MODULE } from "../src/engine/materials";
@@ -52,6 +52,32 @@ describe("engine contracts", () => {
     expect(compileAudioTracks(doc)[0]).toMatchObject({ id: "audio:c", src: "films/x/a.wav", start: 1, duration: 2 });
     expect(() => validateAudioDocument({ ...doc, tracks: [{ id: "t", name: "T", output: "missing" }] })).toThrow(/不存在的总线：missing/);
     expect(editAudioDocument(doc, [{ op: "split", id: "c", at: 2, newId: "d" }]).clips).toHaveLength(2);
+  });
+  it("cuts the part of the mix a sample plays, at the same source positions, fades and automation", () => {
+    const doc = {
+      schemaVersion: 1,
+      sources: [{ id: "s", kind: "file", src: "films/x/a.wav" }],
+      tracks: [{ id: "t", name: "T" }],
+      clips: [
+        { id: "a", track: "t", source: "s", start: 0, duration: 3, offset: 1, rate: 2, fadeIn: 0.5, fadeOut: 1, automation: [{ at: 2.5, value: 0.5 }] },
+        { id: "b", track: "t", source: "s", start: 5, duration: 1 },
+        { id: "c", track: "t", source: "s", start: 3.5, duration: 2, loop: 0.75 },
+      ],
+    };
+    const part = audioWindow(doc, 2, 2);
+    expect(part.clips.map((clip) => [clip.id, clip.start, clip.duration, clip.phase, clip.fadeOffset, clip.fadeDuration])).toEqual([
+      ["a", 0, 1, 4, 2, 3],
+      ["c", 1.5, 0.5, 0, 0, 2],
+    ]);
+    expect(part.clips[0].automation).toEqual([{ at: 2.5, value: 0.5, easing: "linear" }]);
+    // What sounds from 0 in the sample is what sounded from 2 in the work.
+    const before = compileAudioTracks(doc), after = compileAudioTracks(part);
+    for (const id of ["audio:a", "audio:c"]) {
+      const whole = audioSegments(before.find((track) => track.id === id), 10, 2, 2);
+      const cut = audioSegments(after.find((track) => track.id === id), 2, 0, 2);
+      expect(cut).toEqual(whole);
+    }
+    expect(audioWindow(doc, 6, 1).clips).toEqual([]);
   });
   it("lets generated sources name a sound module of a material library", () => {
     const doc = {

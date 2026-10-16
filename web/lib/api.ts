@@ -112,6 +112,9 @@ export const experiencePath = (repo: string) => `/api/repos/${encodeURIComponent
 /** API base of a repository's material libraries (history and sync like a work's). */
 export const materialsPath = (repo: string) => `/api/repos/${encodeURIComponent(repo)}/materials`;
 
+/** What a module of the work played on its own is called: its file name (sheets/剪纸.ts → 剪纸). */
+export const sampleName = (path: string) => path.replace(/^.*\//, "").replace(/\.[^.]+$/, "");
+
 export function formatTime(seconds: number, precise = true) {
   if (!Number.isFinite(seconds)) return "0:00";
   const sign = seconds < 0 ? "-" : "";

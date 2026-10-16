@@ -20,16 +20,15 @@ import {
 import { formatTime } from "../lib/api";
 import { coverFromFrame } from "../lib/covers";
 import { usePersistent, useToast } from "../lib/ui";
-import { useObservable, useWorkbench } from "./store";
+import { useObservable, useWorkbench, type StageController } from "./store";
 import { RecordButton } from "./RecordButton";
 
+/** The film on the workbench's stage: what the timeline, the AI's captures and the shortcuts work with. */
 export function PreviewPane() {
-  const { work, stage, askAi, addToChat, readOnly } = useWorkbench();
+  const { work, stage, readOnly } = useWorkbench();
   const toast = useToast();
-  const frame = useRef<HTMLIFrameElement>(null);
-  const [quality, setQuality] = usePersistent<"draft" | "standard" | "high">("quality", "standard");
-  const [subtitles, setSubtitles] = usePersistent("subtitles", true);
-  const status = useObservable(stage.status);
+  const [quality] = usePersistent<"draft" | "standard" | "high">("quality", "standard");
+  const [subtitles] = usePersistent("subtitles", true);
   const src = useMemo(() => {
     const params = new URLSearchParams({
       work: work.id,
@@ -42,6 +41,43 @@ export function PreviewPane() {
     // The stage hot-reloads itself; only a different work needs a new iframe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [work.id, work.repo]);
+  const coverHere = async () => {
+    const time = stage.playback.get().time;
+    try {
+      await coverFromFrame(work.repo, work.id, time);
+      toast(`已把 ${formatTime(time)} 的画面设为封面`, "ok");
+    } catch (error) {
+      toast((error as Error).message, "error");
+    }
+  };
+  return <StagePane stage={stage} src={src} title="作品预览" record onCover={readOnly ? undefined : coverHere} />;
+}
+
+/**
+ * A stage iframe with its player controls. `scene`: the module of the work it plays on its own
+ * (a sample), so a frame sent to the AI says whose time it is.
+ */
+export function StagePane({
+  stage,
+  src,
+  title,
+  scene,
+  record,
+  onCover,
+}: {
+  stage: StageController;
+  src: string;
+  title: string;
+  scene?: string;
+  /** Voice-over recording: for the film only. */
+  record?: boolean;
+  onCover?: () => void;
+}) {
+  const { askAi, addToChat } = useWorkbench();
+  const frame = useRef<HTMLIFrameElement>(null);
+  const [quality, setQuality] = usePersistent<"draft" | "standard" | "high">("quality", "standard");
+  const [subtitles, setSubtitles] = usePersistent("subtitles", true);
+  const status = useObservable(stage.status);
 
   useEffect(() => {
     const listener = (event: MessageEvent) => {
@@ -63,26 +99,17 @@ export function PreviewPane() {
 
   const capture = async () => {
     const dataUrl = await stage.capture();
-    addToChat({ type: "frame", time: stage.playback.get().time, data: dataUrl.split(",")[1], mimeType: "image/png" });
-  };
-  const coverHere = async () => {
-    const time = stage.playback.get().time;
-    try {
-      await coverFromFrame(work.repo, work.id, time);
-      toast(`已把 ${formatTime(time)} 的画面设为封面`, "ok");
-    } catch (error) {
-      toast((error as Error).message, "error");
-    }
+    addToChat({ type: "frame", time: stage.playback.get().time, data: dataUrl.split(",")[1], mimeType: "image/png", ...(scene ? { scene } : {}) });
   };
 
   return (
     <div className="preview">
       <div className="preview-stage">
-        <iframe ref={frame} src={src} title="作品预览" allow="autoplay; microphone; fullscreen" />
+        <iframe ref={frame} src={src} title={title} allow="autoplay; microphone; fullscreen" />
         {status.status === "loading" && (
           <div className="preview-overlay">
             <Loader2 className="spin" size={22} />
-            <span>正在加载作品…</span>
+            <span>{scene ? "正在加载样片…" : "正在加载作品…"}</span>
           </div>
         )}
         {status.status === "error" && (
@@ -93,7 +120,7 @@ export function PreviewPane() {
               <button className="btn" onClick={() => stage.reload()}>
                 <RotateCw size={14} /> 重新载入
               </button>
-              <button className="btn primary" onClick={() => askAi(`预览加载失败，请修复：\n${status.error}`)}>
+              <button className="btn primary" onClick={() => askAi(`${scene ? `样片 ${scene}` : "预览"}加载失败，请修复：\n${status.error}`)}>
                 <Sparkles size={14} /> 让 AI 修复
               </button>
             </div>
@@ -102,12 +129,15 @@ export function PreviewPane() {
         {status.updating && <div className="preview-updating">正在更新…</div>}
       </div>
       <Transport
+        stage={stage}
         quality={quality}
         setQuality={setQuality}
         subtitles={subtitles}
-        setSubtitles={setSubtitles}
+        // A silent sample has no subtitles to show.
+        setSubtitles={scene && !status.project?.subtitles.length ? undefined : setSubtitles}
+        record={record}
         onCapture={capture}
-        onCover={readOnly ? undefined : coverHere}
+        onCover={onCover}
         onFullscreen={() => frame.current?.requestFullscreen()}
       />
     </div>
@@ -115,24 +145,28 @@ export function PreviewPane() {
 }
 
 function Transport({
+  stage,
   quality,
   setQuality,
   subtitles,
   setSubtitles,
+  record,
   onCapture,
   onCover,
   onFullscreen,
 }: {
+  stage: StageController;
   quality: string;
   setQuality: (value: "draft" | "standard" | "high") => void;
   subtitles: boolean;
-  setSubtitles: (value: boolean) => void;
+  /** Absent when there are no subtitles to show. */
+  setSubtitles?: (value: boolean) => void;
+  record?: boolean;
   onCapture: () => void;
-  /** Absent for a published work. */
+  /** Absent for a published work, and for a sample. */
   onCover?: () => void;
   onFullscreen: () => void;
 }) {
-  const { stage } = useWorkbench();
   const playback = useObservable(stage.playback);
   const status = useObservable(stage.status);
   const duration = status.project?.duration ?? 0;
@@ -183,7 +217,7 @@ function Transport({
         </span>
         {playback.buffering && <span className="badge warn">缓冲中</span>}
         <span className="grow" />
-        <RecordButton />
+        {record && <RecordButton />}
         <button className="icon-btn" title="把当前画面发给 AI" disabled={!ready} onClick={onCapture}>
           <Camera size={16} />
         </button>
@@ -195,9 +229,11 @@ function Transport({
         <button className={`icon-btn ${playback.loop ? "active" : ""}`} title="循环" disabled={!ready} onClick={() => stage.api?.setLoop?.(!playback.loop)}>
           <Repeat size={16} />
         </button>
-        <button className={`icon-btn ${subtitles ? "active" : ""}`} title="字幕" onClick={() => setSubtitles(!subtitles)}>
-          <Captions size={16} />
-        </button>
+        {setSubtitles && (
+          <button className={`icon-btn ${subtitles ? "active" : ""}`} title="字幕" onClick={() => setSubtitles(!subtitles)}>
+            <Captions size={16} />
+          </button>
+        )}
         <div className="volume">
           <button className="icon-btn" title="静音" onClick={() => stage.api?.setVolume?.(playback.volume > 0 ? 0 : 1)}>
             {playback.volume > 0 ? <Volume2 size={16} /> : <VolumeX size={16} />}

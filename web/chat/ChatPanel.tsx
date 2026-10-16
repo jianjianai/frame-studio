@@ -33,7 +33,7 @@ import {
   Shapes,
   Target,
 } from "lucide-react";
-import { api, del, patch, formatTime, timeAgo, useServerEvent } from "../lib/api";
+import { api, del, patch, formatTime, sampleName, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
 import { useWorkbench, type ChatAttachment } from "../workbench/store";
 import { TranscriptReducer, formatTokens, groupTurns, reduceTranscript, runningTurn, writtenTokens, type Entry, type ToolBlock, type Turn } from "./reduce";
@@ -107,7 +107,7 @@ const newer = (next: SessionMeta, known?: SessionMeta) => !known || next.updated
 const SUGGESTIONS = ["检查作品，发现问题就修复", "做一段 3 秒的开场标题动画", "给作品配一段轻快的背景音乐", "让现在这个画面的配色更有电影感"];
 
 export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: () => void }) {
-  const { work, stage, openSettings, viewNow, showView, readOnly } = useWorkbench();
+  const { work, stage, currentStage, openSettings, viewNow, showView, readOnly } = useWorkbench();
   const toast = useToast();
   const [sessions, setSessions] = useState<SessionMeta[]>([]);
   const [current, setCurrent] = usePersistent<string | null>(`chat:${work.repo}/${work.id}`, null);
@@ -477,8 +477,13 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   };
   const captureFrame = async () => {
     try {
+      // What the user looks at: a sample in front, else the film.
+      const { stage, scene } = currentStage();
       const data = await stage.capture();
-      setAttachments((list) => [...list, { type: "frame", time: stage.playback.get().time, data: data.split(",")[1], mimeType: "image/png" }]);
+      setAttachments((list) => [
+        ...list,
+        { type: "frame", time: stage.playback.get().time, data: data.split(",")[1], mimeType: "image/png", ...(scene ? { scene } : {}) },
+      ]);
     } catch (error) {
       toast((error as Error).message, "error");
     }
@@ -672,7 +677,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               attachments={
                 pending.attachments.map((item) =>
                   item.type === "frame" || item.type === "image"
-                    ? { type: "image", uri: `data:${item.mimeType};base64,${item.data}`, time: item.type === "frame" ? item.time : undefined }
+                    ? { type: "image", uri: `data:${item.mimeType};base64,${item.data}`, time: item.type === "frame" && !item.scene ? item.time : undefined }
                     : item,
                 ) as never
               }
@@ -1133,12 +1138,12 @@ function UserMessage({
 }
 
 function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; onRemove?: () => void }) {
-  const { stage, openFile, openMaterial, openResource } = useWorkbench();
+  const { stage, openFile, openSample, openMaterial, openResource } = useWorkbench();
   let icon = <Paperclip size={12} />,
     label = "";
   if (attachment.type === "frame") {
     icon = <Camera size={12} />;
-    label = `画面 ${formatTime(attachment.time)}`;
+    label = attachment.scene ? `样片 ${sampleName(attachment.scene)} ${formatTime(attachment.time)}` : `画面 ${formatTime(attachment.time)}`;
   } else if (attachment.type === "image") {
     icon = <ImageIcon size={12} />;
     label = "图片";
@@ -1167,7 +1172,8 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
     <span
       className="chip"
       onClick={() => {
-        if (attachment.type === "frame") void stage.seek(attachment.time);
+        if (attachment.type === "frame" && attachment.scene) openSample(attachment.scene);
+        else if (attachment.type === "frame") void stage.seek(attachment.time);
         else if (attachment.type === "range") void stage.seek(attachment.start);
         else if (attachment.type === "resource") openResource(attachment.id, { preview: true, title: attachment.title });
         else if (attachment.type === "asset") {

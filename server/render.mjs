@@ -227,7 +227,22 @@ export class Renderer {
       if (error.status) throw error;
       throw problem(422, "作品加载超时或失败：" + [error.message, ...errors].join("\n"), "WORK_LOAD_FAILED", { console: logs });
     }
-    return { page, context, size, errors, logs, close: closeContext, fresh: true };
+    // A module drawn on its own decides its length (and sound) itself.
+    const { duration, sample } = source.scene ? await page.evaluate(() => ({ duration: window.__FRAME_STUDIO__.duration, sample: window.__FRAME_STUDIO__.sample ?? null })) : {};
+    return { page, context, size, errors, logs, close: closeContext, fresh: true, duration, sample };
+  }
+
+  /** How long a module drawn on its own is, and what it declared as a sample (null: nothing). */
+  async sceneInfo(work, scene) {
+    const lease = await this.lease(work, { scene }).catch((error) => {
+      error.message = this.clean(work, error.message);
+      throw error;
+    });
+    try {
+      return { duration: lease.handle.project.duration, sample: lease.handle.sample ?? null };
+    } finally {
+      lease.release();
+    }
   }
 
   /**
@@ -264,7 +279,8 @@ export class Renderer {
     };
     try {
       const handle = await entry.handle;
-      handle.project = meta.meta;
+      // A module on its own is as long as its page says (its sample's duration, else the work's).
+      handle.project = scene && handle.duration ? { ...meta.meta, duration: handle.duration } : meta.meta;
       const exclusive = (size, task) => {
         const run = entry.tail.then(async () => {
           if (size) await this.sized(handle, size);
@@ -694,27 +710,31 @@ export class Renderer {
     }
   }
 
-  /** Render an MP4 (H.264 + AAC) from a frozen snapshot of the work. */
-  async exportVideo(work, { start, end, width, fps, subtitles = true, output, signal, progress }) {
+  /** Render an MP4 (H.264 + AAC) from a frozen snapshot of the work; `scene`: a module of it played on its own. */
+  async exportVideo(work, { start, end, width, fps, subtitles = true, scene, output, signal, progress }) {
     const ffmpeg = ffmpegExecutable();
     if (!ffmpeg) throw problem(500, "导出需要 FFmpeg。安装 ffmpeg 或设置 FFMPEG_PATH。", "NO_FFMPEG");
     const meta = this.services.works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error);
     const project = meta.meta;
-    const plan = createExportPlan({
-      duration: project.duration,
-      composition: project.composition,
-      fps: fps || project.fps,
-      width: width || fitComposition(project, 1920).width,
-      start: start ?? 0,
-      end: end ?? project.duration,
-    });
+    const size = frameDimensions(project, width || fitComposition(project, 1920).width);
     const snapshot = this.snapshot(work);
-    let handle, encoder, audioFile;
+    const source = scene ? { ...snapshot.source, scene: this.services.preview.moduleUrl(path.join(snapshot.dir, scene)) } : snapshot.source;
+    let handle, encoder, audioFile, plan;
     const temp = output + ".partial.mp4";
     try {
       progress?.(0, "准备画面");
-      handle = await this.openPage(snapshot.source, { width: plan.width, project });
+      handle = await this.openPage(source, { width: size.width, project });
+      const duration = handle.duration ?? project.duration;
+      if ((end ?? 0) > duration + 1e-6) throw problem(400, `end ${end} 秒超出了${scene ? `样片 ${scene}` : "作品"}的时长 ${duration} 秒（导出到结尾时不写 end）`);
+      plan = createExportPlan({
+        duration,
+        composition: project.composition,
+        fps: fps || project.fps,
+        width: size.width,
+        start: start ?? 0,
+        end: end ?? duration,
+      });
       const hasAudio = await handle.page.evaluate(async (start) => {
         try {
           const data = await window.__FRAME_STUDIO__.audioChunk(start, 0.05);

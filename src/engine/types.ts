@@ -126,6 +126,16 @@ export interface Scene {
 export interface SceneModule {
   createScene(options: SceneOptions): Promise<Scene> | Scene;
 }
+/**
+ * A sample (样片): a module of the work that exports createScene and plays on its own, not on
+ * the timeline. It says so with `export const sample: Sample = { duration: 4 }`; `audioFrom`
+ * plays the work's sound (audio.json) along from that work time, the beat grid lined up with it.
+ */
+export const sampleSchema = z.strictObject({
+  duration: z.number().positive().max(3600).optional(),
+  audioFrom: z.number().nonnegative().max(3600).optional(),
+});
+export type Sample = z.infer<typeof sampleSchema>;
 export interface AnimationProject extends ProjectMeta {
   load: () => Promise<SceneModule>;
   loadAudio?: () => Promise<GeneratedAudioModule>;
@@ -133,6 +143,8 @@ export interface AnimationProject extends ProjectMeta {
   visual?: VisualDocument;
   audioDocument?: AudioDocument;
   loadAudioDocument?: () => Promise<{default:unknown}>;
+  /** Set when a module plays on its own instead of the film: what it declared as a sample. */
+  sample?: Sample;
 }
 /** Schedule this source-time segment and release every owned node on dispose. */
 export interface GeneratedAudioOptions {
