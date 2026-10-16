@@ -650,8 +650,12 @@ export class AiManager {
       await this.attach(session, work);
       const prompt = this.turnPrompt(session, message, work);
       this.noteGoalCommand(session, message.text);
-      // Claude writes each goal check to its conversation file; read them as the turn goes.
-      if (session.process?.agent === "claude") goalPoll = setInterval(() => this.readGoal(session), GOAL_POLL_MS);
+      // Claude writes each goal check to its conversation file; read them as the turn goes (also
+      // those of a goal set before the studio knew of goals, or while it was down).
+      if (session.process?.agent === "claude" && session.meta.acpSessionId) {
+        if (session.goalReader?.id !== session.meta.acpSessionId) session.goalReader = new ClaudeGoalReader(session.meta.acpSessionId);
+        goalPoll = setInterval(() => this.readGoal(session), GOAL_POLL_MS);
+      }
       let response;
       for (let attempt = 1; ; attempt++) {
         try {
@@ -822,18 +826,12 @@ export class AiManager {
     }
     return this.prompt(id, { text });
   }
-  /** A goal command on its way to the agent: Claude's checks will be in its file from now on. */
+  /** A goal command on its way to the agent: the user's "/goal clear" is told as theirs. */
   noteGoalCommand(session, text) {
-    const command = goalCommand(text);
-    if (!command) return;
-    if (session.meta.agent === "claude" && session.meta.acpSessionId) session.goalReader ??= new ClaudeGoalReader(session.meta.acpSessionId);
-    if (command.action === "clear") session.goalClearing = true;
+    if (goalCommand(text)?.action === "clear") session.goalClearing = true;
   }
-  /** Claude's goal checks written since the last look. */
+  /** Claude's goal checks written since the last look (its turns read its file, see runTurn). */
   readGoal(session) {
-    if (session.meta.agent !== "claude" || !session.meta.acpSessionId) return;
-    // A goal that outlived a restart of the studio: read on from where the file is now.
-    if (!session.goalReader && session.meta.goal) session.goalReader = new ClaudeGoalReader(session.meta.acpSessionId);
     if (!session.goalReader) return;
     try {
       for (const event of session.goalReader.read()) this.applyGoal(session, event);
@@ -856,10 +854,21 @@ export class AiManager {
         session.goalClearing = false;
         line({ event: "set", objective: event.objective });
         break;
-      case "check":
-        if (!goal) return;
-        session.meta.goal = { ...goal, checks: (goal.checks ?? 0) + 1, lastReason: event.reason ?? null, checkedAt: at };
-        line({ event: "check", objective: goal.objective, reason: event.reason ?? null, checks: session.meta.goal.checks });
+      case "check": {
+        // A goal set before the studio knew of it shows from its first check on.
+        const known = goal ?? (event.objective ? { objective: event.objective, status: "active", setAt: at, checks: 0 } : null);
+        if (!known) return;
+        session.meta.goal = { ...known, checks: (known.checks ?? 0) + 1, lastReason: event.reason ?? null, checkedAt: at };
+        line({ event: "check", objective: known.objective, reason: event.reason ?? null, checks: session.meta.goal.checks });
+        break;
+      }
+      case "active":
+        // Asked for its status ("/goal"): the agent's goal, known or not.
+        session.meta.goal =
+          goal && goal.objective === event.objective
+            ? { ...goal, checks: Math.max(goal.checks ?? 0, event.checks), lastReason: event.reason ?? goal.lastReason ?? null }
+            : { objective: event.objective, status: "active", setAt: at, checks: event.checks, lastReason: event.reason };
+        line({ event: "status", objective: event.objective, checks: event.checks, reason: event.reason });
         break;
       case "met":
       case "failed":
@@ -886,9 +895,10 @@ export class AiManager {
         line({ event: "capped", objective: goal.objective, checks: event.count });
         break;
       case "none":
-        // Asked for its status, the agent has no goal: one ended unseen (the studio restarted).
-        if (!goal) return;
+        // Asked for its status, or to clear it, the agent has no goal (one known ended unseen).
+        line({ event: "none" });
         session.meta.goal = null;
+        session.goalClearing = false;
         break;
       default:
         return;
@@ -898,7 +908,7 @@ export class AiManager {
   /** Codex's goal as its adapter reports it (null: there is none any more). */
   codexGoal(session, snapshot) {
     const goal = session.meta.goal ?? null;
-    if (!snapshot) return this.applyGoal(session, { type: goal?.status === "complete" ? "none" : "cleared" });
+    if (!snapshot) return this.applyGoal(session, { type: "cleared" });
     if (!goal || goal.objective !== snapshot.objective) this.applyGoal(session, { type: "set", objective: snapshot.objective, at: snapshot.createdAt });
     const current = session.meta.goal;
     const status = CODEX_STATUSES.has(snapshot.status) ? snapshot.status : "active";
@@ -1015,10 +1025,7 @@ export class AiManager {
       session.meta.agent === "claude"
     ) {
       const output = goalOutput(update.content.text.trim());
-      if (output) {
-        this.applyGoal(session, output);
-        if (output.type !== "none") return;
-      }
+      if (output) return this.applyGoal(session, output);
     }
     // Claude's own notices (a warning; why a hook ended the turn) come as text marked
     // "informational": a line of their own, not words run on into the reply.

@@ -112,6 +112,9 @@ export function goalOutput(text) {
   const cleared = /^Goal cleared: ([\s\S]+)$/.exec(text);
   if (cleared) return { type: "cleared", objective: cleared[1].trim() };
   if (/^No goal set\b/.test(text)) return { type: "none" };
+  // "/goal" with a goal: "Goal active: <condition> (3 turns)", then the last check's reason.
+  const active = /^Goal active: ([\s\S]+?) \((?:not yet evaluated|(\d+) turns?)\)(?:\nLast check: ([\s\S]*))?$/.exec(text);
+  if (active) return { type: "active", objective: active[1].trim(), checks: Number(active[2] ?? 0), reason: active[3]?.trim() || null };
   return null;
 }
 

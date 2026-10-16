@@ -180,6 +180,21 @@ export function GoalLine({ block }: { block: GoalBlock }) {
           <span>目标已结束{block.byUser ? "" : "（AI 那边清除了它）"}</span>
         </div>
       );
+    case "status":
+      return (
+        <div className="goal-line pending">
+          <Target size={13} />
+          <span>目标进行中{block.checks ? `：检查了 ${block.checks} 次，还没达成` : "：还没检查过"}</span>
+          {block.reason && <Reason label="上次检查" text={block.reason} />}
+        </div>
+      );
+    case "none":
+      return (
+        <div className="goal-line pending">
+          <Target size={13} />
+          <span>现在没有目标</span>
+        </div>
+      );
     case "capped":
       return (
         <div className="goal-line warn">

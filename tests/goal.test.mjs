@@ -44,7 +44,9 @@ describe("goal mode", () => {
     expect(goalOutput("Goal set: 甲乙丙")).toEqual({ type: "set", objective: "甲乙丙" });
     expect(goalOutput("Goal cleared: 甲乙丙")).toEqual({ type: "cleared", objective: "甲乙丙" });
     expect(goalOutput("No goal set. Usage: `/goal <condition>`")).toEqual({ type: "none" });
-    expect(goalOutput("Goal active: x (2 turns)")).toBeNull();
+    expect(goalOutput("Goal active: 写完 (2 turns)\nLast check: 还差结尾")).toEqual({ type: "active", objective: "写完", checks: 2, reason: "还差结尾" });
+    expect(goalOutput("Goal active: 写完（含片尾） (not yet evaluated)")).toEqual({ type: "active", objective: "写完（含片尾）", checks: 0, reason: null });
+    expect(goalOutput("Goal achieved")).toBeNull();
     expect(hookCap("A hook blocked the turn from ending 9 consecutive times \u2014 overriding and ending turn. For Stop/SubagentStop hooks…")).toBe(9);
     expect(hookCap("Auto mode is unavailable")).toBeNull();
   });
@@ -96,9 +98,25 @@ describe("goal mode", () => {
     manager.applyGoal(session, { type: "cleared" });
     expect(entries.at(-1)).toEqual({ kind: "goal", event: "cleared", objective: "第二个", byUser: true });
     expect(session.meta.goal).toBeNull();
-    // A check with no goal known (it ended unseen) changes nothing.
+    // A check with no goal named changes nothing.
     manager.applyGoal(session, { type: "check", reason: "?" });
     expect(entries).toHaveLength(6);
+  });
+
+  it("shows a goal set before the studio knew of it, from its first check or when asked", () => {
+    const { manager, session, entries } = harness();
+    manager.applyGoal(session, { type: "check", objective: "全片做完", reason: "还差第三幕", at: 5000 });
+    expect(session.meta.goal).toMatchObject({ objective: "全片做完", status: "active", checks: 1, lastReason: "还差第三幕" });
+    expect(entries.at(-1)).toEqual({ kind: "goal", event: "check", objective: "全片做完", reason: "还差第三幕", checks: 1 });
+    // "/goal": what the agent says is the goal.
+    manager.applyGoal(session, { type: "active", objective: "全片做完", checks: 4, reason: "还差片尾" });
+    expect(session.meta.goal).toMatchObject({ objective: "全片做完", checks: 4, lastReason: "还差片尾", setAt: 5000 });
+    expect(entries.at(-1)).toEqual({ kind: "goal", event: "status", objective: "全片做完", checks: 4, reason: "还差片尾" });
+    manager.applyGoal(session, { type: "none" });
+    expect(session.meta.goal).toBeNull();
+    expect(entries.at(-1)).toEqual({ kind: "goal", event: "none" });
+    manager.applyGoal(session, { type: "active", objective: "另一个", checks: 0, reason: null });
+    expect(session.meta.goal).toMatchObject({ objective: "另一个", checks: 0 });
   });
 
   it("tells when Claude ended a turn at its limit of checks in a row; the goal stays", () => {
