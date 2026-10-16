@@ -79,3 +79,36 @@ document.fonts.add(await font.load());
 
 - 一个作品可以有多个场景模块：放在 `scenes/` 下，通过 `visual.json` 的 scene 图层组合（见 `layers`），或在 `scene.ts` 里自己按时间切换。模块的名称在三处要一致：文件 `scenes/<名称>.ts`、`scene.ts` 里 `createCompositionScene` 的第三个参数（`<名称>: () => import("./scenes/<名称>")`）、图层的 `source.module`。新作品自带的 `title` 模块可以直接改内容，改名要三处一起改。
 - `Scene` 还可以提供 `debug.parameters()/setParameters()` 暴露可调参数，visual.json 的 scene 图层可用 `parameters` 设置它们。
+
+## 单独画一个模块：设定图、组件
+
+人物设定图（阵容、表情、动作、走路循环）、一个道具或组件单独调，不用放进时间轴：写一个导出 `createScene` 的模块（写法和 `scenes/*.ts` 一样），用 `preview_frames` 的 `scene` 画出来。它不在 `visual.json` 里，不影响成片和用户的预览；`work_check` 照样检查它的类型。约定放在 `sheets/` 下，`t` 可以当页码或动画时间用（不能超过作品时长）。
+
+```ts
+// sheets/人物.ts：preview_frames { scene: "sheets/人物.ts", times: [0, 1] }
+import type { Scene, SceneOptions } from "@frame/engine/types";
+import { drawPerson } from "../scenes/people"; // 作品里画人物的函数（举例）
+
+export function createScene({ width, height }: SceneOptions): Scene {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+  return {
+    canvas,
+    render(t) {
+      ctx.setTransform(width / 1080, 0, 0, height / 1920, 0, 0);
+      ctx.fillStyle = "#f3e6e6";
+      ctx.fillRect(0, 0, 1080, 1920);
+      const page = Math.floor(t); // 0：阵容，1：表情
+      ["hero", "friend", "elder"].forEach((kind, i) => drawPerson(ctx, { kind, x: 200 + i * 340, y: 900, mood: page ? "cry" : "calm" }));
+    },
+    dispose() {
+      canvas.width = canvas.height = 1;
+    },
+  };
+}
+```
+
+- 看细节（脸、手、发丝、小字）用 `region` 放大一块：`[x, y, 宽, 高]` 按作品画面像素，`scale` 是倍数（最多到画面长边 3840 像素，1080×1920 的作品是 2 倍）。
+- 不要为了看设定图去改 `scene.ts`、往 `visual.json` 里加临时图层，也不要自己另起浏览器渲染。

@@ -16,7 +16,12 @@ export interface StudioApi {
     height: number;
   };
   dataURL(): string;
-  capture?(): Promise<string>;
+  /** The frame as a PNG data URL; `region` (output pixels) cuts a part of it out. */
+  capture?(region?: CaptureRegion): Promise<string>;
+  /** The frame as 8-bit luma, row by row, base64 (motion analysis). */
+  luma?(): Promise<string>;
+  /** Render at another width (and quality) from now on, without reloading the work. */
+  resize?(width: number, quality?: "draft" | "standard" | "high"): Promise<{ width: number; height: number }>;
   audioChunk?(
     start: number,
     duration: number,
@@ -49,6 +54,12 @@ export interface StudioApi {
   >;
   setParameters?(values: Record<string, number>): void | Promise<void>;
   setOverlay?(enabled: boolean): void | Promise<void>;
+}
+export interface CaptureRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 export async function waitForStudio(
   api: StudioApi,

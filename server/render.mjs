@@ -85,6 +85,7 @@ export class Renderer {
     this.lastUse = 0;
     this.token = services.auth.issueInternal({ purpose: "render" });
     this.assetQueue = new Locks();
+    this.analysis = new Locks();
     services.events.subscribe((event) => {
       if (event.type === "preview-update") this.invalidate(`${event.repo}/${event.work}`);
       if (event.type === "materials" && event.repo) this.invalidateResources(event.repo);
@@ -153,12 +154,17 @@ export class Renderer {
     };
   }
 
-  sourceOf(work) {
-    return { module: this.services.preview.moduleUrl(path.join(work.dir, "project.ts")), assetBase: `/files/${work.repo}/${work.id}/` };
+  /** `scene`: a module of the work (path inside its folder) drawn instead of the film. */
+  sourceOf(work, scene) {
+    return {
+      module: this.services.preview.moduleUrl(path.join(work.dir, "project.ts")),
+      assetBase: `/files/${work.repo}/${work.id}/`,
+      ...(scene ? { scene: this.services.preview.moduleUrl(path.join(work.dir, scene)) } : {}),
+    };
   }
 
   /** Open the headless render page for a work source at an output width. */
-  async openPage(source, { width, project, timeoutMs = 90000 }) {
+  async openPage(source, { width, project, timeoutMs = 90000, quality }) {
     const browser = await this.browser();
     const size = frameDimensions(project, width);
     this.openPages++;
@@ -196,6 +202,8 @@ export class Renderer {
       if (response.status() >= 400 && !response.url().endsWith("/favicon.ico") && !response.request().headers()["x-frame-optional"]) errors.push(`HTTP ${response.status()} ${new URL(response.url()).pathname}`);
     });
     const query = new URLSearchParams({ module: source.module, assetBase: source.assetBase, width: String(size.width), live: "0" });
+    if (source.scene) query.set("scene", source.scene);
+    if (quality) query.set("quality", quality);
     // The first load of a work can make Vite discover new dependencies (e.g. three/addons/*);
     // it then re-optimizes and reloads the page. Such loads are retried.
     const reoptimized = () => logs.some((line) => line.includes("Outdated Optimize Dep")) || errors.some((line) => line.startsWith("HTTP 504 "));
@@ -219,29 +227,32 @@ export class Renderer {
       if (error.status) throw error;
       throw problem(422, "作品加载超时或失败：" + [error.message, ...errors].join("\n"), "WORK_LOAD_FAILED", { console: logs });
     }
-    return { page, context, size, errors, logs, close: closeContext };
+    return { page, context, size, errors, logs, close: closeContext, fresh: true };
   }
 
   /**
-   * Warm page for interactive tools (frames, contact sheets, audio analysis), leased: an AI
-   * calls several tools at once, and a page one of them replaces (the work changed) stays
-   * open until the others are done with it. Call `release()` when done.
+   * Warm page for interactive tools (frames, contact sheets, audio analysis): one per work, and
+   * one per module of it drawn on its own (`scene`). Leased: an AI calls several tools at once,
+   * and a page one of them replaces (the work changed) stays open until the others are done
+   * with it. Drawing goes through `exclusive(width, task)`: one drawing task at a time (two
+   * would take each other's frames), at the width it asks for — the page changes size in
+   * place instead of loading the work again. Call `release()` when done.
    */
-  async lease(work, width) {
+  async lease(work, { width, scene } = {}) {
     const meta = this.services.works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
-    width = width || fitComposition(meta.meta, 1280).width;
-    const key = `${work.repo}/${work.id}`;
+    const key = `${work.repo}/${work.id}` + (scene ? `|scene:${scene}` : "");
     const stamp = this.freshen(work);
     const existing = this.pages.get(key);
     let entry = existing;
-    if (!(existing && existing.width === width && !existing.stale && existing.stamp === stamp)) {
+    if (!(existing && !existing.stale && existing.stamp === stamp)) {
       if (existing) {
         this.pages.delete(key);
         this.retire(existing);
       }
-      entry = { width, usedAt: Date.now(), stale: false, stamp, users: 0 };
-      entry.handle = this.openPage(this.sourceOf(work), { width, project: meta.meta });
+      const first = width || fitComposition(meta.meta, 1280).width;
+      entry = { usedAt: Date.now(), stale: false, stamp, users: 0, tail: Promise.resolve() };
+      entry.handle = this.openPage(this.sourceOf(work, scene), { width: first, project: meta.meta });
       this.pages.set(key, entry);
       entry.handle.catch(() => this.pages.get(key) === entry && this.pages.delete(key));
     }
@@ -254,11 +265,27 @@ export class Renderer {
     try {
       const handle = await entry.handle;
       handle.project = meta.meta;
-      return { handle, release };
+      const exclusive = (size, task) => {
+        const run = entry.tail.then(async () => {
+          if (size) await this.sized(handle, size);
+          return task(handle);
+        });
+        entry.tail = run.catch(() => {});
+        return run;
+      };
+      return { handle, release, exclusive };
     } catch (error) {
       release();
       throw error;
     }
+  }
+
+  /** Draw at `width` from now on. Asked every time: a page Vite reloaded is back at its first size. */
+  async sized(handle, width) {
+    const size = await again(handle.page, READY.work, () => handle.page.evaluate((width) => window.__FRAME_STUDIO__.resize(width), width));
+    // A new scene: its first frame loads what it needs again.
+    if (size.width !== handle.size.width || size.height !== handle.size.height) handle.fresh = true;
+    handle.size = size;
   }
 
   /** Close a page no longer wanted, once nobody is using it (else when the last user releases it). */
@@ -287,10 +314,9 @@ export class Renderer {
     return stamp;
   }
 
+  /** The work changed: its pages (the film and modules drawn on their own) load it again. */
   invalidate(key) {
-    const entry = this.pages.get(key);
-    if (!entry) return;
-    entry.stale = true;
+    for (const [name, entry] of this.pages) if (name === key || name.startsWith(key + "|")) entry.stale = true;
   }
 
   sweep() {
@@ -310,23 +336,31 @@ export class Renderer {
     }
   }
 
-  /** Render frames at absolute times. Returns PNG buffers. */
-  async frames(work, { times, width, subtitles = true }) {
+  /**
+   * Render frames at absolute times. Returns PNG buffers and how long each frame took to draw
+   * (`ms`, without capturing; `loading` when it was the first frame of a new scene). `scene`
+   * draws a module of the work instead of the film; `crop` ({x, y, width, height} in pixels of
+   * the `width`-wide frame) returns only that part.
+   */
+  async frames(work, { times, width, subtitles = true, scene, crop }) {
     this.lastUse = Date.now();
     let lease;
     try {
-      lease = await this.lease(work, width);
+      lease = await this.lease(work, { width, scene });
     } catch (error) {
       error.message = this.clean(work, error.message);
       throw error;
     }
     try {
-      return await this.framesOn(work, lease.handle, { times, subtitles });
+      return await lease.exclusive(width, (handle) => this.framesOn(work, handle, { times, subtitles: subtitles && !scene, crop }));
+    } catch (error) {
+      error.message = this.clean(work, error.message);
+      throw error;
     } finally {
       lease.release();
     }
   }
-  async framesOn(work, handle, { times, subtitles }) {
+  async framesOn(work, handle, { times, subtitles, crop }) {
     const duration = handle.project.duration;
     const errorsBefore = handle.errors.length;
     const result = [];
@@ -334,16 +368,19 @@ export class Renderer {
     for (const raw of times) {
       const time = Math.max(0, Math.min(duration - 1e-3, Number(raw)));
       try {
-        const data = await again(handle.page, READY.work, () =>
+        const { data, ms } = await again(handle.page, READY.work, () =>
           handle.page.evaluate(
-            async ({ time, subtitles }) => {
-              await window.__FRAME_STUDIO__.frame(time, subtitles);
-              return (await window.__FRAME_STUDIO__.capture()).split(",")[1];
+            async ({ time, subtitles, crop }) => {
+              const studio = window.__FRAME_STUDIO__;
+              await studio.frame(time, subtitles);
+              const ms = studio.getDiagnostics().renderMs;
+              return { data: (await studio.capture(crop ?? undefined)).split(",")[1], ms };
             },
-            { time, subtitles },
+            { time, subtitles, crop: crop ?? null },
           ),
         );
-        result.push({ time, png: Buffer.from(data, "base64") });
+        result.push({ time, png: Buffer.from(data, "base64"), ms: Math.round(ms), ...(handle.fresh ? { loading: true } : {}) });
+        handle.fresh = false;
       } catch (error) {
         // Keep the frames that did render; one broken moment should not hide the rest.
         failed.push(`${formatTime(time)} 渲染失败：${error.message}`);
@@ -351,7 +388,159 @@ export class Renderer {
     }
     const errors = mergeTimedErrors([...new Set([...failed, ...handle.errors.slice(errorsBefore)].map((text) => this.clean(work, text)))]);
     if (!result.length) throw problem(422, errors.join("\n") || "没有渲染出画面", "RENDER_FAILED");
-    return { frames: result, width: handle.size.width, height: handle.size.height, errors, console: [...handle.logs] };
+    const size = crop ?? handle.size;
+    return { frames: result, width: size.width, height: size.height, errors, console: [...handle.logs] };
+  }
+
+  /**
+   * One heavy job (motion analysis, timing a whole film) at a time on the server: they draw
+   * hundreds of frames, and several at once would slow every studio page and export down.
+   * Resolves with the task's result and how long it waited for its turn.
+   */
+  async heavy(task) {
+    const queued = Date.now();
+    return this.analysis.run("heavy", async () => ({ waited: Date.now() - queued, result: await task() }));
+  }
+
+  /**
+   * Consecutive frames for motion analysis: small (`width`), as luma, handed to `consume`
+   * batch by batch while the page draws the next batch. Frames named in `thumbs` (indexes) also
+   * come as PNG. `budgetMs` counts from the call (loading the work included): drawing stops
+   * when it is used up and says so (`cut`), rather than hold the server for minutes.
+   */
+  async motionFrames(work, { times, width, thumbs = [], budgetMs = 45000, consume }) {
+    this.lastUse = Date.now();
+    const began = Date.now();
+    let lease;
+    try {
+      lease = await this.lease(work, { width });
+    } catch (error) {
+      error.message = this.clean(work, error.message);
+      throw error;
+    }
+    try {
+      return await lease.exclusive(width, async (handle) => {
+        const started = Date.now();
+        const errorsBefore = handle.errors.length;
+        const wanted = new Set(thumbs);
+        const batches = [];
+        for (let index = 0; index < times.length; index += 6) batches.push(times.slice(index, index + 6).map((time, offset) => ({ time, thumb: wanted.has(index + offset) })));
+        const draw = (batch) =>
+          again(handle.page, READY.work, () =>
+            handle.page.evaluate(async (batch) => {
+              const studio = window.__FRAME_STUDIO__;
+              const out = [];
+              for (const { time, thumb } of batch) {
+                try {
+                  await studio.frame(time, false);
+                } catch (error) {
+                  out.push({ time, error: String(error?.message ?? error) });
+                  break;
+                }
+                out.push({ time, ms: studio.getDiagnostics().renderMs, luma: await studio.luma(), png: thumb ? (await studio.capture()).split(",")[1] : null });
+              }
+              return out;
+            }, batch),
+          );
+        let drawn = 0;
+        let failure = null;
+        let pending = draw(batches[0]);
+        for (let index = 0; index < batches.length; index++) {
+          const batch = await pending;
+          const failed = batch.find((item) => item.error);
+          const over = Date.now() - began > budgetMs;
+          // The page draws the next batch while this one is analysed.
+          pending = index + 1 < batches.length && !over && !failed ? draw(batches[index + 1]) : null;
+          pending?.catch(() => {});
+          for (const item of batch) {
+            if (item.error) {
+              failure = `${formatTime(item.time)} 渲染失败：${item.error}`;
+              break;
+            }
+            await consume({ time: item.time, ms: item.ms, luma: Buffer.from(item.luma, "base64"), png: item.png ? Buffer.from(item.png, "base64") : null });
+            drawn++;
+          }
+          if (!pending) break;
+        }
+        if (drawn) handle.fresh = false;
+        const errors = mergeTimedErrors([...new Set([...(failure ? [failure] : []), ...handle.errors.slice(errorsBefore)].map((text) => this.clean(work, text)))]);
+        const drawing = Date.now() - started;
+        return { drawn, cut: drawn < times.length && !failure, ms: Date.now() - began, loadMs: started - began, perFrame: drawn ? drawing / drawn : null, width: handle.size.width, height: handle.size.height, errors };
+      });
+    } finally {
+      lease.release();
+    }
+  }
+
+  /**
+   * How long frames take to draw over the whole film, the way the studio preview draws them
+   * ("standard" quality, 1280 on the long side, subtitles on), in a page of its own, then the
+   * slowest moments once more (a first visit that also loaded pictures or a layer is fast the
+   * second time). Every `step` seconds; when drawing is slower than `budgetMs` (counted from
+   * the call, loading included) allows, the moments still to come spread out so the
+   * measurement reaches the end of the film.
+   */
+  async timing(work, { step, budgetMs = 45000 } = {}) {
+    this.lastUse = Date.now();
+    const began = Date.now();
+    const meta = this.services.works.meta(work);
+    if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
+    const project = meta.meta;
+    const size = fitComposition(project, 1280);
+    let handle;
+    try {
+      this.freshen(work);
+      handle = await this.openPage(this.sourceOf(work), { width: size.width, project, quality: "standard", timeoutMs: 60000 });
+      const started = Date.now();
+      const draw = (batch) =>
+        again(handle.page, READY.work, () =>
+          handle.page.evaluate(async (batch) => {
+            const studio = window.__FRAME_STUDIO__;
+            const out = [];
+            for (const time of batch) {
+              await studio.frame(time, true);
+              out.push({ time, ms: studio.getDiagnostics().renderMs });
+            }
+            return out;
+          }, batch),
+        );
+      // Most of the budget for the pass over the film, the rest for drawing the slowest again.
+      const passEnd = began + 0.85 * budgetMs;
+      const samples = [];
+      let time = 0,
+        used = step;
+      while (time < project.duration - 1e-3 && Date.now() < passEnd) {
+        const batch = [];
+        // Small batches: a slow work (seconds a frame) learns that after one frame, not eight.
+        for (; batch.length < 2 && time < project.duration - 1e-3; time += used) batch.push(Math.round(time * 1000) / 1000);
+        samples.push(...(await draw(batch)));
+        const each = (Date.now() - started) / samples.length;
+        const room = Math.floor((passEnd - Date.now()) / each);
+        if (room > 0 && (project.duration - time) / used > room) used = Math.ceil(((project.duration - time) / room) * 10) / 10;
+      }
+      const slowest = [...samples].sort((a, b) => b.ms - a.ms).slice(0, 8);
+      for (const sample of slowest) {
+        if (Date.now() > began + budgetMs) break;
+        const [repeat] = await draw([sample.time]);
+        sample.again = repeat.ms;
+      }
+      return {
+        width: size.width,
+        height: size.height,
+        step,
+        lastStep: used,
+        complete: time >= project.duration - 1e-3,
+        samples: samples.map((sample) => ({ time: sample.time, ms: Math.round(sample.ms * 10) / 10, ...(sample.again !== undefined ? { again: Math.round(sample.again * 10) / 10 } : {}) })),
+        ms: Date.now() - began,
+        loadMs: started - began,
+        errors: mergeTimedErrors([...new Set(handle.errors.map((text) => this.clean(work, text)))]),
+      };
+    } catch (error) {
+      error.message = this.clean(work, error.message);
+      throw error;
+    } finally {
+      await handle?.close();
+    }
   }
 
   clean(work, text) {
@@ -398,9 +587,25 @@ export class Renderer {
   }
 
   /** One labelled contact sheet; much cheaper for AI context than many images. */
-  async storyboard(work, { times, columns, width = 480, subtitles = true, format = "jpeg" }) {
-    const { frames, width: w, height: h, errors } = await this.frames(work, { times, width, subtitles });
-    return { image: await contactSheet(frames, w, h, columns, format), times: frames.map((frame) => frame.time), errors, digests: frames.map((frame) => digest(frame.png)) };
+  /** `cell`: the width of each picture in the sheet when the frames come bigger (crops). */
+  async storyboard(work, { times, columns, width = 480, subtitles = true, format = "jpeg", scene, crop, cell }) {
+    const { frames, width: w, height: h, errors } = await this.frames(work, { times, width, subtitles, scene, crop });
+    let cells = frames,
+      cw = w,
+      ch = h;
+    if (cell && w > cell) {
+      cw = cell;
+      ch = Math.max(2, Math.round((h * cell) / w));
+      cells = await Promise.all(frames.map(async (frame) => ({ ...frame, png: await sharp(frame.png).resize(cw, ch).png().toBuffer() })));
+    }
+    return {
+      image: await contactSheet(cells, cw, ch, columns, format),
+      times: frames.map((frame) => frame.time),
+      errors,
+      digests: frames.map((frame) => digest(frame.png)),
+      ms: frames.map((frame) => frame.ms),
+      loading: frames.map((frame) => Boolean(frame.loading)),
+    };
   }
 
   /** A segment of the work's mix as stereo float PCM (48 kHz), rendered offline in the page. */

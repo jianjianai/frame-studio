@@ -392,7 +392,8 @@ describe("tools that save the AI calls", () => {
     expect(png.body.images[0].mimeType).toBe("image/png");
     expect(png.body.data.digests[0]).toMatch(/^[0-9a-f]{12}$/);
     expect(png.body.data.digests[1]).toBe(png.body.data.digests[0]);
-    expect(png.body.text).toContain(`（${png.body.data.digests[0]}）`);
+    expect(png.body.text).toContain(`（${png.body.data.digests[0]}，`);
+    expect(png.body.text).toMatch(/0:00\.50（[0-9a-f]{12}，\d+ ms，含加载）/);
     await tool("work_check", { work: work.id, runtime: false });
     const checked = () => tool("work_context", { work: work.id }).then((result) => result.body.data.lastCheck);
     expect((await checked()).current).toBe(true);

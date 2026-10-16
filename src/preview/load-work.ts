@@ -8,13 +8,18 @@ export interface WorkSource {
   module: string;
   /** URL prefix that maps films/<slug>/... to the work's public/ folder */
   assetBase: string;
+  /**
+   * /@fs URL of another module of the work that exports createScene (a character sheet, one
+   * part on its own): drawn instead of the film, without its timeline, audio or subtitles.
+   */
+  scene?: string;
 }
 
 export function workSourceFromQuery(params = new URLSearchParams(location.search)): WorkSource {
   const module = params.get("module");
   const assetBase = params.get("assetBase");
   if (!module || !assetBase) throw new Error("预览地址缺少 module/assetBase 参数");
-  return { module, assetBase };
+  return { module, assetBase, scene: params.get("scene") || undefined };
 }
 
 /**
@@ -34,6 +39,16 @@ export async function importWork(source: WorkSource, timestamp?: number, materia
     throw new Error("project.ts 元数据无效：" + parsed.error.issues.map((issue) => `${issue.path.join(".") || "(根)"} ${issue.message}`).join("；"));
   const meta = parsed.data;
   setTempo(meta.tempo);
+  const scene = source.scene;
+  if (scene)
+    return resolveProject({
+      ...meta,
+      load: async () => {
+        const mod = await import(/* @vite-ignore */ scene + (timestamp ? `?t=${timestamp}` : ""));
+        if (typeof mod.createScene !== "function") throw new Error(`${decodeURI(scene).replace(/^.*\/projects\/[^/]+\//, "")} 没有导出 createScene(options)`);
+        return mod;
+      },
+    });
   return resolveProject({
     ...meta,
     load: project.load,

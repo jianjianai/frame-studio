@@ -22,7 +22,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 1. `work_context`：看作品现状、素材、用户正在看的时间点和选中的图层。
 2. 用 `frame_guide <主题>` 确认接口，再修改文件。保存后用户的预览立刻更新。
 3. `work_check`：类型、素材引用、真实浏览器加载。有错先修。
-4. `preview_frames` 亲眼检查画面（`times` 看几个时间点，`count` 取样看整体节奏，`format: "png"` 看细节；每张有画面指纹，同一时刻指纹相同就是同样的画面）；有声音时用 `preview_audio`（`listen: true` 给出试听）。`work_context` 的 `lastCheck.current` 说明上次检查的是不是现在的内容。
+4. `preview_frames` 亲眼检查画面（`times` 看几个时间点，`count` 取样看整体节奏，`format: "png"` 看细节，`region` 放大一块；每张有画面指纹，同一时刻指纹相同就是同样的画面）；动作和运镜顺不顺用 `preview_motion`；有声音时用 `preview_audio`（`listen: true` 给出试听）。`work_context` 的 `lastCheck.current` 说明上次检查的是不是现在的内容。
    报错里的 `scenes/x.ts:行:列` 是作品源码中的位置，可以直接定位。
 5. 用一两句话告诉用户改了什么、在哪个时间点能看到。保存版本（`version_save`）由用户决定：用户或任务说明要求保存时再保存，否则不要自己保存。
 
@@ -35,6 +35,9 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 配乐、音效、混音 | `audio_place`、`audio_get` / `audio_edit`，配乐节拍 `preview_audio` 的 `src` + `beats`（见 `audio`） |
 | 配音和字幕 | `speech_synthesize`（`lines` + `place` + `subtitles: true` 一次完成整段旁白）、`subtitles_edit`（见 `speech`、`subtitles`） |
 | 标题、时长、画面尺寸、节拍、镜头标记、字幕样式 | `work_update`（配乐节拍写进 `tempo`，见 `project`） |
+| 看局部细节；不放进时间轴单独看设定图、组件 | `preview_frames` 的 `region`（放大一块）、`scene`（画作品里导出 `createScene` 的另一个模块，见 `scene`） |
+| 动作、运镜顺不顺（急起急停、跳帧、抖动、重复帧、静止太久） | `preview_motion`：一次看一个镜头或转场（2–6 秒）；整段只看节奏时 `fps` 降到 10–15 |
+| 预览卡、导出慢：哪里画得慢 | `work_check` 的 `timing: true`，列出最慢的地方和那里的图层、镜头；改完再测一次对比 |
 | 做另一个版本（竖屏版、换文案） | `work_copy` 复制整个作品（可同时改尺寸），在副本上改；`preview_frames` 的 `compare` 把两个作品同一时刻（`times` 或 `count` 取样）并排画出来对照 |
 | 复用素材库里的角色、场景、效果、转场、音效（Canvas 2D、三维、Pixi） | `resources_search` 找（`engine` 可以只找三维或 Pixi 的）、`resource_view` 看详情和预览图，音效用 `audio_place` 的 `sound` 放到音轨（见 `resources`） |
 | 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身：图片、视频、三维模型、Lottie、全景图、字体）；素材库 `materials_list`（库多时 `query` 查找）、`materials_link`、`materials_use`、`material_write`（见 `assets`） |

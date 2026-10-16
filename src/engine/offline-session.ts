@@ -1,15 +1,27 @@
 import { FrameRenderer } from "./renderer";
 import { resolveProject } from "./resolve-project";
 import { OfflineAudioRenderer } from "./audio-graph";
-import { projectAudioTracks, type AnimationProject } from "./types";
+import { projectAudioTracks, type AnimationProject, type Quality } from "./types";
 import { waitForStudio, type StudioApi } from "./debug";
 import { frameDimensions, fitComposition } from "./dimensions.mjs";
+
+const QUALITIES: Quality[] = ["draft", "standard", "high"];
+
+/** Base64 of bytes, in chunks (one String.fromCharCode call would overflow the stack). */
+function base64(bytes: Uint8Array) {
+  let text = "";
+  for (let at = 0; at < bytes.length; at += 0x8000) text += String.fromCharCode(...bytes.subarray(at, at + 0x8000));
+  return btoa(text);
+}
 
 /** Production entry without a studio registry, UI, HMR, or playback clock. */
 export async function installOffline(project: AnimationProject) {
   project=await resolveProject(project);
-  const requested = new URLSearchParams(location.search).get("width");
-  const { width, height } = frameDimensions(project, requested ? Number(requested) : fitComposition(project, 1280).width);
+  const query = new URLSearchParams(location.search);
+  const requested = query.get("width");
+  let { width, height } = frameDimensions(project, requested ? Number(requested) : fitComposition(project, 1280).width);
+  // The studio preview draws at "standard": timing measured for playback asks for it.
+  let quality: Quality = QUALITIES.find((item) => item === query.get("quality")) ?? "high";
   const canvas = document.createElement("canvas");
   document.body.append(canvas);
   const renderer = new FrameRenderer(canvas, project);
@@ -40,7 +52,18 @@ export async function installOffline(project: AnimationProject) {
       height,
     }),
     dataURL: () => renderer.dataURL(),
-    capture: () => renderer.capture(),
+    capture: (region) => renderer.capture(region),
+    luma: async () => base64(await renderer.luma()),
+    async resize(nextWidth, nextQuality = quality) {
+      const size = frameDimensions(project, nextWidth);
+      if (size.width === width && size.height === height && nextQuality === quality) return size;
+      // A new scene at the new size; the page and its modules stay (no reload, no recompiling).
+      const prepared = await renderer.prepareProject(project, { ...size, quality: nextQuality, time: () => time, subtitles: () => false });
+      if (!prepared.commit()) throw new Error("Resize superseded");
+      ({ width, height } = size);
+      quality = nextQuality;
+      return size;
+    },
     async waitUntilReady(options = {}) {
       await waitForStudio(api, options);
       if (options.audio)
@@ -104,7 +127,7 @@ export async function installOffline(project: AnimationProject) {
     { once: true },
   );
   try {
-    await renderer.init(width, height, "high");
+    await renderer.init(width, height, quality);
     // Import the audio module now: a first import can make the dev server
     // re-optimize dependencies and reload, which is only safe before ready.
     await project.loadAudio?.();
