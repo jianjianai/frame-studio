@@ -291,10 +291,12 @@ export function registerAssetTools(registry) {
     },
   });
 
+  const fromWork = z.strictObject({ work: z.string().min(1).max(80), path: z.string().min(1).max(400) });
   const plainSource = {
     url: z.string().url().optional(),
     data: z.string().max(12 * 1024 * 1024).optional(),
     file: z.string().optional(),
+    fromWork: fromWork.optional(),
     name: z.string().max(120).optional(),
     folder: z
       .string()
@@ -306,6 +308,9 @@ export function registerAssetTools(registry) {
     url: z.string().url().optional(),
     data: z.string().max(12 * 1024 * 1024).optional().describe("文件内容的 base64（≤8 MB，要同时给 name）；没有终端时用，否则用 upload_link"),
     file: z.string().optional().describe("服务器上的绝对路径（仅本机模式）"),
+    fromWork: fromWork
+      .optional()
+      .describe('同一作品库另一个作品里的文件，复制过来：{ work: "作品 id", path: "public/音乐.flac" }（path 也可以写 films/<名称>/… 地址；work_read 查文件）'),
     name: z.string().max(120).optional().describe("保存的文件名"),
     folder: z
       .string()
@@ -314,12 +319,26 @@ export function registerAssetTools(registry) {
       .describe("保存到哪个文件夹，默认 public/imports"),
     license: z.string().max(500).optional().describe("来源与许可"),
   };
-  /** One import into the work's public/: from a URL, base64 data or (local studio) a file of this machine. */
-  const importOne = async (work, { url, data, file, name, folder = "public/imports", license }) => {
-    if ([url, data, file].filter(Boolean).length !== 1) throw problem(400, "url、data、file 必须且只能提供一个");
+  /**
+   * One import into the work's public/: from a URL, base64 data, another work of the same
+   * repository, or (local studio) a file of this machine.
+   */
+  const importOne = async (work, { url, data, file, fromWork: from, name, folder = "public/imports", license }, ctx) => {
+    if ([url, data, file, from].filter(Boolean).length !== 1) throw problem(400, "url、data、file、fromWork 必须且只能提供一个");
     let relative;
     if (url) relative = await importFromUrl(work, url, { name, folder, publicOnly: services.auth.required });
-    else if (data) {
+    else if (from) {
+      const source = await ctx.otherWork(from.work.includes("/") ? from.work : `${work.repo}/${from.work}`);
+      if (source.repo !== work.repo) throw problem(403, `fromWork 只能是同一作品库（${work.repo}）的作品`, "FORBIDDEN");
+      const address = /^films\/([^/]+)\/(.+)$/.exec(from.path);
+      if (address && address[1] !== source.slug) throw problem(400, `${from.path} 不是作品 ${source.id} 的素材（应为 films/${source.slug}/…）`);
+      const original = confined(source.dir, address ? `public/${address[2]}` : from.path);
+      if (!fs.statSync(original, { throwIfNoEntry: false })?.isFile()) throw problem(404, `作品 ${source.id} 里没有 ${from.path}`, "NOT_FOUND");
+      relative = uniquePath(work.dir, `${folder}/${(name || path.basename(original)).replace(/[\\/\x00-\x1f?#%*:|"<>]/g, "_")}`);
+      fs.mkdirSync(path.dirname(path.join(work.dir, relative)), { recursive: true });
+      fs.copyFileSync(original, path.join(work.dir, relative));
+      license ??= `来自同一作品库的作品 ${source.id}（${from.path}）`;
+    } else if (data) {
       const buffer = decodeData(data, name);
       relative = uniquePath(work.dir, `${folder}/${name.replace(/[\\/\x00-\x1f?#%*:|"<>]/g, "_")}`);
       await writeStream(work.dir, relative, Readable.from([buffer]));
@@ -343,7 +362,7 @@ export function registerAssetTools(registry) {
     name: "asset_import",
     title: "导入素材",
     description:
-      "把素材放进作品自己的 public/：从网址下载（url）、base64 内容（data，小文件）或服务器本地文件（file，仅本机模式）。一次导入多个用 items（同时下载，某项失败不影响其他项，结果逐项列出，只需重试失败的）。你所在电脑上的文件用 upload_link 上传。返回代码中使用的 films/... 地址。注意素材版权，在 license 中记录来源。多个作品都要用的素材放进素材库（material_write）。",
+      "把素材放进作品自己的 public/：从网址下载（url）、base64 内容（data，小文件）、同一作品库另一个作品里的文件（fromWork）或服务器本地文件（file，仅本机模式）。一次导入多个用 items（同时下载，某项失败不影响其他项，结果逐项列出，只需重试失败的）。你所在电脑上的文件用 upload_link 上传。返回代码中使用的 films/... 地址。注意素材版权，在 license 中记录来源。多个作品都要用的素材放进素材库（material_write）。",
     input: {
       work: workArg,
       ...source,
@@ -351,10 +370,10 @@ export function registerAssetTools(registry) {
     },
     async run({ work: _ignored, items, ...single }, ctx) {
       const work = await ctx.work();
-      if (items?.length && (single.url || single.data || single.file || single.name))
-        throw problem(400, "用 items 时，url、data、file、name 写在每一项里（外层只能写 folder、license 作为各项的默认值）");
+      if (items?.length && (single.url || single.data || single.file || single.fromWork || single.name))
+        throw problem(400, "用 items 时，url、data、file、fromWork、name 写在每一项里（外层只能写 folder、license 作为各项的默认值）");
       const list = items?.length ? items.map((item) => ({ folder: single.folder, license: single.license, ...item })) : [single];
-      const results = await eachSettled(list, (item) => importOne(work, item));
+      const results = await eachSettled(list, (item) => importOne(work, item, ctx));
       services.events.emit({ type: "assets", work: work.id, repo: work.repo });
       if (!items?.length) {
         if (!results[0].ok) throw results[0].error;
@@ -364,7 +383,7 @@ export function registerAssetTools(registry) {
       return {
         data: results.map((result, index) => (result.ok ? { ok: true, ...result.value } : { ok: false, item: index, error: errorOf(result.error) })),
         text: summarize(results, (result, index) =>
-          result.ok ? `✓ ${index + 1}. ${result.value.path} → ${result.value.url}` : `✗ ${index + 1}. ${list[index].url || list[index].name || list[index].file}：${result.error.message}`,
+          result.ok ? `✓ ${index + 1}. ${result.value.path} → ${result.value.url}` : `✗ ${index + 1}. ${list[index].url || list[index].name || list[index].file || list[index].fromWork?.path}：${result.error.message}`,
         ),
       };
     },

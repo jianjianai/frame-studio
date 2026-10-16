@@ -38,6 +38,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 看局部细节；不放进时间轴单独看设定图、组件 | `preview_frames` 的 `region`（放大一块）、`scene`（画作品里导出 `createScene` 的另一个模块，见 `scene`） |
 | 动作、运镜顺不顺（急起急停、跳帧、抖动、重复帧、静止太久） | `preview_motion`：一次看一个镜头或转场（2–6 秒）；整段只看节奏时 `fps` 降到 10–15 |
 | 预览卡、导出慢：哪里画得慢 | `work_check` 的 `timing: true`，列出最慢的地方和那里的图层、镜头；改完再测一次对比 |
+| 参考同一作品库的其他作品（故事、场景代码、画面、素材） | `works_list` 找作品，`work_read` 读它的文件，`search` 的 `scope: ["works"]` 在它们的代码里搜，`preview_frames`、`work_context` 等读取类工具填 `work` 看画面和结构，`asset_import` 的 `fromWork` 把素材复制过来；其他作品只能读，只修改当前作品 |
 | 做另一个版本（竖屏版、换文案） | `work_copy` 复制整个作品（可同时改尺寸），在副本上改；`preview_frames` 的 `compare` 把两个作品同一时刻（`times` 或 `count` 取样）并排画出来对照 |
 | 复用素材库里的角色、场景、效果、转场、音效（Canvas 2D、三维、Pixi） | `resources_search` 找（`engine` 可以只找三维或 Pixi 的）、`resource_view` 看详情和预览图，音效用 `audio_place` 的 `sound` 放到音轨（见 `resources`） |
 | 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身：图片、视频、三维模型、Lottie、全景图、字体）；素材库 `materials_list`（库多时 `query` 查找）、`materials_link`、`materials_use`、`material_write`（见 `assets`） |

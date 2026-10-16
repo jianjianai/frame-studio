@@ -279,7 +279,8 @@ describe("experience libraries", () => {
     expect(await response.text()).toContain("全部完成");
     expect(context()).not.toContain("经验库");
 
-    // A bound session's tools have no work parameter, and a stray one is ignored.
+    // A bound session's changing tools have no work parameter, and a stray one is ignored; its
+    // reading tools take another work of its repository.
     const mcp = async (method, params) => {
       const reply = await fetch(`${base}/mcp`, {
         method: "POST",
@@ -289,14 +290,21 @@ describe("experience libraries", () => {
       return JSON.parse((await reply.text()).split("\n").find((line) => line.startsWith("data: ")).slice(6)).result;
     };
     const listed = await mcp("tools/list", {});
-    expect(listed.tools.some((tool) => "work" in (tool.inputSchema.properties ?? {}))).toBe(false);
+    const naming = listed.tools.filter((tool) => "work" in (tool.inputSchema.properties ?? {}));
+    expect(naming.map((tool) => tool.name)).toContain("work_context");
+    expect(naming.every((tool) => tool.annotations.readOnlyHint)).toBe(true);
     expect(listed.tools.find((tool) => tool.name === "experience_read")._meta).toEqual({ "anthropic/alwaysLoad": true });
     expect(listed.tools.find((tool) => tool.name === "experience_commit")._meta).toBeUndefined();
     // Built-in agents edit files with their own tools.
     expect(listed.tools.some((tool) => tool.name === "files_batch")).toBe(false);
-    const stray = await mcp("tools/call", { name: "experience_read", arguments: { work: "work-" + work.id, path: "开场.md" } });
+    const stray = await mcp("tools/call", {
+      name: "experience_write",
+      arguments: { work: "work-" + work.id, operations: [{ op: "write", path: "开场.md", content: "# 开场\n\n- 前 3 秒给出问题\n" }] },
+    });
     expect(stray.isError).toBeFalsy();
-    expect(stray.content[0].text).toContain("前 3 秒给出问题");
+    const read = await mcp("tools/call", { name: "experience_read", arguments: { work: work.id, path: "开场.md" } });
+    expect(read.content[0].text).toContain("前 3 秒给出问题");
+    expect((await mcp("tools/call", { name: "experience_read", arguments: { work: "work-" + work.id, path: "开场.md" } })).isError).toBe(true);
 
     // In a mode that confirms changes, FRAME's own tools wait for the user too; reads never do.
     session.meta.configOptions = [{ id: "mode", currentValue: "default" }];

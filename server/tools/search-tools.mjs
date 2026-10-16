@@ -5,7 +5,7 @@ import { workArg, repoArg } from "./registry.mjs";
 import { problem } from "../util.mjs";
 import { appRoot } from "../config.mjs";
 
-const SCOPES = ["work", "used", "materials", "experience", "reviews", "guide", "engine"];
+const SCOPES = ["work", "works", "used", "materials", "experience", "reviews", "guide", "engine"];
 const FILE_LIMIT = 8 * 1024 * 1024; // larger files are skipped (and counted)
 const FILE_COUNT = 20000;
 const SHOWN = 300; // characters of a line shown; longer lines are cut around the match
@@ -80,6 +80,19 @@ export function registerSearchTools(registry) {
     };
     for (const scope of scopes) {
       if (scope === "work") await folder(scope, work.dir, (file) => file);
+      if (scope === "works") {
+        // The other works of the repository, to see how they did something.
+        for (const other of await services.works.list({ repo: work.repo })) {
+          if (other.id === work.id) continue;
+          let dir;
+          try {
+            dir = services.works.describe(work.repo, other.id).dir;
+          } catch {
+            continue;
+          }
+          await folder(scope, dir, (file) => `作品 ${other.id}「${other.title}」/${file}`);
+        }
+      }
       if (scope === "materials" && services.materials) await folder(scope, await services.materials.dir(work.repo), (file) => `materials/${file}`);
       if (scope === "experience" && services.experience) await folder(scope, await services.experience.dir(work.repo), (file) => `经验库 ${file}`);
       if (scope === "reviews" && services.reviews) {
@@ -126,7 +139,7 @@ export function registerSearchTools(registry) {
     name: "search",
     title: "搜索",
     description:
-      "搜索文字或正则，返回 文件:行号 和上下文（长行只显示匹配附近）。scope：work 作品、used 作品用到的素材库文件（按锁定的版本，即实际运行的代码）、materials 素材库当前版本、experience 经验库、reviews 各作品的复盘资料（数据和复盘文档）、guide 制作指南、engine 引擎源码，可以组合。几个关键词一起搜用 patterns（任一匹配）；wholeWord 整词；multiline 跨行匹配（正则里用 \\n）；glob / exclude 选文件。找定义、调用处、用法、相关经验时用它，不用逐个读文件。还没有作品时用 repo 指定作品库（scope 不含 work、used）；只搜 guide、engine 时两者都不用。",
+      "搜索文字或正则，返回 文件:行号 和上下文（长行只显示匹配附近）。scope：work 作品、works 同一作品库的其他作品（参考它们的写法，只读）、used 作品用到的素材库文件（按锁定的版本，即实际运行的代码）、materials 素材库当前版本、experience 经验库、reviews 各作品的复盘资料（数据和复盘文档）、guide 制作指南、engine 引擎源码，可以组合。几个关键词一起搜用 patterns（任一匹配）；wholeWord 整词；multiline 跨行匹配（正则里用 \\n）；glob / exclude 选文件。找定义、调用处、用法、相关经验时用它，不用逐个读文件。还没有作品时用 repo 指定作品库（scope 不含 work、used）；只搜 guide、engine 时两者都不用。",
     readOnly: true,
     input: {
       work: workArg,
@@ -168,6 +181,8 @@ export function registerSearchTools(registry) {
       const shared = scope.every((item) => item === "guide" || item === "engine");
       const work = shared && !args.work && !args.repo && !ctx.scope.work ? { repo: null, dir: null } : await ctx.place();
       if (!work.dir && scope.some((item) => item === "work" || item === "used")) throw problem(400, "scope work / used 搜的是作品：需要 work（只搜素材库、经验库时用 repo 指定作品库，scope 不含 work）");
+      if (!work.repo && scope.includes("works")) throw problem(400, "scope works 搜的是作品库里的作品：需要 work 或 repo");
+      if (scope.includes("works") && ctx.scope.work && !ctx.scope.agent) throw problem(403, "这个会话只能操作当前作品", "FORBIDDEN");
       const skipped = { large: 0, binary: 0 };
       const files = [];
       let total = 0;

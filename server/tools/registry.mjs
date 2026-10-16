@@ -50,14 +50,34 @@ export class ToolRegistry {
     const ctx = {
       services: this.services,
       scope,
-      /** Resolve the target work: explicit `work` argument, else the session's work. */
+      /**
+       * Resolve the target work: explicit `work` argument, else the session's work. The studio's
+       * own AI, bound to a work, reads the other works of its repository too and changes only its
+       * own; a grant to one work (OAuth) stays on that work.
+       */
       work: async (value = parsed.data.work) => {
         let ref = value || (scope.work ? (scope.repo ? `${scope.repo}/${scope.work}` : scope.work) : "");
         if (!ref) throw problem(400, "需要指定作品：先调用 works_list，再在 work 参数中传入作品 id", "WORK_REQUIRED");
         const [repo, id] = ref.includes("/") ? ref.split("/") : [undefined, ref];
-        if (scope.work && (id !== scope.work || (repo && scope.repo && repo !== scope.repo))) throw problem(403, "这个会话只能操作当前作品", "FORBIDDEN");
+        if (scope.work && (id !== scope.work || (repo && scope.repo && repo !== scope.repo))) {
+          if (scope.agent && !tool.readOnly)
+            throw problem(403, "这个会话只能修改当前作品；同一作品库的其他作品只能读取（work_read、preview_frames、work_context 等读取类工具填 work）", "FORBIDDEN");
+          return ctx.otherWork(ref);
+        }
         // Changing tools may not touch a published (view-only) work, unless they write elsewhere (exports, experience).
         return tool.readOnly || tool.published ? this.services.openWork(id, repo) : this.services.openEditable(id, repo);
+      },
+      /**
+       * Another work to read from (copy an asset of, compare with): for the studio's own AI bound
+       * to a work, one of the same repository; a grant to one work has no other.
+       */
+      otherWork: async (ref) => {
+        const [repo, id] = ref.includes("/") ? ref.split("/") : [undefined, ref];
+        if (scope.work && (id !== scope.work || (repo && scope.repo && repo !== scope.repo))) {
+          if (!scope.agent) throw problem(403, "这个会话只能操作当前作品", "FORBIDDEN");
+          if (repo && scope.repo && repo !== scope.repo) throw problem(403, `只能读取同一作品库（${scope.repo}）里的作品`, "FORBIDDEN");
+        }
+        return this.services.openWork(id, repo ?? scope.repo);
       },
       /**
        * The work, or — for tools that only look at material libraries — just a repository
@@ -185,7 +205,7 @@ export const workArg = z
   .string()
   .regex(/^([a-z0-9-]+\/)?[A-Za-z0-9][A-Za-z0-9._-]*$/)
   .optional()
-  .describe('作品 id（或 "作品库/id"）。在作品内的 AI 会话中可以省略。');
+  .describe('作品 id（或 "作品库/id"）。作品里的 AI 会话省略就是当前作品；读取类工具也可以填同一作品库的其他作品（只读，用来参考）');
 
 /**
  * JSON result. Without a custom text the data is also sent as MCP structuredContent;

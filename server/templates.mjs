@@ -178,7 +178,7 @@ export function platformInstructions() {
 - 作品文件全部在 \`projects/<名称>/\`（只有一个），只修改这里。
 - \`src/\`、\`node_modules/\`、\`docs/\` 是指向 FRAME 引擎的只读链接：可以阅读，不要修改。
 - \`projects/<名称>/AGENTS.md\` 是这个作品自己的需求和约定，内容在下面「本作品的需求与约定」一节。
-- 不要读取或参考上级目录中的其他作品；需要接口示例时用 \`frame_guide\`。
+- 同一作品库的其他作品可以参考（只读）：\`works_list\` 找作品，\`work_read\` 读它们的文件（故事、说明、场景代码、时间轴），\`search\` 的 scope works 在它们的代码里搜，\`preview_frames\`、\`work_context\` 等读取工具填 work 看它们的画面和结构，\`asset_import\` 的 fromWork 把它们的素材复制过来。用这些工具，不要直接读写上级目录；只能修改当前作品。接口示例用 \`frame_guide\`。
 
 ## 作品结构
 - \`project.ts\`：静态元数据（标题、尺寸 composition、时长 duration、fps、字幕、音轨、加载入口）。只能写字面量。

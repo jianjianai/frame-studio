@@ -2,9 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { workArg, asJson } from "./registry.mjs";
-import { tree } from "../files.mjs";
+import { tree, isText } from "../files.mjs";
 import { checkWork } from "../checks.mjs";
-import { problem, confined } from "../util.mjs";
+import { problem, confined, mediaKind } from "../util.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./file-ops.mjs";
 import { probe } from "../media.mjs";
 import { projectAudioTracks } from "../../src/engine/types.ts";
@@ -156,25 +156,32 @@ export function registerWorkTools(registry) {
   registry.add({
     name: "works_list",
     title: "列出作品",
-    description: "列出所有作品库中的作品（id、标题、时长、尺寸、更新时间）。",
+    description:
+      "列出作品库中的作品（id、标题、时长、尺寸、更新时间）。作品里的 AI 会话只列出同一作品库的作品：找到要参考的作品后，用 work_read 读它的文件、search 的 scope works 搜它的代码、preview_frames 等读取工具填 work 看它的画面。",
     readOnly: true,
     input: { repo: z.string().optional().describe("只列出这个作品库"), query: z.string().optional().describe("按标题过滤") },
-    async run({ repo, query }) {
-      let list = await works.list({ repo });
+    async run({ repo, query }, ctx) {
+      // The studio's own AI, bound to a work, sees the works of its repository; a grant to one
+      // work (OAuth), that work.
+      const bound = ctx.scope.work;
+      let list = await works.list({ repo: bound ? ctx.scope.repo : repo });
+      if (bound && !ctx.scope.agent) list = list.filter((item) => item.id === bound);
       if (query) list = list.filter((item) => item.title.toLowerCase().includes(query.toLowerCase()));
-      return asJson(
-        list.map(({ id, repo, title, duration, width, height, fps, updatedAt, location }) => ({
-          id,
-          repo,
-          title,
-          duration,
-          width,
-          height,
-          fps,
-          updatedAt,
-          location,
-        })),
-      );
+      const rows = list.map(({ id, repo, title, duration, width, height, fps, updatedAt, location }) => ({
+        id,
+        repo,
+        title,
+        duration,
+        width,
+        height,
+        fps,
+        updatedAt,
+        location,
+        ...(bound && id === ctx.scope.work ? { current: true } : {}),
+      }));
+      if (!bound) return asJson(rows);
+      const lines = rows.map((item) => `- ${item.id}「${item.title}」${item.current ? "（当前作品）" : ""}：${item.duration} 秒，${item.width}×${item.height}，更新于 ${String(item.updatedAt).slice(0, 10)}`);
+      return asJson(rows, `作品库 ${ctx.scope.repo} 的作品 ${rows.length} 个：\n${lines.join("\n") || "（没有）"}`);
     },
   });
 
@@ -392,6 +399,75 @@ export function registerWorkTools(registry) {
       const work = await ctx.work();
       const base = dir ? confined(work.dir, dir) : work.dir;
       return asJson(tree(base).map((entry) => ({ path: (dir ? dir.replace(/\/$/, "") + "/" : "") + entry.path, type: entry.type, size: entry.size })));
+    },
+  });
+
+  registry.add({
+    name: "work_read",
+    title: "读取作品文件",
+    description:
+      "读取作品的文件，主要用来参考同一作品库里的其他作品：它们的故事和说明（故事.md、AGENTS.md）、场景代码、时间轴（visual.json、audio.json）、素材。work 填作品 id（works_list 查），只读，不会改动它。不给 paths 时列出作品的全部文件；paths 是作品文件夹里的文件或文件夹（例如 故事.md、scenes/act1.ts、public），一次最多 20 个，文件夹列出其中的文件。文本返回内容（长文件用 startLine / lineCount 分段读）；图片、音频、视频等只给类型和大小（看样子用 asset_view 填 work，复制到本作品用 asset_import 的 fromWork）。在代码里找东西用 search 的 scope works。",
+    readOnly: true,
+    input: {
+      work: workArg,
+      paths: z.array(relativePath).max(20).optional().describe("文件或文件夹，相对作品文件夹 projects/<名称>/"),
+      startLine: z.number().int().min(1).optional().describe("只读一个文件时：从第几行开始"),
+      lineCount: z.number().int().min(1).max(5000).optional().describe("只读一个文件时：读几行"),
+    },
+    async run({ paths, startLine, lineCount }, ctx) {
+      const work = await ctx.work();
+      const meta = services.works.meta(work);
+      const head = `作品 ${work.id}「${meta.ok ? meta.meta.title : work.slug}」${ctx.scope.work && work.id !== ctx.scope.work ? "（另一个作品，只读）" : ""}，文件在 projects/${work.slug}/`;
+      const listing = (base, prefix = "") =>
+        tree(base).map((entry) => `${prefix}${entry.path}${entry.type === "dir" ? "/" : `  ${entry.size < 1024 ? entry.size + " B" : entry.size < 1048576 ? Math.round(entry.size / 1024) + " KB" : (entry.size / 1048576).toFixed(1) + " MB"}`}`);
+      if (!paths?.length) {
+        const files = listing(work.dir);
+        return { data: { work: work.id, files: tree(work.dir).map(({ path: file, type, size }) => ({ path: file, type, size })) }, text: `${head}\n${files.join("\n") || "（没有文件）"}` };
+      }
+      if ((startLine || lineCount) && paths.length > 1) throw problem(400, "startLine / lineCount 只用于读一个文件");
+      const parts = [];
+      let budget = 512 * 1024; // text returned in one call
+      for (const relative of paths) {
+        const file = confined(work.dir, relative);
+        const stat = fs.statSync(file, { throwIfNoEntry: false });
+        if (!stat) {
+          parts.push(`=== ${relative}\n（不存在）`);
+          continue;
+        }
+        if (stat.isDirectory()) {
+          parts.push(`=== ${relative}/\n${listing(file, relative.replace(/\/$/, "") + "/").join("\n") || "（空文件夹）"}`);
+          continue;
+        }
+        // Unknown kinds (.lrc, .txt…) are read as text unless they turn out binary.
+        const kind = isText(relative) ? null : mediaKind(relative);
+        if (kind && kind !== "file") {
+          const info = await probe(file).catch(() => ({}));
+          const facts = [info.kind ?? kind, info.width && info.height ? `${info.width}×${info.height}` : "", info.duration ? `${Math.round(info.duration * 100) / 100} 秒` : "", `${Math.round(stat.size / 1024)} KB`].filter(Boolean);
+          const address = relative.startsWith("public/") ? `，代码里的地址 films/${work.slug}/${relative.slice("public/".length)}` : "";
+          parts.push(`=== ${relative}\n（${facts.join("，")}${address}）`);
+          continue;
+        }
+        const buffer = fs.readFileSync(file);
+        if (buffer.subarray(0, 8000).includes(0)) {
+          parts.push(`=== ${relative}\n（二进制文件，${Math.round(stat.size / 1024)} KB）`);
+          continue;
+        }
+        const lines = buffer.toString("utf8").split("\n");
+        if (lines.length > 1 && lines.at(-1) === "") lines.pop(); // the final newline ends the last line
+        const from = Math.min((startLine || 1) - 1, lines.length);
+        const shown = startLine || lineCount ? lines.slice(from, from + (lineCount || lines.length)) : lines;
+        let text = shown.join("\n");
+        const range = startLine || lineCount ? `（第 ${from + 1}–${from + shown.length} 行，共 ${lines.length} 行）` : `（${lines.length} 行）`;
+        if (Buffer.byteLength(text) > budget) {
+          text = text.slice(0, Math.max(0, Math.floor(budget / 3)));
+          parts.push(`=== ${relative} ${range}\n${text}\n…（太长，后面没有返回：用 startLine / lineCount 分段读）`);
+          budget = 0;
+          continue;
+        }
+        budget -= Buffer.byteLength(text);
+        parts.push(`=== ${relative} ${range}\n${text}`);
+      }
+      return { data: { work: work.id, paths }, text: `${head}\n\n${parts.join("\n\n")}` };
     },
   });
 

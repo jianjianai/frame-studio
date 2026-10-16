@@ -22,7 +22,7 @@ work_context 的 notes 是作品的需求与约定，experiences 是关联的经
 /** Built-in agents have all of this, and more, in their session brief (the work-root AGENTS.md). */
 const AGENT_INSTRUCTIONS = "FRAME Studio 视频作品工具。用法见作品根目录 AGENTS.md（会话说明）；作品文件用你自己的读写工具。";
 /** Built-in agents edit the work's files with their own tools. */
-const AGENT_HIDDEN = new Set(["works_list", "work_create", "work_copy", "files_list", "files_batch"]);
+const AGENT_HIDDEN = new Set(["work_create", "work_copy", "files_list", "files_batch"]);
 
 /**
  * The chat session behind an MCP request (from the agent's internal token). Kept out of
@@ -58,13 +58,16 @@ export function createMcpServer(registry, scope = {}, { confirm } = {}) {
   const server = new McpServer({ name: "frame", version: appVersion }, { instructions: scope.agent ? AGENT_INSTRUCTIONS : MCP_INSTRUCTIONS });
   for (const tool of registry.list()) {
     if (scope.readOnly && !tool.readOnly) continue;
-    if (scope.work && ["work_create", "work_copy", "works_list"].includes(tool.name)) continue;
+    if (scope.work && ["work_create", "work_copy"].includes(tool.name)) continue;
+    // A grant to one work (OAuth) sees that work only.
+    if (scope.work && !scope.agent && tool.name === "works_list") continue;
     if (scope.agent && AGENT_HIDDEN.has(tool.name)) continue;
-    // A session bound to one work never names a work: the parameter is hidden (fewer tokens,
-    // nothing to get wrong) and ignored if a client sends it anyway.
+    // A session bound to one work changes only that work: its tools do not name a work (the
+    // parameter is hidden, and ignored if a client sends it anyway). The studio's own AI keeps
+    // it on reading tools, to look at the other works of the same repository.
     const shape = tool.publicSchema.shape ?? {};
-    const inputSchema =
-      scope.work && "work" in shape ? z.looseObject(Object.fromEntries(Object.entries(shape).filter(([key]) => key !== "work"))) : tool.publicSchema;
+    const bound = scope.work && (!scope.agent || !tool.readOnly);
+    const inputSchema = bound && "work" in shape ? z.looseObject(Object.fromEntries(Object.entries(shape).filter(([key]) => key !== "work"))) : tool.publicSchema;
     server.registerTool(
       tool.name,
       {
@@ -86,7 +89,7 @@ export function createMcpServer(registry, scope = {}, { confirm } = {}) {
         try {
           const session = requestSession.getStore();
           const { work: _named, ...rest } = args ?? {};
-          const input = scope.work ? rest : args;
+          const input = bound ? rest : args;
           if (session && confirm && !tool.readOnly && !(await confirm(session, tool, input, ctx?.mcpReq?.signal)))
             return { isError: true, content: [{ type: "text", text: DECLINED }] };
           return toMcpResult(await registry.call(tool.name, input, session ? { ...scope, session } : scope));

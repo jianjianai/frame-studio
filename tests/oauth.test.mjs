@@ -112,6 +112,8 @@ describe("MCP OAuth", () => {
     expect(names).toContain("work_context");
     expect(names).not.toContain("files_batch");
     expect(names).not.toContain("works_list");
+    // Unlike the studio's own AI, a grant to one work does not name other works.
+    expect(listed.tools.some((tool) => "work" in (tool.inputSchema.properties ?? {}))).toBe(false);
     const context = await mcpResult(await mcp(tokens.access_token, "tools/call", { name: "work_context", arguments: {} }));
     expect(context.content[0].text).toContain(work.id);
   });

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { ToolRegistry } from "../server/tools/registry.mjs";
 import { createMcpServer, toMcpResult } from "../server/mcp.mjs";
 
-const registry = new ToolRegistry({ openWork: async (id, repo) => ({ id, repo: repo ?? "local" }) });
+const registry = new ToolRegistry({ openWork: async (id, repo) => ({ id, repo: repo ?? "local" }), openEditable: async (id, repo) => ({ id, repo: repo ?? "local", editable: true }) });
 registry.add({
   name: "read",
   title: "",
@@ -13,6 +13,7 @@ registry.add({
   run: async ({ n }, ctx) => ({ data: { n, work: await ctx.work() } }),
 });
 registry.add({ name: "write", title: "", description: "", input: {}, run: async () => ({ data: { ok: true } }) });
+registry.add({ name: "change", title: "", description: "", input: { work: z.string().optional() }, run: async (_args, ctx) => ({ data: { work: await ctx.work() } }) });
 const doc = z.strictObject({ id: z.string(), size: z.number().int() });
 registry.add({
   name: "edit",
@@ -31,11 +32,36 @@ describe("tool registry", () => {
     await expect(registry.call("read", { n: 0, work: "a1" })).rejects.toThrow(/参数无效：n/);
     await expect(registry.call("read", { n: 1, extra: true, work: "a1" })).rejects.toThrow(/参数无效/);
   });
-  it("binds agent sessions to their own work", async () => {
-    const result = await registry.call("read", { n: 1 }, { work: "w1", repo: "local" });
+  it("binds agent sessions to their own work; they read the other works of their repository", async () => {
+    const agent = { work: "w1", repo: "local", agent: true };
+    const result = await registry.call("read", { n: 1 }, agent);
     expect(result.data.work).toEqual({ id: "w1", repo: "local" });
-    await expect(registry.call("read", { n: 1, work: "other" }, { work: "w1", repo: "local" })).rejects.toThrow(/当前作品/);
+    // Reading tools may look at another work of the same repository, not at another repository's.
+    expect((await registry.call("read", { n: 1, work: "other" }, agent)).data.work).toEqual({ id: "other", repo: "local" });
+    await expect(registry.call("read", { n: 1, work: "else/other" }, agent)).rejects.toThrow(/同一作品库（local）/);
+    // Changing tools stay with the session's own work.
+    expect((await registry.call("change", {}, agent)).data.work).toEqual({ id: "w1", repo: "local", editable: true });
+    await expect(registry.call("change", { work: "other" }, agent)).rejects.toThrow(/只能修改当前作品/);
     await expect(registry.call("read", { n: 1 })).rejects.toThrow(/需要指定作品/);
+  });
+  it("keeps a grant to one work (OAuth) on that work", async () => {
+    const grant = { work: "w1", repo: "local" };
+    expect((await registry.call("read", { n: 1 }, grant)).data.work).toEqual({ id: "w1", repo: "local" });
+    await expect(registry.call("read", { n: 1, work: "other" }, grant)).rejects.toThrow(/只能操作当前作品/);
+    await expect(registry.call("change", { work: "other" }, grant)).rejects.toThrow(/只能操作当前作品/);
+  });
+  it("shows the work parameter to a bound session's reading tools only", () => {
+    const tools = new ToolRegistry({});
+    tools.add({ name: "look", title: "", description: "", readOnly: true, input: { work: z.string().optional() }, run: async () => ({ data: 1 }) });
+    tools.add({ name: "cut", title: "", description: "", input: { work: z.string().optional() }, run: async () => ({ data: 1 }) });
+    const shape = (server, name) => Object.keys(server._registeredTools[name].inputSchema.shape ?? server._registeredTools[name].inputSchema._zod?.def?.shape ?? {});
+    const agent = createMcpServer(tools, { work: "ab12", repo: "local", agent: true });
+    expect(shape(agent, "look")).toContain("work");
+    expect(shape(agent, "cut")).not.toContain("work");
+    // A grant to one work names none.
+    const grant = createMcpServer(tools, { work: "ab12", repo: "local" });
+    expect(shape(grant, "look")).not.toContain("work");
+    expect(shape(grant, "cut")).not.toContain("work");
   });
   it("hides write tools in read-only scope", async () => {
     await expect(registry.call("write", {}, { readOnly: true })).rejects.toThrow(/只读/);
