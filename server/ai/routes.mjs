@@ -10,6 +10,7 @@ export function aiPlugin(services) {
   const ai = (services.ai = new AiManager(services));
   const logins = new Map();
   services.closers.push(() => ai.close());
+  services.starters.push(() => ai.resumeInterrupted());
 
   // ---- profiles, accounts ---------------------------------------------------
   router.get("/api/ai/profiles", () => ({

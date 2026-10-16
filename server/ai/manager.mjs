@@ -22,6 +22,9 @@ const HEARTBEAT_MS = 3000;
 const GOAL_POLL_MS = 1000;
 // What "continue" says to the AI for the user.
 const GOAL_CONTINUE = "继续朝目标做";
+// A turn the studio's shutdown cut off (an update) goes on after the restart, if it comes soon.
+const RESUME_WITHIN_MS = 30 * 60 * 1000;
+const RESUME_TEXT = "FRAME 刚才更新重启，打断了你上一轮的工作（这条消息是自动发的）。请从中断的地方接着做。";
 /** FRAME permission levels mapped to each agent's own session modes. */
 export const PERMISSION_MODES = {
   ask: { claude: "default", codex: "read-only" },
@@ -316,7 +319,7 @@ export class AiManager {
       if (session.process !== process) continue;
       session.process = null;
       session.attached = false;
-      if (session.meta.status === "running") {
+      if (session.meta.status === "running" && !this.closing) {
         this.append(session, { kind: "error", message: `AI 进程意外退出（${code}）：${process.stderr.trim().slice(-400)}` });
         session.meta.status = "idle";
         this.publish(session);
@@ -686,7 +689,8 @@ export class AiManager {
       const cost = session.turnCost && this.pricedByClaude(session) ? { cost: session.turnCost } : {};
       this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null, ...cost });
     } catch (error) {
-      this.append(session, { kind: "error", message: authHint(error, session.process).message });
+      // The studio shutting down ended it: said so already (close).
+      if (!this.closing) this.append(session, { kind: "error", message: authHint(error, session.process).message });
     } finally {
       if (goalPoll) {
         clearInterval(goalPoll);
@@ -1262,11 +1266,34 @@ export class AiManager {
     }
   }
 
+  /**
+   * The studio is shutting down (an update replaces it): turns still running are cut off. They
+   * are marked, and go on by themselves after the restart (resumeInterrupted). A crash marks
+   * nothing, so a turn that brings the studio down is not sent again and again.
+   */
   close() {
+    this.closing = true;
     clearInterval(this.timer);
     clearInterval(this.pulse);
+    for (const session of this.sessions.values()) {
+      if (session.meta.status === "idle") continue;
+      session.meta.interrupted = Date.now();
+      this.append(session, { kind: "notice", message: "FRAME 正在更新重启，这一轮被打断了；重启后 AI 会自动接着做" });
+      this.saveMeta(session);
+    }
     for (const entry of this.processes.values()) entry.process.kill();
     this.processes.clear();
+  }
+  /** After a restart: the conversations whose turn the shutdown cut off go on, once. */
+  resumeInterrupted() {
+    for (const session of this.sessions.values()) {
+      const at = session.meta.interrupted;
+      if (!at) continue;
+      delete session.meta.interrupted;
+      this.saveMeta(session);
+      if (Date.now() - at > RESUME_WITHIN_MS) continue;
+      this.prompt(session.meta.id, { text: RESUME_TEXT }).catch((error) => console.warn(`resuming conversation ${session.meta.id} failed:`, error.message));
+    }
   }
 }
 

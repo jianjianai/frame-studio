@@ -37,7 +37,7 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
   const preview = await createPreview({ config, httpServer: server, events });
   const watcher = new WorkWatcher({ events, preview });
   repos.beforeRemove.push((id) => watcher.unwatchRepo(id));
-  const services = { config, events, settings, auth, github, repos, works, preview, watcher, router, closers: [] };
+  const services = { config, events, settings, auth, github, repos, works, preview, watcher, router, closers: [], starters: [] };
 
   /** Open a work for editing and start watching it. Used by every route/tool that touches a work. */
   services.openWork = async (id, repo) => {
@@ -273,6 +273,8 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
       // is not a secure context in Chromium, which would hide WebCodecs from the render page.
       const host = { "0.0.0.0": "127.0.0.1", "::": "::1", "": "127.0.0.1" }[config.host] ?? config.host;
       services.baseUrl = `http://${host.includes(":") ? `[${host}]` : host}:${port}`;
+      // What needs the studio reachable (agents get its address for their tools).
+      for (const start of services.starters) start();
       return services.baseUrl;
     },
     async close() {
