@@ -19,11 +19,14 @@ import {
   Columns2,
   Clapperboard,
   X,
+  FileVideo,
+  Upload,
 } from "lucide-react";
-import { api, formatTime, sampleName, workPath } from "../lib/api";
+import { api, formatBytes, formatTime, sampleName, workPath } from "../lib/api";
 import { coverFromFrame } from "../lib/covers";
 import type { FileEntry, WorkInfo } from "../lib/types";
-import { useContextMenu, usePersistent, useToast } from "../lib/ui";
+import { useContextMenu, usePersistent, useToast, type MenuItem } from "../lib/ui";
+import { uploadBlobs } from "../views/upload";
 import { Observable, StageController, useObservable, useWorkbench } from "./store";
 import { RecordButton } from "./RecordButton";
 
@@ -43,7 +46,10 @@ export function sampleStageSrc(work: WorkInfo, file: string) {
   return `/preview/stage.html?${params}`;
 }
 
-/** The sample compared beside the film (a file of the work), or null. */
+/** Videos the browser plays: what can be compared beside the film besides samples. */
+export const isVideo = (path: string) => /\.(mp4|m4v|webm|mov)$/i.test(path);
+
+/** The sample compared beside the film (a sample module or a video of the work), or null. */
 export const compareTarget = new Observable<string | null>(null);
 const compareKey = (work: WorkInfo) => `frame:compare:${work.repo}/${work.id}`;
 /** Compare a sample beside the film, or stop (null); remembered for the work in this browser. */
@@ -54,10 +60,14 @@ export function setCompare(work: WorkInfo, path: string | null) {
     else localStorage.removeItem(compareKey(work));
   } catch {}
 }
-/** The work's samples (modules that declare `sample`), as the explorer knows them. */
-async function samplesOf(work: WorkInfo) {
+/** What can be compared: the work's samples (modules that declare `sample`), and its videos, those in sheets/ first. */
+async function comparablesOf(work: WorkInfo) {
   const entries = await api<FileEntry[]>(`${workPath(work.repo, work.id)}/tree`).catch(() => [] as FileEntry[]);
-  return entries.filter((entry) => entry.scene === "sample");
+  const videos = entries.filter((entry) => entry.type === "file" && isVideo(entry.path));
+  return {
+    samples: entries.filter((entry) => entry.scene === "sample"),
+    videos: [...videos.filter((entry) => entry.path.startsWith("sheets/")), ...videos.filter((entry) => !entry.path.startsWith("sheets/"))],
+  };
 }
 
 /** The film on the workbench's stage: what the timeline, the AI's captures and the shortcuts work with. */
@@ -97,21 +107,49 @@ export function PreviewPane() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [work.repo, work.id]);
   const [openMenu, menu] = useContextMenu();
-  /** Pick a sample to compare: one is taken at once, more are offered in a menu. */
+  /** Upload a video of the user's own into sheets/ and compare it. */
+  const uploadVideo = () => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = "video/*";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      toast(`正在上传 ${file.name}（${formatBytes(file.size)}）…`);
+      try {
+        const [saved] = await uploadBlobs(work, [file], "sheets");
+        setCompare(work, saved.path);
+        toast(`已上传到 ${saved.path}，放在成片旁边对比`, "ok");
+      } catch (error) {
+        toast((error as Error).message, "error");
+      }
+    };
+    input.click();
+  };
+  /** Pick what to compare: a sample or a video of the work, or upload a video. */
   const pickSample = async (event: React.MouseEvent) => {
     const at = { clientX: event.clientX, clientY: event.clientY };
-    const samples = await samplesOf(work);
-    if (!samples.length) return toast("作品里还没有样片：在 sheets/ 里写一个导出 createScene 和 sample 的模块（可以让 AI 做个样片）");
-    if (samples.length === 1 && !compare) return setCompare(work, samples[0].path);
-    openMenu(
-      at,
-      samples.map((entry) => ({
-        label: `${sampleName(entry.path)}${entry.duration ? `（${formatTime(entry.duration, false)}）` : ""}`,
-        icon: <Clapperboard size={14} />,
-        disabled: entry.path === compare,
-        onClick: () => setCompare(work, entry.path),
-      })),
-    );
+    const { samples, videos } = await comparablesOf(work);
+    const choices = [...samples, ...videos];
+    if (!choices.length && readOnly) return toast("作品里还没有样片或视频可以对比");
+    // Only one thing it could be: no menu (an editable work offers uploading as well).
+    if (choices.length === 1 && readOnly && !compare) return setCompare(work, choices[0].path);
+    const item = (entry: FileEntry, video: boolean): MenuItem => ({
+      label: `${video ? `视频：${entry.path}` : sampleName(entry.path)}${entry.duration ? `（${formatTime(entry.duration, false)}）` : ""}`,
+      icon: video ? <FileVideo size={14} /> : <Clapperboard size={14} />,
+      disabled: entry.path === compare,
+      onClick: () => setCompare(work, entry.path),
+    });
+    openMenu(at, [
+      ...samples.map((entry) => item(entry, false)),
+      ...videos.map((entry) => item(entry, true)),
+      ...(readOnly
+        ? []
+        : ([
+            ...(choices.length ? ["separator"] : []),
+            { label: "上传视频…（放进 sheets/，不进时间轴）", icon: <Upload size={14} />, onClick: uploadVideo },
+          ] as MenuItem[])),
+    ]);
   };
   return (
     <div className={`preview-pair ${compare ? "comparing" : ""}`}>
@@ -133,10 +171,29 @@ export function PreviewPane() {
 }
 
 /**
- * A sample beside the film. It plays and pauses with the film (and loops, being short); its
- * own controls are only where it is and how loud.
+ * A sample or a video beside the film. It plays and pauses with the film (and loops, being
+ * short); its own controls are only where it is and how loud.
  */
 function ComparePane({ file, onPick, onClose }: { file: string; onPick: (event: React.MouseEvent) => void; onClose: () => void }) {
+  const video = isVideo(file);
+  return (
+    <div className="compare-pane">
+      <div className="compare-head">
+        {video ? <FileVideo size={13} /> : <Clapperboard size={13} />}
+        <button className="compare-pick ellipsis" title={`对比的${video ? "视频" : "样片"}：${file}（点击换一个）`} onClick={onPick}>
+          对比：{video ? file.split("/").pop() : sampleName(file)}
+        </button>
+        <span className="grow" />
+        <button className="icon-btn" title="关闭对比" onClick={onClose}>
+          <X size={14} />
+        </button>
+      </div>
+      {video ? <CompareVideo file={file} /> : <CompareSample file={file} />}
+    </div>
+  );
+}
+
+function CompareSample({ file }: { file: string }) {
   const { work, stage: film } = useWorkbench();
   const stage = useMemo(() => new StageController(), []);
   useEffect(() => {
@@ -155,19 +212,130 @@ function ComparePane({ file, onPick, onClose }: { file: string; onPick: (event: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [work.id, work.repo, file],
   );
+  return <StagePane stage={stage} src={src} title={`对比样片 ${file}`} scene={file} compact />;
+}
+
+/**
+ * A video of the work beside the film (one the user uploaded, say): like a sample, it plays and
+ * pauses with the film and loops, with only its own scrubber and volume.
+ */
+function CompareVideo({ file }: { file: string }) {
+  const { work, stage: film } = useWorkbench();
+  const ref = useRef<HTMLVideoElement>(null);
+  const [time, setTime] = useState(0);
+  const [duration, setDuration] = useState(0);
+  const [volume, setVolume] = useState(1);
+  const [failed, setFailed] = useState("");
+  // The browser may refuse sound that did not start from a click on the page itself.
+  const [silenced, setSilenced] = useState(false);
+  const src = `${workPath(work.repo, work.id)}/raw?path=${encodeURIComponent(file)}`;
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    const follow = (playing: boolean) => {
+      if (!playing) return video.pause();
+      video.play().catch((error: Error) => {
+        if (error.name !== "NotAllowedError") return;
+        video.muted = true;
+        setSilenced(true);
+        void video.play().catch(() => {});
+      });
+    };
+    let playing = film.playback.get().playing;
+    if (playing) follow(true);
+    const stop = film.playback.subscribe(() => {
+      const now = film.playback.get().playing;
+      if (now === playing) return;
+      playing = now;
+      follow(now);
+    });
+    // The bar moves smoothly (timeupdate comes only a few times a second).
+    let frame = requestAnimationFrame(function tick() {
+      setTime(video.currentTime);
+      frame = requestAnimationFrame(tick);
+    });
+    return () => {
+      stop();
+      cancelAnimationFrame(frame);
+      video.pause();
+    };
+  }, [film, src]);
+  const setLevel = (value: number) => {
+    const video = ref.current;
+    if (!video) return;
+    video.volume = value;
+    video.muted = false;
+    setVolume(value);
+    setSilenced(false);
+  };
   return (
-    <div className="compare-pane">
-      <div className="compare-head">
-        <Clapperboard size={13} />
-        <button className="compare-pick ellipsis" title={`对比的样片：${file}（点击换一个）`} onClick={onPick}>
-          对比：{sampleName(file)}
-        </button>
-        <span className="grow" />
-        <button className="icon-btn" title="关闭对比" onClick={onClose}>
-          <X size={14} />
-        </button>
+    <div className="preview">
+      <div className="preview-stage">
+        <video
+          ref={ref}
+          className="compare-video"
+          src={src}
+          loop
+          playsInline
+          preload="auto"
+          onLoadedMetadata={(event) => setDuration(event.currentTarget.duration)}
+          onError={() => setFailed("浏览器播放不了这个视频（可能是 HEVC 等编码），请转成 MP4（H.264）后再上传")}
+        />
+        {failed && (
+          <div className="preview-overlay error">
+            <AlertTriangle size={22} />
+            <pre>{failed}</pre>
+          </div>
+        )}
       </div>
-      <StagePane stage={stage} src={src} title={`对比样片 ${file}`} scene={file} compact />
+      <div className="transport compact">
+        <div className="scrubber">
+          <input
+            type="range"
+            min={0}
+            max={duration || 1}
+            step={0.001}
+            value={time}
+            disabled={!duration}
+            aria-label="视频位置"
+            style={{ "--progress": `${duration ? (time / duration) * 100 : 0}%` } as React.CSSProperties}
+            onChange={(event) => {
+              const value = Number(event.target.value);
+              if (ref.current) ref.current.currentTime = value;
+              setTime(value);
+            }}
+          />
+        </div>
+        <div className="transport-row">
+          <span className="time mono">
+            {formatTime(time)} <span className="faint">/ {formatTime(duration)}</span>
+          </span>
+          {silenced ? (
+            <button className="btn small" title="浏览器先静音播放了，点一下打开声音" onClick={() => setLevel(volume || 1)}>
+              <VolumeX size={13} /> 打开声音
+            </button>
+          ) : (
+            <span className="faint small-text ellipsis" title="成片播放、暂停时它也一起播放、暂停；播完从头循环">
+              随成片播放、暂停
+            </span>
+          )}
+          <span className="grow" />
+          <div className="compare-volume">
+            <button className="icon-btn" title="静音" onClick={() => setLevel(volume > 0 && !silenced ? 0 : 1)}>
+              {volume > 0 && !silenced ? <Volume2 size={16} /> : <VolumeX size={16} />}
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={silenced ? 0 : volume}
+              aria-label="视频音量"
+              onChange={(event) => setLevel(Number(event.target.value))}
+            />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

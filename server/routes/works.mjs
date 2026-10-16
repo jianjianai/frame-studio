@@ -228,12 +228,16 @@ export function workRoutes(services) {
     movePath((await editable(params)).dir, body.from, body.to);
   });
   router.delete("/api/works/:repo/:id/file", async ({ params, query }) => removePath((await editable(params)).dir, query.path));
-  /** Raw upload: PUT body is the file. `?path=public/x.png&unique=1` picks a free name. */
+  /**
+   * Raw upload: PUT body is the file. `?path=public/x.png&unique=1` picks a free name. sheets/
+   * holds what is not on the timeline, such as videos to compare with the film: kept with the
+   * work but, unlike public/, not downloaded by every browser that plays it.
+   */
   router.post(
     "/api/works/:repo/:id/upload",
     async ({ req, params, query }) => {
       const work = await editable(params);
-      if (!query.path || !/^(public|production)\//.test(query.path)) throw problem(400, "上传文件只能放在 public/ 或 production/");
+      if (!query.path || !/^(public|production|sheets)\//.test(query.path)) throw problem(400, "上传文件只能放在 public/、production/ 或 sheets/");
       const target = query.unique === "1" ? uniquePath(work.dir, query.path) : query.path;
       const saved = await writeStream(work.dir, target, req, { overwrite: query.overwrite === "1" });
       events.emit({ type: "assets", work: work.id, repo: work.repo });

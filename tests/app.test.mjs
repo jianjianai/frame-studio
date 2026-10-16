@@ -205,6 +205,20 @@ describe("studio API (local mode)", () => {
     expect((await server.call(`${base}/download/not-a-token`)).status).toBe(404);
   });
 
+  it("takes videos to compare into sheets/, kept with the work but not in the playback precache", async () => {
+    const work = await server.app.services.works.create({ title: "对比视频" });
+    const base = `/api/works/local/${work.id}`;
+    const upload = (file) => fetch(`${server.base}${base}/upload?path=${encodeURIComponent(file)}&unique=1`, { method: "POST", headers: { "Content-Type": "video/webm" }, body: "webm" });
+    const first = await (await upload("sheets/参考片.webm")).json();
+    const second = await (await upload("sheets/参考片.webm")).json();
+    expect([first.path, second.path]).toEqual(["sheets/参考片.webm", "sheets/参考片-2.webm"]);
+    expect((await upload("scenes/x.webm")).status).toBe(400);
+    const precache = await server.call(`/api/works/local/${work.id}/precache`);
+    expect(JSON.stringify(precache.body ?? {})).not.toContain("参考片");
+    const raw = await fetch(`${server.base}${base}/raw?path=${encodeURIComponent("sheets/参考片.webm")}`, { headers: { Range: "bytes=0-1" } });
+    expect([raw.status, await raw.text()]).toEqual([206, "we"]);
+  });
+
   it("exposes the tool registry", async () => {
     const tools = await server.call("/api/tools");
     expect(tools.body.map((tool) => tool.name)).toEqual(expect.arrayContaining(["work_context", "preview_frames", "speech_synthesize"]));

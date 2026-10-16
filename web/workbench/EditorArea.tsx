@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useImperativeHandle, useMemo, useState, type Ref } from "react";
-import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes, BarChart3, Box, Globe2, Type, Clapperboard, Play, ExternalLink, Download } from "lucide-react";
+import { X, MonitorPlay, FileCode2, FileImage, FileAudio, FileVideo, File as FileIcon, Circle, Sparkles, FileDiff, BookOpen, Pencil, Eye, Shapes, BarChart3, Box, Globe2, Type, Clapperboard, Play, ExternalLink, Download, Columns2 } from "lucide-react";
 import { api, ApiError, formatTime, sampleName, workPath, experiencePath, useServerEvent, materialsPath } from "../lib/api";
 import { reviewsPath } from "../lib/reviews";
 import { RawViewer } from "../reviews/RawViewer";
@@ -7,7 +7,7 @@ import { Markdown } from "../chat/Markdown";
 import { useToast, useConfirm } from "../lib/ui";
 import { useWorkbench, type Tool, type VersionSource } from "./store";
 import { ToolTab, TOOL_TITLES, toolIcon } from "./ToolTab";
-import { PreviewPane } from "./PreviewPane";
+import { PreviewPane, isVideo } from "./PreviewPane";
 import { CodeEditor } from "./CodeEditor";
 import { DiffEditor } from "./DiffEditor";
 import { ResourceViewer } from "./ResourceViewer";
@@ -519,7 +519,7 @@ function TooLarge({ path, message, onPage }: { path: string; message: string; on
 }
 
 function MediaViewer({ path, kind }: { path: string; kind: Tab["kind"] }) {
-  const { work, addToChat } = useWorkbench();
+  const { work, addToChat, compareSample } = useWorkbench();
   const drawn = kind === "model" || kind === "environment" || kind === "font";
   const [version, setVersion] = useState(0);
   const [info, setInfo] = useState("");
@@ -553,6 +553,11 @@ function MediaViewer({ path, kind }: { path: string; kind: Tab["kind"] }) {
       <div className="media-info">
         <span className="faint mono ellipsis">{path}</span>
         {info && <span className="faint">{info}</span>}
+        {kind === "video" && isVideo(path) && (
+          <button className="btn small" title="回到成片预览，把这个视频放在旁边一起播放" onClick={() => compareSample(path)}>
+            <Columns2 size={13} /> 和成片对比
+          </button>
+        )}
         {reference && (
           <button className="btn small" onClick={() => addToChat({ type: "asset", url: reference, path })}>
             <Sparkles size={13} /> 引用到 AI 聊天

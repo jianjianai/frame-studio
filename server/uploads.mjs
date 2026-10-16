@@ -92,7 +92,7 @@ export function uploadsPlugin(services) {
           confined(dir, `${file.library}/${file.path}`);
         } else {
           works.assertEditable(work);
-          if (!/^(public|production)\//.test(file.path)) throw problem(400, `作品里的文件要放在 public/ 或 production/：${file.path}`);
+          if (!/^(public|production|sheets)\//.test(file.path)) throw problem(400, `作品里的文件要放在 public/、production/ 或 sheets/（不进时间轴的样片、对比视频）：${file.path}`);
           confined(work.dir, file.path);
         }
         const token = randomBytes(24).toString("base64url");

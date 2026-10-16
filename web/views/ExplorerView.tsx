@@ -18,12 +18,14 @@ import {
   Clapperboard,
   Play,
   FileCode2,
+  Columns2,
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { fileIcon } from "../workbench/EditorArea";
+import { isVideo } from "../workbench/PreviewPane";
 import { ViewHeader } from "./ViewHeader";
 import { uploadFiles } from "./upload";
 
@@ -50,7 +52,7 @@ export function buildTree(entries: FileEntry[]) {
 }
 
 export function ExplorerView() {
-  const { work, openFile, openSample, addToChat, readOnly } = useWorkbench();
+  const { work, openFile, openSample, compareSample, addToChat, readOnly } = useWorkbench();
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [open, setOpen] = useState<Set<string>>(new Set(["scenes"]));
   // Picked rows, like VS Code: a click picks one, Ctrl/⌘ adds or drops one, Shift picks a run.
@@ -179,6 +181,10 @@ export function ExplorerView() {
         : readOnly
           ? []
           : [{ label: "新建文件", icon: <FilePlus size={14} />, onClick: () => newFile(node.path) }]),
+      // A sample or a video of the work (one the user uploaded, say) beside the film.
+      ...(node.scene === "sample" || isVideo(node.path)
+        ? [{ label: "和成片对比", icon: <Columns2 size={14} />, onClick: () => compareSample(node.path) }]
+        : []),
       { label: node.type === "file" ? "导出（下载）" : "导出为 zip", icon: <Download size={14} />, onClick: () => exportPaths([node.path]) },
       // Touch has no Ctrl or Shift: a long press adds the row to the picks.
       ...(selected.size && !selected.has(node.path)
