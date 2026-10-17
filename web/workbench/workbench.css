@@ -2439,3 +2439,136 @@ a.btn.disabled {
     right: 0;
   }
 }
+
+/* ---- the logged-in browser (BrowserTab) ---- */
+.browser-tab {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+}
+.browser-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.browser-tabs-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 220px;
+  flex: 0 1 auto;
+  padding: 4px 4px 4px 10px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+  cursor: pointer;
+}
+.browser-tabs-item:hover {
+  background: var(--bg-hover);
+}
+.browser-tabs-item.active {
+  background: var(--bg);
+  border-color: var(--border);
+  color: var(--fg);
+  margin-bottom: -1px;
+}
+.browser-tabs-item .ellipsis {
+  min-width: 0;
+}
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.browser-address {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  font-size: 13px;
+}
+.browser-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-soft);
+}
+.browser-note.warn {
+  background: var(--warn-soft);
+}
+.browser-stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  overflow: hidden;
+  background: var(--bg-sunken);
+}
+.browser-stage.typing {
+  box-shadow: inset 0 0 0 2px var(--accent-soft);
+}
+.browser-canvas {
+  display: block;
+  background: #fff;
+  /* Touch drags scroll the page in the browser, not the studio. */
+  touch-action: none;
+  cursor: default;
+}
+/* Where the keys go: invisible, at the last click (an input method shows its candidates there). */
+.browser-keys {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  border: 0;
+  opacity: 0;
+  resize: none;
+  font-size: 16px;
+  pointer-events: none;
+  caret-color: transparent;
+}
+.browser-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--fg-muted);
+  font-size: 13px;
+  background: var(--bg-sunken);
+}
+.browser-downloads {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.browser-download {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  min-width: 0;
+}
+.accent-text {
+  color: var(--accent);
+}

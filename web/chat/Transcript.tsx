@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import {
   ChevronRight,
   ChevronDown,
@@ -22,7 +22,10 @@ import {
   Sparkles,
   Clapperboard,
   Info,
+  KeyRound,
 } from "lucide-react";
+import { useWorkbench } from "../workbench/store";
+import { loginDone, showBrowserTab, useBrowserState } from "../lib/browser";
 import { formatTime } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { lineDiff, compactDiff } from "./lineDiff";
@@ -103,6 +106,12 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   experience_write: "整理经验库",
   experience_link: "关联经验库",
   experience_commit: "保存经验库版本",
+  browser_open: "打开网页",
+  browser_read: "读网页",
+  browser_act: "操作网页",
+  browser_download: "从网页下载",
+  browser_login: "请你登录",
+  browser_cookies: "导出登录信息",
 };
 export function toolTitle(title: string) {
   if (title === "Compact conversation") return "压缩上下文";
@@ -267,6 +276,7 @@ function ToolCard({ tool: short, load }: { tool: ToolBlock; load?: LoadTool }) {
       ? input.path ||
         input.file_path ||
         input.command ||
+        input.url ||
         input.pattern ||
         (Array.isArray(input.times) ? (input.times as number[]).map((t) => formatTime(t)).join(", ") : "")
       : "") || (tool.toolKind === "edit" && diffPath ? diffPath.split("/").slice(-2).join("/") : "");
@@ -358,6 +368,46 @@ function Permission({ block, onRespond }: { block: Extract<Block, { kind: "permi
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The AI asks the user to log in to a site (browser_login): open the browser there, and say when
+ * it is done (the AI gets a message). Only while that tab still waits for the login.
+ */
+function LoginRequest({ tool }: { tool: ToolBlock }) {
+  const { openTool } = useWorkbench();
+  const { tabs } = useBrowserState();
+  const input = (tool.rawInput ?? {}) as { url?: string; reason?: string };
+  const text = toolResults(tool)
+    .map((item) => (item.content?.type === "text" ? item.content.text : ""))
+    .join("\n");
+  const tabId = /标签页 (t[0-9a-f]{6})/.exec(text)?.[1];
+  const tab = tabId ? tabs.find((item) => item.id === tabId) : undefined;
+  if (tool.status !== "completed" || !tabId || !tab?.login) return null;
+  return (
+    <div className="permission-card login-card">
+      <div className="row">
+        <KeyRound size={15} className="warn-text" />
+        <strong className="grow">AI 请你登录 {tab.login.host}</strong>
+      </div>
+      <div className="small-text">{tab.login.reason || input.reason}</div>
+      <div className="faint small-text">在 FRAME 浏览器里登录：扫码、密码、验证码都在那里输入，不要发到聊天里。</div>
+      <div className="row wrap">
+        <button
+          className="btn small primary"
+          onClick={() => {
+            showBrowserTab(tabId);
+            openTool("browser");
+          }}
+        >
+          <Globe size={13} /> 打开浏览器
+        </button>
+        <button className="btn small" onClick={() => void loginDone(tabId).catch(() => {})}>
+          登录好了
+        </button>
+      </div>
     </div>
   );
 }
@@ -523,7 +573,14 @@ export function TurnBlocks({
           case "thought":
             return <Thought key={index} text={block.text} />;
           case "tool":
-            return <ToolCard key={block.id} tool={block} load={onLoadTool} />;
+            return /frame__browser_login|frame[.:]browser_login/.test(block.title) ? (
+              <Fragment key={block.id}>
+                <ToolCard tool={block} load={onLoadTool} />
+                <LoginRequest tool={block} />
+              </Fragment>
+            ) : (
+              <ToolCard key={block.id} tool={block} load={onLoadTool} />
+            );
           case "plan":
             return <Plan key={index} entries={block.entries} />;
           case "permission":

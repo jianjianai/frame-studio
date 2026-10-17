@@ -50,7 +50,7 @@ const DECLINED = "用户没有允许这次修改（当前模式下修改需要�
 export function createMcpServer(registry, scope = {}, { confirm } = {}) {
   const server = new McpServer({ name: "frame", version: appVersion }, { instructions: scope.agent ? AGENT_INSTRUCTIONS : MCP_INSTRUCTIONS });
   for (const tool of registry.list()) {
-    if (scope.readOnly && !tool.readOnly) continue;
+    if (scope.readOnly && (!tool.readOnly || tool.signedIn)) continue;
     if (scope.work && ["work_create", "work_copy"].includes(tool.name)) continue;
     // A grant to one work (OAuth) sees that work only.
     if (scope.work && !scope.agent && tool.name === "works_list") continue;
@@ -70,11 +70,12 @@ export function createMcpServer(registry, scope = {}, { confirm } = {}) {
         // Built-in agents: FRAME asks the user itself when the session's mode wants it (confirm
         // below), and every change is in the work's versions; a destructive hint would make
         // Codex ask again on each layers_edit / audio_edit / files_batch, even in auto-edit mode.
+        // The logged-in browser's tools reach the web as the user: not read-only for other clients.
         annotations: {
           title: tool.title,
-          readOnlyHint: Boolean(tool.readOnly),
+          readOnlyHint: Boolean(tool.readOnly) && !tool.signedIn,
           destructiveHint: Boolean(tool.destructive) && !scope.agent,
-          openWorldHint: false,
+          openWorldHint: Boolean(tool.signedIn),
         },
         ...(CORE_TOOLS.has(tool.name) ? { _meta: { "anthropic/alwaysLoad": true } } : {}),
       },

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import {
   Upload,
   Link2,
+  Globe,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -109,6 +110,9 @@ export function AssetsView() {
             <Link2 size={15} />
           </button>
         )}
+        <button className="icon-btn" title="浏览器：在这里登录网站，AI 就能下载要登录才能下载的素材（在选项卡中打开）" onClick={() => openTool("browser")}>
+          <Globe size={15} />
+        </button>
         <button className="icon-btn" title="资源：素材库里声明的角色、场景、效果、音效等（在选项卡中打开）" onClick={() => openTool("resources")}>
           <Shapes size={15} />
         </button>

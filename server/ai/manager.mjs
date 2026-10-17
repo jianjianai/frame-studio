@@ -1192,6 +1192,8 @@ export class AiManager {
           `用户正在看样片 ${view.sample.path}（单独播放，不在时间轴上），样片里的 ${formatTime(view.sample.time ?? 0)}${view.sample.playing ? "（播放中）" : ""}`,
         );
     }
+    // "This page" in the user's words is the one they look at in the logged-in browser.
+    for (const tab of services.browser?.watched() ?? []) lines.push(`用户在 FRAME 浏览器里看着标签页 ${tab.id}：${tab.title || "（无标题）"}（${tab.url}）`);
     if (!steering) {
       const files = snapshotFiles(work.dir);
       const changedFiles = filesNotice(session.files, files);

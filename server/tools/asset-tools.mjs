@@ -48,7 +48,7 @@ export function privateAddress(ip) {
 }
 
 /** A studio on the network must not fetch its own network for whoever asks (SSRF). */
-async function assertPublicHost(url) {
+export async function assertPublicHost(url) {
   const host = url.hostname.replace(/^\[|\]$/g, "");
   const addresses = net.isIP(host) ? [host] : (await dns.lookup(host, { all: true }).catch(() => [])).map((item) => item.address);
   if (!addresses.length) throw problem(400, `找不到这个网址的服务器：${url.host}`);
@@ -58,15 +58,16 @@ async function assertPublicHost(url) {
 /**
  * Download a URL into a folder of `work.dir`; refuses non-http(s) and oversized files. With
  * `publicOnly` (a studio reachable from the network), every address on the way, redirects
- * included, must be a public one.
+ * included, must be a public one. `headers(url)` adds request headers for each address on the
+ * way (the logged-in browser's cookies, which differ from host to host).
  */
-export async function importFromUrl(work, url, { name, folder = "public/imports", limit = 1024 * 1024 * 1024, publicOnly = false } = {}) {
+export async function importFromUrl(work, url, { name, folder = "public/imports", limit = 1024 * 1024 * 1024, publicOnly = false, headers } = {}) {
   let current = new URL(url);
   let response;
   for (let hops = 0; ; hops++) {
     if (!["http:", "https:"].includes(current.protocol)) throw problem(400, "只能从 http/https 地址导入");
     if (publicOnly) await assertPublicHost(current);
-    response = await fetch(current, { redirect: "manual", signal: AbortSignal.timeout(10 * 60 * 1000) });
+    response = await fetch(current, { redirect: "manual", headers: headers ? await headers(current) : undefined, signal: AbortSignal.timeout(10 * 60 * 1000) });
     const location = response.status >= 300 && response.status < 400 && response.headers.get("location");
     if (!location) break;
     if (hops >= 5) throw problem(502, "下载失败：重定向次数过多");
@@ -81,6 +82,17 @@ export async function importFromUrl(work, url, { name, folder = "public/imports"
   const relative = uniquePath(work.dir, `${folder.replace(/\/$/, "")}/${base}`);
   await writeStream(work.dir, relative, Readable.fromWeb(response.body), { limit });
   return relative;
+}
+
+/** A file just put into the work's public/: its source noted in production/licenses.md, its address and what it is. */
+export async function importedAsset(work, relative, license) {
+  if (license) {
+    const credits = path.join(work.dir, "production", "licenses.md");
+    fs.mkdirSync(path.dirname(credits), { recursive: true });
+    fs.appendFileSync(credits, `- ${relative}: ${license}\n`);
+  }
+  const info = await probe(path.join(work.dir, relative));
+  return { path: relative, url: `films/${work.slug}/${relative.replace(/^public\//, "")}`, ...info };
 }
 
 /** base64 file content sent with a tool call (clients without a shell); small files only. */
@@ -349,13 +361,7 @@ export function registerAssetTools(registry) {
       fs.mkdirSync(path.dirname(path.join(work.dir, relative)), { recursive: true });
       fs.copyFileSync(file, path.join(work.dir, relative));
     }
-    if (license) {
-      const credits = path.join(work.dir, "production", "licenses.md");
-      fs.mkdirSync(path.dirname(credits), { recursive: true });
-      fs.appendFileSync(credits, `- ${relative}: ${license}\n`);
-    }
-    const info = await probe(path.join(work.dir, relative));
-    return { path: relative, url: `films/${work.slug}/${relative.replace(/^public\//, "")}`, ...info };
+    return importedAsset(work, relative, license);
   };
 
   registry.add({

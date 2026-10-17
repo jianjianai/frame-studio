@@ -152,10 +152,10 @@ export interface Selection {
 export type VersionSource = "work" | "experience" | "materials" | "reviews" | "skills";
 /**
  * Tools that open as editor tabs (wide, many options or much data) instead of side bar views:
- * export, reviews, the libraries' resources, and the management of the material or
- * experience libraries.
+ * export, reviews, the libraries' resources, the management of the material or experience
+ * libraries, and the logged-in browser.
  */
-export type Tool = "export" | "reviews" | "resources" | "libraries:materials" | "libraries:experiences";
+export type Tool = "export" | "reviews" | "resources" | "libraries:materials" | "libraries:experiences" | "browser";
 
 export interface WorkbenchContextValue {
   work: WorkInfo;

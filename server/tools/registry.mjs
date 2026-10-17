@@ -4,7 +4,9 @@ import { problem } from "../util.mjs";
 /**
  * One registry of FRAME tools shared by MCP (HTTP + stdio), the CLI, the
  * built-in AI agents and the studio. A tool is:
- *   { name, title, description, input: zod shape, publicInput?, guide?, readOnly?, destructive?, run(args, ctx) }
+ *   { name, title, description, input: zod shape, publicInput?, guide?, readOnly?, destructive?, signedIn?, run(args, ctx) }
+ * `signedIn` tools act in the user's logged-in browser: they change no work, but a read-only
+ * grant may not use them.
  * `publicInput` is a looser shape advertised to clients when the strict one would be a
  * huge JSON schema (document operations); arguments are still validated against `input`.
  * `guide` names the frame_guide topic that documents the arguments.
@@ -43,7 +45,7 @@ export class ToolRegistry {
   async call(name, args = {}, scope = {}) {
     const tool = this.tools.get(name);
     if (!tool) throw problem(404, `未知工具：${name}`, "UNKNOWN_TOOL");
-    if (scope.readOnly && !tool.readOnly) throw problem(403, `只读模式不能调用 ${name}`, "FORBIDDEN");
+    if (scope.readOnly && (!tool.readOnly || tool.signedIn)) throw problem(403, `只读模式不能调用 ${name}`, "FORBIDDEN");
     const hint = tool.guide ? `。格式见 frame_guide ${tool.guide}` : "";
     const parsed = tool.schema.safeParse(args ?? {});
     if (!parsed.success) throw problem(400, "参数无效：" + describeIssues(parsed.error.issues, tool.schema) + hint, "INVALID_ARGUMENTS");
