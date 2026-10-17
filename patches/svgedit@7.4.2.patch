@@ -1,0 +1,86 @@
+diff --git a/dist/editor/Editor.js b/dist/editor/Editor.js
+index 5f4b8b9ac0a3170ebd87b759096f8ba755095b3a..ae88a6b80cf44c2e77bb0cecfdaf20573a6dc67e 100644
+--- a/dist/editor/Editor.js
++++ b/dist/editor/Editor.js
+@@ -38606,8 +38606,9 @@ var Zm, Qm, $m, eh, th, nh, rh, G, ih, ah, oh, sh, ch, lh, uh, dh, fh, ph, mh, h
+ 			}), this.addPtsToSelection(e), t && (this.dragctrl = t, Qg.getLinkControlPts() && this.segs[e].setLinked(t));
+ 		}
+ 		update() {
+-			let { elem: e } = this;
+-			return Tg(e) ? (this.matrix = Rh(e), this.imatrix = this.matrix.inverse()) : (this.matrix = null, this.imatrix = null), this.eachSeg(function(t) {
++			let { elem: e } = this, n = Rh(e);
++			for (let t = e.parentNode; t?.nodeType === 1 && t !== Qg.getSvgContent(); t = t.parentNode) t.transform?.baseVal && (n = Rh(t).multiply(n));
++			return Nh(n) ? (this.matrix = null, this.imatrix = null) : (this.matrix = n, this.imatrix = n.inverse()), this.eachSeg(function(t) {
+ 				this.item = e.pathSegList.getItem(t), this.update();
+ 			}), this;
+ 		}
+@@ -40588,16 +40589,14 @@ var Zm, Qm, $m, eh, th, nh, rh, G, ih, ah, oh, sh, ch, lh, uh, dh, fh, ph, mh, h
+ 							}
+ 							let a = q.recalculateDimensions(t);
+ 							a ? e.addSubCommand(a) : n.numberOfItems > 1 && i ? e.addSubCommand(wy(q.getSvgRoot(), t, n, r)) : (t.getAttribute("transform") || "") !== r && e.addSubCommand(new yy(t, { transform: r }));
+-						}), e.isEmpty() || q.addCommandToHistory(e), q.dragStartTransforms = null, q.hasDragStartTransform = !1;
++						}), e.isEmpty() || (q.addCommandToHistory(e), q.call("changed", t)), q.dragStartTransforms = null, q.hasDragStartTransform = !1;
+ 						let n = t.length;
+ 						for (let e = 0; e < n && t[e]; ++e) q.selectorManager.requestSelector(t[e]).resize();
+ 					} else p = e.target, t[0].nodeName === "path" && !t[1] ? q.pathActions.select(t[0]) : e.shiftKey && r !== p && q.removeFromSelection([p]);
+ 					let n = t[0];
+-					n && (n.removeAttribute("style"), n.localName === "foreignObject" ? og(n, (e) => {
+-						e.style.removeProperty("pointer-events");
+-					}) : og(n, (e) => {
+-						e.removeAttribute("style");
+-					}));
++					n && og(n, (e) => {
++						e.style.removeProperty("pointer-events"), e.getAttribute("style")?.trim() || e.removeAttribute("style");
++					});
+ 				}
+ 				return;
+ 			case "zoom": {
+@@ -43276,7 +43275,7 @@ var Zm, Qm, $m, eh, th, nh, rh, G, ih, ah, oh, sh, ch, lh, uh, dh, fh, ph, mh, h
+ 		vx[e] = n;
+ 	}
+ 	for (yx = (e) => {
+-		if (e.nodeType === 3 && (e.nodeValue = e.nodeValue.trim(), e.nodeValue.length || e.remove()), e.nodeType !== 1) return;
++		if (e.nodeType === 3 && (e.nodeValue.trim() || e.remove()), e.nodeType !== 1) return;
+ 		let t = e.ownerDocument, n = e.parentNode;
+ 		if (!t || !n) return;
+ 		let r = _x[e.nodeName], i = vx[e.nodeName];
+@@ -43291,14 +43290,14 @@ var Zm, Qm, $m, eh, th, nh, rh, G, ih, ah, oh, sh, ch, lh, uh, dh, fh, ph, mh, h
+ 						a.value,
+ 						e
+ 					]);
+-				} else fh(`attribute ${o} in element ${e.nodeName} not in whitelist is removed: ${e.outerHTML}`, null, "sanitize"), e.removeAttributeNS(c, s);
++				} else /^on/i.test(s) && (fh(`attribute ${o} in element ${e.nodeName} not in whitelist is removed: ${e.outerHTML}`, null, "sanitize"), e.removeAttributeNS(c, s));
+ 				if (o === "style") {
+-					let t = a.value.split(";"), n = t.length;
++					let t = a.value.split(";"), n = t.length, k = [];
+ 					for (; n--;) {
+-						let [i, a] = t[n].split(":"), o = (i || "").trim(), s = (a || "").trim();
+-						r.includes(o) && e.setAttribute(o, s);
++						let [i, ...a] = t[n].split(":"), o = (i || "").trim(), s = a.join(":").trim();
++						o && (r.includes(o) && o !== "transform" && (o !== "filter" || /^(url\(|none$)/.test(s)) ? e.setAttribute(o, s) : k.unshift(`${o}:${s}`));
+ 					}
+-					e.removeAttribute("style");
++					k.length ? e.setAttribute("style", k.join(";")) : e.removeAttribute("style");
+ 				}
+ 			}
+ 			let a = e.getAttributeNS(Eh.XLINK, "href");
+@@ -43344,13 +43343,15 @@ var Zm, Qm, $m, eh, th, nh, rh, G, ih, ah, oh, sh, ch, lh, uh, dh, fh, ph, mh, h
+ 				let n = e.getAttribute(t);
+ 				n && (n = cg(n), n && n[0] !== "#" && (e.setAttribute(t, ""), fh(`attribute ${t} in element ${e.nodeName} pointing to a non-local reference (${n}) is removed: ${e.outerHTML}`, null, "sanitize"), e.removeAttribute(t)));
+ 			}), n = e.childNodes.length; n--;) yx(e.childNodes.item(n));
++		} else if (e.namespaceURI === Eh.SVG && e.localName !== "script") {
++			for (let t = e.attributes.length; t--;) {
++				let n = e.attributes.item(t);
++				/^on/i.test(n.localName) && e.removeAttributeNS(n.namespaceURI, n.localName);
++			}
++			for (let t = e.childNodes.length; t--;) yx(e.childNodes.item(t));
+ 		} else {
+ 			fh(`element ${e.nodeName} not supported is removed: ${e.outerHTML}`, null, "sanitize");
+-			let t = [];
+-			for (; e.hasChildNodes();) t.push(n.insertBefore(e.firstChild, e));
+ 			e.remove();
+-			let r = t.length;
+-			for (; r--;) yx(t[r]);
+ 		}
+ 	}, bx = rh((() => {})), bx(), xx = Uint8Array, Sx = Uint16Array, Cx = Int32Array, wx = new xx([
+ 		0,

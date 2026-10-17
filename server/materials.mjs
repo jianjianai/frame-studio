@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { git, gitToFile } from "./git.mjs";
-import { tree, writeText, writeStream, removePath, movePath, uniquePath, contentVersion, TEXT_LIMIT } from "./files.mjs";
+import { tree, readText, writeText, writeStream, removePath, movePath, uniquePath, contentVersion, TEXT_LIMIT } from "./files.mjs";
 import { readJson, sendFile } from "./http.mjs";
 import { problem, notFound, conflict, confined, inside, sha256, Locks, Lru, writeFileAtomic } from "./util.mjs";
 import { LibraryBranches, libraryVersionRoutes, validId, idFrom } from "./library-branches.mjs";
@@ -1106,6 +1106,24 @@ export function materialsPlugin(services) {
   router.delete(`${base}/libraries/:lib/file`, ({ params, query }) => materials.delete(params.repo, params.lib, String(query.path || "")));
   /** A file as it is now (browsing a library outside a work). */
   router.get(`${base}/file`, async ({ params, query, req, res }) => sendFile(req, res, await materials.file(params.repo, {}, String(query.path || ""))));
+  // A text file edited in a tab (an SVG in the SVG editor): read with its hash, saved as a new version.
+  router.get(`${base}/text`, async ({ params, query }) => {
+    const ref = String(query.path || "");
+    if (!validRef(ref)) throw problem(400, "Invalid path");
+    return readText(await materials.dir(params.repo), ref);
+  });
+  router.put(`${base}/text`, async ({ params, req }) => {
+    const { path: ref, content, expectedHash } = await readJson(req);
+    if (!validRef(ref) || typeof content !== "string") throw problem(400, "需要素材库文件路径和文本内容");
+    const file = confined(await materials.dir(params.repo), ref);
+    if (expectedHash !== undefined) {
+      const current = fs.existsSync(file) ? sha256(fs.readFileSync(file, "utf8")) : null;
+      if (current !== (expectedHash || null)) throw problem(409, `materials/${ref} 已被其他人修改，请重新读取后再保存`, "CONFLICT", { currentHash: current });
+    }
+    const [id, ...rest] = ref.split("/");
+    await materials.put(params.repo, id, rest.join("/"), { content });
+    return { path: ref, hash: sha256(content) };
+  });
   // Each library's versions (every change is one already): history, restoring and sync like a work's.
   libraryVersionRoutes(services, {
     base,

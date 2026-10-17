@@ -4,6 +4,8 @@ allowBuilds:
   sharp: true
   ffmpeg-static: true
   msedge-tts: false
+  core-js: false
 patchedDependencies:
   '@agentclientprotocol/codex-acp@2.1.1': patches/@agentclientprotocol__codex-acp@2.1.1.patch
+  svgedit@7.4.2: patches/svgedit@7.4.2.patch
 verifyDepsBeforeRun: false

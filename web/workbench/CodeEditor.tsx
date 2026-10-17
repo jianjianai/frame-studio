@@ -5,12 +5,14 @@ import { EditorState, Compartment } from "@codemirror/state";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { xml } from "@codemirror/lang-xml";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { tags } from "@lezer/highlight";
 
 const language = (path: string) => {
   if (/\.json$/i.test(path)) return json();
   if (/\.md$/i.test(path)) return markdown();
+  if (/\.(svg|xml)$/i.test(path)) return xml();
   if (/\.(ts|tsx|js|mjs|jsx)$/i.test(path)) return javascript({ typescript: /\.tsx?$/i.test(path), jsx: /x$/i.test(path) });
   return [];
 };
@@ -23,6 +25,9 @@ const highlight = HighlightStyle.define([
   { tag: [tags.function(tags.variableName), tags.function(tags.propertyName)], color: "var(--syntax-function)" },
   { tag: [tags.typeName, tags.className, tags.namespace], color: "var(--syntax-type)" },
   { tag: [tags.propertyName], color: "var(--syntax-property)" },
+  { tag: [tags.tagName], color: "var(--syntax-keyword)" },
+  { tag: [tags.attributeName], color: "var(--syntax-property)" },
+  { tag: [tags.attributeValue], color: "var(--syntax-string)" },
   { tag: [tags.heading], color: "var(--syntax-keyword)", fontWeight: "bold" },
   { tag: [tags.link, tags.url], color: "var(--accent)" },
 ]);

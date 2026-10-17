@@ -53,6 +53,23 @@ describe("material libraries", () => {
     await call(`${lib}/trash/${encodeURIComponent("通用-背景-1")}`, { method: "DELETE" });
   });
 
+  it("reads and saves a library's text file for an editor tab, each save a version", async () => {
+    await call(`${lib}/libraries`, { method: "POST", body: { name: "人物" } });
+    await call(`${lib}/libraries/${encodeURIComponent("人物")}/upload?path=a.svg`, { method: "POST", raw: "<svg>1</svg>" });
+    const text = (path) => call(`${lib}/text?path=${encodeURIComponent(path)}`);
+    const read = (await text("人物/a.svg")).body;
+    expect(read).toMatchObject({ path: "人物/a.svg", content: "<svg>1</svg>" });
+    const save = (content, expectedHash) => call(`${lib}/text`, { method: "PUT", body: { path: "人物/a.svg", content, expectedHash } });
+    expect((await save("<svg>2</svg>", read.hash)).body.hash).not.toBe(read.hash);
+    expect((await save("<svg>3</svg>", read.hash)).status).toBe(409);
+    expect((await text("人物/a.svg")).body.content).toBe("<svg>2</svg>");
+    expect((await call(`${lib}/libraries/${encodeURIComponent("人物")}/history`)).body.map((version) => version.message)).toEqual(["更新 a.svg", "添加 a.svg", "新建素材库：人物"]);
+    expect((await text("../secrets.json")).status).toBe(400);
+    expect((await call(`${lib}/text`, { method: "PUT", body: { path: "人物/../../x.svg", content: "x" } })).status).toBe(400);
+    await call(`${lib}/libraries/${encodeURIComponent("人物")}`, { method: "DELETE" });
+    await call(`${lib}/trash/${encodeURIComponent("人物")}`, { method: "DELETE" });
+  });
+
   it("lists library files with their size and length for previews", async () => {
     // One second of silence: 8 kHz, 16-bit mono PCM.
     const samples = 8000;

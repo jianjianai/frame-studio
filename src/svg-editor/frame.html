@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+    <title>SVG 编辑器</title>
+    <link rel="stylesheet" href="./svgedit.css" />
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        overflow: hidden;
+      }
+      #container {
+        width: 100vw;
+        height: 100vh;
+      }
+      /* Opening, saving and exporting are the studio's (its tab names and saves the file); the editor's homepage opens no window here. */
+      #title_panel,
+      #tool_export,
+      #tool_editor_homepage {
+        display: none !important;
+      }
+    </style>
+    <script type="module" src="./frame.js"></script>
+  </head>
+  <body>
+    <div id="container"></div>
+  </body>
+</html>

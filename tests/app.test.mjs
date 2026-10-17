@@ -301,6 +301,20 @@ describe("studio API (password mode)", () => {
     expect((await fetch(server.base + base + "..%2F..%2F..%2Fsettings.json")).status).toBe(400);
   });
 
+  it("serves the SVG editor to its sandboxed frame without a session, and nothing else from there", async () => {
+    const page = await fetch(server.base + "/svg-editor/frame.html");
+    expect(page.status).toBe(200);
+    expect(page.headers.get("access-control-allow-origin")).toBe("*");
+    expect(await page.text()).toContain("./frame.js");
+    // SVG-Edit's own build, loaded by the frame as modules (an opaque origin, so CORS).
+    const editor = await fetch(server.base + "/svg-editor/Editor.js");
+    expect(editor.status).toBe(200);
+    expect(editor.headers.get("content-type")).toContain("javascript");
+    expect(await editor.text()).toContain('o !== "transform"');
+    expect((await fetch(server.base + "/svg-editor/..%2F..%2F..%2Fpackage.json")).status).toBe(400);
+    expect((await fetch(server.base + "/svg-editor/missing.js")).status).toBe(404);
+  });
+
   it("does not hand outside AIs the server's own folder", async () => {
     const work = await server.app.services.works.create({ title: "外部" });
     const context = JSON.parse((await server.app.services.tools.call("work_context", { work: work.id })).text);

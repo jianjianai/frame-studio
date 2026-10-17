@@ -16,6 +16,7 @@ import { WorkWatcher } from "./files.mjs";
 import { workRoutes } from "./routes/works.mjs";
 import { precacheManifest } from "./precache.mjs";
 import { repoRoutes } from "./routes/repos.mjs";
+import { serveSvgEditor } from "./svg-editor.mjs";
 
 /**
  * FRAME Studio: one process serving the studio UI, the work preview (Vite),
@@ -120,6 +121,8 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
         return;
       }
       if (routed) throw problem(404, "接口不存在", "NOT_FOUND");
+      // The SVG editor's code: public, the sandboxed frame running it has no session.
+      if (pathname.startsWith("/svg-editor/")) return serveSvgEditor(req, res, pathname);
       // OAuth access tokens are for MCP only, not for browsing work files or the studio.
       if (principal?.kind === "oauth") throw problem(403, "This token can only call FRAME tools", "FORBIDDEN");
       // Everything below serves the browser: login required when a password is set.

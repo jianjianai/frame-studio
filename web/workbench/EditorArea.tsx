@@ -31,6 +31,9 @@ import {
   PanelBottom,
   ArrowRightLeft,
   Pin,
+  PenTool,
+  Code2,
+  Save,
 } from "lucide-react";
 import { api, ApiError, formatTime, sampleName, workPath, experiencePath, useServerEvent, materialsPath, skillsPath } from "../lib/api";
 import { reviewsPath } from "../lib/reviews";
@@ -48,6 +51,7 @@ import { AssetViewer } from "./AssetViewer";
 import { ZoomImage } from "./ZoomImage";
 import { SampleTab, playable } from "./SampleTab";
 import { PageViewer, usePageUrl } from "./PageViewer";
+import { SvgEditor } from "./SvgEditor";
 import { isLottieText } from "../views/media";
 import {
   activate,
@@ -120,6 +124,8 @@ interface Doc {
   unreadable?: string;
   /** When the file last changed on disk: a page shown rendered loads it again. */
   stamp?: number;
+  /** What is selected in the SVG editor, for the AI. */
+  selection?: string[];
 }
 
 const PREVIEW: Doc = { key: "preview", file: "", source: "work", kind: "preview", title: "预览" };
@@ -128,6 +134,8 @@ const single = (doc: Doc | undefined) => doc?.kind === "preview" || doc?.kind ==
 const dirty = (doc: Doc | undefined) => Boolean(doc && doc.content !== doc.saved);
 
 const isPage = (path: string) => /\.html?$/i.test(path);
+/** SVG files of the work and of the material libraries open in the SVG editor (their code a click away). */
+const isSvg = (path: string) => /\.svg$/i.test(path);
 /** A document's frontmatter (a skill's SKILL.md: name, description) reads as the block it is, not as a heading. */
 const frontmatterAsCode = (text: string) => text.replace(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/, (_, yaml: string) => "```yaml\n" + yaml + "\n```\n\n");
 
@@ -191,7 +199,12 @@ const docIcon = (doc: Doc) =>
   );
 
 /** How the AI is told what an editor shows ("这个文件"). */
-const labelOf = (doc: Doc) =>
+const labelOf = (doc: Doc) => {
+  const label = documentLabel(doc);
+  const selected = doc.selection?.slice(0, 8).join("、");
+  return selected ? `${label}（SVG 编辑器里选中了 ${selected}${(doc.selection?.length ?? 0) > 8 ? " 等" : ""}）` : label;
+};
+const documentLabel = (doc: Doc) =>
   doc.kind === "preview"
     ? "成片预览"
     : doc.kind === "sample"
@@ -264,7 +277,7 @@ type Rect = { left: number; top: number; width: number; height: number };
  * players on screen their timelines can be synced.
  */
 export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; onActiveChange?: (label: string | null) => void }) {
-  const { work, stage } = useWorkbench();
+  const { work, stage, readOnly } = useWorkbench();
   const toast = useToast();
   const confirm = useConfirm();
   const [docs, setDocs] = useState<Record<string, Doc>>({ preview: PREVIEW });
@@ -284,8 +297,10 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   const apisRef = useRef(apis);
   apisRef.current = apis;
 
+  /** Where a document's text is read and saved (a library's raw files are elsewhere). */
+  const textApi = (source: Source) => (source === "materials" ? `${apisRef.current.materials}/text` : `${apisRef.current[source]}/file`);
   const load = useCallback(async (doc: Pick<Doc, "file" | "source">) => {
-    const file = await api<{ content: string; hash: string }>(`${apisRef.current[doc.source]}/file?path=${encodeURIComponent(doc.file)}`);
+    const file = await api<{ content: string; hash: string }>(`${textApi(doc.source)}?path=${encodeURIComponent(doc.file)}`);
     return { content: file.content, saved: file.content, hash: file.hash };
   }, []);
   const updateDoc = useCallback((key: string, change: Partial<Doc>) => setDocs((all) => (all[key] ? { ...all, [key]: { ...all[key], ...change } } : all)), []);
@@ -347,8 +362,11 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   }, []);
   const openFile = useCallback(
     (path: string, options: { line?: number; preview?: boolean } & OpenAt = {}) =>
-      // An HTML file opens as the page it is.
-      open({ key: path, file: path, source: "work", kind: kindOf(path) }, { ...options, rendered: isPage(path) && options.line === undefined }),
+      // An HTML file opens as the page it is, an SVG in the SVG editor.
+      open(
+        { key: path, file: path, source: "work", kind: isSvg(path) ? "text" : kindOf(path) },
+        { ...options, rendered: (isPage(path) || isSvg(path)) && options.line === undefined },
+      ),
     [open],
   );
   const openSample = useCallback(
@@ -363,7 +381,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     [open],
   );
   const openMaterial = useCallback(
-    (ref: string, options: { preview?: boolean } = {}) => open({ key: `mat:${ref}`, file: ref, source: "materials", kind: kindOf(ref) }, options),
+    (ref: string, options: { preview?: boolean } = {}) =>
+      open({ key: `mat:${ref}`, file: ref, source: "materials", kind: isSvg(ref) ? "text" : kindOf(ref) }, { ...options, rendered: isSvg(ref) }),
     [open],
   );
   const openResource = useCallback(
@@ -497,20 +516,30 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         refresh((doc) => doc.source === "reviews" && (!event.work || doc.file.startsWith(`${event.work}/`)));
       } else if ((event.type === "skills" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `skills-${work.repo}`)) {
         refresh((doc) => doc.source === "skills");
+      } else if (event.type === "materials" && event.repo === work.repo) {
+        // A library changed (paths: its id), or all of them.
+        const libraries = (event.paths as string[] | undefined) ?? [];
+        refresh((doc) => doc.source === "materials" && (!libraries.length || libraries.some((id) => doc.file.startsWith(id + "/"))));
       }
     },
     [work.id, work.repo],
   );
 
+  /** A library file this work locked at an older version: edited and saved here, the work goes on with the new one. */
+  const followMaterial = async (ref: string) => {
+    const { files } = await api<{ files: { ref: string; outdated: boolean }[] }>(`${apis.work}/materials`);
+    if (files.find((item) => item.ref === ref)?.outdated) await api(`${apis.work}/materials/lock`, { body: { refs: [ref], update: true } });
+  };
   const save = async (key: string) => {
     const doc = docsRef.current[key];
     if (!doc || doc.content === undefined) return;
     try {
-      const result = await api<{ hash: string }>(`${apis[doc.source]}/file`, {
+      const result = await api<{ hash: string }>(textApi(doc.source), {
         method: "PUT",
         body: { path: doc.file, content: doc.content, expectedHash: doc.external ? undefined : doc.hash },
       });
       updateDoc(key, { saved: doc.content, hash: result.hash, external: false });
+      if (doc.source === "materials" && !readOnly) await followMaterial(doc.file);
     } catch (error) {
       toast((error as Error).message, "error");
     }
@@ -1078,16 +1107,19 @@ function EditorContent({
   onNeedText: () => void;
   onSample: () => void;
 }) {
-  const { work, readOnly } = useWorkbench();
+  const { work, readOnly, addToChat } = useWorkbench();
   // A Lottie animation among the work's files (public/) can be played as well as read.
   const lottie = useMemo(
     () => doc.source === "work" && doc.kind === "text" && /^public\/.+\.json$/i.test(doc.file) && isLottieText(doc.content),
     [doc.source, doc.kind, doc.file, doc.content],
   );
   const page = doc.kind === "text" && isPage(doc.file);
+  const svg = doc.kind === "text" && isSvg(doc.file) && (doc.source === "work" || doc.source === "materials");
   const rendered = Boolean(editor.rendered);
+  // Published works keep their libraries and reviews editable: they are not the work.
+  const locked = readOnly && doc.source === "work";
   // A page shown rendered is read when its code is asked for (it may be too large for the editor).
-  const wantsText = doc.kind === "text" && doc.source !== "materials" && !(rendered && page && doc.source === "work");
+  const wantsText = doc.kind === "text" && (doc.source !== "materials" || svg) && !(rendered && page && doc.source === "work");
   useEffect(() => {
     if (wantsText && doc.content === undefined && !doc.unreadable) onNeedText();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1122,6 +1154,7 @@ function EditorContent({
           </div>
         </div>
       )}
+      {svg && <SvgToolbar doc={doc} rendered={rendered} locked={locked} onEditor={onEditor} onSave={onSave} onChat={addToChat} />}
       {doc.kind === "text" && doc.source === "work" && !rendered && playable(doc.content) && !/^(scene|project)\.ts$/.test(doc.file) && (
         <div className="editor-toolbar">
           <span className="faint small-text ellipsis grow">{doc.file} 导出了 createScene，可以不放进时间轴单独播放</span>
@@ -1138,7 +1171,24 @@ function EditorContent({
         <RawViewer key={doc.file} fileRef={doc.file} />
       ) : doc.kind === "diff" ? (
         <DiffEditor query={doc.diff!} source={doc.source === "resource" ? "materials" : doc.source} library={doc.file || undefined} />
-      ) : doc.source === "materials" ? (
+      ) : svg && doc.content !== undefined && !doc.unreadable && rendered ? (
+        locked ? (
+          <div className="media-viewer image">
+            <ZoomImage src={`${workPath(work.repo, work.id)}/raw?path=${encodeURIComponent(doc.file)}&v=${doc.hash}`} alt={doc.file} />
+          </div>
+        ) : (
+          <SvgEditor
+            key={doc.key}
+            value={doc.content}
+            onChange={(content) => {
+              onDoc({ content });
+              if (editor.preview) onEditor({ preview: false });
+            }}
+            onSave={onSave}
+            onSelection={(selection) => onDoc({ selection })}
+          />
+        )
+      ) : doc.source === "materials" && !svg ? (
         <MaterialViewer key={doc.file} fileRef={doc.file} kind={doc.kind} playerId={editor.id} />
       ) : doc.kind === "text" ? (
         rendered && page && doc.source === "work" ? (
@@ -1163,8 +1213,7 @@ function EditorContent({
               if (editor.preview) onEditor({ preview: false });
             }}
             onSave={onSave}
-            // Published works keep their libraries and reviews editable: they are not the work.
-            readOnly={readOnly && doc.source === "work"}
+            readOnly={locked}
           />
         )
       ) : (
@@ -1189,6 +1238,54 @@ function PageLink({ file, version }: { file: string; version?: number }) {
     <a className={`btn small ${url ? "" : "disabled"}`} href={url ?? undefined} target="_blank" rel="noopener" title="在浏览器的新标签页里打开这个页面">
       <ExternalLink size={13} /> 新标签页
     </a>
+  );
+}
+
+/** An SVG's tab: drawn in the SVG editor or as code, saved from here on a touch screen, quoted to the AI. */
+function SvgToolbar({
+  doc,
+  rendered,
+  locked,
+  onEditor,
+  onSave,
+  onChat,
+}: {
+  doc: Doc;
+  rendered: boolean;
+  locked: boolean;
+  onEditor: (change: Partial<Editor>) => void;
+  onSave: () => void;
+  onChat: ReturnType<typeof useWorkbench>["addToChat"];
+}) {
+  const { work } = useWorkbench();
+  // Assets are referenced from code as films/<slug>/<path under public/>, library files as materials/<ref>.
+  const reference =
+    doc.source === "materials" ? `materials/${doc.file}` : doc.file.startsWith("public/") ? `films/${work.slug}/${doc.file.slice("public/".length)}` : null;
+  return (
+    <div className="editor-toolbar">
+      <span className="faint small-text ellipsis grow" title={doc.source === "materials" ? "保存后成为素材库里这个文件的新版本" : undefined}>
+        {doc.source === "materials" ? `素材库 · materials/${doc.file}` : doc.file}
+        {locked ? " · 已发布，只能查看" : ""}
+      </span>
+      {reference && (
+        <button className="btn small" onClick={() => onChat({ type: "asset", url: reference, path: doc.source === "work" ? doc.file : undefined })}>
+          <Sparkles size={13} /> 引用到 AI 聊天
+        </button>
+      )}
+      {!locked && (
+        <button className="btn small" disabled={!dirty(doc)} onClick={onSave} title="保存（Ctrl+S）">
+          <Save size={13} /> 保存
+        </button>
+      )}
+      <div className="segmented">
+        <button className={rendered ? "active" : ""} onClick={() => onEditor({ rendered: true })}>
+          <PenTool size={12} /> 图形
+        </button>
+        <button className={rendered ? "" : "active"} onClick={() => onEditor({ rendered: false })}>
+          <Code2 size={12} /> 代码
+        </button>
+      </div>
+    </div>
   );
 }
 
