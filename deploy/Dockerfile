@@ -20,6 +20,10 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 # The agents' adapters carry small patches (patches/, pnpm patchedDependencies).
 COPY patches ./patches
 RUN pnpm install --frozen-lockfile
+# Voice input in the chat: the speech recognition model and the pause detector come with the
+# image, so the microphone works without a download (models.mjs says which).
+COPY server/speech/models.mjs server/speech/download.mjs server/speech/bundle.mjs ./server/speech/
+RUN node server/speech/bundle.mjs /opt/frame-models/speech
 COPY . .
 RUN pnpm build && pnpm prune --prod && chown -R node:node /app
 
@@ -29,6 +33,7 @@ ENV FRAME_HOME=/data \
     FRAME_BROWSER=/usr/bin/chromium \
     FRAME_BEAT_PYTHON=/opt/beat-this/bin/python \
     TORCH_HOME=/opt/beat-this/torch \
+    FRAME_SPEECH_MODELS=/opt/frame-models/speech \
     FRAME_AGENT_HOME=/data/home \
     HOME=/data/home
 USER node

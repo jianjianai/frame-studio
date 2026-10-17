@@ -1,10 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { createRequire } from "node:module";
-import * as tar from "tar";
 import { SPEECH_MODELS, RECOGNITION_MODELS, VAD_MODEL } from "./models.mjs";
+import { fetchFile, fetchModel } from "./download.mjs";
 import { problem, notFound } from "../util.mjs";
 
 const require = createRequire(import.meta.url);
@@ -42,6 +40,8 @@ export class SpeechService {
   constructor({ config, settings, tasks, events }) {
     this.dir = path.join(config.dirs.models, "speech");
     fs.mkdirSync(this.dir, { recursive: true });
+    // Models that come with the program (the Docker image has the voice input ones): used in place, never deleted.
+    this.shipped = config.speechModels;
     this.settings = settings;
     this.tasks = tasks;
     this.events = events;
@@ -54,14 +54,22 @@ export class SpeechService {
   conf() {
     return this.settings.get("speech");
   }
+  builtin(id) {
+    return Boolean(this.shipped) && fs.existsSync(path.join(this.shipped, id, ".installed"));
+  }
   modelDir(id) {
-    return path.join(this.dir, id);
+    return this.builtin(id) ? path.join(this.shipped, id) : path.join(this.dir, id);
   }
   installed(id) {
     return fs.existsSync(path.join(this.modelDir(id), ".installed"));
   }
   models(list = SPEECH_MODELS) {
-    return list.map((model) => ({ ...model, installed: this.installed(model.id), installing: this.installing.get(model.id) ?? null }));
+    return list.map((model) => ({
+      ...model,
+      installed: this.installed(model.id),
+      builtin: this.builtin(model.id),
+      installing: this.installing.get(model.id) ?? null,
+    }));
   }
   providers() {
     const openai = this.conf().providers?.openai ?? {};
@@ -309,18 +317,15 @@ export class SpeechService {
       },
     });
   }
-  /** The VAD model file, downloaded the first time (under 1 MB). */
+  /** The VAD model file: shipped, or downloaded the first time (under 1 MB). */
   vadModel() {
-    const file = path.join(this.modelDir(VAD_MODEL.id), VAD_MODEL.file);
+    const shipped = this.shipped && path.join(this.shipped, VAD_MODEL.id, VAD_MODEL.file);
+    if (shipped && fs.existsSync(shipped)) return Promise.resolve(shipped);
+    const file = path.join(this.dir, VAD_MODEL.id, VAD_MODEL.file);
     if (fs.existsSync(file)) return Promise.resolve(file);
-    this.vadDownload ??= (async () => {
-      const response = await fetch(VAD_MODEL.url, { redirect: "follow", signal: AbortSignal.timeout(120000) });
-      if (!response.ok) throw problem(502, `下载语音检测模型失败：HTTP ${response.status}`);
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file + ".partial", Buffer.from(await response.arrayBuffer()));
-      fs.renameSync(file + ".partial", file);
-      return file;
-    })().finally(() => (this.vadDownload = null));
+    this.vadDownload ??= fetchFile(VAD_MODEL.url, file)
+      .catch((error) => Promise.reject(problem(502, `下载语音检测模型失败：${error.message}`)))
+      .finally(() => (this.vadDownload = null));
     return this.vadDownload;
   }
   /** Where an installed model's files are: archives extract into one folder of their own. */
@@ -379,8 +384,6 @@ export class SpeechService {
     if (!model) throw notFound("未知模型");
     if (this.installed(id)) return null;
     if (this.installing.has(id)) throw problem(409, "正在下载这个模型");
-    const target = this.modelDir(id);
-    const temp = target + ".partial";
     this.installing.set(id, { progress: 0, message: "准备下载" });
     const recognition = RECOGNITION_MODELS.includes(model);
     return this.tasks.start({ kind: "speech-model", title: `下载${recognition ? "语音识别" : "语音"}模型 ${model.name}` }, async ({ signal, progress }) => {
@@ -390,28 +393,14 @@ export class SpeechService {
         this.events.emit({ type: "speech-models" });
       };
       try {
-        fs.rmSync(temp, { recursive: true, force: true });
-        fs.mkdirSync(temp, { recursive: true });
-        const response = await fetch(model.archive, { signal, redirect: "follow" });
-        if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
-        const total = Number(response.headers.get("content-length")) || model.size;
-        let received = 0;
-        const counted = Readable.fromWeb(response.body).on("data", (chunk) => {
-          received += chunk.length;
-          if (received % (2 * 1024 * 1024) < chunk.length)
-            report(Math.min(0.99, received / total), `已下载 ${(received / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`);
-        });
-        const bunzip = require("unbzip2-stream");
-        await pipeline(counted, bunzip(), tar.x({ cwd: temp, strict: true }), { signal });
         // Voice input also needs the pause detector: fetched now, so it works offline afterwards.
         if (recognition) await this.vadModel();
-        fs.writeFileSync(path.join(temp, ".installed"), new Date().toISOString());
-        fs.rmSync(target, { recursive: true, force: true });
-        fs.renameSync(temp, target);
+        await fetchModel(model, path.join(this.dir, id), {
+          signal,
+          progress: (received, total) =>
+            report(Math.min(0.99, received / total), `已下载 ${(received / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`),
+        });
         return { model: id };
-      } catch (error) {
-        fs.rmSync(temp, { recursive: true, force: true });
-        throw error;
       } finally {
         this.installing.delete(id);
         this.events.emit({ type: "speech-models" });
@@ -419,6 +408,7 @@ export class SpeechService {
     });
   }
   remove(id) {
+    if (this.builtin(id)) throw problem(400, "这个模型随程序提供，不能删除");
     this.engines.delete(id);
     this.recognizers.delete(id);
     fs.rmSync(this.modelDir(id), { recursive: true, force: true });

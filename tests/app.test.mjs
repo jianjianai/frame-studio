@@ -351,6 +351,24 @@ describe("websocket access", () => {
       await server.app.close();
     }
   });
+
+  it("uses the recognition model that comes with the program, and keeps it", async () => {
+    const shipped = fs.mkdtempSync(path.join(os.tmpdir(), "frame-models-"));
+    const { RECOGNITION_MODELS } = await import("../server/speech/models.mjs");
+    const id = RECOGNITION_MODELS[0].id;
+    fs.mkdirSync(path.join(shipped, id));
+    fs.writeFileSync(path.join(shipped, id, ".installed"), "");
+    const server = await start({ FRAME_SPEECH_MODELS: shipped });
+    try {
+      const { recognition } = (await server.call("/api/speech/providers")).body;
+      expect(recognition.provider).toBe("local:" + id);
+      expect(recognition.models[0]).toMatchObject({ id, installed: true, builtin: true });
+      expect((await server.call(`/api/speech/models/${id}`, { method: "DELETE" })).status).toBe(400);
+      expect(fs.existsSync(path.join(shipped, id, ".installed"))).toBe(true);
+    } finally {
+      await server.app.close();
+    }
+  });
 });
 
 describe("configuration", () => {

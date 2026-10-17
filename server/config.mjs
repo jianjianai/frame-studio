@@ -35,6 +35,8 @@ export function loadConfig(env = process.env) {
     password,
     dev: env.FRAME_DEV === "1",
     publicUrl: env.FRAME_PUBLIC_URL || "",
+    // Speech models that come with the program (the Docker image's), besides the downloaded ones.
+    speechModels: env.FRAME_SPEECH_MODELS ? path.resolve(env.FRAME_SPEECH_MODELS) : "",
     dirs: {
       repos: path.join(home, "repos"),
       works: path.join(home, "works"),
