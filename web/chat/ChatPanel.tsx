@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
+import { memo, useCallback, useContext, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type Ref } from "react";
 import {
   Plus,
   History,
@@ -44,7 +44,7 @@ import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
 import { insertPrompt, newPromptId, usePrompts, type PromptNode } from "../lib/prompts";
 import { COMMAND_TEXT, GoalBar, GoalCommandMessage, GoalTip, goalCommand, type GoalAction, type GoalState } from "./Goal";
-import { MentionText, SkillMenu, SkillNames, matchSkills, mentionAt, useRepoSkills, type SkillChoice } from "./SkillMention";
+import { MentionText, SkillNames, SuggestMenu, matchSkills, suggestAt, useRepoSkills, type Suggestion } from "./SkillMention";
 import "./chat.css";
 
 export interface ChatHandle {
@@ -128,10 +128,10 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const [defaultModes, setDefaultModes] = useState<Record<string, string>>({});
   const [profileId, setProfileId] = usePersistent<string>("ai-profile", "");
   const [text, setText] = useState("");
-  // The caret, for an @<name> being typed; Esc shuts the skill menu until the text changes.
+  // The caret, for a /<name> or @<name> being typed; Esc shuts the menu until the text changes.
   const [caret, setCaret] = useState(0);
-  const [mentionShut, setMentionShut] = useState<string | null>(null);
-  const [mentionIndex, setMentionIndex] = useState(0);
+  const [suggestShut, setSuggestShut] = useState<string | null>(null);
+  const [suggestIndex, setSuggestIndex] = useState(0);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [accounts, setAccounts] = useState<Record<string, boolean | undefined>>({});
@@ -496,13 +496,29 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
       toast((error as Error).message, "error");
     }
   };
-  const commands = text.startsWith("/") && !text.includes(" ") ? (session?.commands ?? []).filter((command) => command.name.startsWith(text.slice(1))) : [];
-  // @<name> picks a skill of the work's repository for this message (any AI; server: turnPrompt).
+  // The menu where the caret is: /<skill or command> at the start of the message (also in front
+  // of text written before), @<skill> anywhere. Skills are the work's repository's, for any AI
+  // (server: turnPrompt); commands are the AI's own (Codex lists skills as $<name>: not here).
   const skills = useRepoSkills(work.repo);
   const skillNames = useMemo(() => skills.map((skill) => skill.name), [skills]);
-  const mention = !dictation.active && mentionShut !== text ? mentionAt(text, caret) : null;
-  const mentionChoices = mention ? matchSkills(skills, mention.query).slice(0, 8) : [];
-  const mentionActive = Math.min(mentionIndex, Math.max(0, mentionChoices.length - 1));
+  const suggest = !dictation.active && suggestShut !== text ? suggestAt(text, caret) : null;
+  const suggestions: Suggestion[] = !suggest
+    ? []
+    : [
+        ...matchSkills(skills, suggest.query).map((skill) => ({ ...skill, skill: true })),
+        ...(suggest.kind === "/"
+          ? (session?.commands ?? [])
+              .filter((command) => command.name.startsWith(suggest.query) && !command.name.startsWith("$") && !skillNames.includes(command.name))
+              .map((command) => ({
+                name: command.name,
+                description: COMMAND_TEXT[command.name]?.description ?? command.description,
+                hint: COMMAND_TEXT[command.name]?.hint ?? command.hint,
+              }))
+          : []),
+      ].slice(0, 8);
+  // An @ in a repository without skills says where to add them (until something follows it).
+  const noSkills = suggest?.kind === "@" && !skills.length && !suggest.query;
+  const suggestActive = Math.min(suggestIndex, Math.max(0, suggestions.length - 1));
   const placeCaret = (at: number) => {
     setCaret(at);
     setTimeout(() => {
@@ -510,11 +526,11 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
       input.current?.setSelectionRange(at, at);
     }, 0);
   };
-  const pickSkill = (skill: SkillChoice) => {
-    if (!mention) return;
-    const before = `${text.slice(0, mention.start)}@${skill.name} `;
+  const pickSuggestion = (choice: Suggestion) => {
+    if (!suggest) return;
+    const before = `${text.slice(0, suggest.start)}${suggest.kind}${choice.name} `;
     setText(before + text.slice(caret).replace(/^[^\S\n]+/, ""));
-    setMentionIndex(0);
+    setSuggestIndex(0);
     placeCaret(before.length);
   };
   /** The toolbar's button: an @ at the caret, which opens the skill menu. */
@@ -523,7 +539,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     const before = text.slice(0, at);
     const insert = before && !/\s$/.test(before) ? " @" : "@";
     setText(before + insert + text.slice(at));
-    setMentionShut(null);
+    setSuggestShut(null);
     placeCaret(at + insert.length);
   };
   const goalAction = (action: GoalAction) => {
@@ -773,33 +789,22 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           void dropFiles([...event.dataTransfer.files]);
         }}
       >
-        {commands.length > 0 && (
-          <div className="command-list">
-            {commands.slice(0, 8).map((command) => {
-              const own = COMMAND_TEXT[command.name];
-              const hint = own?.hint ?? command.hint;
-              return (
-                <button key={command.name} onClick={() => setText("/" + command.name + " ")}>
-                  <strong>/{command.name}</strong>
-                  {hint && <span className="faint">{hint}</span>}
-                  <span className="muted ellipsis">{own?.description ?? command.description}</span>
-                </button>
-              );
-            })}
-          </div>
-        )}
-        {/* Shut when nothing fits what follows the @ (an @ that is not for a skill). */}
-        {mention && (mentionChoices.length > 0 || (!skills.length && !mention.query)) && (
-          <SkillMenu
-            choices={mentionChoices}
-            active={mentionActive}
-            empty={!skills.length}
-            onPick={pickSkill}
-            onHover={setMentionIndex}
-            onManage={() => {
-              setMentionShut(text);
-              showView("skills");
-            }}
+        {/* Shut when nothing fits what is typed (a / or @ that is not for a skill or command). */}
+        {suggest && (suggestions.length > 0 || noSkills) && (
+          <SuggestMenu
+            kind={suggest.kind}
+            choices={suggestions}
+            active={suggestActive}
+            onPick={pickSuggestion}
+            onHover={setSuggestIndex}
+            onManage={
+              noSkills
+                ? () => {
+                    setSuggestShut(text);
+                    showView("skills");
+                  }
+                : undefined
+            }
           />
         )}
         {attachments.length > 0 && (
@@ -828,7 +833,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           onChange={(event) => {
             setText(event.target.value);
             setCaret(event.target.selectionStart);
-            setMentionIndex(0);
+            setSuggestIndex(0);
           }}
           onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
           onKeyDown={(event) => {
@@ -839,22 +844,22 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               if (event.key === "Escape") dictation.cancel();
               return;
             }
-            // The skill menu: arrows choose, Enter or Tab picks, Esc shuts it.
-            if (mention && !event.nativeEvent.isComposing) {
-              const count = mentionChoices.length;
+            // The / and @ menu: arrows choose, Enter or Tab picks, Esc shuts it.
+            if (suggest && !event.nativeEvent.isComposing) {
+              const count = suggestions.length;
               if ((event.key === "ArrowDown" || event.key === "ArrowUp") && count) {
                 event.preventDefault();
-                setMentionIndex((mentionActive + (event.key === "ArrowDown" ? 1 : count - 1)) % count);
+                setSuggestIndex((suggestActive + (event.key === "ArrowDown" ? 1 : count - 1)) % count);
                 return;
               }
               if ((event.key === "Enter" || event.key === "Tab") && count) {
                 event.preventDefault();
-                pickSkill(mentionChoices[mentionActive]);
+                pickSuggestion(suggestions[suggestActive]);
                 return;
               }
-              if (event.key === "Escape") {
+              if (event.key === "Escape" && (count || noSkills)) {
                 event.preventDefault();
-                setMentionShut(text);
+                setSuggestShut(text);
                 return;
               }
             }
@@ -1075,6 +1080,9 @@ const TurnView = memo(function TurnView({
   actions: TurnActions;
 }) {
   const user = turn.user;
+  // An AI command is not edited into another message; a /<skill> message is an ordinary one.
+  const skillNames = useContext(SkillNames);
+  const command = user?.text.trim().startsWith("/") && !skillNames.includes(/^\/(\S+)/.exec(user.text.trim())?.[1] ?? "");
   return (
     <div className="turn">
       {user && (
@@ -1083,7 +1091,7 @@ const TurnView = memo(function TurnView({
           attachments={user.attachments}
           steered={user.steered}
           busy={branching}
-          onEdit={user.steered || user.text.trim().startsWith("/") ? undefined : (text) => actions.branch(turnIndex, text, user.attachments)}
+          onEdit={user.steered || command ? undefined : (text) => actions.branch(turnIndex, text, user.attachments)}
           versions={versionCount > 1 ? { index: versionIndex, count: versionCount, go: (to) => actions.goVersion(turnIndex, to) } : undefined}
         />
       )}

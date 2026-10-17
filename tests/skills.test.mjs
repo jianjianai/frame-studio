@@ -177,6 +177,16 @@ describe("the repository's skills in the studio and for the AI", () => {
     expect(named[0].text).toBe("@节奏 帮我卡点");
     expect(named.at(-1).text).toContain("用户点名要用技能 节奏（.claude/skills/节奏/SKILL.md）：先用 Skill 工具加载，按它的说明做。");
     expect(context("帮我卡点，@不存在").at(-1).text).not.toContain("点名");
+    // /<skill> at the start, as typed in Claude Code, is the same (Claude lists skills as its commands).
+    expect(mentionedSkills("/titles 做 @节奏", ["节奏", "titles"])).toEqual(["titles", "节奏"]);
+    session.meta.commands = [
+      { name: "节奏", description: "" },
+      { name: "compact", description: "" },
+    ];
+    const slashed = context("/节奏 帮我卡点");
+    expect(slashed[0].text).toBe("@节奏 帮我卡点");
+    expect(slashed.at(-1).text).toContain("用户点名要用技能 节奏");
+    expect(context("/compact")).toEqual([{ type: "text", text: "/compact" }]);
     // Codex finds them under .agents/ and reads them itself.
     session.process = { agent: "codex" };
     expect(context("@titles 做标题").at(-1).text).toContain("用户点名要用技能 titles（.agents/skills/titles/SKILL.md）：先读它的 SKILL.md");

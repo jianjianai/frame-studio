@@ -116,9 +116,16 @@ export function readUpload(fileName, data) {
   return skills;
 }
 
-/** The skills a message names with @<name> (at its start or after a space), in order, once each. */
+/** The skill a message starts with as /<name> (like a command), or null. */
+export function leadingSkill(text, names) {
+  const name = /^\s*\/([\p{L}\p{N}][\p{L}\p{N}._-]*)(?=\s|$)/u.exec(String(text || ""))?.[1];
+  return name && names.includes(name) ? name : null;
+}
+
+/** The skills a message names: /<name> at its start, @<name> anywhere (at the start or after a space); in order, once each. */
 export function mentionedSkills(text, names) {
-  const found = [];
+  const leading = leadingSkill(text, names);
+  const found = leading ? [leading] : [];
   for (const match of String(text || "").matchAll(/(?:^|\s)@([\p{L}\p{N}][\p{L}\p{N}._-]*)/gu)) {
     const name = match[1].replace(/\.+$/, "");
     if (names.includes(name) && !found.includes(name)) found.push(name);

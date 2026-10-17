@@ -12,7 +12,7 @@ import { formatTime } from "../render.mjs";
 import { experienceDelta, filesNotice, noteSeen, rebaseSeen, referencedExperience, selectionText, snapshotFiles } from "./context.mjs";
 import { lastReceived } from "./heartbeat.mjs";
 import { ClaudeGoalReader, CODEX_STATUSES, goalCommand, goalOutput, hookCap } from "./goal.mjs";
-import { mentionedSkills } from "../skills.mjs";
+import { leadingSkill, mentionedSkills } from "../skills.mjs";
 
 const IDLE_MS = 15 * 60 * 1000;
 const HEARTBEAT_MS = 3000;
@@ -645,7 +645,8 @@ export class AiManager {
     session.turnCost = undefined;
     session.heartbeat = undefined;
     // A conversation is named by its first message; one started with a goal, by the goal.
-    const named = goalCommand(message.text)?.objective ?? (isCommand(session, message.text) ? "" : message.text);
+    const skillNames = this.services.skills?.namesSync(session.meta.repo) ?? [];
+    const named = goalCommand(message.text)?.objective ?? (isCommand(session, message.text, skillNames) ? "" : message.text);
     if (session.meta.title === "新对话" && named.trim()) session.meta.title = named.trim().replace(/\s+/g, " ").slice(0, 40);
     this.publish(session);
     const turnStart = fs.statSync(path.join(this.sessionsDir, session.meta.id + ".jsonl"), { throwIfNoEntry: false })?.size ?? 0;
@@ -1164,9 +1165,10 @@ export class AiManager {
    * steered into a running turn skips the file changes: they are mostly the AI's own so far.
    */
   turnPrompt(session, message, work, { steering = false } = {}) {
-    // A slash command goes as typed: anything appended would become its arguments.
-    if (isCommand(session, message.text) && !message.attachments.length) return [{ type: "text", text: message.text.trim() }];
     const { services } = this;
+    const skillNames = services.skills?.namesSync(work.repo) ?? [];
+    // A slash command goes as typed: anything appended would become its arguments.
+    if (isCommand(session, message.text, skillNames) && !message.attachments.length) return [{ type: "text", text: message.text.trim() }];
     const lines = [`[FRAME] 作品 ${work.id}，作品文件在 projects/${work.slug}/`];
     const view = message.view ?? services.viewState.get(`${work.repo}/${work.id}`);
     const meta = services.works.meta(work).meta;
@@ -1206,8 +1208,8 @@ export class AiManager {
     const images = message.attachments.filter((item) => item.type === "image").length;
     if (images) references.push(`${images} 张图片（用户直接发给你的，见附图，不是作品里的画面）`);
     if (references.length) lines.push("用户引用：" + references.join("；"));
-    // Skills the user picked with @<name>: which one to use is theirs to say.
-    const skills = mentionedSkills(message.text, services.skills?.namesSync(work.repo) ?? []);
+    // Skills the user picked (/<name> at the start, @<name>): which one to use is theirs to say.
+    const skills = mentionedSkills(message.text, skillNames);
     if (skills.length) {
       const codex = session.process?.agent === "codex";
       const where = (name) => `${codex ? ".agents" : ".claude"}/skills/${name}/SKILL.md`;
@@ -1248,7 +1250,8 @@ export class AiManager {
     if (referenced.text) lines.push("", referenced.text);
 
     const blocks = [];
-    if (message.text.trim()) blocks.push({ type: "text", text: message.text });
+    // A /<skill> goes as @<skill>, which no AI takes for one of its commands: the line above says what to do.
+    if (message.text.trim()) blocks.push({ type: "text", text: leadingSkill(message.text, skillNames) ? message.text.replace(/^(\s*)\//, "$1@") : message.text });
     blocks.push({ type: "text", text: lines.join("\n") });
     for (const attachment of message.attachments) {
       if (attachment.data && attachment.mimeType?.startsWith("image/")) blocks.push({ type: "image", data: attachment.data, mimeType: attachment.mimeType });
@@ -1343,9 +1346,11 @@ const isModel = (options, id) => options.some((option) => option.id === id && (o
  * "/compact", "/review …": a command the agent offers. Both offer compact and goal, also before
  * a new conversation's list of commands has arrived (a goal is often its first message).
  */
-function isCommand(session, text) {
+/** A message that is one of the AI's own commands (/compact, /goal…); a skill of the repository's (`skills`) is not one. */
+function isCommand(session, text, skills = []) {
   const name = /^\/([a-z][\w-]*)(\s|$)/i.exec(text.trim())?.[1];
-  return Boolean(name) && (name === "compact" || name === "goal" || Boolean(session.meta.commands?.some((command) => command.name === name)));
+  if (!name || skills.includes(name)) return false;
+  return name === "compact" || name === "goal" || Boolean(session.meta.commands?.some((command) => command.name === name));
 }
 
 const userAttachments = (message) => message.attachments.map((item) => (item.data ? { ...item, type: "image", kind: item.type } : item));

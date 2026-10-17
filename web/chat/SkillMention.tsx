@@ -2,7 +2,7 @@ import { createContext, Fragment, useContext, useEffect, useState } from "react"
 import { Puzzle } from "lucide-react";
 import { api, skillsPath, useServerEvent } from "../lib/api";
 
-/** A skill of the work's repository, as @<name> offers it (server/skills.mjs). */
+/** A skill of the work's repository (server/skills.mjs). */
 export interface SkillChoice {
   name: string;
   description: string;
@@ -30,13 +30,20 @@ export function useRepoSkills(repo: string) {
   return skills;
 }
 
-/** An @<name> being typed just before the caret (at the start or after a space): what is typed so far and where the @ is. */
-export function mentionAt(text: string, caret: number) {
-  const match = /(?:^|\s)@([\p{L}\p{N}._-]*)$/u.exec(text.slice(0, caret));
-  return match ? { query: match[1], start: caret - match[1].length - 1 } : null;
+/**
+ * What is being typed just before the caret: a /<command or skill> at the start of the message
+ * (also put in front of text written before), or an @<skill> anywhere (at the start or after a
+ * space). `start` is where its / or @ is.
+ */
+export function suggestAt(text: string, caret: number) {
+  const before = text.slice(0, caret);
+  const slash = /^\/([^\s/]*)$/.exec(before);
+  if (slash) return { kind: "/" as const, query: slash[1], start: 0 };
+  const at = /(?:^|\s)@([\p{L}\p{N}._-]*)$/u.exec(before);
+  return at ? { kind: "@" as const, query: at[1], start: caret - at[1].length - 1 } : null;
 }
 
-/** The skills that fit what is typed after @: names first, then descriptions. */
+/** The skills that fit what is typed: names first, then descriptions. */
 export function matchSkills(skills: SkillChoice[], query: string) {
   const q = query.toLowerCase();
   const byName = skills.filter((skill) => skill.name.toLowerCase().includes(q));
@@ -44,46 +51,59 @@ export function matchSkills(skills: SkillChoice[], query: string) {
   return [...byName, ...byText];
 }
 
-/** The list above the input while an @<name> is typed (or, without skills, how to add some). */
-export function SkillMenu({
+/** One line of the menu: a skill of the repository, or a command of the AI. */
+export interface Suggestion {
+  name: string;
+  description: string;
+  hint?: string;
+  skill?: boolean;
+  problem?: string;
+}
+
+/** The list above the input while a /<name> or @<name> is typed (or, without skills, how to add some). */
+export function SuggestMenu({
+  kind,
   choices,
   active,
-  empty,
   onPick,
   onHover,
   onManage,
 }: {
-  choices: SkillChoice[];
+  kind: "/" | "@";
+  choices: Suggestion[];
   active: number;
-  /** The repository has no skills at all. */
-  empty: boolean;
-  onPick: (skill: SkillChoice) => void;
+  onPick: (choice: Suggestion) => void;
   onHover: (index: number) => void;
-  onManage: () => void;
+  /** Shown instead of choices: the repository has no skills yet. */
+  onManage?: () => void;
 }) {
   return (
     <div className="command-list" role="listbox">
-      {empty ? (
+      {onManage ? (
         <button onMouseDown={(event) => event.preventDefault()} onClick={onManage}>
           <Puzzle size={13} />
           <span className="muted">这个作品库还没有技能，点这里打开「技能」添加</span>
         </button>
       ) : (
-        choices.map((skill, index) => (
+        choices.map((choice, index) => (
           <button
-            key={skill.name}
+            key={`${choice.skill ? "skill" : "command"}:${choice.name}`}
             role="option"
             aria-selected={index === active}
             className={index === active ? "selected" : undefined}
-            title={skill.problem ? `⚠ ${skill.problem}` : skill.description}
+            title={choice.problem ? `⚠ ${choice.problem}` : choice.description}
             // Keep the input's focus (and caret) while picking with the mouse.
             onMouseDown={(event) => event.preventDefault()}
             onMouseEnter={() => onHover(index)}
-            onClick={() => onPick(skill)}
+            onClick={() => onPick(choice)}
           >
-            <Puzzle size={13} />
-            <strong>@{skill.name}</strong>
-            <span className="muted ellipsis">{skill.description}</span>
+            {choice.skill && <Puzzle size={13} />}
+            <strong>
+              {kind}
+              {choice.name}
+            </strong>
+            {choice.hint && <span className="faint">{choice.hint}</span>}
+            <span className="muted ellipsis">{choice.description}</span>
           </button>
         ))
       )}
@@ -91,23 +111,24 @@ export function SkillMenu({
   );
 }
 
-/** The names of the repository's skills, so sent messages show their @<name> as skills. */
+/** The names of the repository's skills, so sent messages show their /<name> and @<name> as skills. */
 export const SkillNames = createContext<string[]>([]);
 
-/** A message's text with the skills it names (@<name>) marked. */
+/** A message's text with the skills it names (/<name> at its start, @<name> anywhere) marked. */
 export function MentionText({ text }: { text: string }) {
   const names = useContext(SkillNames);
-  if (!names.length || !text.includes("@")) return <>{text}</>;
-  const parts = text.split(/((?:^|(?<=\s))@[\p{L}\p{N}][\p{L}\p{N}._-]*)/u);
+  if (!names.length || !/[@/]/.test(text)) return <>{text}</>;
+  const parts = text.split(/(^\/[\p{L}\p{N}][\p{L}\p{N}._-]*|(?:^|(?<=\s))@[\p{L}\p{N}][\p{L}\p{N}._-]*)/u);
   return (
     <>
       {parts.map((part, index) => {
-        const name = part.startsWith("@") ? part.slice(1).replace(/\.+$/, "") : null;
+        const name = /^[@/]/.test(part) ? part.slice(1).replace(/\.+$/, "") : null;
         if (!name || !names.includes(name)) return <Fragment key={index}>{part}</Fragment>;
         return (
           <Fragment key={index}>
             <span className="skill-mention" title="点名要用的技能">
-              @{name}
+              {part[0]}
+              {name}
             </span>
             {part.slice(1 + name.length)}
           </Fragment>
