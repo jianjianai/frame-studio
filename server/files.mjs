@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { Zip, ZipPassThrough } from "fflate";
 import { confined, problem, writeFileAtomic, mediaKind, sha256, inside } from "./util.mjs";
 
-const HIDDEN = new Set([".git", "node_modules", ".cache", "exports", ".DS_Store"]);
+const HIDDEN = new Set([".git", ".gitattributes", "node_modules", ".cache", "exports", ".DS_Store"]);
 const versions = new Map(); // file -> { size, mtimeMs, ino, version }
 
 /**

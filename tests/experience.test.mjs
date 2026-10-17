@@ -69,25 +69,25 @@ describe("experience libraries", () => {
     expect(linked.readme).toContain("## 用户偏好");
     expect(context.body.data.notes).toContain("# 科普短片");
 
-    // New documents show up in the diff of unsaved changes as fully added.
-    expect((await call(`${lib}/diff?file=${encodeURIComponent("知识类视频/开场.md")}`)).body.diff).toContain("+- 前 2 秒给出问题");
-    const status = await call(`${lib}/status`);
-    expect(status.body.files.map((file) => file.path).sort()).toEqual(["知识类视频/README.md", "知识类视频/开场.md"]);
-    expect((await call(`${lib}/commit`, { method: "POST", body: { message: "开场经验" } })).body.commit).toMatch(/^[0-9a-f]{40}$/);
-    expect((await call(`${lib}/history`)).body.map((version) => version.message)).toEqual(["开场经验", "创建经验库"]);
+    // The library's own versions (a branch of its own): new documents show up in the diff of
+    // unsaved changes as fully added, paths from the library's folder.
+    const versions = `${lib}/libraries/${encodeURIComponent("知识类视频")}`;
+    expect((await call(`${versions}/diff?file=${encodeURIComponent("开场.md")}`)).body.diff).toContain("+- 前 2 秒给出问题");
+    const status = await call(`${versions}/status`);
+    expect(status.body.files.map((file) => file.path)).toEqual(["开场.md"]);
+    expect((await call(`${versions}/commit`, { method: "POST", body: { message: "开场经验" } })).body.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect((await call(`${versions}/history`)).body.map((version) => version.message)).toEqual(["开场经验", "新建经验库：知识类视频"]);
     // A version's files, and one file's change in it (the 版本与同步 history opens them).
-    const [saved] = (await call(`${lib}/history`)).body;
-    expect((await call(`${lib}/changes?commit=${saved.commit}`)).body).toEqual([
-      { status: "A", path: "知识类视频/README.md" },
-      { status: "A", path: "知识类视频/开场.md" },
-    ]);
-    const one = (await call(`${lib}/diff?commit=${saved.commit}&file=${encodeURIComponent("知识类视频/开场.md")}`)).body.diff;
+    const [saved] = (await call(`${versions}/history`)).body;
+    expect((await call(`${versions}/changes?commit=${saved.commit}`)).body).toEqual([{ status: "A", path: "开场.md" }]);
+    const one = (await call(`${versions}/diff?commit=${saved.commit}&file=${encodeURIComponent("开场.md")}`)).body.diff;
     expect(one).toContain("+- 前 2 秒给出问题");
     expect(one).not.toContain("README.md");
-    expect((await call(`${lib}/diff?commit=HEAD`)).body.diff).toContain("+- 前 2 秒给出问题");
-    expect((await call(`${lib}/diff?commit=--output=x`)).status).toBe(400);
+    expect((await call(`${versions}/diff?commit=HEAD`)).body.diff).toContain("+- 前 2 秒给出问题");
+    expect((await call(`${versions}/diff?commit=--output=x`)).status).toBe(400);
+    expect((await call(`${lib}/versions`)).body).toMatchObject([{ id: "知识类视频", files: 0, head: { message: "开场经验" } }]);
     // The template's introduction says nothing about the library: no `about` until someone writes one.
-    expect((await call(`${lib}/libraries`)).body).toMatchObject([{ id: "知识类视频", title: "知识类视频", files: 2, aliases: [], about: "", works: 1 }]);
+    expect((await call(`${lib}/libraries`)).body).toMatchObject([{ id: "知识类视频", title: "知识类视频", files: 2, about: "", works: 1 }]);
     expect((await call(`${lib}/libraries?work=${work.id}`)).body).toMatchObject([{ id: "知识类视频", linked: true }]);
     expect((await call(`${lib}/tree?library=${encodeURIComponent("知识类视频")}`)).body.map((entry) => entry.path)).toEqual(["知识类视频/README.md", "知识类视频/开场.md"]);
     expect((await call(`${lib}/find?q=${encodeURIComponent("开场")}`)).body).toEqual([{ library: "知识类视频", path: "知识类视频/开场.md", title: "开场" }]);
@@ -101,40 +101,34 @@ describe("experience libraries", () => {
     expect(fs.readFileSync(path.join(opened.root, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
   });
 
-  it("renames a library and keeps the works that link its old name", async () => {
+  it("renames a library: its title changes, the id works link stays", async () => {
     const created = await call(`${lib}/libraries`, { method: "POST", body: { name: "旧名称" } });
     const work = (await call("/api/works", { method: "POST", body: { title: "改名测试" } })).body;
     await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experiences: [created.body.id] } });
     await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "做法.md", content: "# 做法\n\n- 先画分镜\n" }] });
+    const versions = `${lib}/libraries/${encodeURIComponent("旧名称")}`;
 
-    const renamed = await call(`${lib}/libraries/${encodeURIComponent("旧名称")}/rename`, { method: "POST", body: { name: "新名称" } });
-    expect(renamed.body).toEqual({ id: "新名称", title: "新名称" });
-    const libraries = (await call(`${lib}/libraries`)).body;
-    expect(libraries.find((item) => item.id === "新名称")).toMatchObject({ title: "新名称", files: 2, aliases: ["旧名称"] });
-    expect(libraries.some((item) => item.id === "旧名称")).toBe(false);
-    expect((await call(`${lib}/file?path=${encodeURIComponent("新名称/README.md")}`)).body.content).toMatch(/^# 新名称\n/);
+    expect((await call(`${versions}/rename`, { method: "POST", body: { name: "新名称" } })).body).toEqual({ id: "旧名称", title: "新名称" });
+    expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "旧名称")).toMatchObject({ title: "新名称", files: 2 });
+    expect((await call(`${lib}/file?path=${encodeURIComponent("旧名称/README.md")}`)).body.content).toMatch(/^# 新名称\n/);
+    // Saved as a version at once; the other unsaved edits stay unsaved.
+    expect((await call(`${versions}/history`)).body[0].message).toBe("经验库改名为「新名称」");
+    expect((await call(`${versions}/status`)).body.files.map((file) => file.path)).toEqual(["做法.md"]);
 
-    // The work still links "旧名称" in its project.ts, and finds the library under its new name.
+    // The work links the id: nothing of it changes.
     const info = (await call(`/api/works/local/${work.id}`)).body;
     expect(info.meta.experiences).toEqual(["旧名称"]);
-    expect(info.experiences).toEqual({ libraries: [{ id: "新名称", title: "新名称" }], missing: [] });
+    expect(info.experiences).toEqual({ libraries: [{ id: "旧名称", title: "新名称" }], missing: [] });
     expect((await tool("experience_read", { work: work.id, path: "做法.md" })).body.text).toContain("先画分镜");
     const opened = await app.services.openWork(work.id, "local");
-    expect(Object.keys(app.services.works.writeBrief(opened).experience)).toEqual(["新名称"]);
+    expect(Object.keys(app.services.works.writeBrief(opened).experience)).toEqual(["旧名称"]);
     expect(fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8")).toContain("## 经验库「新名称」");
+    // The title is free for another library (with an id of its own); a name is required.
+    expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "新名称" } })).body).toEqual({ id: "新名称", title: "新名称" });
+    expect((await call(`${versions}/rename`, { method: "POST", body: { name: " " } })).status).toBe(400);
 
-    // The old name stays reserved while works may use it; going back to it is fine.
-    expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "旧名称" } })).status).toBe(409);
-    expect((await call(`${lib}/libraries/${encodeURIComponent("新名称")}/rename`, { method: "POST", body: { name: "第三个名字" } })).body.id).toBe("第三个名字");
-    expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "第三个名字").aliases.sort()).toEqual(["新名称", "旧名称"].sort());
-    expect((await call(`${lib}/libraries/${encodeURIComponent("第三个名字")}/rename`, { method: "POST", body: { name: "旧名称" } })).body.id).toBe("旧名称");
-    expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "旧名称").aliases.sort()).toEqual(["新名称", "第三个名字"].sort());
-    expect((await call(`/api/works/local/${work.id}`)).body.experiences.libraries).toEqual([{ id: "旧名称", title: "旧名称" }]);
-
-    // Deleting the library also drops its earlier names.
     await call(`${lib}/libraries/${encodeURIComponent("旧名称")}`, { method: "DELETE" });
     expect((await call(`/api/works/local/${work.id}`)).body.experiences).toEqual({ libraries: [], missing: ["旧名称"] });
-    expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "新名称" } })).status).toBe(200);
   });
 
   it("lets a work follow several libraries", async () => {
@@ -193,21 +187,27 @@ describe("experience libraries", () => {
     expect(context()).not.toContain("不再关联");
     expect((await call(`${lib}/libraries`)).body.some((item) => item.id === "新经验")).toBe(true);
 
-    // Saving the libraries' changes is a version of the experience branch (no work hooks run for it).
+    // Saving is a version of each library with changes, on its own branch (no work hooks run for it).
+    await tools.call("experience_write", { library: "新经验", operations: [{ op: "write", path: "做法.md", content: "# 做法\n" }] }, scope);
+    await tools.call("experience_write", { library: "知识类视频", operations: [{ op: "write", path: "备忘.md", content: "# 备忘\n" }] }, scope);
     const hooks = [];
     works.beforeSave.push((target) => hooks.push(target.id));
     try {
-      const saved = await tools.call("experience_commit", { message: "新建经验库「新经验」", push: true }, scope);
-      expect(saved.data.commit).toMatch(/^[0-9a-f]{40}$/);
-      expect(saved.data.files).toContain("新经验/README.md");
-      expect(saved.data.pushed).toMatchObject({ ok: false }); // the local repository has no GitHub
+      const saved = await tools.call("experience_commit", { library: "新经验", message: "新经验的做法", push: true }, scope);
+      expect(saved.data.saved).toMatchObject([{ library: "新经验", files: ["新经验/做法.md"], pushed: { ok: false } }]); // the local repository has no GitHub
+      expect(saved.data.saved[0].commit).toMatch(/^[0-9a-f]{40}$/);
       expect(saved.text).toContain("推送到 GitHub 失败");
     } finally {
       works.beforeSave.pop();
     }
     expect(hooks).toEqual([]);
-    expect((await call(`${lib}/status`)).body.files).toEqual([]);
-    expect((await call(`${lib}/history`)).body[0].message).toBe("新建经验库「新经验」");
+    const versions = (id) => `${lib}/libraries/${encodeURIComponent(id)}`;
+    expect((await call(`${versions("新经验")}/status`)).body.files).toEqual([]);
+    expect((await call(`${versions("新经验")}/history`)).body[0].message).toBe("新经验的做法");
+    // The other library's edit was not saved with it. Without `library`, every library with
+    // changes gets a version of its own (竖屏短片 has the earlier test's unsaved document).
+    expect((await call(`${versions("知识类视频")}/status`)).body.files.map((file) => file.path)).toEqual(["备忘.md"]);
+    expect((await tools.call("experience_commit", { message: "备忘" }, scope)).data.saved.map((item) => item.library)).toEqual(["知识类视频", "竖屏短片"]);
     expect((await tools.call("experience_commit", { message: "再存" }, scope)).text).toBe("经验库没有未保存的修改");
     // Linking changes the work, so a published work refuses it; saving experience does not.
     await call(`/api/works/local/${work.id}/publish`, { method: "POST" });

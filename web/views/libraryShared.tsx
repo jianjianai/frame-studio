@@ -9,8 +9,6 @@ export interface LibraryInfo {
   about?: string;
   files: number;
   size?: number;
-  /** Earlier names (experience libraries that were renamed). */
-  aliases?: string[];
   /** How many works link it, and when the latest of them changed. */
   works?: number;
   usedAt?: string | null;
@@ -59,9 +57,9 @@ export const looseName = (name: string) =>
     .replace(/[\s\p{P}\p{S}]+/gu, "")
     .replace(/(素材库|经验库|库)$/, "");
 
-/** Whether every search word is in the library's name, folder, earlier names or introduction. */
+/** Whether every search word is in the library's name, id or introduction. */
 export function libraryMatches(library: LibraryInfo, query: string) {
-  const text = [library.title, library.id, ...(library.aliases ?? []), library.about ?? ""].join(" ").toLowerCase();
+  const text = [library.title, library.id, library.about ?? ""].join(" ").toLowerCase();
   return searchWords(query).every((word) => text.includes(word));
 }
 

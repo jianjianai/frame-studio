@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Lru, notFound } from "./util.mjs";
-import { tree, movePath, removePath, writeText } from "./files.mjs";
+import { tree } from "./files.mjs";
 
 /**
  * Picking libraries among many. A repository may hold dozens or hundreds of material and
@@ -73,7 +73,7 @@ function cosine(a, b, rare, weights) {
 
 /**
  * How well a library matches search words (0: not at all): each word found in its title, id,
- * an earlier name, the introduction or other text (document titles, file names), the more
+ * the introduction or other text (document titles, file names), the more
  * words the better; failing that, the Chinese word pairs it shares with the query.
  */
 export function matchScore(library, query) {
@@ -82,7 +82,6 @@ export function matchScore(library, query) {
   const fields = [
     [library.title, 6],
     [library.id, 6],
-    [(library.aliases ?? []).join(" "), 5],
     [library.about, 3],
     [library.extra, 2],
   ];
@@ -212,7 +211,7 @@ export function closestLibraries(name, libraries, count = 5) {
   return libraries
     .map((library) => {
       let best = 0;
-      for (const candidate of [library.id, library.title, ...(library.aliases ?? [])]) {
+      for (const candidate of [library.id, library.title]) {
         const loose = looseName(candidate);
         if (!loose) continue;
         if (loose.includes(wanted) || wanted.includes(loose)) best = Math.max(best, 0.9);
@@ -232,18 +231,18 @@ export function closestLibraries(name, libraries, count = 5) {
 }
 
 /**
- * The library a name means: its folder name, an earlier name (`alias`), its title, or the
+ * The library a name means: its id, its title, or the
  * same written a little differently (case, spaces, punctuation, a "素材库" ending) when only
  * one library fits. Null when none does.
  */
-export function findLibrary(name, libraries, alias) {
+export function findLibrary(name, libraries) {
   const wanted = String(name || "").trim();
   if (!wanted) return null;
-  const exact = libraries.find((library) => library.id === wanted) ?? (alias ? libraries.find((library) => library.id === alias(wanted)) : null) ?? libraries.find((library) => library.title === wanted);
+  const exact = libraries.find((library) => library.id === wanted) ?? libraries.find((library) => library.title === wanted);
   if (exact) return exact;
   const loose = looseName(wanted);
   if (!loose) return null;
-  const fits = libraries.filter((library) => [library.id, library.title, ...(library.aliases ?? [])].some((candidate) => looseName(candidate) === loose));
+  const fits = libraries.filter((library) => [library.id, library.title].some((candidate) => looseName(candidate) === loose));
   return fits.length === 1 ? fits[0] : null;
 }
 
@@ -286,10 +285,11 @@ export function readmeLead(file, template = "") {
  * any other change; restoring moves the folder back.
  */
 export const TRASH = ".trash";
-const NOTE = ".trashed.json";
+/** What a binned library's checkout says about it: { id, title, deletedAt }. */
+export const NOTE = ".trashed.json";
 const validKey = (key) => typeof key === "string" && key && !/[\\/\x00-\x1f]/.test(key) && !key.startsWith(".");
 
-/** The libraries in a branch's recycle bin, the latest deleted first. */
+/** The libraries in a recycle bin (.trash/<key>/ under the libraries' folder), the latest deleted first. */
 export function trashed(dir) {
   let keys = [];
   try {
@@ -312,51 +312,15 @@ export function trashed(dir) {
     .sort((a, b) => String(b.deletedAt).localeCompare(String(a.deletedAt)));
 }
 
-/** Move a library folder into the recycle bin; returns its key there (unique, the same name may go twice). */
-export function moveToTrash(dir, id, title) {
-  let key = id;
-  for (let n = 2; fs.existsSync(path.join(dir, TRASH, key)); n++) key = `${id} (${n})`;
-  movePath(dir, id, `${TRASH}/${key}`);
-  writeText(dir, `${TRASH}/${key}/${NOTE}`, JSON.stringify({ id, title, deletedAt: new Date().toISOString() }, null, 2) + "\n");
-  return key;
-}
-
 /** The note of a library in the bin (what restoring brings back); 404 for none. */
 export function trashNote(dir, key) {
   if (!validKey(key) || !fs.existsSync(path.join(dir, TRASH, key))) throw notFound("回收站里没有这个库");
   return trashed(dir).find((item) => item.key === key);
 }
 
-/** The name a library comes back under: its own, or — another library took it meanwhile — a free one. */
-export function restoreName(dir, note) {
-  let id = note.id;
-  for (let n = 2; fs.existsSync(path.join(dir, id)); n++) id = `${note.id} ${n}`;
-  return id;
-}
-
-/** Move a library from the bin back to `id` (see restoreName). */
-export function moveFromTrash(dir, key, id) {
-  if (fs.existsSync(path.join(dir, TRASH, key, NOTE))) removePath(dir, `${TRASH}/${key}/${NOTE}`);
-  movePath(dir, `${TRASH}/${key}`, id);
-  removeEmptyTrash(dir);
-}
-
-/** Delete a library in the bin for good (the branch's history still has it). */
-export function purgeTrash(dir, key) {
-  removePath(dir, `${TRASH}/${key}`);
-  removeEmptyTrash(dir);
-}
-
-const removeEmptyTrash = (dir) => {
-  try {
-    if (!fs.readdirSync(path.join(dir, TRASH)).length) fs.rmdirSync(path.join(dir, TRASH));
-  } catch {}
-};
-
 /**
  * What a repository's libraries are to its works: how many works link each, when such a work
- * last changed, and how well each suits a given work. Experience links may use earlier names
- * (renamed libraries), which the experience module resolves.
+ * last changed, and how well each suits a given work. Works link libraries by id.
  */
 export class LibraryIndex {
   constructor(services) {
@@ -367,8 +331,6 @@ export class LibraryIndex {
   /** The works of a repository (not in the bin) with their words and links. */
   async works(repo) {
     const catalog = await this.services.works.catalog(repo);
-    const dir = this.services.experience ? await this.services.experience.dir(repo).catch(() => null) : null;
-    const current = (name) => (dir ? (this.services.experience.resolve(dir, name) ?? name) : name);
     return [...catalog.values()]
       .filter((item) => !item.trashed && !item.error)
       .map((item) => ({
@@ -376,7 +338,7 @@ export class LibraryIndex {
         title: item.title,
         updatedAt: item.updatedAt,
         text: [item.title, item.subtitle, item.description, ...(item.tags ?? [])].filter(Boolean).join(" "),
-        links: new Set([...(item.materials ?? []).map((name) => `materials:${name}`), ...(item.experiences ?? []).map((name) => `experiences:${current(name)}`)]),
+        links: new Set([...(item.materials ?? []).map((name) => `materials:${name}`), ...(item.experiences ?? []).map((name) => `experiences:${name}`)]),
       }));
   }
 
@@ -408,7 +370,7 @@ export class LibraryIndex {
     });
   }
 
-  /** The library ids a work links now (experience links through earlier names followed). */
+  /** The library ids a work links that exist now. */
   linkedIds(kind, work) {
     if (kind === "materials") return this.services.materials?.names(work) ?? [];
     return this.services.experience?.linkedSync(work).libraries.map((library) => library.id) ?? [];

@@ -20,7 +20,7 @@ export interface RemoteState {
 }
 
 /**
- * The remote state of `scope` (a work id, or experience-<repo> / materials-<repo>) from the
+ * The remote state of `scope` (a work id, a library's branch such as materials/<id>, or reviews-<repo>) from the
  * API under `base` (…/remote). With `check`, it is compared with GitHub when shown (opening
  * the work or panel); otherwise only by a manual refresh and when versions are pushed —
  * the events bring every result.

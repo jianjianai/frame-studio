@@ -23,8 +23,8 @@ works/<库>/<作品>/                   作品工作目录 = works/<作品> 分�
    src → 引擎, node_modules → 依赖, docs → 文档     （链接，不提交）
    AGENTS.md, CLAUDE.md, tsconfig.json             （平台生成，不提交；AGENTS.md 是 AI 的会话说明）
    .materials/<素材库>/<路径>                        作品导入的素材库代码（@materials/…）在作品所用版本的副本（平台生成，不提交）
-libraries/<库>/                      frame/materials 分支的 worktree：素材库（每个文件夹一个库；作品在 project.ts 的 materials 中引用，用到的文件版本锁定在作品的 materials.lock.json）；.trash/<名称>/ 是删除的素材库（回收站，附 .trashed.json）
-experience/<库>/                     frame/experience 分支的 worktree：经验库（每个文件夹一个库，作品在 project.ts 的 experiences 中关联）；.trash/ 同上
+libraries/<库>/<id>/                 素材库：每个库是分支 materials/<id>，各自一个 worktree（作品在 project.ts 的 materials 中按 id 引用，用到的文件版本锁定在作品的 materials.lock.json）；.trash/<名称>/ 是回收站里的素材库（分支 materials-trash/<名称>，附 .trashed.json）
+experience/<库>/<id>/                经验库：每个库是分支 experience/<id>，各自一个 worktree（作品在 project.ts 的 experiences 中按 id 关联）；.trash/ 同上（experience-trash/<名称>）
 reviews/<库>/                        frame/reviews 分支的 worktree：作品发布后的复盘（每个作品一个文件夹 <作品 id>/：review.json、复盘文档、raw/ 原始文件）
 exports/<库>/<作品>/                  导出的视频
 models/speech/                       下载的语音模型
@@ -34,9 +34,9 @@ tmp/                                 导出快照、Vite 缓存；library/<库>/
 cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图片的缩略图）及其来源版本
 ```
 
-一个作品 = 一个分支，所以各作品的历史、推送、拉取互不影响。回收站也是分支名：移到回收站把 `works/<id>` 改名为 `trash/<id>`（本机和 GitHub 一起改，GitHub 上的改名是带 `--force-with-lease` 的原子推送）。「释放本地空间」删除已同步作品的本地分支和工作目录，再删除没有本地分支引用的 LFS 文件并 `git gc`。打开作品时检出到唯一的工作目录：编辑器、预览、AI、CLI、MCP 都读写这里的同一份文件。
+一个作品 = 一个分支，所以各作品的历史、推送、拉取互不影响。素材库和经验库也一样，每个库一个分支（`server/library-branches.mjs`）：库的 id 就是分支名的最后一段，新建后不再改变，作品的引用、素材地址和锁定都按 id；显示的名称是 README 的第一个「# 」标题，改名只改它。列出库时检出本机还没有的库分支（另一台设备新建的，取 GitHub 之后），GitHub 上已经删除或移到回收站的本机分支在没有只属于本机的内容时删掉。回收站也是分支名：移到回收站把 `works/<id>` 改名为 `trash/<id>`（本机和 GitHub 一起改，GitHub 上的改名是带 `--force-with-lease` 的原子推送）。「释放本地空间」删除已同步作品的本地分支和工作目录，再删除没有本地分支引用的 LFS 文件并 `git gc`。打开作品时检出到唯一的工作目录：编辑器、预览、AI、CLI、MCP 都读写这里的同一份文件。
 
-「迁移」把本地作品库（没有 GitHub）里的一个作品移到另一个作品库，作品 id 不变（`routes/works.mjs` 编排，`works.move` 处理分支）：先把未保存的修改存为一个版本；作品用到、目标库没有的素材库和经验库按现在的样子复制过去，各保存为一个版本（同名的库用目标库的；作品按旧名称关联的经验库在目标库留一个别名）；再把分支所有版本引用的 LFS 文件链接到目标库的 LFS 存储，`git fetch` 分支，确认两边相同后删除原工作目录和分支，在目标库检出。素材锁定的是原库的 Git blob，迁移后改锁目标库现在的版本（目标库没有的文件去掉锁定），存为一个版本，已发布的作品也一样。复盘文件夹在两个复盘分支上各存一个版本；导出的视频、封面缓存、最近打开、AI 请求删除的标记跟着改；AI 对话改到新作品库，正在连接的代理会话先 `session/close`，下一条消息在新目录恢复，Claude 的会话记录（`~/.claude/projects/<目录名>/`）一起移到新目录名下。浏览器里没完成的本机导出收到 `work-moved` 后改从新位置载入，正在渲染时不能迁移。最后对原库 `reclaim` 释放空间。
+「迁移」把本地作品库（没有 GitHub）里的一个作品移到另一个作品库，作品 id 不变（`routes/works.mjs` 编排，`works.move` 处理分支）：先把未保存的修改存为一个版本；作品用到、目标库没有的素材库和经验库按现在的样子复制过去，各保存为一个版本（目标库有同 id 的库时用目标库的）；再把分支所有版本引用的 LFS 文件链接到目标库的 LFS 存储，`git fetch` 分支，确认两边相同后删除原工作目录和分支，在目标库检出。素材锁定的是原库的 Git blob，迁移后改锁目标库现在的版本（目标库没有的文件去掉锁定），存为一个版本，已发布的作品也一样。复盘文件夹在两个复盘分支上各存一个版本；导出的视频、封面缓存、最近打开、AI 请求删除的标记跟着改；AI 对话改到新作品库，正在连接的代理会话先 `session/close`，下一条消息在新目录恢复，Claude 的会话记录（`~/.claude/projects/<目录名>/`）一起移到新目录名下。浏览器里没完成的本机导出收到 `work-moved` 后改从新位置载入，正在渲染时不能迁移。最后对原库 `reclaim` 释放空间。
 
 「取消链接」把一个 GitHub 作品库从这台电脑移除，GitHub 上的仓库不动（本地作品库不能取消链接）。先取一次 GitHub，列出只在本机的内容：有未保存修改的工作目录、GitHub 没有的版本（两边都有新版本时要先在作品里处理）；可以一键保存并推送，或者明确选择丢弃。AI 正在工作或有导出在进行时拒绝。确认后删除这个库的克隆、工作目录、素材/经验/复盘的 worktree、导出的视频，以及各模块通过 `repos.beforeRemove` 登记的东西（封面缓存、AI 对话、文件监视、同步状态、素材库缓存）。
 

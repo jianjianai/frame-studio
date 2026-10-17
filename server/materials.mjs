@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { git, gitOk, gitToFile } from "./git.mjs";
+import { git, gitToFile } from "./git.mjs";
 import { tree, writeText, writeStream, removePath, movePath, uniquePath, contentVersion, TEXT_LIMIT } from "./files.mjs";
 import { readJson, sendFile } from "./http.mjs";
 import { problem, notFound, conflict, confined, inside, sha256, Locks, Lru, writeFileAtomic } from "./util.mjs";
-import { MATERIALS_BRANCH } from "./repos.mjs";
+import { LibraryBranches, libraryVersionRoutes, validId, idFrom } from "./library-branches.mjs";
 import { workArg, repoArg, asJson } from "./tools/registry.mjs";
 import { importFromUrl, decodeData } from "./tools/asset-tools.mjs";
 import { eachSettled, summarize, errorOf } from "./tools/batch.mjs";
@@ -13,15 +13,15 @@ import { Readable } from "node:stream";
 import { editList, applyEdits } from "./tools/file-ops.mjs";
 import { probe } from "./media.mjs";
 import { appRoot } from "./config.mjs";
-import { findLibrary, unknownLibraries, closestLibraries, searchLibraries, searchWords, offerOrder, readmeLead, TRASH, trashed, moveToTrash, trashNote, restoreName, moveFromTrash, purgeTrash } from "./libraries.mjs";
+import { findLibrary, unknownLibraries, closestLibraries, searchLibraries, searchWords, offerOrder, readmeLead, trashed } from "./libraries.mjs";
 
 /**
  * Material libraries: media shared by the works of a content repository (images, video,
- * audio, fonts, Lottie…), on its `frame/materials` branch (checked out at
- * <home>/libraries/<repo>/). Each top-level folder is one library, with a README that
- * keeps the files' sources and licenses. Every change is saved as a version at once.
+ * audio, fonts, Lottie…). Each library is a branch `materials/<id>` of its own, checked out
+ * at <home>/libraries/<repo>/<id>/ (library-branches.mjs), with a README that keeps the
+ * files' sources and licenses. Every change is saved as a version of its library at once.
  *
- * A work references libraries by name (project.ts `materials`) and uses their files
+ * A work references libraries by id (project.ts `materials`) and uses their files
  * directly as `materials/<library>/<path>`. The version of each file it uses is locked in
  * its materials.lock.json ("<library>/<path>" → git blob), so a later change to the file
  * does not change the work until its lock is updated; unlocked files show as they are now.
@@ -34,13 +34,6 @@ import { findLibrary, unknownLibraries, closestLibraries, searchLibraries, searc
  */
 
 const LOCK_FILE = "materials.lock.json";
-const validId = (id) => typeof id === "string" && /^[^\\/:*?"<>|#%\x00-\x1f.][^\\/:*?"<>|#%\x00-\x1f]{0,59}$/.test(id);
-const folderOf = (name) =>
-  String(name || "")
-    .trim()
-    .replace(/[\\/:*?"<>|#%\x00-\x1f]+/g, "-")
-    .replace(/^[.\s-]+/, "")
-    .slice(0, 60);
 const validRef = (ref) => typeof ref === "string" && /^[^/]+\/.+/.test(ref) && !ref.split("/").some((part) => !part || part === "." || part === "..");
 /** materials/<library>/<path> as code, layers and audio documents write it. */
 const MATERIAL_REF = /(?<![@\w])materials\/([^/"'`\s)\\]+\/[^"'`\s)\\]+)/g;
@@ -93,10 +86,10 @@ export const mediaFacts = (info) =>
   );
 
 /** The introduction a new library's README starts with (it says nothing about the library). */
-const templateLead = (title) => `素材库「${title}」。引用了它的作品可以直接使用其中的文件：\`materials/${folderOf(title)}/<文件>\`。`;
-const libraryReadme = (title) => `# ${title}
+const templateLead = (title, id = idFrom(title)) => `素材库「${title}」。引用了它的作品可以直接使用其中的文件：\`materials/${id}/<文件>\`。`;
+const libraryReadme = (title, id) => `# ${title}
 
-${templateLead(title)}
+${templateLead(title, id)}
 
 ## 来源与许可
 
@@ -105,6 +98,7 @@ ${templateLead(title)}
 export class Materials {
   constructor(services) {
     this.services = services;
+    this.branches = new LibraryBranches(services, { prefix: "materials", base: "libraries", noun: "素材库" });
     this.locks = new Locks();
     this.heads = new Map(); // repo → Promise<Map path → blob>, dropped when the branch changes
     this.blobs = new Lru(500); // blob → text of library code (blobs never change)
@@ -115,129 +109,143 @@ export class Materials {
     this.sizes = new Lru(20000); // blob → size of its content (an LFS pointer's object)
   }
 
-  /** The materials worktree of a repository (checked out on first use). */
+  /** The folder holding the repository's library checkouts (library-branches.mjs). */
   dir(repo) {
-    return this.services.repos.library(repo);
+    return this.branches.dir(repo);
   }
-  /** A work-like handle, so the works' version functions (history, push, pull…) apply. */
-  async scope(repo) {
-    const root = await this.dir(repo);
-    return { id: `materials-${repo}`, repo, root, dir: root, branch: MATERIALS_BRANCH };
+  /** One library as a work-like handle, so the works' version functions (history, push, pull…) apply. */
+  scope(repo, id) {
+    return this.branches.scope(repo, id);
+  }
+  /** The libraries' branch tips: they say whether anything changed. */
+  async tips(repo) {
+    return (await git(this.services.repos.get(repo).dir, ["for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/materials/"]).catch(() => "")).trim();
   }
 
   // ---- libraries --------------------------------------------------------------------
 
   title(dir, id) {
-    try {
-      return /^#\s+(.+)$/m.exec(fs.readFileSync(path.join(dir, id, "README.md"), "utf8"))?.[1].trim() || id;
-    } catch {
-      return id;
-    }
+    return this.branches.title(dir, id);
   }
   /**
-   * The libraries: folder name, title, number of files and their size, and the README's
-   * introduction (`about`). Every change is a version, so the listing is kept until the
-   * branch moves.
+   * The libraries: id, title, number of files and their size, and the README's introduction
+   * (`about`). Every change is a version, so the listing is kept until a branch moves.
    */
   async libraries(repo) {
     const dir = await this.dir(repo);
-    const commit = (await git(dir, ["rev-parse", "HEAD"]).catch(() => "")).trim();
+    const commit = await this.tips(repo);
     const known = this.listed.get(repo);
-    if (commit && known?.commit === commit) return known.libraries.map((library) => ({ ...library }));
-    const libraries = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) => {
-        const files = tree(path.join(dir, entry.name), { maxEntries: 100000 }).filter((item) => item.type === "file" && item.path !== "README.md");
-        const title = this.title(dir, entry.name);
+    if (known?.commit === commit) return known.libraries.map((library) => ({ ...library }));
+    const libraries = (await this.branches.ids(repo))
+      .map((id) => {
+        const files = tree(path.join(dir, id), { maxEntries: 100000 }).filter((item) => item.type === "file" && item.path !== "README.md");
+        const title = this.title(dir, id);
         return {
-          id: entry.name,
+          id,
           title,
           files: files.length,
           size: files.reduce((sum, item) => sum + (item.size || 0), 0),
-          about: readmeLead(path.join(dir, entry.name, "README.md"), templateLead(title)),
+          about: readmeLead(path.join(dir, id, "README.md"), templateLead(title, id)),
         };
       })
       .sort((a, b) => a.title.localeCompare(b.title, "zh"));
-    if (commit) this.listed.set(repo, { commit, libraries });
+    this.listed.set(repo, { commit, libraries });
     return libraries.map((library) => ({ ...library }));
   }
-  /** Run a change in the worktree and save it as a version (only the given paths). */
-  async save(repo, paths, message, change) {
+  /** Run a change in the libraries' folder and save what it did to each library in `ids` as a version of that library. */
+  async save(repo, ids, message, change) {
     const dir = await this.dir(repo);
+    const { works } = this.services;
     return this.locks.run(repo, async () => {
       const result = await change(dir);
-      await git(dir, ["add", "-A", "--", ...paths]);
-      const changed = !(await gitOk(dir, ["diff", "--cached", "--quiet"]));
-      if (changed) await git(dir, ["commit", "-q", "-m", message]);
-      this.services.events.emit({ type: "materials", repo, paths });
-      if (changed) this.services.works.saved(await this.scope(repo));
+      const saved = [];
+      for (const id of new Set(ids)) {
+        const scope = await this.scope(repo, id);
+        if (await works.locks.run(`${repo}/${scope.id}`, () => works.commitAll(scope.root, message))) saved.push(scope);
+      }
+      this.services.events.emit({ type: "materials", repo, paths: ids });
+      for (const scope of saved) works.saved(scope);
       return result;
     });
   }
   async create(repo, name) {
     const title = String(name || "").trim();
-    const id = folderOf(title);
-    if (!validId(id)) throw problem(400, "请填写素材库名称");
-    const dir = await this.dir(repo);
-    if (fs.existsSync(path.join(dir, id))) throw conflict(`已经有名为「${id}」的素材库`);
-    await this.save(repo, [id], `新建素材库：${title}`, () => writeText(dir, `${id}/README.md`, libraryReadme(title)));
+    const id = idFrom(title);
+    if (!title || !validId(id)) throw problem(400, "请填写素材库名称");
+    await this.branches.create(repo, id, { files: { "README.md": libraryReadme(title, id) }, message: `新建素材库：${title}` });
+    this.services.events.emit({ type: "materials", repo, paths: [id] });
     return { id, title };
   }
+  /** A new name (the README's title); the id works reference stays. */
+  async rename(repo, id, name) {
+    const result = await this.branches.retitle(repo, id, name);
+    this.services.events.emit({ type: "materials", repo, paths: [id] });
+    return result;
+  }
   /**
-   * Delete a library: into the recycle bin (.trash/ on the branch), from where it can come
-   * back. Works keep the versions they locked either way: those stay in the branch's history.
+   * Delete a library: into the recycle bin, from where it can come back. Works keep the
+   * versions they locked: the binned branch still has them.
    */
   async remove(repo, id) {
-    const dir = await this.dir(repo);
-    if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound("素材库不存在");
-    const title = this.title(dir, id);
-    const key = await this.save(repo, [id, TRASH], `删除素材库：${title}（移到回收站）`, () => moveToTrash(dir, id, title));
-    return { key, id, title };
+    const result = await this.branches.trash(repo, id);
+    this.services.events.emit({ type: "materials", repo, paths: [id] });
+    return result;
   }
-  /** The worktree when the branch exists (here or on GitHub), else null: looking need not create it. */
-  async existing(repo) {
-    if (fs.existsSync(path.join(this.services.config.dirs.libraries, repo, ".git"))) return this.dir(repo);
-    return (await this.services.repos.hasBranch(repo, MATERIALS_BRANCH)) ? this.dir(repo) : null;
+  /** The libraries' folder (looking creates no branch). */
+  existing(repo) {
+    return this.dir(repo);
   }
   /** The libraries in the recycle bin. */
   async trash(repo) {
-    const dir = await this.existing(repo);
-    return dir ? trashed(dir) : [];
+    return trashed(await this.dir(repo));
   }
-  /** A library back from the bin: under its name, or a free one when that was taken meanwhile. */
+  /** A library back from the bin: under its id, or a free one when that was taken meanwhile. */
   async restore(repo, key) {
-    const dir = await this.dir(repo);
-    const note = trashNote(dir, key);
-    const id = restoreName(dir, note);
-    await this.save(repo, [TRASH, id], `恢复素材库：${note.title}${id !== note.id ? `（改名为「${id}」）` : ""}`, () => moveFromTrash(dir, key, id));
-    return { id, title: note.title, renamed: id !== note.id };
+    const result = await this.branches.restore(repo, key);
+    this.services.events.emit({ type: "materials", repo, paths: [result.id] });
+    return result;
   }
-  /** Delete a library in the bin for good; `key` null empties the bin. The history keeps them. */
+  /**
+   * Delete binned libraries for good (`key` null: all of them). Their versions go with them, so
+   * not while works still reference a library by its id (and no other library has it now).
+   */
   async purge(repo, key = null) {
     const dir = await this.dir(repo);
-    const notes = key === null ? trashed(dir) : [trashNote(dir, key)];
-    if (!notes.length) return { purged: [] };
-    await this.save(repo, [TRASH], key === null ? "清空素材库回收站" : `从回收站删除素材库：${notes[0].title}`, () => {
-      for (const note of notes) purgeTrash(dir, note.key);
-    });
-    return { purged: notes.map((note) => note.key) };
+    const notes = key === null ? trashed(dir) : trashed(dir).filter((note) => note.key === key);
+    const catalog = await this.services.works.catalog(repo);
+    for (const note of notes) {
+      if (this.branches.exists(dir, note.id)) continue;
+      const users = [...catalog.values()].filter((item) => !item.trashed && (item.materials ?? []).includes(note.id));
+      if (users.length)
+        throw conflict(
+          `还有作品引用素材库「${note.title}」：${users
+            .slice(0, 5)
+            .map((item) => `「${item.title || item.id}」`)
+            .join("")}${users.length > 5 ? ` 等 ${users.length} 个` : ""}。彻底删除后它们会缺少素材，先在这些作品里取消引用，或者恢复它。`,
+        );
+    }
+    const result = await this.branches.purge(repo, key);
+    this.services.events.emit({ type: "materials", repo, paths: [] });
+    return { purged: result.purged };
   }
 
-  /** The current versions in the branch: path → blob. */
-  async head(dir) {
-    const out = await git(dir, ["ls-tree", "-r", "-z", "HEAD"]).catch(() => "");
+  /** The libraries' current files: "<id>/<path>" → blob. */
+  async headMap(repo) {
     const blobs = new Map();
-    for (const line of out.split("\0").filter(Boolean)) {
-      const [info, file] = line.split("\t");
-      blobs.set(file, info.split(" ")[2]);
+    const dir = await this.dir(repo);
+    for (const id of await this.branches.ids(repo)) {
+      const out = await git(path.join(dir, id), ["ls-tree", "-r", "-z", "HEAD"]).catch(() => "");
+      for (const line of out.split("\0").filter(Boolean)) {
+        const [info, file] = line.split("\t");
+        if (file !== ".gitattributes") blobs.set(`${id}/${file}`, info.split(" ")[2]);
+      }
     }
     return blobs;
   }
   async files(repo, id) {
     const dir = await this.dir(repo);
-    if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound("素材库不存在");
-    const blobs = await this.head(dir);
+    if (!this.branches.exists(dir, id)) throw notFound("素材库不存在");
+    const blobs = await this.headOf(repo);
     const result = [];
     for (const item of tree(path.join(dir, id), { maxEntries: 100000 }).filter((entry) => entry.type === "file" && entry.path !== "README.md"))
       result.push(await this.describeFile(dir, id, item.path, item.size, blobs.get(`${id}/${item.path}`) ?? null));
@@ -270,7 +278,7 @@ export class Materials {
     if (!words.length) return [];
     const dir = await this.dir(repo);
     const result = [];
-    for (const [ref, blob] of await this.head(dir)) {
+    for (const [ref, blob] of await this.headOf(repo)) {
       const [id, ...rest] = ref.split("/");
       const relative = rest.join("/");
       if (!relative || relative === "README.md" || id.startsWith(".")) continue;
@@ -283,11 +291,11 @@ export class Materials {
     return result;
   }
   libraryOf(dir, id) {
-    if (!validId(id) || !fs.existsSync(path.join(dir, id))) {
+    if (!this.branches.exists(dir, id)) {
       // The closest names (from the folders: this runs synchronously), as the link tools say them.
       const all = fs
         .readdirSync(dir, { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
+        .filter((entry) => this.branches.exists(dir, entry.name))
         .map((entry) => ({ id: entry.name, title: this.title(dir, entry.name) }));
       const close = closestLibraries(String(id), all, 5);
       throw notFound(`素材库「${id}」不存在${close.length ? `。最接近的：${close.map((item) => `「${item.id}」`).join("")}` : ""}（素材库很多时用 materials_list 的 query 查找，新建用 materials_link 的 create）`);
@@ -355,14 +363,14 @@ export class Materials {
     if (relative === "README.md") {
       if (typeof from.content !== "string") throw problem(400, "README.md 用 content 写入文本");
       if (!/^#\s+\S/m.test(from.content)) throw problem(400, "README.md 需要一个一级标题（# 素材库名称）：它是素材库显示的名称，标题后的第一段是介绍");
-      const kept = await this.save(repo, [id], `素材库「${this.title(dir, id)}」：更新 README.md`, () => this.readme(dir, id, from.content));
+      const kept = await this.save(repo, [id], "更新 README.md", () => this.readme(dir, id, from.content));
       return { ref: `${id}/README.md`, url: `materials/${id}/README.md`, path: "README.md", kind: "text", kept };
     }
     let target = `${id}/${relative}`;
     confined(dir, target);
     const existed = fs.existsSync(path.join(dir, target));
     if (existed && !replace) target = uniquePath(dir, target);
-    const saved = await this.save(repo, [id], `素材库「${this.title(dir, id)}」：${existed && replace ? "更新" : "添加"} ${target.slice(id.length + 1)}`, async () => {
+    const saved = await this.save(repo, [id], `${existed && replace ? "更新" : "添加"} ${target.slice(id.length + 1)}`, async () => {
       if (from.url) {
         if (existed && replace) fs.rmSync(path.join(dir, target));
         target = await importFromUrl({ dir }, from.url, { name: path.basename(target), folder: path.dirname(target), publicOnly: this.services.auth.required });
@@ -385,7 +393,7 @@ export class Materials {
     const target = toLibrary || id;
     this.libraryOf(dir, target);
     if (from === "README.md" || to === "README.md") throw problem(400, "README.md 不能移动或被替换：直接用 put（content）或 edit 修改它");
-    const notes = await this.save(repo, [id, target], `素材库：移动 ${id}/${from} → ${target}/${to}`, () => {
+    const notes = await this.save(repo, [id, target], target === id ? `移动 ${from} → ${to}` : `移动 ${id}/${from} → ${target}/${to}`, () => {
       movePath(dir, `${id}/${from}`, `${target}/${to}`);
       return this.recredit(dir, id, from, to, target);
     });
@@ -395,7 +403,7 @@ export class Materials {
     const dir = await this.dir(repo);
     this.libraryOf(dir, id);
     if (relative === "README.md") throw problem(400, "README.md 是素材库的说明并记录素材的来源与许可，不能删除；要改内容用 put（content）或 edit");
-    return this.save(repo, [id], `素材库「${this.title(dir, id)}」：删除 ${relative}`, () => {
+    return this.save(repo, [id], `删除 ${relative}`, () => {
       removePath(dir, `${id}/${relative}`);
       return this.recredit(dir, id, relative);
     });
@@ -412,8 +420,8 @@ export class Materials {
     const dir = await this.dir(work.repo);
     const names = this.names(work);
     return {
-      libraries: names.filter((name) => fs.existsSync(path.join(dir, name))).map((id) => ({ id, title: this.title(dir, id) })),
-      missing: names.filter((name) => !fs.existsSync(path.join(dir, name))),
+      libraries: names.filter((name) => this.branches.exists(dir, name)).map((id) => ({ id, title: this.title(dir, id) })),
+      missing: names.filter((name) => !this.branches.exists(dir, name)),
     };
   }
   readLocks(dir) {
@@ -509,7 +517,7 @@ export class Materials {
     for (const ref of [...wanted].sort()) {
       if (!validRef(ref) || SCRIPT.test(ref) || ref.startsWith(".") || ref.endsWith("/README.md")) continue;
       if (locks[ref]) {
-        const size = await this.blobSize(dir, locks[ref]);
+        const size = await this.blobSize(work.repo, locks[ref]);
         if (size !== null) files.push({ ref, size, version: "git-" + locks[ref] });
         continue;
       }
@@ -520,8 +528,9 @@ export class Materials {
     return files;
   }
   /** Size of a blob's content (a Git LFS pointer's object), or null when the blob is not here. */
-  async blobSize(dir, blob) {
+  async blobSize(repo, blob) {
     if (!/^[0-9a-f]{40,64}$/.test(blob)) return null;
+    const dir = this.services.repos.get(repo).dir;
     if (this.sizes.has(blob)) return this.sizes.get(blob);
     const stored = Number((await git(dir, ["cat-file", "-s", blob]).catch(() => "")).trim() || NaN);
     if (!Number.isFinite(stored)) return null;
@@ -594,10 +603,10 @@ export class Materials {
     return links;
   }
 
-  /** The branch's current files (cached until the libraries change). */
+  /** The libraries' current files (cached until the libraries change). */
   headOf(repo) {
     if (!this.heads.has(repo)) {
-      const pending = this.dir(repo).then((dir) => this.head(dir));
+      const pending = this.headMap(repo);
       pending.catch(() => this.heads.delete(repo));
       this.heads.set(repo, pending);
     }
@@ -608,7 +617,7 @@ export class Materials {
     if (!blob || !/^[0-9a-f]{40,64}$/.test(blob)) throw notFound("没有这个版本");
     let text = this.blobs.get(blob);
     if (text === undefined) {
-      text = await git(await this.dir(repo), ["cat-file", "blob", blob]);
+      text = await git(this.services.repos.get(repo).dir, ["cat-file", "blob", blob]);
       this.blobs.set(blob, text);
     }
     return text;
@@ -621,8 +630,7 @@ export class Materials {
    */
   async lock(work, refs, { update = false } = {}) {
     this.services.works.assertEditable(work);
-    const dir = await this.dir(work.repo);
-    const head = await this.head(dir);
+    const head = await this.headMap(work.repo);
     this.heads.set(work.repo, Promise.resolve(head));
     const locks = this.readLocks(work.dir);
     const exists = (ref) => Boolean(locks[ref] || head.has(ref));
@@ -669,7 +677,7 @@ export class Materials {
     );
     const names = this.names(work);
     const dir = await this.dir(work.repo);
-    const unlinked = [...new Set([...refs].map((ref) => ref.split("/")[0]))].filter((id) => !names.includes(id) && fs.existsSync(path.join(dir, id)));
+    const unlinked = [...new Set([...refs].map((ref) => ref.split("/")[0]))].filter((id) => !names.includes(id) && this.branches.exists(dir, id));
     if (unlinked.length) await this.services.works.update(work, { materials: [...names, ...unlinked] });
     return result;
   }
@@ -701,17 +709,14 @@ export class Materials {
    * (`missing`).
    */
   async movePlan(work, to) {
-    const source = await this.existing(work.repo);
-    if (!source) return { copy: [], shared: [], changed: [], missing: [] };
-    const head = await this.head(source);
+    const source = await this.dir(work.repo);
+    const head = await this.headOf(work.repo);
     const used = new Map(Object.entries(this.readLocks(work.dir)));
     for (const ref of await this.references(work)) if (!used.has(ref) && head.has(ref)) used.set(ref, head.get(ref));
-    const names = [...new Set([...this.names(work), ...[...used.keys()].map((ref) => ref.split("/")[0])])].filter((id) =>
-      fs.existsSync(path.join(source, id)),
-    );
-    const target = await this.existing(to);
-    const there = target ? await this.head(target) : new Map();
-    const copied = (id) => !target || !fs.existsSync(path.join(target, id));
+    const names = [...new Set([...this.names(work), ...[...used.keys()].map((ref) => ref.split("/")[0])])].filter((id) => this.branches.exists(source, id));
+    const target = await this.dir(to);
+    const there = await this.headMap(to);
+    const copied = (id) => !this.branches.exists(target, id);
     const changed = [];
     const missing = [];
     for (const [ref, blob] of [...used].sort(([a], [b]) => a.localeCompare(b))) {
@@ -724,15 +729,12 @@ export class Materials {
     return { copy: names.filter(copied).map(describe), shared: names.filter((id) => !copied(id)).map(describe), changed, missing };
   }
 
-  /** Before the work moves: copy the libraries it uses that `to` lacks there, as one version. */
+  /** Before the work moves: copy the libraries it uses that `to` lacks there, each a new library there. */
   async carry(work, to, from) {
     const plan = await this.movePlan(work, to);
-    if (!plan.copy.length) return plan;
     const source = await this.dir(work.repo);
-    const ids = plan.copy.map((library) => library.id);
-    await this.save(to, ids, `从「${from}」迁入素材库：${plan.copy.map((library) => library.title).join("、")}`, (dir) => {
-      for (const id of ids) fs.cpSync(path.join(source, id), path.join(dir, id), { recursive: true });
-    });
+    for (const { id } of plan.copy) await this.branches.create(to, id, { from: path.join(source, id), message: `从「${from}」迁入` });
+    if (plan.copy.length) this.services.events.emit({ type: "materials", repo: to, paths: plan.copy.map((library) => library.id) });
     return plan;
   }
 
@@ -744,7 +746,7 @@ export class Materials {
   async relock(work) {
     const locks = this.readLocks(work.dir);
     if (!Object.keys(locks).length) return [];
-    const head = await this.head(await this.dir(work.repo));
+    const head = await this.headMap(work.repo);
     const changed = Object.keys(locks).filter((ref) => head.get(ref) !== locks[ref]);
     if (!changed.length) return [];
     for (const ref of changed) {
@@ -952,6 +954,7 @@ export class Materials {
     this.heads.delete(repo);
     this.listed.delete(repo);
     this.excluded.delete(repo);
+    this.branches.forget(repo);
     for (const root of this.manifests.keys()) if (root === library || inside(works, root)) this.manifests.delete(root);
     fs.rmSync(library, { recursive: true, force: true });
   }
@@ -972,8 +975,7 @@ export class Materials {
 
   /** The work's libraries and the files it uses: locked version, current version. */
   async status(work) {
-    const dir = await this.dir(work.repo);
-    const head = await this.head(dir);
+    const head = await this.headMap(work.repo);
     const locks = this.readLocks(work.dir);
     const { refs: used, unresolved, prefixes } = await this.usage(work);
     const files = [...new Set([...Object.keys(locks), ...used])].sort().map((ref) => ({
@@ -1007,8 +1009,9 @@ export class Materials {
     if (fs.existsSync(target)) return target;
     fs.mkdirSync(cache, { recursive: true });
     const temp = `${target}.${process.pid}.${Date.now()}.tmp`;
+    const info = this.services.repos.get(repo);
     try {
-      await gitToFile(dir, ["cat-file", "blob", blob], temp);
+      await gitToFile(info.dir, ["cat-file", "blob", blob], temp);
     } catch {
       throw notFound(`素材 materials/${ref} 锁定的版本不在本机，先在「素材库」中从 GitHub 拉取`);
     }
@@ -1019,8 +1022,7 @@ export class Materials {
     if (fs.statSync(temp).size < 1024 && start.toString("utf8").startsWith("version https://git-lfs.github.com/spec/v1")) {
       // A Git LFS pointer: smudge gives the content (downloading it if needed).
       const pointer = fs.readFileSync(temp, "utf8");
-      const info = this.services.repos.get(repo);
-      await gitToFile(dir, ["lfs", "smudge", "--", ref], temp, { input: pointer, env: this.services.repos.env(info) });
+      await gitToFile(info.dir, ["lfs", "smudge", "--", ref], temp, { input: pointer, env: this.services.repos.env(info) });
     }
     fs.renameSync(temp, target);
     return target;
@@ -1036,30 +1038,32 @@ export function materialsPlugin(services) {
   // Library code: the preview resolves @materials/… to copies at the versions each work uses,
   // which follow the libraries (unlocked files) and the works' lock files (pull, revert, edits).
   services.preview?.importResolvers?.push((source, importer) => materials.resolveImport(source, importer));
-  // The branch also moves without a change made here (GitHub's newer versions brought in, a
-  // conflict settled): its versions event then counts as a change of the libraries.
-  const seen = new Map(); // repo → the commit the libraries were last known at
-  const commitOf = async (repo) => (await git(await materials.dir(repo), ["rev-parse", "HEAD"]).catch(() => "")).trim();
+  // A library branch also moves without a change made here (GitHub's newer versions brought
+  // in, a conflict settled): its versions event then counts as a change of the libraries.
+  // Versions events carry the branch name, not the repository: each repository is asked.
+  const seen = new Map(); // repo → the libraries' tips when last known
   services.events.subscribe((event) => {
     if (event.type === "materials" && event.repo) {
-      void commitOf(event.repo).then((commit) => seen.set(event.repo, commit));
+      void materials.tips(event.repo).then((tips) => seen.set(event.repo, tips));
       void materials.refreshRepo(event.repo).catch(() => {});
     }
-    if (event.type === "work-versions" && String(event.work).startsWith("materials-")) {
-      const repo = String(event.work).slice("materials-".length);
-      void commitOf(repo).then((commit) => {
-        if (!commit || seen.get(repo) === commit) return;
-        seen.set(repo, commit);
-        services.events.emit({ type: "materials", repo, paths: [] });
-      });
-    }
+    if (event.type === "work-versions" && String(event.work).startsWith("materials/"))
+      for (const { id: repo, ready } of services.repos.list()) {
+        if (!ready || !seen.has(repo)) continue;
+        void materials.tips(repo).then((tips) => {
+          if (seen.get(repo) === tips) return;
+          seen.set(repo, tips);
+          services.events.emit({ type: "materials", repo, paths: [] });
+        });
+      }
+    // GitHub was asked: it may have libraries made on another device.
+    if (event.type === "repos") materials.branches.refresh();
     if (event.type === "work-files" && event.files?.some((file) => file.endsWith(LOCK_FILE))) {
       const place = materials.rootOf(path.join(services.config.dirs.works, event.repo, event.work, "projects"));
       if (place) void materials.refreshCopies(place).catch(() => {});
     }
   });
   const base = "/api/repos/:repo/materials";
-  const scope = (params) => materials.scope(params.repo);
 
   // With `work`: whether it uses each library and how well each suits it (the picker's 推荐).
   router.get(`${base}/libraries`, async ({ params, query }) => {
@@ -1071,6 +1075,7 @@ export function materialsPlugin(services) {
   });
   router.post(`${base}/libraries`, async ({ params, req }) => materials.create(params.repo, (await readJson(req)).name));
   router.delete(`${base}/libraries/:lib`, ({ params }) => materials.remove(params.repo, params.lib));
+  router.post(`${base}/libraries/:lib/rename`, async ({ params, req }) => materials.rename(params.repo, params.lib, (await readJson(req)).name));
   // The recycle bin of deleted libraries.
   router.get(`${base}/trash`, ({ params }) => materials.trash(params.repo));
   router.post(`${base}/trash/:key/restore`, ({ params }) => materials.restore(params.repo, params.key));
@@ -1101,31 +1106,11 @@ export function materialsPlugin(services) {
   router.delete(`${base}/libraries/:lib/file`, ({ params, query }) => materials.delete(params.repo, params.lib, String(query.path || "")));
   /** A file as it is now (browsing a library outside a work). */
   router.get(`${base}/file`, async ({ params, query, req, res }) => sendFile(req, res, await materials.file(params.repo, {}, String(query.path || ""))));
-  // Versions: every change is one already; history and sync like a work's.
-  router.get(`${base}/status`, async ({ params }) => works.status(await scope(params)));
-  router.get(`${base}/history`, async ({ params, query }) => works.history(await scope(params), { limit: Number(query.limit || 50), skip: Number(query.skip || 0) }));
-  router.get(`${base}/changes`, async ({ params, query }) => works.changes(await scope(params), query.commit));
-  router.get(`${base}/diff`, async ({ params, query }) => ({ diff: await works.diff(await scope(params), { commit: query.commit, file: query.file }) }));
-  router.post(`${base}/revert`, async ({ params, req }) => {
-    // Restoring an earlier version is itself a new version; works keep the versions they locked.
-    const result = { commit: await works.revert(await scope(params), (await readJson(req)).commit) };
-    services.events.emit({ type: "materials", repo: params.repo, paths: [] });
-    return result;
-  });
-  // Every change is saved at once, so there is nothing to save or discard; kept for the shared versions panel.
-  router.post(`${base}/commit`, () => ({ commit: null }));
-  router.post(`${base}/discard`, () => null);
-  router.post(`${base}/sync`, async ({ params }) => works.sync(await scope(params)));
-  router.post(`${base}/push`, async ({ params }) => works.push(await scope(params)));
-  router.post(`${base}/pull`, async ({ params }) => {
-    const result = await works.pull(await scope(params));
-    services.events.emit({ type: "materials", repo: params.repo, paths: [] });
-    return result;
-  });
-  router.post(`${base}/resolve`, async ({ params, req }) => {
-    const result = await works.resolve(await scope(params), (await readJson(req)).strategy);
-    services.events.emit({ type: "materials", repo: params.repo, paths: [] });
-    return result;
+  // Each library's versions (every change is one already): history, restoring and sync like a work's.
+  libraryVersionRoutes(services, {
+    base,
+    branches: materials.branches,
+    changed: (repo, id) => services.events.emit({ type: "materials", repo, paths: [id] }),
   });
 
   // The materials a work uses.

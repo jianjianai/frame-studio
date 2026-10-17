@@ -30,9 +30,9 @@ export function ExperienceView() {
   const [openMenu, menu] = useContextMenu();
   const base = experiencePath(work.repo);
   const enc = encodeURIComponent;
-  // The work links libraries by name; renamed ones are found through their earlier names.
+  // The work links libraries by id, which renaming never changes.
   const linkedNames = useMemo(() => work.meta?.experiences ?? [], [work.meta?.experiences]);
-  const libraryOfName = (name: string) => libraries.find((item) => item.id === name || item.aliases?.includes(name));
+  const libraryOfName = (name: string) => libraries.find((item) => item.id === name);
   const linked = [...new Set(linkedNames.map((name) => libraryOfName(name)).filter((item): item is LibraryInfo => Boolean(item)))];
   const missingNames = loaded ? linkedNames.filter((name) => !libraryOfName(name)) : [];
 

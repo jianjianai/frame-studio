@@ -592,16 +592,13 @@ export class Reviews {
       const dir = await this.existing(repo);
       if (!dir) continue;
       const catalog = await this.services.works.catalog(repo);
-      // Library names as linked, renames followed.
-      const experienceDir = path.join(this.services.config.dirs.experience, repo);
-      const library = (name) => this.services.experience?.resolve(experienceDir, name) ?? name;
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         if (!entry.isDirectory() || !validWorkId(entry.name) || (ids?.length && !ids.includes(entry.name))) continue;
         if (!fs.existsSync(path.join(dir, entry.name, DATA_FILE))) continue;
         const review = parseReview(fs.readFileSync(path.join(dir, entry.name, DATA_FILE), "utf8"), entry.name);
         const work = catalog.get(entry.name);
         if (tags?.length && !work?.tags?.some((tag) => tags.includes(tag))) continue;
-        if (experience && !work?.experiences?.some((name) => library(name) === library(experience))) continue;
+        if (experience && !work?.experiences?.includes(experience)) continue;
         entries.push({
           repo,
           review,

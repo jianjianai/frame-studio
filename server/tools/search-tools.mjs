@@ -191,7 +191,7 @@ export function registerSearchTools(registry) {
       for (const source of await sources(work, [...new Set(scope)], skipped)) {
         if ((include && !include(source.file)) || (leave && leave(source.file))) continue;
         // Files FRAME manages itself only add noise.
-        if (/(^|\/)(materials\.lock\.json|\.aliases\.json|\.manifest\.json)$/.test(source.file)) continue;
+        if (/(^|\/)(materials\.lock\.json|\.manifest\.json)$/.test(source.file)) continue;
         const text = await source.read();
         if (text === null) continue;
         const lines = text.split("\n");

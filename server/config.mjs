@@ -11,8 +11,8 @@ export const appVersion = JSON.parse(fs.readFileSync(path.join(appRoot, "package
  *   settings.json / secrets.json   configuration (secrets are 0600)
  *   repos/<repo>/                  main clone of each content repository
  *   works/<repo>/<work>/           git worktree of branch works/<work>
- *   libraries/<repo>/              worktree of the frame/materials branch
- *   experience/<repo>/             worktree of the frame/experience branch (experience libraries)
+ *   libraries/<repo>/<id>/         worktree of each material library's branch materials/<id> (.trash/<key>/: materials-trash/<key>)
+ *   experience/<repo>/<id>/        worktree of each experience library's branch experience/<id> (.trash/<key>/: experience-trash/<key>)
  *   reviews/<repo>/                worktree of the frame/reviews branch (data of posted videos)
  *   exports/<work>/                rendered videos
  *   models/                        installed speech models

@@ -39,9 +39,11 @@ describe("取消链接作品库", () => {
     const pushed = await services.works.create({ repo: repo.id, title: "已同步" });
     await services.works.setPublished(pushed, true); // read-only on disk: removal must still work
     const edited = await services.works.create({ repo: repo.id, title: "有修改" });
+    await services.experience.create(repo.id, "经验");
     services.remoteSync.forget(repo.id); // the test pushes itself
     await services.remoteSync.pushNow(pushed);
     fs.writeFileSync(path.join(edited.dir, "notes.md"), "只在本机");
+    fs.writeFileSync(path.join(await services.experience.dir(repo.id), "经验", "草稿.md"), "# 只在本机\n");
     const video = path.join(services.config.dirs.exports, repo.id, pushed.id, "成片.mp4");
     fs.mkdirSync(path.dirname(video), { recursive: true });
     fs.writeFileSync(video, "mp4");
@@ -51,9 +53,9 @@ describe("取消链接作品库", () => {
 
     const report = (await call(`/api/repos/${repo.id}/unlink`)).body;
     expect(report).toMatchObject({ id: repo.id, error: "", busy: [], works: 2, exports: { count: 1, bytes: 3 } });
-    // Publishing started the material library branch here; the published work itself is on GitHub.
+    // The library never reached GitHub and has an unsaved document; the published work itself is on GitHub.
     expect(report.pending).toEqual([
-      expect.objectContaining({ kind: "library", branch: "frame/materials", title: "素材库", unsaved: 0, ahead: 1 }),
+      expect.objectContaining({ kind: "library", branch: "experience/经验", title: "经验库「经验」", unsaved: 1, ahead: 1 }),
       expect.objectContaining({ kind: "work", work: edited.id, title: "有修改", unsaved: 1, ahead: 1, behind: 0 }),
     ]);
 
@@ -65,7 +67,7 @@ describe("取消链接作品库", () => {
     expect(synced.failed).toEqual([]);
     expect(synced.pending).toEqual([]);
     expect((await git(remote, ["log", "-1", "--format=%s", `works/${edited.id}`])).trim()).toBe("取消链接前自动保存");
-    expect((await git(remote, ["branch", "--list", "frame/materials"])).trim()).toContain("frame/materials");
+    expect((await git(remote, ["log", "-1", "--format=%s", "experience/经验"])).trim()).toBe("取消链接前自动保存");
 
     const removed = await call(`/api/repos/${repo.id}`, { method: "DELETE" });
     expect(removed.status).toBe(200);

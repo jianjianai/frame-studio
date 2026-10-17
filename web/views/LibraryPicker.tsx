@@ -46,7 +46,7 @@ export function LibraryPicker({
     [libraries, query, order, pinned],
   );
   const typed = query.trim();
-  const canCreate = Boolean(onCreate && typed && !libraries.some((library) => [library.id, library.title, ...(library.aliases ?? [])].some((name) => looseName(name) === looseName(typed))));
+  const canCreate = Boolean(onCreate && typed && !libraries.some((library) => [library.id, library.title].some((name) => looseName(name) === looseName(typed))));
   // Rows the keyboard moves through: "create" first when offered, then the libraries.
   const rows: (LibraryInfo | "create")[] = [...(canCreate ? ["create" as const] : []), ...matched.slice(0, SHOWN)];
 

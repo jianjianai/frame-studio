@@ -7,6 +7,7 @@ import {
   FilePlus,
   FileText,
   FolderPlus,
+  History,
   Library,
   Link2,
   MoreHorizontal,
@@ -21,7 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { api, del, experiencePath, materialsPath, timeAgo, workPath, useServerEvent } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, usePersistent, usePrompt, type MenuItem } from "../lib/ui";
+import { useAction, useConfirm, useContextMenu, usePersistent, usePrompt, useToast, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "./store";
 import {
@@ -52,7 +53,7 @@ const SHOWN = 200;
  * the recycle bin, from where they come back or go for good.
  */
 export function LibrariesTab({ kind }: { kind: LibraryKind }) {
-  const { work, reload, readOnly, openExperience, openMaterial, askAi } = useWorkbench();
+  const { work, reload, readOnly, openExperience, openMaterial, askAi, showVersions } = useWorkbench();
   const noun = NOUN[kind];
   const materials = kind === "materials";
   const base = materials ? materialsPath(work.repo) : experiencePath(work.repo);
@@ -68,16 +69,17 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
   const [contents, setContents] = useState<Record<string, MaterialFile[] | FileEntry[]>>({});
   const [found, setFound] = useState<{ files?: MaterialFile[]; documents?: { library: string; path: string; title: string }[] } | null>(null);
   const [run, busy] = useAction();
+  const toast = useToast();
   const confirm = useConfirm();
   const prompt = usePrompt();
   const [openMenu, menu] = useContextMenu();
 
-  // What the work links: material libraries by folder name, experience libraries also by earlier names.
+  // What the work links: libraries by id (their branch name), which renaming never changes.
   const linkedNames = useMemo(
     () => (materials ? (work.meta?.materials ?? []) : (work.meta?.experiences ?? [])),
     [materials, work.meta?.materials, work.meta?.experiences],
   );
-  const libraryOfName = (name: string) => libraries.find((item) => item.id === name || item.aliases?.includes(name));
+  const libraryOfName = (name: string) => libraries.find((item) => item.id === name);
   const linkedIds = new Set(linkedNames.map((name) => libraryOfName(name)?.id).filter((id): id is string => Boolean(id)));
   const missing = loaded ? linkedNames.filter((name) => !libraryOfName(name)) : [];
   const uses = new Map(status.files.map((item) => [item.ref, item]));
@@ -156,12 +158,12 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
     });
   const rename = (library: LibraryInfo) =>
     run(async () => {
-      const name = (await prompt(`重命名${noun}`, library.title))?.trim();
+      const name = (await prompt(`重命名${noun}（只改显示的名称，作品按 id「${library.id}」${materials ? "引用" : "关联"}它，不受影响）`, library.title))?.trim();
       if (!name || name === library.title) return;
       await api(`${base}/libraries/${enc(library.id)}/rename`, { body: { name } });
       await load();
       await reload(); // the work's description shows the library's title
-    }, "已重命名。关联它的作品不受影响");
+    }, `已重命名。${materials ? "引用" : "关联"}它的作品不受影响`);
   const remove = (library: LibraryInfo) =>
     run(async () => {
       const users = library.works ?? 0;
@@ -181,12 +183,13 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
       await load();
       setFilter("all");
       setOpen((current) => new Set([...current, result.id]));
+      if (result.renamed) toast(`id「${item.id}」已被另一个${noun}占用，恢复后的 id 是「${result.id}」：按旧 id ${materials ? "引用" : "关联"}它的作品要重新${materials ? "引用" : "关联"}`);
       return result;
     }, `已恢复${noun}「${item.title}」`);
   const purge = (item?: TrashedLibrary) =>
     run(async () => {
       const what = item ? `「${item.title}」` : `回收站里的 ${trash.length} 个${noun}`;
-      if (!(await confirm(`彻底删除${what}？${materials ? "已经锁定其中文件的作品仍能使用锁定的版本；" : ""}以后只能从${noun}的版本历史里找回。`, { confirm: "彻底删除", danger: true })))
+      if (!(await confirm(`彻底删除${what}？它们的分支和全部版本都会删除（GitHub 上的也一起删除），不能找回。${materials ? "还有作品引用的素材库不能彻底删除。" : ""}`, { confirm: "彻底删除", danger: true })))
         return;
       await del(item ? `${base}/trash/${enc(item.key)}` : `${base}/trash`);
       await load();
@@ -233,7 +236,8 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
       icon: <FileText size={14} />,
       onClick: () => (materials ? openMaterial(`${library.id}/README.md`) : openExperience(`${library.id}/README.md`)),
     });
-    if (!materials) items.push({ label: "重命名", icon: <Pencil size={14} />, onClick: () => rename(library) });
+    items.push({ label: "重命名", icon: <Pencil size={14} />, onClick: () => rename(library) });
+    items.push({ label: "版本与同步", icon: <History size={14} />, onClick: () => showVersions(materials ? "materials" : "experience", library.id) });
     items.push("separator", { label: "删除（移到回收站）", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(library) });
     openMenu(event, items);
   };
@@ -253,7 +257,7 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
   const trashRows = trash.filter((item) => !query.trim() || `${item.title} ${item.id}`.toLowerCase().includes(query.trim().toLowerCase()));
   const suggested = libraries.filter((library) => !linkedIds.has(library.id) && (library.score ?? 0) >= SUGGEST).length;
   const typed = query.trim();
-  const canCreate = typed && filter !== "trash" && !libraries.some((library) => [library.id, library.title, ...(library.aliases ?? [])].some((name) => looseName(name) === looseName(typed)));
+  const canCreate = typed && filter !== "trash" && !libraries.some((library) => [library.id, library.title].some((name) => looseName(name) === looseName(typed)));
   const filters: { id: Filter; label: string; count: number }[] = [
     { id: "all", label: "全部", count: libraries.length },
     { id: "linked", label: "本作品", count: linkedIds.size },
@@ -343,7 +347,7 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
           <>
             {trashRows.length > 0 && (
               <div className="library-trash-head">
-                <span className="faint small-text grow">删除的{noun}先放在这里，可以恢复；彻底删除后只能从版本历史里找回。</span>
+                <span className="faint small-text grow">删除的{noun}先放在这里，可以恢复；彻底删除后连同全部版本一起删除，不能找回。</span>
                 <button className="btn small danger" disabled={busy} onClick={() => purge()}>
                   <Trash2 size={13} /> 清空回收站
                 </button>

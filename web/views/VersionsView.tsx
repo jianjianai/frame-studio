@@ -19,7 +19,7 @@ import {
   Undo2,
 } from "lucide-react";
 import { api, timeAgo, workPath, experiencePath, materialsPath, useServerEvent, type ApiError } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, useToast } from "../lib/ui";
+import { useAction, useConfirm, useContextMenu, usePersistent, useToast } from "../lib/ui";
 import type { Version, WorkStatus } from "../lib/types";
 import { useWorkbench, type VersionSource } from "../workbench/store";
 import { RepoDialog } from "../components/RepoDialog";
@@ -30,36 +30,91 @@ import { ViewHeader } from "./ViewHeader";
 
 const statusLabel: Record<string, string> = { M: "修改", A: "新增", D: "删除", "?": "新增", R: "重命名", U: "冲突", C: "复制", T: "类型改变" };
 export const SOURCE_NAMES: Record<VersionSource, string> = { work: "作品", experience: "经验库", materials: "素材库", reviews: "复盘资料" };
-const SOURCES: VersionSource[] = ["work", "experience", "materials", "reviews"];
 const SOURCE_ICONS: Record<VersionSource, typeof GitBranch> = { work: GitBranch, experience: BookOpen, materials: Library, reviews: BarChart3 };
+/** Each library of these kinds is a branch of its own, with its own versions. */
+type LibraryKind = "experience" | "materials";
+const LIBRARY_KINDS: LibraryKind[] = ["experience", "materials"];
+const isLibraryKind = (source: VersionSource): source is LibraryKind => source === "experience" || source === "materials";
 /** Versions a history page shows; more on request. */
 const PAGE = 50;
 
-/** The API base of a branch with versions: the work's, or a shared branch of its repository. */
-export const versionsBase = (source: VersionSource, repo: string, id: string) =>
-  source === "experience" ? experiencePath(repo) : source === "materials" ? materialsPath(repo) : source === "reviews" ? reviewsPath(repo) : workPath(repo, id);
-const scopeOf = (source: VersionSource, repo: string, id: string) => (source === "work" ? id : `${source}-${repo}`);
+/** A library as the 版本与同步 view lists it (`<kind>/versions`). */
+interface LibraryVersions {
+  id: string;
+  title: string;
+  files: number;
+  head: { commit: string; message: string; date: string } | null;
+  ahead: number;
+  behind: number;
+}
+
+/** The API base of what has versions: the work, one library (`library`), or the repository's reviews. */
+export const versionsBase = (source: VersionSource, repo: string, id: string, library?: string) =>
+  isLibraryKind(source)
+    ? `${source === "experience" ? experiencePath(repo) : materialsPath(repo)}${library ? `/libraries/${encodeURIComponent(library)}` : ""}`
+    : source === "reviews"
+      ? reviewsPath(repo)
+      : workPath(repo, id);
+/** The server's name of it in events: the work's id, a library's branch, the reviews' scope. */
+export const scopeOf = (source: VersionSource, repo: string, id: string, library?: string) =>
+  source === "work" ? id : isLibraryKind(source) ? `${source}/${library}` : `${source}-${repo}`;
+
+/** The libraries of both kinds with their unsaved changes and last versions, kept up to date. */
+function useLibraryVersions(refresh: number) {
+  const { work } = useWorkbench();
+  const [lists, setLists] = useState<Record<LibraryKind, LibraryVersions[] | null>>({ experience: null, materials: null });
+  const load = (kind: LibraryKind) =>
+    api<LibraryVersions[]>(`${versionsBase(kind, work.repo, work.id)}/versions`).then(
+      (list) => setLists((current) => ({ ...current, [kind]: list })),
+      () => setLists((current) => ({ ...current, [kind]: [] })),
+    );
+  useEffect(() => {
+    void load("experience");
+    void load("materials");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [work.repo, refresh]);
+  useServerEvent(
+    (event) => {
+      if (event.type === "experience-files" && event.repo === work.repo) void load("experience");
+      if (event.type === "materials" && event.repo === work.repo) void load("materials");
+      if (event.type === "work-versions" || event.type === "repos")
+        for (const kind of LIBRARY_KINDS) if (event.type === "repos" || String(event.work).startsWith(kind + "/")) void load(kind);
+    },
+    [work.repo],
+  );
+  return lists;
+}
 
 /**
- * 版本与同步, like VS Code's Source Control: the branches with versions — the work, and the
- * repository's experience, material and review branches — each with where it stands; the one
- * picked shows its unsaved changes and history below (a version opens to the files it changed,
- * a file opens its change in a tab), saving and GitHub sync.
+ * 版本与同步, like VS Code's Source Control: what has versions — the work, each experience and
+ * material library (a branch each, listed under their kind) and the repository's reviews —
+ * each with where it stands; the one picked shows its unsaved changes and history below (a
+ * version opens to the files it changed, a file opens its change in a tab), saving and GitHub sync.
  */
 export function VersionsView() {
-  const { work, versionSource, showVersions } = useWorkbench();
+  const { work, versionSource, versionLibrary, showVersions } = useWorkbench();
   const [refresh, setRefresh] = useState(0);
   // The review branch exists once a review was recorded.
   const [reviews, setReviews] = useState(false);
-  const shown = SOURCES.filter((source) => source !== "reviews" || reviews);
-  const source = shown.includes(versionSource) ? versionSource : "work";
-  const refreshAll = () =>
-    Promise.all(
-      shown.flatMap((item) => {
-        const base = versionsBase(item, work.repo, work.id);
-        return [api(`${base}/sync`, { method: "POST" }), api(`${base}/remote/check`, { method: "POST" })].map((call) => call.catch(() => null));
-      }),
+  const libraries = useLibraryVersions(refresh);
+  const [expanded, setExpanded] = usePersistent<Partial<Record<LibraryKind, boolean>>>("versions-expanded", { experience: true, materials: true });
+  const source = versionSource === "reviews" && !reviews ? "work" : versionSource;
+  // The library shown of a kind: the one picked last, else the first one.
+  const libraryOf = (kind: LibraryKind) => {
+    const list = libraries[kind] ?? [];
+    return list.find((item) => item.id === versionLibrary[kind]) ?? list[0] ?? null;
+  };
+  const library = isLibraryKind(source) ? libraryOf(source) : null;
+  const refreshAll = () => {
+    const bases = [
+      versionsBase("work", work.repo, work.id),
+      ...(reviews ? [versionsBase("reviews", work.repo, work.id)] : []),
+      ...LIBRARY_KINDS.flatMap((kind) => (libraries[kind] ?? []).map((item) => versionsBase(kind, work.repo, work.id, item.id))),
+    ];
+    return Promise.all(
+      bases.flatMap((base) => [api(`${base}/sync`, { method: "POST" }), api(`${base}/remote/check`, { method: "POST" })].map((call) => call.catch(() => null))),
     ).then(() => setRefresh(Date.now()));
+  };
   return (
     <div className="view">
       <ViewHeader title="版本与同步">
@@ -68,23 +123,59 @@ export function VersionsView() {
         </button>
       </ViewHeader>
       <div className="branch-list">
-        {SOURCES.map((item) => (
-          <BranchRow
-            key={item}
-            source={item}
-            selected={item === source}
-            refresh={refresh}
-            onSelect={() => showVersions(item)}
-            onPresence={item === "reviews" ? setReviews : undefined}
+        <BranchRow source="work" selected={source === "work"} refresh={refresh} onSelect={() => showVersions("work")} />
+        {LIBRARY_KINDS.map((kind) => (
+          <LibraryGroup
+            key={kind}
+            kind={kind}
+            list={libraries[kind]}
+            expanded={expanded[kind] !== false}
+            onToggle={() => setExpanded((current) => ({ ...current, [kind]: current[kind] === false }))}
+            selected={source === kind ? (library?.id ?? null) : null}
+            onSelect={(id) => showVersions(kind, id)}
           />
         ))}
+        <BranchRow source="reviews" selected={source === "reviews"} refresh={refresh} onSelect={() => showVersions("reviews")} onPresence={setReviews} />
       </div>
-      <VersionsPanel key={source} source={source} refresh={refresh} />
+      {isLibraryKind(source) ? (
+        library ? (
+          <VersionsPanel key={`${source}/${library.id}`} source={source} library={library.id} title={library.title} refresh={refresh} />
+        ) : (
+          <p className="view-hint">还没有{SOURCE_NAMES[source]}。在「{SOURCE_NAMES[source]}」选项卡（管理…）里新建，每个{SOURCE_NAMES[source]}有自己的版本。</p>
+        )
+      ) : (
+        <VersionsPanel key={source} source={source} refresh={refresh} />
+      )}
     </div>
   );
 }
 
-/** One branch: its name, unsaved changes or last version, versions to push or pull, trouble with GitHub. */
+/** How a branch stands: unsaved changes or its last version. */
+const standing = (changes: number, head: { date: string; message: string } | null) =>
+  changes ? `${changes} 个未保存的修改` : head ? `${timeAgo(head.date)}保存 · ${head.message}` : "还没有版本";
+
+/** Versions only here (↑) and only on GitHub (↓). */
+function AheadBehind({ ahead, behind }: { ahead: number; behind: number }) {
+  return (
+    <>
+      {ahead > 0 && (
+        <span className="faint small-text" title="还没推送到 GitHub 的版本">
+          <ArrowUp size={11} />
+          {ahead}
+        </span>
+      )}
+      {behind > 0 && (
+        <span className="faint small-text" title="GitHub 上更新的版本">
+          <ArrowDown size={11} />
+          {behind}
+        </span>
+      )}
+    </>
+  );
+}
+const troubled = (state: { state: string } | null) => Boolean(state && ["behind", "diverged", "conflict", "error"].includes(state.state));
+
+/** The work or the reviews: its name, unsaved changes or last version, versions to push or pull, trouble with GitHub. */
 function BranchRow({
   source,
   selected,
@@ -92,7 +183,7 @@ function BranchRow({
   onSelect,
   onPresence,
 }: {
-  source: VersionSource;
+  source: "work" | "reviews";
   selected: boolean;
   refresh: number;
   onSelect: () => void;
@@ -110,8 +201,6 @@ function BranchRow({
   }, [base, refresh]);
   useServerEvent((event) => {
     if ((event.type === "work-files" || event.type === "work-versions") && event.work === scope) void load();
-    if (source === "experience" && event.type === "experience-files" && event.repo === work.repo) void load();
-    if (source === "materials" && event.type === "materials" && event.repo === work.repo) void load();
     if (source === "reviews" && event.type === "reviews" && event.repo === work.repo) void load();
   });
   // No review data yet: no branch to show.
@@ -120,47 +209,95 @@ function BranchRow({
   if (!status || !present) return null;
   const Icon = SOURCE_ICONS[source];
   const changes = status.files.length;
-  const trouble = remote && ["behind", "diverged", "conflict", "error"].includes(remote.state);
   return (
     <div className={`branch-row ${selected ? "selected" : ""}`} title={`${SOURCE_NAMES[source]}的版本与同步`} onClick={onSelect}>
       <Icon size={14} />
       <div className="grow" style={{ minWidth: 0 }}>
         <div className="ellipsis">{SOURCE_NAMES[source]}</div>
-        <div className="faint small-text ellipsis">
-          {changes ? `${changes} 个未保存的修改` : status.head ? `${timeAgo(status.head.date)}保存 · ${status.head.message}` : "还没有版本"}
-        </div>
+        <div className="faint small-text ellipsis">{standing(changes, status.head)}</div>
       </div>
       {changes > 0 && <span className="badge accent">{changes}</span>}
-      {status.ahead > 0 && (
-        <span className="faint small-text" title="还没推送到 GitHub 的版本">
-          <ArrowUp size={11} />
-          {status.ahead}
-        </span>
-      )}
-      {status.behind > 0 && (
-        <span className="faint small-text" title="GitHub 上更新的版本">
-          <ArrowDown size={11} />
-          {status.behind}
-        </span>
-      )}
-      {trouble && <AlertTriangle size={14} className="warn-text" aria-label="和 GitHub 不同步" />}
+      <AheadBehind ahead={status.ahead} behind={status.behind} />
+      {troubled(remote) && <AlertTriangle size={14} className="warn-text" aria-label="和 GitHub 不同步" />}
+    </div>
+  );
+}
+
+/** The experience or material libraries: a row for the kind (folding), and below it one row per library. */
+function LibraryGroup({
+  kind,
+  list,
+  expanded,
+  onToggle,
+  selected,
+  onSelect,
+}: {
+  kind: LibraryKind;
+  list: LibraryVersions[] | null;
+  expanded: boolean;
+  onToggle: () => void;
+  selected: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (!list) return null;
+  const Icon = SOURCE_ICONS[kind];
+  const changes = list.reduce((sum, item) => sum + item.files, 0);
+  const open = expanded && list.length > 0;
+  return (
+    <>
+      <div className="branch-row" title={`每个${SOURCE_NAMES[kind]}是一个分支，版本、修改和同步各自独立`} onClick={onToggle}>
+        <Icon size={14} />
+        <div className="grow" style={{ minWidth: 0 }}>
+          <div className="ellipsis">{SOURCE_NAMES[kind]}</div>
+          <div className="faint small-text ellipsis">
+            {list.length ? `${list.length} 个${SOURCE_NAMES[kind]}${changes ? ` · ${changes} 个未保存的修改` : ""}` : `还没有${SOURCE_NAMES[kind]}`}
+          </div>
+        </div>
+        {!open && changes > 0 && <span className="badge accent">{changes}</span>}
+        {list.length > 0 && (open ? <ChevronDown size={14} /> : <ChevronRight size={14} />)}
+      </div>
+      {open && list.map((item) => <LibraryRow key={item.id} kind={kind} library={item} selected={item.id === selected} onSelect={() => onSelect(item.id)} />)}
+    </>
+  );
+}
+
+/** One library: its title (and id when they differ), unsaved changes or last version, versions to push or pull, trouble with GitHub. */
+function LibraryRow({ kind, library, selected, onSelect }: { kind: LibraryKind; library: LibraryVersions; selected: boolean; onSelect: () => void }) {
+  const { work } = useWorkbench();
+  const [remote] = useRemoteState(`${versionsBase(kind, work.repo, work.id, library.id)}/remote`, work.repo, scopeOf(kind, work.repo, work.id, library.id));
+  return (
+    <div
+      className={`branch-row branch-child ${selected ? "selected" : ""}`}
+      title={`${SOURCE_NAMES[kind]}「${library.title}」的版本与同步（分支 ${kind}/${library.id}）`}
+      onClick={onSelect}
+    >
+      <div className="grow" style={{ minWidth: 0 }}>
+        <div className="ellipsis">
+          {library.title}
+          {library.title !== library.id && <span className="faint small-text"> {library.id}</span>}
+        </div>
+        <div className="faint small-text ellipsis">{standing(library.files, library.head)}</div>
+      </div>
+      {library.files > 0 && <span className="badge accent">{library.files}</span>}
+      <AheadBehind ahead={library.ahead} behind={library.behind} />
+      {troubled(remote) && <AlertTriangle size={14} className="warn-text" aria-label="和 GitHub 不同步" />}
     </div>
   );
 }
 
 /**
- * Saving versions, unsaved changes, history and GitHub sync of the work or one of the
- * repository's shared branches (same API on another branch). Changes open as diff tabs: a
- * click previews, a double-click keeps the tab.
+ * Saving versions, unsaved changes, history and GitHub sync of the work, one library (its own
+ * branch) or the repository's reviews (same API on another branch). Changes open as diff tabs:
+ * a click previews, a double-click keeps the tab.
  */
-export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; refresh?: number }) {
+export function VersionsPanel({ source, library, title, refresh = 0 }: { source: VersionSource; library?: string; title?: string; refresh?: number }) {
   const { work, reload: reloadWork, openDiff, readOnly } = useWorkbench();
-  // Shared branches use the work's version UI; the material and review branches save every change at once.
+  // Shared branches use the work's version UI; material libraries and the reviews save every change at once.
   const shared = source !== "work";
   const autosaved = source === "materials" || source === "reviews";
   // A published work keeps its history viewable and syncs, but takes no new versions.
   const locked = !shared && readOnly;
-  const scope = scopeOf(source, work.repo, work.id);
+  const scope = scopeOf(source, work.repo, work.id, library);
   const reload = shared ? async () => {} : reloadWork;
   const [status, setStatus] = useState<WorkStatus | null>(null);
   const [history, setHistory] = useState<Version[]>([]);
@@ -175,8 +312,9 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
   const confirm = useConfirm();
   const toast = useToast();
   const [openMenu, menu] = useContextMenu();
-  const base = versionsBase(source, work.repo, work.id);
-  const name = SOURCE_NAMES[source];
+  const base = versionsBase(source, work.repo, work.id, library);
+  const name = library ? `${SOURCE_NAMES[source]}「${title ?? library}」` : SOURCE_NAMES[source];
+  // Paths come from the branch's root: a work's are shown as in its folder.
   const prefix = shared ? "" : `projects/${work.slug}/`;
   const short = (file: string) => file.replace(prefix, "");
   const load = async (count = Math.max(PAGE, history.length)) => {
@@ -195,6 +333,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
     if (source === "materials" && event.type === "materials" && event.repo === work.repo) void load();
     if (source === "reviews" && event.type === "reviews" && event.repo === work.repo) void load();
   });
+  const diff = (tab: string, query: string, preview: boolean) => openDiff(tab, query, { preview, source, library });
 
   const commit = () =>
     run(async () => {
@@ -286,7 +425,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
       {busy && <div className="view-progress" />}
       <section className="view-section">
         {autosaved ? (
-          <p className="view-hint">{name}的每次修改都自动保存为一个版本。</p>
+          <p className="view-hint">{name}的每次修改都自动保存为一个版本{library ? "，和其他素材库互不影响" : ""}。</p>
         ) : locked ? (
           <p className="view-hint">作品已发布，不再保存新版本。</p>
         ) : (
@@ -361,8 +500,8 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
               key={file.path}
               className="change-row"
               title={`${short(file.path)}：单击查看改动，双击保持打开`}
-              onClick={() => openDiff(`${fileName(file.path)}（未保存）`, `file=${encodeURIComponent(file.path)}`, { preview: true, source })}
-              onDoubleClick={() => openDiff(`${fileName(file.path)}（未保存）`, `file=${encodeURIComponent(file.path)}`, { preview: false, source })}
+              onClick={() => diff(`${fileName(file.path)}（未保存）`, `file=${encodeURIComponent(file.path)}`, true)}
+              onDoubleClick={() => diff(`${fileName(file.path)}（未保存）`, `file=${encodeURIComponent(file.path)}`, false)}
             >
               <span className={`change-status s-${file.status === "?" ? "A" : file.status}`}>{file.status === "?" ? "A" : file.status}</span>
               <span className="ellipsis grow" title={statusLabel[file.status] || file.status}>
@@ -402,7 +541,7 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
                     {
                       label: "查看这个版本的全部改动",
                       icon: <FileDiff size={14} />,
-                      onClick: () => openDiff(`${version.short} ${version.message}`, `commit=${version.commit}`, { preview: false, source }),
+                      onClick: () => diff(`${version.short} ${version.message}`, `commit=${version.commit}`, false),
                     },
                     { label: "恢复到这个版本", icon: <RotateCcw size={14} />, onClick: () => revert(version), disabled: index === 0 || locked },
                   ])
@@ -448,8 +587,8 @@ export function VersionsPanel({ source, refresh = 0 }: { source: VersionSource; 
                         key={file.path}
                         className="version-file"
                         title={`${short(file.path)}：单击查看这个版本对它的改动，双击保持打开`}
-                        onClick={() => openDiff(title, query, { preview: true, source })}
-                        onDoubleClick={() => openDiff(title, query, { preview: false, source })}
+                        onClick={() => diff(title, query, true)}
+                        onDoubleClick={() => diff(title, query, false)}
                       >
                         <span className={`change-status s-${file.status}`}>{file.status}</span>
                         <span className="ellipsis grow" title={statusLabel[file.status] || file.status}>

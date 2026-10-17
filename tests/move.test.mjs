@@ -54,14 +54,13 @@ describe("迁移作品到其他作品库", () => {
     const target = repos.get(repo.id);
 
     // A material library: one file the work locks now, one it locked at an older version.
+    await materials.create("local", "品牌");
     await materials.save("local", ["品牌"], "素材", (dir) => {
-      fs.mkdirSync(path.join(dir, "品牌"), { recursive: true });
       fs.writeFileSync(path.join(dir, "品牌", "README.md"), "# 品牌\n");
       fs.writeFileSync(path.join(dir, "品牌", "logo.svg"), "<svg>logo</svg>");
       fs.writeFileSync(path.join(dir, "品牌", "old.svg"), "<svg>old</svg>");
     });
     await experience.create("local", "短片经验");
-    await experience.commitPaths("local", ["短片经验"], "经验");
 
     const work = await works.create({ title: "迁移的作品" });
     fs.writeFileSync(path.join(work.dir, "scene.ts"), fs.readFileSync(path.join(work.dir, "scene.ts"), "utf8") + '\n// assetUrl("materials/品牌/logo.svg")\n// assetUrl("materials/品牌/old.svg")\n');
@@ -127,7 +126,7 @@ describe("迁移作品到其他作品库", () => {
     const there = works.describe(repo.id, work.id);
     expect(fs.readFileSync(path.join(there.dir, "notes.md"), "utf8")).toBe("迁移前的修改");
     expect(fs.readFileSync(lfsFile(target.dir, "a"), "utf8")).toBe("mp4");
-    const head = await materials.head(await materials.dir(repo.id));
+    const head = await materials.headMap(repo.id);
     expect(JSON.parse(fs.readFileSync(path.join(there.dir, "materials.lock.json"), "utf8"))).toEqual({
       "品牌/logo.svg": head.get("品牌/logo.svg"),
       "品牌/old.svg": head.get("品牌/old.svg"),

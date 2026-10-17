@@ -678,7 +678,7 @@ function About() {
       <p className="muted">
         数据目录：<span className="mono">{state?.home}</span>
       </p>
-      <p className="muted">作品是 Git 分支，素材库在 frame/materials 分支，导出文件在数据目录的 exports/ 中。</p>
+      <p className="muted">作品是 Git 分支，每个素材库、经验库也各是一个分支（materials/、experience/），导出文件在数据目录的 exports/ 中。</p>
     </>
   );
 }

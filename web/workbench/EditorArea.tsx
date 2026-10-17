@@ -91,7 +91,7 @@ export interface EditorHandle {
   /** A file of a work's review (`<work id>/<path>`): documents are edited, original files viewed. */
   openReview(path: string, options?: { preview?: boolean }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
-  openDiff(title: string, query: string, options?: { preview?: boolean; source?: VersionSource }): void;
+  openDiff(title: string, query: string, options?: { preview?: boolean; source?: VersionSource; library?: string }): void;
   /** A tool in its own tab (export, reviews, resources, library management). */
   openTool(tool: Tool): void;
   /** Split the focused group's tab off to a side (Ctrl+\). */
@@ -368,9 +368,10 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     [open],
   );
   const openDiff = useCallback(
-    (title: string, query: string, options: { preview?: boolean; source?: VersionSource } = {}) => {
+    (title: string, query: string, options: { preview?: boolean; source?: VersionSource; library?: string } = {}) => {
       const source = options.source ?? "work";
-      open({ key: `diff:${source}:${query}`, file: "", source, kind: "diff", title, diff: query }, { preview: options.preview ?? true });
+      const library = options.library;
+      open({ key: `diff:${source}:${library ?? ""}:${query}`, file: library ?? "", source, kind: "diff", title, diff: query }, { preview: options.preview ?? true });
     },
     [open],
   );
@@ -446,7 +447,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
             : all,
         );
       } else if (event.type === "experience-files" && event.repo === work.repo) {
-        // A renamed library or document: its open tabs follow it.
+        // A moved document: its open tabs follow it.
         const moved = event.moved as { from: string; to: string } | undefined;
         if (moved) {
           const follow = (file: string) => (file === moved.from || file.startsWith(moved.from + "/") ? moved.to + file.slice(moved.from.length) : null);
@@ -469,6 +470,10 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         }
         const changed = event.files as string[];
         refresh((doc) => doc.source === "experience" && (!changed.length || changed.some((file) => doc.file === file || doc.file.startsWith(file + "/"))));
+      } else if (event.type === "work-versions" && String(event.work).startsWith("experience/")) {
+        // A library's branch moved (GitHub's versions brought in): its open documents follow.
+        const library = String(event.work).slice("experience/".length);
+        refresh((doc) => doc.source === "experience" && doc.file.startsWith(library + "/"));
       } else if ((event.type === "reviews" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `reviews-${work.repo}`)) {
         refresh((doc) => doc.source === "reviews" && (!event.work || doc.file.startsWith(`${event.work}/`)));
       }
@@ -1111,7 +1116,7 @@ function EditorContent({
       ) : doc.kind === "raw" ? (
         <RawViewer key={doc.file} fileRef={doc.file} />
       ) : doc.kind === "diff" ? (
-        <DiffEditor query={doc.diff!} source={doc.source === "resource" ? "materials" : doc.source} />
+        <DiffEditor query={doc.diff!} source={doc.source === "resource" ? "materials" : doc.source} library={doc.file || undefined} />
       ) : doc.source === "materials" ? (
         <MaterialViewer key={doc.file} fileRef={doc.file} kind={doc.kind} playerId={editor.id} />
       ) : doc.kind === "text" ? (

@@ -29,7 +29,7 @@ describe("material libraries", () => {
   });
   afterAll(() => app.close());
 
-  it("keeps libraries as folders with every change saved as a version", async () => {
+  it("keeps each library on its own branch with every change saved as a version", async () => {
     expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "品牌" } })).body).toEqual({ id: "品牌", title: "品牌" });
     expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "品牌" } })).status).toBe(409);
     const uploaded = await call(`${lib}/libraries/${encodeURIComponent("品牌")}/upload?path=logo.svg&source=${encodeURIComponent("自己画的")}&license=CC0`, {
@@ -42,9 +42,15 @@ describe("material libraries", () => {
     expect(files[0].blob).toMatch(/^[0-9a-f]{40}$/);
     const readme = fs.readFileSync(path.join(await materials.dir("local"), "品牌", "README.md"), "utf8");
     expect(readme).toContain("- `logo.svg`：来源 自己画的；许可 CC0");
-    expect((await call(`${lib}/history`)).body.map((version) => version.message).slice(0, 2)).toEqual(["素材库「品牌」：添加 logo.svg", "新建素材库：品牌"]);
-    expect((await call(`${lib}/status`)).body.files).toEqual([]);
+    expect((await call(`${lib}/libraries/${encodeURIComponent("品牌")}/history`)).body.map((version) => version.message)).toEqual(["添加 logo.svg", "新建素材库：品牌"]);
+    expect((await call(`${lib}/libraries/${encodeURIComponent("品牌")}/status`)).body.files).toEqual([]);
     expect((await call(`${lib}/libraries`)).body).toMatchObject([{ id: "品牌", title: "品牌", files: 1, size: 13, about: "", works: 0 }]);
+    expect((await call(`${lib}/versions`)).body).toMatchObject([{ id: "品牌", title: "品牌", files: 0, head: { message: "添加 logo.svg" } }]);
+    // An id is a branch name: no spaces or the characters Git refuses.
+    expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "通用 背景~1" } })).body).toEqual({ id: "通用-背景-1", title: "通用 背景~1" });
+    expect((await git(app.services.repos.dir("local"), ["for-each-ref", "--format=%(refname:short)", "refs/heads/materials/"])).trim().split("\n")).toEqual(["materials/品牌", "materials/通用-背景-1"]);
+    await call(`${lib}/libraries/${encodeURIComponent("通用-背景-1")}`, { method: "DELETE" });
+    await call(`${lib}/trash/${encodeURIComponent("通用-背景-1")}`, { method: "DELETE" });
   });
 
   it("lists library files with their size and length for previews", async () => {
@@ -171,11 +177,10 @@ describe("material libraries", () => {
     expect(files["materials/缓存/logo.svg"]).toMatchObject({ size: 14, version: "git-" + locks()["缓存/logo.svg"] });
 
     // A Git LFS pointer counts as the size of the object it stands for.
-    const dir = await materials.dir("local");
     const text = "version https://git-lfs.github.com/spec/v1\noid sha256:" + "a".repeat(64) + "\nsize 12345678\n";
-    const pointer = (await git(dir, ["hash-object", "-w", "--stdin"], { input: text })).trim();
-    expect(await materials.blobSize(dir, pointer)).toBe(12345678);
-    expect(await materials.blobSize(dir, "0".repeat(40))).toBeNull();
+    const pointer = (await git(app.services.repos.dir("local"), ["hash-object", "-w", "--stdin"], { input: text })).trim();
+    expect(await materials.blobSize("local", pointer)).toBe(12345678);
+    expect(await materials.blobSize("local", "0".repeat(40))).toBeNull();
     await call(`${lib}/libraries/${encodeURIComponent("缓存")}`, { method: "DELETE" });
   });
 
@@ -344,19 +349,36 @@ describe("material libraries", () => {
     expect(missing.problems.map((problem) => problem.message)).toContain("素材库里没有 @materials/特效/missing（scene.ts 导入）");
   });
 
-  it("syncs libraries through the repository's materials branch", async () => {
+  it("syncs each library through its own branch, binning and renaming too", async () => {
     process.env.FRAME_ALLOW_FILE_REMOTES = "1";
     const remote = fs.mkdtempSync(path.join(os.tmpdir(), "frame-remote-")) + "/works.git";
     await git(os.tmpdir(), ["init", "--bare", "--initial-branch=main", remote]);
     const other = await createApp({ env: { FRAME_HOME: fs.mkdtempSync(path.join(os.tmpdir(), "frame-materials-b-")), FRAME_PORT: "0" }, plugins });
+    const branches = async (dir) => (await git(dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads/"])).split("\n").filter((name) => /^materials/.test(name));
     try {
       const a = await app.services.repos.clone({ url: "file://" + remote });
       const b = await other.services.repos.clone({ url: "file://" + remote });
       await materials.create(a.id, "共享");
       await materials.put(a.id, "共享", "a.txt", { content: "from a" });
-      await works.push(await materials.scope(a.id));
-      await other.services.works.pull(await other.services.materials.scope(b.id));
+      await works.push(await materials.scope(a.id, "共享"));
+      // The other device asks GitHub and finds the library.
+      await other.services.repos.fetch(b.id);
+      expect((await other.services.materials.libraries(b.id)).map((library) => library.id)).toEqual(["共享"]);
       expect((await other.services.materials.files(b.id, "共享")).map((file) => file.path)).toEqual(["a.txt"]);
+      // A later version comes in by pulling that library alone.
+      await materials.put(a.id, "共享", "b.txt", { content: "from a" });
+      await materials.rename(a.id, "共享", "大家的素材");
+      await works.push(await materials.scope(a.id, "共享"));
+      await other.services.works.pull(await other.services.materials.scope(b.id, "共享"));
+      expect((await other.services.materials.files(b.id, "共享")).map((file) => file.path)).toEqual(["a.txt", "b.txt"]);
+      expect((await other.services.materials.libraries(b.id))[0]).toMatchObject({ id: "共享", title: "大家的素材" });
+      // Binned on one device: the branch is renamed on GitHub; the other device follows.
+      await materials.remove(a.id, "共享");
+      expect(await branches(remote)).toEqual(["materials-trash/共享"]);
+      await other.services.repos.fetch(b.id);
+      expect((await other.services.materials.libraries(b.id)).map((library) => library.id)).toEqual([]);
+      expect((await other.services.materials.trash(b.id)).map((item) => item.key)).toEqual(["共享"]);
+      expect(await branches(other.services.repos.dir(b.id))).toEqual(["materials-trash/共享"]);
     } finally {
       await other.close();
     }

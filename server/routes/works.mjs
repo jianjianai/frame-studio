@@ -150,7 +150,7 @@ export function workRoutes(services) {
       blocked,
       error,
       materials: (await services.materials?.movePlan(work, to)) ?? { copy: [], shared: [], changed: [], missing: [] },
-      experiences: (await services.experience?.movePlan(work, to)) ?? { copy: [], shared: [], aliases: {} },
+      experiences: (await services.experience?.movePlan(work, to)) ?? { copy: [], shared: [] },
       review: Boolean(await services.reviews?.has(from, id)),
       exports: { count: videos.length, bytes: diskUsage(exports) },
       sessions: services.ai?.list({ work: id, repo: from }).length ?? 0,

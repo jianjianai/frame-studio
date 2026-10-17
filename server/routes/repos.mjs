@@ -3,14 +3,19 @@ import path from "node:path";
 import { readJson } from "../http.mjs";
 import { git } from "../git.mjs";
 import { problem, conflict, diskUsage } from "../util.mjs";
-import { LOCAL_REPO, MATERIALS_BRANCH } from "../repos.mjs";
+import { LOCAL_REPO } from "../repos.mjs";
 
-/** The branches a repository's works share, and the service that keeps each. */
-const LIBRARY_BRANCHES = {
-  [MATERIALS_BRANCH]: { title: "素材库", service: "materials" },
-  "frame/experience": { title: "经验库", service: "experience" },
-  "frame/reviews": { title: "复盘资料", service: "reviews" },
-};
+/** A branch the works of a repository share: a library (or one in the recycle bin) or the reviews, and the service that keeps it. */
+function sharedBranch(branch) {
+  for (const [prefix, service, noun] of [
+    ["materials", "materials", "素材库"],
+    ["experience", "experience", "经验库"],
+  ]) {
+    if (branch.startsWith(prefix + "/")) return { service, library: branch.slice(prefix.length + 1), title: `${noun}「${branch.slice(prefix.length + 1)}」` };
+    if (branch.startsWith(prefix + "-trash/")) return { service, title: `${noun}回收站「${branch.slice(prefix.length + 7)}」` };
+  }
+  return branch === "frame/reviews" ? { service: "reviews", title: "复盘资料" } : null;
+}
 
 export function repoRoutes(services) {
   const { router, repos, github, works } = services;
@@ -50,7 +55,7 @@ export function repoRoutes(services) {
     const item = (branch) => {
       if (!pending.has(branch)) {
         const [, prefix, work] = /^(works|trash)\/(.+)$/.exec(branch) ?? [];
-        const library = LIBRARY_BRANCHES[branch];
+        const library = sharedBranch(branch);
         pending.set(branch, {
           branch,
           kind: work ? (prefix === "works" ? "work" : "trash") : library ? "library" : "branch",
@@ -103,8 +108,15 @@ export function repoRoutes(services) {
     const failed = [];
     for (const entry of report.pending.filter((item) => item.unsaved))
       try {
-        const library = LIBRARY_BRANCHES[entry.branch];
-        const scope = entry.kind === "work" ? works.describe(id, entry.work) : library ? await services[library.service].scope(id) : null;
+        const library = sharedBranch(entry.branch);
+        const scope =
+          entry.kind === "work"
+            ? works.describe(id, entry.work)
+            : library?.library
+              ? await services[library.service].scope(id, library.library)
+              : library?.service === "reviews"
+                ? await services.reviews.scope(id)
+                : null;
         if (!scope) continue;
         await works.commit(scope, "取消链接前自动保存");
         // Pushed at once, in turn with the push the saved version scheduled.

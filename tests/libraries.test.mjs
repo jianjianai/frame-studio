@@ -68,27 +68,22 @@ describe("many libraries", () => {
     app = await createApp({ env: { FRAME_HOME: home, FRAME_PORT: "0" }, plugins });
     base = await app.listen();
     ({ works } = app.services);
-    // Sixty material libraries and forty experience libraries, written straight into their branches.
-    const materials = await app.services.materials.dir("local");
+    // Sixty material libraries and forty experience libraries, each its own branch.
     for (let index = 0; index < 60; index++) {
       const id = index === 7 ? "三维模型库" : `素材${String(index).padStart(2, "0")}`;
-      fs.mkdirSync(path.join(materials, id, "img"), { recursive: true });
-      fs.writeFileSync(path.join(materials, id, "README.md"), `# ${id}\n\n${index === 7 ? "产品展示用的三维模型和摄影棚光。" : `第 ${index} 组通用背景图片。`}\n`);
-      for (let file = 0; file < (index === 7 ? 45 : 1); file++) fs.writeFileSync(path.join(materials, id, file < 40 ? "img" : "", `bg${file}.svg`), `<svg>${file}</svg>`);
+      const files = { "README.md": `# ${id}\n\n${index === 7 ? "产品展示用的三维模型和摄影棚光。" : `第 ${index} 组通用背景图片。`}\n` };
+      for (let file = 0; file < (index === 7 ? 45 : 1); file++) files[`${file < 40 ? "img/" : ""}bg${file}.svg`] = `<svg>${file}</svg>`;
       // Six resources in three kinds each: too many for a full directory of every library.
       const declared = ["character", "set", "prop"].flatMap((kind) => [1, 2].map((n) => `  ${kind}${n}: resource({ kind: "${kind}", title: "${id} 的第 ${n} 个${kind}资源（名字很长）", preview: { width: 400, height: 300, draw() {} } }),`));
-      fs.mkdirSync(path.join(materials, id, "code"), { recursive: true });
-      fs.writeFileSync(path.join(materials, id, "code", "shapes.ts"), `import { defineResources, resource } from "@frame/engine/resources";\n\nexport const resources = defineResources({\n${declared.join("\n")}\n});\n`);
+      files["code/shapes.ts"] = `import { defineResources, resource } from "@frame/engine/resources";\n\nexport const resources = defineResources({\n${declared.join("\n")}\n});\n`;
+      await app.services.materials.branches.create("local", id, { files, message: "素材库" });
     }
-    await git(materials, ["add", "-A"]);
-    await git(materials, ["commit", "-q", "-m", "很多素材库"]);
     app.services.events.emit({ type: "materials", repo: "local", paths: [] });
-    const experience = await app.services.experience.dir("local");
     for (let index = 0; index < 40; index++) {
       const id = index === 3 ? "产品视频" : `经验${String(index).padStart(2, "0")}`;
-      fs.mkdirSync(path.join(experience, id), { recursive: true });
-      fs.writeFileSync(path.join(experience, id, "README.md"), `# ${id}\n\n${index === 3 ? "产品展示类短片的节奏和镜头。" : `第 ${index} 类作品的经验。`}\n`);
-      if (index === 3) fs.writeFileSync(path.join(experience, id, "开场.md"), "# 开场\n\n前两秒亮出产品。\n");
+      const files = { "README.md": `# ${id}\n\n${index === 3 ? "产品展示类短片的节奏和镜头。" : `第 ${index} 类作品的经验。`}\n` };
+      if (index === 3) files["开场.md"] = "# 开场\n\n前两秒亮出产品。\n";
+      await app.services.experience.branches.create("local", id, { files, message: "经验库" });
     }
     for (const [key, title] of [
       ["a", "三维产品展示 第一集"],
@@ -99,7 +94,8 @@ describe("many libraries", () => {
       ids[key] = work.id;
       if (key !== "c") await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { materials: ["三维模型库"], experiences: ["产品视频"] } });
     }
-  });
+    // A hundred branches with their checkouts take a while on a busy machine.
+  }, 240000);
   afterAll(() => app.close());
 
   it("lists how many works use each library and which suit a work", async () => {
@@ -216,11 +212,16 @@ describe("the recycle bin of libraries", () => {
   });
   afterAll(() => app.close());
 
+  const log = (dir, count = 1) => git(dir, ["log", `-${count}`, "--format=%s"]).then((out) => out.trim().split("\n"));
+  const branches = (prefix) =>
+    git(app.services.repos.dir("local"), ["for-each-ref", "--format=%(refname:short)", "refs/heads/"]).then((out) => out.split("\n").filter((branch) => branch.startsWith(prefix)));
+
   it("keeps a deleted material library in the bin until it is restored or purged", async () => {
     await call(`${materials}/libraries`, { method: "POST", body: { name: "旧素材" } });
     await call(`${materials}/libraries/${enc("旧素材")}/upload?path=logo.svg`, { method: "POST", raw: "<svg/>" });
     const work = (await call("/api/works", { method: "POST", body: { title: "用旧素材" } })).body;
     await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { materials: ["旧素材"] } });
+    const dir = await app.services.materials.dir("local");
 
     const removed = await call(`${materials}/libraries/${enc("旧素材")}`, { method: "DELETE" });
     expect(removed.body).toMatchObject({ key: "旧素材", id: "旧素材", title: "旧素材" });
@@ -230,56 +231,67 @@ describe("the recycle bin of libraries", () => {
     // Nothing in the bin is searched or listed for the AI.
     expect((await tool("search", { work: work.id, pattern: "svg", scope: ["materials"] })).body.text).toContain("没有找到");
     expect((await tool("materials_list", { work: work.id })).body.text).toContain("有 0 个素材库");
-    expect((await call(`${materials}/history`)).body[0].message).toBe("删除素材库：旧素材（移到回收站）");
+    // The bin is a branch of its own, its last version says so.
+    expect(await branches("materials")).toEqual(["materials-trash/旧素材"]);
+    expect(await log(path.join(dir, ".trash", "旧素材"))).toEqual(["删除素材库：旧素材（移到回收站）"]);
 
     expect((await call(`${materials}/trash/${enc("旧素材")}/restore`, { method: "POST" })).body).toEqual({ id: "旧素材", title: "旧素材", renamed: false });
     expect((await call(`/api/works/local/${work.id}/materials`)).body.libraries.map((item) => item.id)).toEqual(["旧素材"]);
     expect((await call(`${materials}/trash`)).body).toEqual([]);
+    expect(await branches("materials")).toEqual(["materials/旧素材"]);
+    expect(await log(path.join(dir, "旧素材"), 3)).toEqual(["恢复素材库：旧素材", "删除素材库：旧素材（移到回收站）", "添加 logo.svg"]);
 
-    // Deleted again, its name taken meanwhile: it comes back under another one.
+    // Deleted again, its id taken meanwhile: it comes back under another one.
     await call(`${materials}/libraries/${enc("旧素材")}`, { method: "DELETE" });
     await call(`${materials}/libraries`, { method: "POST", body: { name: "旧素材" } });
-    expect((await call(`${materials}/trash/${enc("旧素材")}/restore`, { method: "POST" })).body).toEqual({ id: "旧素材 2", title: "旧素材", renamed: true });
-    await call(`${materials}/libraries/${enc("旧素材 2")}`, { method: "DELETE" });
+    expect((await call(`${materials}/trash/${enc("旧素材")}/restore`, { method: "POST" })).body).toEqual({ id: "旧素材-2", title: "旧素材", renamed: true });
+    await call(`${materials}/libraries/${enc("旧素材-2")}`, { method: "DELETE" });
     await call(`${materials}/libraries/${enc("旧素材")}`, { method: "DELETE" });
-    expect((await call(`${materials}/trash`)).body.map((item) => item.key).sort()).toEqual(["旧素材", "旧素材 2"]);
-    expect((await call(`${materials}/trash/${enc("旧素材 2")}`, { method: "DELETE" })).body).toEqual({ purged: ["旧素材 2"] });
+    expect((await call(`${materials}/trash`)).body.map((item) => item.key).sort()).toEqual(["旧素材", "旧素材-2"]);
+    expect((await call(`${materials}/trash/${enc("旧素材-2")}`, { method: "DELETE" })).body).toEqual({ purged: ["旧素材-2"] });
+    // Its versions go for good: not while a work still references it.
+    const refused = await call(`${materials}/trash`, { method: "DELETE" });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.message).toContain("还有作品引用素材库「旧素材」：「用旧素材」");
+    await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { materials: [] } });
     expect((await call(`${materials}/trash`, { method: "DELETE" })).body).toEqual({ purged: ["旧素材"] });
     expect((await call(`${materials}/trash`)).body).toEqual([]);
+    expect(await branches("materials")).toEqual([]);
+    expect(fs.existsSync(path.join(dir, ".trash"))).toBe(false);
     expect((await call(`${materials}/trash/${enc("旧素材")}/restore`, { method: "POST" })).status).toBe(404);
     expect((await call(`${materials}/trash/${enc("../x")}/restore`, { method: "POST" })).status).toBe(404);
   });
 
-  it("saves only the move of an experience library as a version, leaving other edits unsaved", async () => {
+  it("bins an experience library with its unsaved edits and leaves the others' unsaved", async () => {
     await call(`${experience}/libraries`, { method: "POST", body: { name: "旧经验" } });
     await call(`${experience}/libraries`, { method: "POST", body: { name: "留着" } });
-    await call(`${experience}/commit`, { method: "POST", body: { message: "两个经验库" } });
-    await call(`${experience}/libraries/${enc("旧经验")}/rename`, { method: "POST", body: { name: "更旧的经验" } });
-    await call(`${experience}/commit`, { method: "POST", body: { message: "改名" } });
+    // Renaming changes the title; the id works link stays.
+    expect((await call(`${experience}/libraries/${enc("旧经验")}/rename`, { method: "POST", body: { name: "更旧的经验" } })).body).toEqual({ id: "旧经验", title: "更旧的经验" });
+    await call(`${experience}/file`, { method: "PUT", body: { path: "旧经验/没保存.md", content: "# 没保存\n", expectedHash: null } });
     await call(`${experience}/file`, { method: "PUT", body: { path: "留着/草稿.md", content: "# 草稿\n", expectedHash: null } });
 
-    expect((await call(`${experience}/libraries/${enc("更旧的经验")}`, { method: "DELETE" })).body).toMatchObject({ key: "更旧的经验", title: "更旧的经验" });
-    expect((await call(`${experience}/history`)).body[0].message).toBe("删除经验库：更旧的经验（移到回收站）");
-    expect((await call(`${experience}/status`)).body.files.map((file) => file.path)).toEqual(["留着/草稿.md"]);
+    expect((await call(`${experience}/libraries/${enc("旧经验")}`, { method: "DELETE" })).body).toMatchObject({ key: "旧经验", title: "更旧的经验" });
+    expect((await call(`${experience}/libraries/${enc("留着")}/status`)).body.files.map((file) => file.path)).toEqual(["草稿.md"]);
     expect((await call(`${experience}/libraries`)).body.map((item) => item.id)).toEqual(["留着"]);
-    expect((await call(`${experience}/trash`)).body).toMatchObject([{ key: "更旧的经验", id: "更旧的经验" }]);
+    expect((await call(`${experience}/trash`)).body).toMatchObject([{ key: "旧经验", id: "旧经验", title: "更旧的经验", files: 1 }]);
 
-    // The AI hears where it is; restored, links through its earlier name work again.
-    const work = (await call("/api/works", { method: "POST", body: { title: "用旧名字" } })).body;
+    // The AI hears where it is; restored, the work's link works again.
+    const work = (await call("/api/works", { method: "POST", body: { title: "用旧经验" } })).body;
     expect((await tool("experience_link", { work: work.id, add: ["更旧的经验"] })).body.error.message).toBe(
       "「更旧的经验」在经验库的回收站里：请用户在「经验库」选项卡（管理…）的回收站中恢复。",
     );
     await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experiences: ["旧经验"] } });
-    expect((await call(`${experience}/trash/${enc("更旧的经验")}/restore`, { method: "POST" })).body).toEqual({ id: "更旧的经验", title: "更旧的经验", renamed: false });
+    expect((await call(`${experience}/trash/${enc("旧经验")}/restore`, { method: "POST" })).body).toEqual({ id: "旧经验", title: "更旧的经验", renamed: false });
     expect((await tool("experience_read", { work: work.id })).body.text).toContain("经验库「更旧的经验」");
+    const restored = (await app.services.experience.dir("local")) + "/旧经验";
+    expect(await log(restored, 4)).toEqual(["恢复经验库：更旧的经验", "删除经验库：更旧的经验（移到回收站）", "经验库改名为「更旧的经验」", "新建经验库：旧经验"]);
 
-    // Purged: the history keeps it, its earlier names go.
-    await call(`${experience}/libraries/${enc("更旧的经验")}`, { method: "DELETE" });
-    expect((await call(`${experience}/trash/${enc("更旧的经验")}`, { method: "DELETE" })).body).toEqual({ purged: ["更旧的经验"] });
+    // Purged: its branch goes.
+    await call(`${experience}/libraries/${enc("旧经验")}`, { method: "DELETE" });
+    expect((await call(`${experience}/trash/${enc("旧经验")}`, { method: "DELETE" })).body).toEqual({ purged: ["旧经验"] });
     const dir = await app.services.experience.dir("local");
-    expect(fs.existsSync(path.join(dir, ".aliases.json"))).toBe(false);
     expect(fs.existsSync(path.join(dir, ".trash"))).toBe(false);
-    expect((await call(`${experience}/status`)).body.files.map((file) => file.path)).toEqual(["留着/草稿.md"]);
-    expect((await call(`${experience}/history`)).body.map((item) => item.message).slice(0, 2)).toEqual(["从回收站删除经验库：更旧的经验", "删除经验库：更旧的经验（移到回收站）"]);
+    expect(await branches("experience")).toEqual(["experience/留着"]);
+    expect((await call(`${experience}/libraries/${enc("留着")}/status`)).body.files.map((file) => file.path)).toEqual(["草稿.md"]);
   });
 });

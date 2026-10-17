@@ -146,7 +146,7 @@ export interface Selection {
   index?: number;
 }
 
-/** Branches with versions: the work, and the repository's experience, material and review branches. */
+/** What has versions: the work, each experience and material library (a branch each), and the repository's reviews. */
 export type VersionSource = "work" | "experience" | "materials" | "reviews";
 /**
  * Tools that open as editor tabs (wide, many options or much data) instead of side bar views:
@@ -177,13 +177,14 @@ export interface WorkbenchContextValue {
   openResource: (id: string, options?: { preview?: boolean; title?: string }) => void;
   /** Open a file of a work's review (`<work id>/<path>`): documents to edit, original files to view. */
   openReview: (path: string, options?: { preview?: boolean }) => void;
-  /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. */
-  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: VersionSource }) => void;
+  /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. `library`: whose (experience, materials). */
+  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: VersionSource; library?: string }) => void;
   /** Open (or show) a tool's tab: export, reviews, resources, library management. */
   openTool: (tool: Tool) => void;
-  /** The branch the 版本与同步 view shows; `showVersions` opens that view on a branch. */
+  /** The branch the 版本与同步 view shows (for libraries, which one of each kind); `showVersions` opens that view on a branch. */
   versionSource: VersionSource;
-  showVersions: (source?: VersionSource) => void;
+  versionLibrary: Partial<Record<VersionSource, string>>;
+  showVersions: (source?: VersionSource, library?: string) => void;
   addToChat: (attachment: ChatAttachment, prompt?: string) => void;
   askAi: (prompt: string, attachments?: ChatAttachment[]) => void;
   /** Put a prompt into the chat's input box (opening the chat). */

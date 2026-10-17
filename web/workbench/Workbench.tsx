@@ -69,6 +69,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     if (!VIEWS.some((item) => item.id === view)) setView("explorer");
   }, [view, setView]);
   const [versionSource, setVersionSource] = usePersistent<VersionSource>("versions-source", "work");
+  const [versionLibrary, setVersionLibrary] = usePersistent<Partial<Record<VersionSource, string>>>("versions-library", {});
   const [sidebar, setSidebar] = usePersistent("sidebar", { visible: true, width: 260 });
   const [panel, setPanel] = usePersistent("panel", { visible: true, height: 240, tab: "timeline" });
   const [chat, setChat] = usePersistent("chat", { visible: true, width: 400 });
@@ -108,12 +109,12 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   const readOnlyRef = useRef(false);
   const history = useTimelineHistory(base, reload, () => readOnlyRef.current);
   const reloadStatus = useCallback(() => api<WorkStatus>(base + "/status").then(setStatus, () => {}), [base]);
-  // Unsaved changes of the experience libraries, for the badge on the 经验 icon.
+  // Unsaved changes of the experience libraries, for the badge on the 版本与同步 icon.
   const [experienceChanges, setExperienceChanges] = useState(0);
   const reloadExperience = useCallback(
     () =>
-      api<WorkStatus>(experiencePath(repo) + "/status").then(
-        (next) => setExperienceChanges(next.files.length),
+      api<{ files: number }[]>(experiencePath(repo) + "/versions").then(
+        (libraries) => setExperienceChanges(libraries.reduce((sum, library) => sum + library.files, 0)),
         () => {},
       ),
     [repo],
@@ -121,7 +122,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   useEffect(() => void reloadExperience(), [reloadExperience]);
   useServerEvent(
     (event) => {
-      if ((event.type === "experience-files" && event.repo === repo) || (event.type === "work-versions" && event.work === `experience-${repo}`))
+      if ((event.type === "experience-files" && event.repo === repo) || (event.type === "work-versions" && String(event.work).startsWith("experience/")))
         void reloadExperience();
     },
     [repo],
@@ -234,8 +235,10 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
       setSidebar((value) => ({ ...value, visible: true }));
     },
     versionSource,
-    showVersions: (source) => {
+    versionLibrary,
+    showVersions: (source, library) => {
       if (source) setVersionSource(source);
+      if (source && library) setVersionLibrary((current) => ({ ...current, [source]: library }));
       setView("versions");
       setSidebar((value) => ({ ...value, visible: true }));
     },

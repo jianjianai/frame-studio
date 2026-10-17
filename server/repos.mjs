@@ -1,20 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import { git, gitOk, authEnv, addOrphanWorktree, parseStatus } from "./git.mjs";
-import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { problem, notFound, Locks, diskUsage, writable } from "./util.mjs";
 
 export const LOCAL_REPO = "local";
-export const MATERIALS_BRANCH = "frame/materials";
-const MATERIALS_README = `# FRAME 素材库
-
-每个文件夹是一个素材库（图片、视频、音频、字体等），各自的 README 记录素材的来源与许可。
-作品在 FRAME Studio 中引用素材库后直接使用其中的文件，并锁定所用文件的版本。
-`;
+/** Branches of a repository besides its works: libraries (and their recycle bins) and the reviews. */
+export const SHARED_BRANCHES = ["materials", "materials-trash", "experience", "experience-trash", "frame"];
 const REPO_README = `# FRAME 作品库
 
 本仓库由 FRAME Studio 管理。每个作品是一个独立分支 \`works/<作品 id>\`，作品文件位于 \`projects/<名称>/\`；
-共享素材库位于 \`${MATERIALS_BRANCH}\` 分支，经验库位于 \`frame/experience\` 分支，作品发布后的复盘数据位于 \`frame/reviews\` 分支。请在 FRAME Studio 中打开与编辑。
+每个素材库是一个分支 \`materials/<id>\`，每个经验库是一个分支 \`experience/<id>\`（回收站里的在 \`materials-trash/\`、\`experience-trash/\`），作品发布后的复盘数据位于 \`frame/reviews\` 分支。请在 FRAME Studio 中打开与编辑。
 `;
 
 const repoIdFrom = (fullName) =>
@@ -137,10 +132,10 @@ export class Repos {
     const dir = this.dir(LOCAL_REPO);
     await git(dir, ["remote", "add", "origin", created.url]);
     await git(dir, ["config", "remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"]);
-    await git(dir, ["push", "origin", "main", "refs/heads/works/*:refs/heads/works/*", "refs/heads/frame/*:refs/heads/frame/*"], {
+    await git(dir, ["push", "origin", "main", ...["works", ...SHARED_BRANCHES].map((kind) => `refs/heads/${kind}/*:refs/heads/${kind}/*`)], {
       env: authEnv(this.github.token(account)),
     });
-    const branches = (await git(dir, ["for-each-ref", "--format=%(refname:short)", "refs/heads/works", "refs/heads/frame"])).split("\n").filter(Boolean);
+    const branches = (await git(dir, ["for-each-ref", "--format=%(refname:short)", ...["works", ...SHARED_BRANCHES].map((kind) => `refs/heads/${kind}/`)])).split("\n").filter(Boolean);
     for (const branch of branches) {
       await git(dir, ["config", `branch.${branch}.remote`, "origin"]);
       await git(dir, ["config", `branch.${branch}.merge`, `refs/heads/${branch}`]);
@@ -203,7 +198,7 @@ export class Repos {
     return { error, branches, worktrees, backups };
   }
 
-  /** Checkouts of the repository's branches (works and the shared library branches). */
+  /** Checkouts of the repository's branches (works, libraries, reviews). */
   async worktrees(id) {
     const out = await git(this.dir(id), ["worktree", "list", "--porcelain"]);
     const result = [];
@@ -257,19 +252,8 @@ export class Repos {
     this.settings.update("repos", (repos) => repos.map((item) => (item.id === id ? { ...item, account } : item)));
   }
 
-  /** Worktree of the materials branch, created as an orphan branch on first use. */
-  library(id) {
-    return this.branchWorktree(id, {
-      branch: MATERIALS_BRANCH,
-      dir: path.join(this.config.dirs.libraries, id),
-      files: { "README.md": MATERIALS_README, ".gitattributes": GIT_ATTRIBUTES },
-      message: "创建素材库分支",
-    });
-  }
-
   /**
-   * The checkout of a branch the works of a repository share (materials, experience,
-   * reviews) at `dir`: on first use from the local branch, else from GitHub's, else a new
+   * The checkout of a branch the works of a repository share (the reviews) at `dir`: on first use from the local branch, else from GitHub's, else a new
    * branch with no history that starts with `files`.
    */
   async branchWorktree(id, { branch, dir, files, message }) {

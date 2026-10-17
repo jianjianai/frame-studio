@@ -3,31 +3,22 @@ import path from "node:path";
 import { z } from "zod";
 import { tree, readText, writeText, removePath, movePath } from "./files.mjs";
 import { readJson } from "./http.mjs";
-import { problem, notFound, conflict, confined } from "./util.mjs";
-import { GIT_ATTRIBUTES } from "./templates.mjs";
+import { problem, notFound, confined } from "./util.mjs";
 import { workArg, repoArg, asJson } from "./tools/registry.mjs";
 import { readLibrary, libraryBrief, experienceBrief, briefText, describeDocument } from "./ai/context.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./tools/file-ops.mjs";
-import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST, TRASH, trashed, moveToTrash, trashNote, moveFromTrash, purgeTrash } from "./libraries.mjs";
-import { git, gitOk } from "./git.mjs";
+import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST, trashed } from "./libraries.mjs";
+import { LibraryBranches, libraryVersionRoutes, validId, idFrom } from "./library-branches.mjs";
 
 /**
  * Experience libraries: Markdown documents of production know-how, shared by the works
- * of a content repository. They live on the repository's `frame/experience` branch
- * (checked out at <home>/experience/<repo>/); each top-level folder is one library.
- * A work links libraries (`experiences` in project.ts) by folder name. The AI reads them
- * before working, keeps them organized, links them and saves their versions on request;
- * people edit them in the studio. Versions work like a
- * work's. Renaming a library leaves an alias (old name → new name in .aliases.json, on the
- * same branch), so links in works that cannot be rewritten (published, only on GitHub) still
- * find it.
+ * of a content repository. Each library is a branch `experience/<id>` of its own, checked out
+ * at <home>/experience/<repo>/<id>/ (library-branches.mjs), with its own versions and sync.
+ * A work links libraries (`experiences` in project.ts) by id, which never changes; renaming
+ * changes the title (the README's first "# " line). The AI reads them before working, keeps
+ * them organized, links them and saves their versions on request; people edit them in the
+ * studio, and save each library's changes as its own version.
  */
-export const EXPERIENCE_BRANCH = "frame/experience";
-const ROOT_README = `# FRAME 经验库
-
-每个文件夹是一个经验库（例如“知识类视频”“音乐视频”），里面是 Markdown 写的制作经验。
-作品在 FRAME Studio 中关联一个经验库后，AI 开始制作前会先阅读它，也会把新的经验整理进来。
-`;
 /** The introduction a new library's README starts with (it says nothing about the library). */
 const templateLead = (title) => `「${title}」类作品的制作经验。关联了这个经验库的作品，AI 开始制作时会先看这里。`;
 const libraryReadme = (title) => `# ${title}
@@ -43,67 +34,40 @@ ${templateLead(title)}
 - （这类作品都适用的结构、节奏、风格。按主题展开的经验另建文档，例如“开场.md”“配色与字体.md”）
 `;
 
-const ALIASES = ".aliases.json";
-/** A library folder name from what the user typed. */
-const folderOf = (name) =>
-  String(name || "")
-    .trim()
-    .replace(/[\\/:*?"<>|#%\x00-\x1f]+/g, "-")
-    .replace(/^[.\s-]+/, "")
-    .slice(0, 60);
-
-const validId = (id) => typeof id === "string" && /^[^\\/:*?"<>|#%\x00-\x1f.][^\\/:*?"<>|#%\x00-\x1f]{0,59}$/.test(id);
-
 export class Experience {
   constructor(services) {
     this.services = services;
+    this.branches = new LibraryBranches(services, { prefix: "experience", base: "experience", noun: "经验库" });
   }
 
-  /** The experience worktree of a repository, created (or checked out from GitHub) on first use. */
+  /** The folder holding the repository's library checkouts. */
   dir(repoId) {
-    return this.services.repos.branchWorktree(repoId, {
-      branch: EXPERIENCE_BRANCH,
-      dir: path.join(this.services.config.dirs.experience, repoId),
-      files: { "README.md": ROOT_README, ".gitattributes": GIT_ATTRIBUTES },
-      message: "创建经验库",
-    });
+    return this.branches.dir(repoId);
   }
-
-  /** A work-like handle so the works' version functions (status, history, diff, push…) apply. */
-  async scope(repoId) {
-    const root = await this.dir(repoId);
-    return { id: `experience-${repoId}`, repo: repoId, root, dir: root, branch: EXPERIENCE_BRANCH };
+  /** One library as a work-like handle, so the works' version functions (status, history, diff, push…) apply. */
+  scope(repoId, id) {
+    return this.branches.scope(repoId, id);
   }
 
   /**
-   * The libraries: folder name, title, number of documents, earlier names, and the README's
-   * introduction (`about`). With `documents`, also the documents' paths and titles, and as
-   * `extra` the text a search by topic looks through.
+   * The libraries: id, title, number of documents and the README's introduction (`about`).
+   * With `documents`, also the documents' paths and titles, and as `extra` the text a search by
+   * topic looks through.
    */
   async libraries(repoId, { documents = false } = {}) {
     const dir = await this.dir(repoId);
-    // Earlier names, which works may still link: each with the library it leads to now.
-    const aliases = Object.keys(this.aliases(dir)).map((name) => [name, this.resolve(dir, name)]);
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory() && !entry.name.startsWith("."))
-      .map((entry) => {
-        const files = tree(path.join(dir, entry.name), { maxEntries: 100000 }).filter((item) => item.type === "file");
-        const title = this.title(dir, entry.name);
-        const library = {
-          id: entry.name,
-          title,
-          files: files.length,
-          aliases: aliases.filter(([, target]) => target === entry.name).map(([name]) => name),
-          about: readmeLead(path.join(dir, entry.name, "README.md"), templateLead(title)),
-        };
+    return (await this.branches.ids(repoId))
+      .map((id) => {
+        const files = tree(path.join(dir, id), { maxEntries: 100000 }).filter((item) => item.type === "file");
+        const title = this.title(dir, id);
+        const library = { id, title, files: files.length, about: readmeLead(path.join(dir, id, "README.md"), templateLead(title)) };
         if (documents) {
           library.documents = files
             .filter((item) => /\.(md|txt)$/i.test(item.path) && item.path !== "README.md")
             .map((item) => {
               let title = "";
               try {
-                title = describeDocument(item.path, fs.readFileSync(path.join(dir, entry.name, item.path), "utf8").slice(0, 2000)).title;
+                title = describeDocument(item.path, fs.readFileSync(path.join(dir, id, item.path), "utf8").slice(0, 2000)).title;
               } catch {}
               return { path: item.path, title };
             });
@@ -115,157 +79,59 @@ export class Experience {
   }
 
   title(dir, id) {
-    try {
-      return /^#\s+(.+)$/m.exec(fs.readFileSync(path.join(dir, id, "README.md"), "utf8"))?.[1].trim() || id;
-    } catch {
-      return id;
-    }
+    return this.branches.title(dir, id);
   }
 
+  /** A new library (its id from the name, for good), saved at once with its README. */
   async create(repoId, name) {
     const title = String(name || "").trim();
-    const id = folderOf(title);
-    if (!validId(id)) throw problem(400, "请填写经验库名称");
-    const dir = await this.dir(repoId);
-    this.assertFree(dir, id);
-    writeText(dir, `${id}/README.md`, libraryReadme(title));
+    const id = idFrom(title);
+    if (!title || !validId(id)) throw problem(400, "请填写经验库名称");
+    await this.branches.create(repoId, id, { files: { "README.md": libraryReadme(title) }, message: `新建经验库：${title}` });
     this.changed(repoId, [`${id}/README.md`]);
     return { id, title };
   }
 
-  /** A new folder name may be neither a library nor an earlier name works still link. */
-  assertFree(dir, id) {
-    if (fs.existsSync(path.join(dir, id))) throw conflict(`已经有名为「${id}」的经验库`);
-    const target = this.resolve(dir, id);
-    if (target) throw conflict(`「${id}」是经验库「${this.title(dir, target)}」以前的名称，有作品还在用它，请换一个名称`);
-  }
-
-  /**
-   * Rename a library: its folder (with an alias from the old name) and its README title.
-   * Like other edits of the libraries it is unsaved until the user saves a version.
-   */
+  /** A new name (the README's title), saved at once; the id works link stays. */
   async rename(repoId, id, name) {
-    const title = String(name || "").trim();
-    const next = folderOf(title);
-    if (!validId(next)) throw problem(400, "请填写经验库名称");
-    const dir = await this.dir(repoId);
-    if (!validId(id) || !fs.existsSync(path.join(dir, id))) throw notFound("经验库不存在");
-    if (next !== id) {
-      // Going back to one of its own earlier names is fine.
-      if (this.resolve(dir, next) !== id) this.assertFree(dir, next);
-      movePath(dir, id, next);
-      const aliases = this.aliases(dir);
-      // Keep every earlier name one step from the library.
-      for (const [from, to] of Object.entries(aliases)) if (to === id) aliases[from] = next;
-      delete aliases[next];
-      aliases[id] = next;
-      writeText(dir, ALIASES, JSON.stringify(aliases, null, 2) + "\n");
-    }
-    const readme = path.join(dir, next, "README.md");
-    const content = fs.existsSync(readme) ? fs.readFileSync(readme, "utf8") : "";
-    writeText(dir, `${next}/README.md`, /^#\s+.*$/m.test(content) ? content.replace(/^#\s+.*$/m, `# ${title}`) : `# ${title}\n\n${content}`);
-    this.changed(repoId, [id, next, ALIASES], next !== id ? { from: id, to: next } : undefined);
-    return { id: next, title };
+    const result = await this.branches.retitle(repoId, id, name);
+    this.changed(repoId, [`${id}/README.md`]);
+    return result;
   }
 
-  /**
-   * Save only these paths as a version, now: moving a library into or out of the recycle bin is
-   * kept at once (other unsaved edits stay unsaved). Paths neither on disk nor in the last
-   * version are left out (a library made and deleted before any version).
-   */
-  async commitPaths(repoId, paths, message) {
-    const scope = await this.scope(repoId);
-    const { works } = this.services;
-    return works.locks.run(`${scope.repo}/${scope.id}`, async () => {
-      const known = [];
-      for (const item of paths)
-        if (fs.existsSync(path.join(scope.root, item)) || (await git(scope.root, ["ls-files", "--", item]).catch(() => "")).trim()) known.push(item);
-      if (!known.length) return null;
-      await git(scope.root, ["add", "-A", "--", ...known]);
-      if (await gitOk(scope.root, ["diff", "--cached", "--quiet", "--", ...known])) return null;
-      await git(scope.root, ["commit", "-q", "-m", message, "--", ...known]);
-      this.services.events.emit({ type: "work-versions", work: scope.id });
-      works.saved(scope);
-      return true;
-    });
-  }
-
-  /**
-   * Delete a library: into the recycle bin (.trash/ on the branch), saved as a version at once.
-   * Works linking it see it missing until it is restored; earlier names keep leading to it.
-   */
+  /** Delete a library: into the recycle bin (with its unsaved edits). Works linking it see it missing until it is restored. */
   async remove(repoId, id) {
-    if (!validId(id)) throw notFound("经验库不存在");
-    const dir = await this.dir(repoId);
-    if (!fs.existsSync(path.join(dir, id))) throw notFound("经验库不存在");
-    const title = this.title(dir, id);
-    const key = moveToTrash(dir, id, title);
-    await this.commitPaths(repoId, [id, TRASH], `删除经验库：${title}（移到回收站）`);
-    this.changed(repoId, [id, `${TRASH}/${key}`]);
-    return { key, id, title };
+    const result = await this.branches.trash(repoId, id);
+    this.changed(repoId, [id]);
+    return result;
   }
-  /** The worktree when the branch exists (here or on GitHub), else null: looking need not create it. */
-  async existing(repoId) {
-    if (fs.existsSync(path.join(this.services.config.dirs.experience, repoId, ".git"))) return this.dir(repoId);
-    return (await this.services.repos.hasBranch(repoId, EXPERIENCE_BRANCH)) ? this.dir(repoId) : null;
+  /** The libraries' folder (looking creates no branch). */
+  existing(repoId) {
+    return this.dir(repoId);
   }
   /** The libraries in the recycle bin. */
   async trash(repoId) {
-    const dir = await this.existing(repoId);
-    return dir ? trashed(dir) : [];
+    return trashed(await this.dir(repoId));
   }
-  /** A library back from the bin: under its name, or a free one when that was taken meanwhile. */
+  /** A library back from the bin: under its id, or a free one when that was taken meanwhile. */
   async restore(repoId, key) {
-    const dir = await this.dir(repoId);
-    const note = trashNote(dir, key);
-    // Taken: a library's name, or an earlier name works still use for one.
-    let id = note.id;
-    for (let n = 2; this.resolve(dir, id); n++) id = `${note.id} ${n}`;
-    moveFromTrash(dir, key, id);
-    await this.commitPaths(repoId, [TRASH, id], `恢复经验库：${note.title}${id !== note.id ? `（改名为「${id}」）` : ""}`);
-    this.changed(repoId, [id, TRASH]);
-    return { id, title: note.title, renamed: id !== note.id };
+    const result = await this.branches.restore(repoId, key);
+    this.changed(repoId, [result.id]);
+    return result;
   }
-  /**
-   * Delete a library in the bin for good (`key` null: all of them); the history keeps them.
-   * Earlier names that led to it now lead nowhere and go too.
-   */
+  /** Delete binned libraries for good (`key` null: all of them), versions and all. */
   async purge(repoId, key = null) {
-    const dir = await this.dir(repoId);
-    const notes = key === null ? trashed(dir) : [trashNote(dir, key)];
-    if (!notes.length) return { purged: [] };
-    for (const note of notes) purgeTrash(dir, note.key);
-    // Earlier names of the deleted libraries (each kept one step from its library).
-    const gone = new Set(notes.map((note) => note.id).filter((id) => !fs.existsSync(path.join(dir, id))));
-    const aliases = this.aliases(dir);
-    const left = Object.fromEntries(Object.entries(aliases).filter(([, to]) => !gone.has(to)));
-    const pruned = Object.keys(left).length !== Object.keys(aliases).length;
-    if (pruned) Object.keys(left).length ? writeText(dir, ALIASES, JSON.stringify(left, null, 2) + "\n") : removePath(dir, ALIASES);
-    await this.commitPaths(repoId, [TRASH, ...(pruned ? [ALIASES] : [])], key === null ? "清空经验库回收站" : `从回收站删除经验库：${notes[0].title}`);
-    this.changed(repoId, [TRASH, ALIASES]);
-    return { purged: notes.map((note) => note.key) };
+    const result = await this.branches.purge(repoId, key);
+    this.changed(repoId, []);
+    return { purged: result.purged };
   }
 
-  /** Earlier library names: { old folder name: newer folder name }. */
-  aliases(dir) {
-    try {
-      const value = JSON.parse(fs.readFileSync(path.join(dir, ALIASES), "utf8"));
-      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
-    } catch {
-      return {};
-    }
-  }
-  /** The library folder a (possibly earlier) name stands for, or null. */
+  /** The library a linked id stands for, or null when there is none (deleted, or in the bin). */
   resolve(dir, id) {
-    const aliases = this.aliases(dir);
-    for (let hops = 0; validId(id) && hops < 20; hops++) {
-      if (fs.existsSync(path.join(dir, id))) return id;
-      id = aliases[id];
-    }
-    return null;
+    return this.branches.exists(dir, id) ? id : null;
   }
 
-  /** `moved` ({from, to}) lets open editor tabs follow a renamed folder or document. */
+  /** `moved` ({from, to}) lets open editor tabs follow a moved document. */
   changed(repo, files, moved) {
     this.services.events.emit({ type: "experience-files", repo, files, ...(moved ? { moved } : {}) });
   }
@@ -298,38 +164,30 @@ export class Experience {
 
   /**
    * What moving a work to repository `to` means for its linked libraries: those `to` lacks are
-   * copied there as they are now (`copy`); a library of the same name there is linked instead
-   * (`shared`). A link by an earlier name gets that name as an alias there.
+   * copied there as they are now (`copy`); a library with the same id there is linked instead
+   * (`shared`).
    */
   async movePlan(work, to) {
     const names = this.names(work);
-    const source = names.length ? await this.existing(work.repo) : null;
-    const target = names.length ? await this.existing(to) : null;
-    const plan = { copy: [], shared: [], aliases: {} };
-    for (const name of names) {
-      const id = source && this.resolve(source, name);
-      if (!id) continue;
-      const there = target && (this.resolve(target, name) ?? (fs.existsSync(path.join(target, id)) ? id : null));
+    const plan = { copy: [], shared: [] };
+    if (!names.length) return plan;
+    const source = await this.dir(work.repo);
+    const target = await this.dir(to);
+    for (const id of names) {
+      if (!this.branches.exists(source, id)) continue;
       const library = { id, title: this.title(source, id) };
-      if (there) plan.shared.push(library);
-      else if (!plan.copy.some((item) => item.id === id)) plan.copy.push(library);
-      if (name !== id && !(target && this.resolve(target, name))) plan.aliases[name] = id;
+      if (this.branches.exists(target, id)) plan.shared.push(library);
+      else plan.copy.push(library);
     }
     return plan;
   }
 
-  /** Before the work moves: copy the libraries `to` lacks (and the earlier names the work links them by), saved at once. */
+  /** Before the work moves: copy the libraries `to` lacks, each a new library there (with what was unsaved). */
   async carry(work, to, from) {
     const plan = await this.movePlan(work, to);
-    if (!plan.copy.length && !Object.keys(plan.aliases).length) return plan;
     const source = await this.dir(work.repo);
-    const target = await this.dir(to);
-    for (const { id } of plan.copy) fs.cpSync(path.join(source, id), path.join(target, id), { recursive: true });
-    if (Object.keys(plan.aliases).length) writeText(target, ALIASES, JSON.stringify({ ...this.aliases(target), ...plan.aliases }, null, 2) + "\n");
-    const ids = plan.copy.map((library) => library.id);
-    const titles = plan.copy.map((library) => library.title).join("、");
-    await this.commitPaths(to, [...ids, ALIASES], titles ? `从「${from}」迁入经验库：${titles}` : `从「${from}」迁入作品关联经验库的旧名称`);
-    this.changed(to, [...ids, ALIASES]);
+    for (const { id } of plan.copy) await this.branches.create(to, id, { from: path.join(source, id), message: `从「${from}」迁入` });
+    if (plan.copy.length) this.changed(to, plan.copy.map((library) => library.id));
     return plan;
   }
 
@@ -349,19 +207,11 @@ export class Experience {
     return this.linkedSync(work).libraries.map(({ id, title, root }) => ({ library: { id, title }, documents: readLibrary(root) }));
   }
 
-  /**
-   * What the AI knew under earlier library names, under the current ones: a renamed library
-   * is not "unlinked and linked again".
-   */
+  /** What the AI knew of each library, under its title as it is now: a renamed library is not a new one. */
   follow(work, seen) {
     if (!seen) return {};
     const dir = path.join(this.services.config.dirs.experience, work.repo);
-    const next = {};
-    for (const [id, entry] of Object.entries(seen)) {
-      const current = this.resolve(dir, id) ?? id;
-      if (!next[current]) next[current] = current === id ? entry : { ...entry, title: this.title(dir, current) };
-    }
-    return next;
+    return Object.fromEntries(Object.entries(seen).map(([id, entry]) => [id, this.branches.exists(dir, id) ? { ...entry, title: this.title(dir, id) } : entry]));
   }
 
   /** What the AI is told about linked names that lead nowhere: in the recycle bin, or deleted. */
@@ -379,7 +229,8 @@ export class Experience {
   /** How many libraries the repository has, without listing them (the brief is written synchronously). */
   countSync(repo) {
     try {
-      return fs.readdirSync(path.join(this.services.config.dirs.experience, repo), { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith(".")).length;
+      const dir = path.join(this.services.config.dirs.experience, repo);
+      return fs.readdirSync(dir).filter((name) => this.branches.exists(dir, name)).length;
     } catch {
       return 0;
     }
@@ -468,7 +319,15 @@ export function experiencePlugin(services) {
   /** Tell the chat session (if any) what its AI just read or wrote, so it is not told again. */
   const noteSeen = (ctx, library, file, hash, level) => ctx.scope.session && services.ai?.noteExperience(ctx.scope.session, library.id, file, hash, level);
   const base = "/api/repos/:repo/experience";
-  const scope = (params) => experience.scope(params.repo);
+  /** The libraries' folder, for a path that must lie in one of them (each library is its own checkout). */
+  const within = async (repo, ...files) => {
+    const dir = await experience.dir(repo);
+    for (const file of files)
+      if (!experience.branches.exists(dir, String(file || "").split("/")[0])) throw problem(400, `${file} 不在任何经验库里：路径写成 <经验库 id>/<文档>，新经验库先新建`);
+    return dir;
+  };
+  // GitHub was asked: it may have libraries made on another device.
+  services.events.subscribe((event) => event.type === "repos" && experience.branches.refresh());
 
   // ---- libraries ----------------------------------------------------------------
   // With `work`: whether it links each library and how well each suits it (the picker's 推荐).
@@ -492,7 +351,7 @@ export function experiencePlugin(services) {
   router.get(`${base}/tree`, async ({ params, query }) => {
     const dir = await experience.dir(params.repo);
     if (!query.library) return tree(dir);
-    if (!validId(query.library) || !fs.existsSync(path.join(dir, query.library))) throw notFound("经验库不存在");
+    if (!experience.branches.exists(dir, query.library)) throw notFound("经验库不存在");
     return tree(confined(dir, query.library)).map((entry) => ({ ...entry, path: `${query.library}/${entry.path}` }));
   });
   /** Documents of every library whose name or title has all the words (the 经验 view's filter). */
@@ -517,49 +376,22 @@ export function experiencePlugin(services) {
   router.get(`${base}/file`, async ({ params, query }) => readText(await experience.dir(params.repo), query.path));
   router.put(`${base}/file`, async ({ params, req }) => {
     const body = await readJson(req);
-    const result = writeText(await experience.dir(params.repo), body.path, body.content, { expectedHash: body.expectedHash });
+    const result = writeText(await within(params.repo, body.path), body.path, body.content, { expectedHash: body.expectedHash });
     experience.changed(params.repo, [body.path]);
     return result;
   });
   router.post(`${base}/move`, async ({ params, req }) => {
     const body = await readJson(req);
-    movePath(await experience.dir(params.repo), body.from, body.to);
+    movePath(await within(params.repo, body.from, body.to), body.from, body.to);
     experience.changed(params.repo, [body.from, body.to], { from: body.from, to: body.to });
   });
   router.delete(`${base}/file`, async ({ params, query }) => {
-    removePath(await experience.dir(params.repo), query.path);
+    removePath(await within(params.repo, query.path), query.path);
     experience.changed(params.repo, [query.path]);
   });
 
-  // ---- versions: the works' implementation on the experience branch ----------------------
-  router.get(`${base}/status`, async ({ params }) => works.status(await scope(params)));
-  router.get(`${base}/history`, async ({ params, query }) =>
-    works.history(await scope(params), { limit: Number(query.limit || 50), skip: Number(query.skip || 0) }),
-  );
-  router.get(`${base}/changes`, async ({ params, query }) => works.changes(await scope(params), query.commit));
-  router.get(`${base}/diff`, async ({ params, query }) => ({ diff: await works.diff(await scope(params), { commit: query.commit, file: query.file }) }));
-  router.post(`${base}/commit`, async ({ params, req }) => ({ commit: await works.commit(await scope(params), (await readJson(req)).message) }));
-  router.post(`${base}/revert`, async ({ params, req }) => {
-    const result = { commit: await works.revert(await scope(params), (await readJson(req)).commit) };
-    experience.changed(params.repo, []);
-    return result;
-  });
-  router.post(`${base}/discard`, async ({ params, req }) => {
-    await works.discard(await scope(params), (await readJson(req)).files || []);
-    experience.changed(params.repo, []);
-  });
-  router.post(`${base}/sync`, async ({ params }) => works.sync(await scope(params)));
-  router.post(`${base}/push`, async ({ params }) => works.push(await scope(params)));
-  router.post(`${base}/pull`, async ({ params }) => {
-    const result = await works.pull(await scope(params));
-    experience.changed(params.repo, []);
-    return result;
-  });
-  router.post(`${base}/resolve`, async ({ params, req }) => {
-    const result = await works.resolve(await scope(params), (await readJson(req)).strategy);
-    experience.changed(params.repo, []);
-    return result;
-  });
+  // ---- versions: each library's, like a work's ------------------------------------------
+  libraryVersionRoutes(services, { base, branches: experience.branches, changed: (repo, id) => experience.changed(repo, [id]) });
 
   // ---- AI tools ---------------------------------------------------------------------
   /**
@@ -574,7 +406,7 @@ export function experiencePlugin(services) {
       const dir = await experience.dir(work.repo);
       // Linked libraries by name or title first (cheap); any other library of the repository after.
       const id =
-        experience.resolve(dir, name.trim()) ?? findLibrary(name, libraries)?.id ?? findLibrary(name, await experience.libraries(work.repo), (alias) => experience.resolve(dir, alias))?.id;
+        experience.resolve(dir, name.trim()) ?? findLibrary(name, libraries)?.id ?? findLibrary(name, await experience.libraries(work.repo))?.id;
       if (!id)
         throw problem(400, unknownLibraries("experiences", [name.trim()], await experience.libraries(work.repo), trashed(dir)).replace(/新建用 create$/, "新建用 experience_link 的 create"), "NO_EXPERIENCE");
       return { work, library: libraries.find((item) => item.id === id) ?? { id, title: experience.title(dir, id), root: path.join(dir, id), dir } };
@@ -592,7 +424,7 @@ export function experiencePlugin(services) {
     throw problem(400, `作品关联了多个经验库：${libraries.map((item) => `「${item.id}」`).join("")}，用 library 参数指定一个`, "LIBRARY_REQUIRED");
   };
   const docPath = z.string().min(1).max(300).describe("经验库内的相对路径，例如 README.md 或 开场.md");
-  const libraryArg = z.string().max(80).optional().describe("经验库名称；作品关联了多个经验库时必填。整理经验库时也可以指定作品没有关联的经验库");
+  const libraryArg = z.string().max(80).optional().describe("经验库 id 或名称；作品关联了多个经验库时必填。整理经验库时也可以指定作品没有关联的经验库");
 
   tools.add({
     name: "experience_read",
@@ -712,7 +544,7 @@ export function experiencePlugin(services) {
     published: true, // creating libraries is fine on a published work; changing its links is checked below
     title: "关联经验库",
     description:
-      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。名称写文件夹名或标题（大小写、空格、标点不同也能认出）；不存在时返回最接近的几个，经验库很多时先用 experience_list 查找。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
+      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。名称写 id 或标题（大小写、空格、标点不同也能认出）；作品按 id 关联，经验库改名（只改标题）不影响关联；不存在时返回最接近的几个，经验库很多时先用 experience_list 查找。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
     input: { work: workArg, add: z.array(nameArg).max(10).default([]), remove: z.array(nameArg).max(10).default([]), create: z.array(nameArg).max(5).default([]) },
     async run({ add, remove, create }, ctx) {
       const work = await ctx.work();
@@ -721,8 +553,8 @@ export function experiencePlugin(services) {
         throw problem(423, "作品已发布，不能改变它关联的经验库。经验库本身可以照常整理（用 library 参数指定），也可以用 create 新建。要改关联，请用户先取消发布或创建副本。", "PUBLISHED");
       const dir = await experience.dir(work.repo);
       const all = await experience.libraries(work.repo);
-      // A folder name (or an earlier one), a library's title, or either written a little differently.
-      const find = (name) => findLibrary(name, all, (alias) => experience.resolve(dir, alias))?.id ?? null;
+      // A library's id or title, or either written a little differently.
+      const find = (name) => findLibrary(name, all)?.id ?? null;
       const unknown = add.filter((name) => !find(name));
       if (unknown.length) throw problem(400, unknownLibraries("experiences", unknown, all, trashed(dir)));
       const adding = add.map(find);
@@ -738,9 +570,9 @@ export function experiencePlugin(services) {
           `${created.length ? `已新建经验库：${created.map((id) => `「${id}」`).join("")}` : "没有新建经验库（同名的已存在）"}。作品已发布，没有关联到它；读写时用 library 参数指定。`,
         );
       const before = experience.linkedSync(work).libraries;
-      // Links through earlier names or to deleted libraries can be removed too.
+      // Links to deleted libraries can be removed too.
       const dropping = new Set(remove.map((name) => find(name) ?? name.trim()));
-      const kept = experience.names(work).filter((name) => !dropping.has(experience.resolve(dir, name) ?? name));
+      const kept = experience.names(work).filter((name) => !dropping.has(name));
       await works.update(work, { experiences: [...new Set([...kept, ...adding])] });
       const after = experience.linkedSync(work).libraries;
       const added = after.filter((item) => !before.some((old) => old.id === item.id));
@@ -763,29 +595,35 @@ export function experiencePlugin(services) {
 
   tools.add({
     name: "experience_commit",
-    published: true, // the experience branch, not the work: allowed on a published work
+    published: true, // the library branches, not the work: allowed on a published work
     title: "保存经验库版本",
     description:
-      "把经验库里未保存的修改保存为一个版本（Git 提交）。同一作品库的经验库在同一个分支上，会一起保存，和用户在「版本与同步」→ 经验库里点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
-    input: { work: workArg, repo: repoArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
-    async run({ message, push }, ctx) {
+      "把经验库里未保存的修改保存为版本（Git 提交）。每个经验库是自己的分支，版本、未保存的修改和同步各自独立：library 指定只保存哪个经验库；不写时有修改的经验库各自保存一个版本（message 相同），和用户在「版本与同步」里逐个点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
+    input: { work: workArg, repo: repoArg, library: libraryArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
+    async run({ library: name, message, push }, ctx) {
       const work = await ctx.place();
-      const scope = await experience.scope(work.repo);
-      const files = (await works.status(scope)).files.map((file) => file.path);
-      const commit = await works.commit(scope, message);
-      let pushed = null;
-      if (push)
-        try {
-          await works.push(scope);
-          pushed = { ok: true };
-        } catch (error) {
-          pushed = { ok: false, error: error.message };
-        }
-      const pushText = !pushed ? "" : pushed.ok ? "，已推送到 GitHub" : `。推送到 GitHub 失败：${pushed.error}（请用户在「版本与同步」→ 经验库中处理）`;
-      return asJson(
-        { commit, files, pushed },
-        commit ? `已保存经验库版本 ${commit.slice(0, 7)}：${files.join("、")}${pushText}` : `经验库没有未保存的修改${pushText}`,
+      const ids = name?.trim() ? [(await libraryOf(ctx, name)).library.id] : await experience.branches.ids(work.repo);
+      const saved = [];
+      for (const id of ids) {
+        const scope = await experience.scope(work.repo, id);
+        const files = (await works.status(scope)).files.map((file) => `${id}/${file.path}`);
+        const commit = await works.commit(scope, message);
+        if (!commit) continue;
+        let pushed = null;
+        if (push)
+          try {
+            await works.push(scope);
+            pushed = { ok: true };
+          } catch (error) {
+            pushed = { ok: false, error: error.message };
+          }
+        saved.push({ library: id, commit, files, pushed });
+      }
+      const lines = saved.map(
+        (item) =>
+          `「${item.library}」${item.commit.slice(0, 7)}：${item.files.join("、")}${!item.pushed ? "" : item.pushed.ok ? "，已推送到 GitHub" : `。推送到 GitHub 失败：${item.pushed.error}（请用户在「版本与同步」中处理）`}`,
       );
+      return asJson({ saved }, saved.length ? `已保存经验库版本：\n${lines.join("\n")}` : `${name?.trim() ? `经验库「${ids[0]}」` : "经验库"}没有未保存的修改`);
     },
   });
 

@@ -2307,6 +2307,10 @@ a.btn.disabled {
   flex: none;
   color: var(--fg-muted);
 }
+/* A library under its kind (each library is a branch of its own). */
+.branch-row.branch-child {
+  padding-left: 30px;
+}
 .versions-save {
   width: 100%;
 }

@@ -98,7 +98,7 @@ export interface WorkInfo {
   };
   loads: Record<string, string> | null;
   metaError: string | null;
-  /** The linked experience libraries (renames followed), and linked names that lead nowhere. */
+  /** The linked experience libraries, and linked ids that lead nowhere (deleted or in the bin). */
   experiences?: { libraries: { id: string; title: string }[]; missing: string[] };
   preview: { module: string; assetBase: string; library: { materialBase: string; assetBase: string } | null };
 }
