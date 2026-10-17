@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Copy, FileCode2, Music, Pause, Play, RotateCcw, Sparkles, Square, AudioLines } from "lucide-react";
 import { api, workPath, useServerEvent } from "../lib/api";
 import { useToast } from "../lib/ui";
-import { useWorkbench } from "./store";
+import { useTabVisible, useWorkbench } from "./store";
 import { assetDrag } from "./assetDrag";
 import { ENGINE_TAGS, seconds, soundAsset } from "../views/ResourcesPanel";
 
@@ -105,6 +105,13 @@ export function ResourceViewer({ id }: { id: string }) {
     return () => clearInterval(timer);
   }, []);
   useEffect(() => () => page?.stop(), [page]);
+  // Out of sight (another tab shown): stop playing.
+  const visible = useTabVisible();
+  useEffect(() => {
+    if (visible) return;
+    setPlaying(false);
+    page?.stop();
+  }, [visible, page]);
 
   // Library code changed: load the page anew.
   useServerEvent(

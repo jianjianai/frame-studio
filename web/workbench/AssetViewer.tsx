@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Pause, Play } from "lucide-react";
+import { useTabVisible } from "./store";
 
 /** What src/preview/asset.ts says about the file it shows (same origin). */
 interface AssetInfo {
@@ -53,6 +54,11 @@ export function AssetViewer({ assetBase, src, version }: { assetBase: string; sr
   const [animation, setAnimation] = useState("");
   const [time, setTime] = useState(0);
   const [playing, setPlaying] = useState(false);
+  // Out of sight (another tab shown): stop playing.
+  const visible = useTabVisible();
+  useEffect(() => {
+    if (!visible) setPlaying(false);
+  }, [visible]);
   const url = `/preview/asset.html?${new URLSearchParams({ assetBase, src, ...(version !== undefined ? { v: String(version) } : {}) })}`;
 
   // The page opens the file; wait until it says it is ready (or why not).

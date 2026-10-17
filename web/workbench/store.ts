@@ -215,3 +215,10 @@ export function useWorkbench() {
   if (!value) throw new Error("WorkbenchContext missing");
   return value;
 }
+
+/**
+ * Whether the editor tab a component is in is shown: tabs stay mounted while another tab of
+ * their group is shown (until they are closed), so what plays pauses out of sight.
+ */
+export const TabVisible = createContext(true);
+export const useTabVisible = () => useContext(TabVisible);

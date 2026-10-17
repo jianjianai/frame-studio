@@ -42,7 +42,7 @@ import { RawViewer } from "../reviews/RawViewer";
 import { Markdown } from "../chat/Markdown";
 import { coarsePointer } from "../lib/touch";
 import { Sash, useConfirm, useContextMenu, useToast, type MenuItem } from "../lib/ui";
-import { Observable, useObservable, useWorkbench, type Tool, type VersionSource } from "./store";
+import { Observable, TabVisible, useObservable, useTabVisible, useWorkbench, type Tool, type VersionSource } from "./store";
 import { ToolTab, TOOL_TITLES, toolIcon } from "./ToolTab";
 import { PreviewPane } from "./PreviewPane";
 import { CodeEditor } from "./CodeEditor";
@@ -260,6 +260,36 @@ export const editorDrag = new Observable<EditorDrag | null>(null);
 
 let ids = 0;
 const newId = (prefix: string) => `${prefix}${++ids}`;
+
+/** A work's tabs as the browser keeps them for a reload: the groups, the documents (without their text) and unsaved text. */
+interface SavedTabs {
+  state: EditorState;
+  docs: (Pick<Doc, "key" | "file" | "source" | "kind" | "title" | "diff"> & { draft?: string; base?: string | null })[];
+}
+type Draft = { content: string; base: string | null };
+const tabsKey = (repo: string, id: string) => `frame:tabs:${repo}/${id}`;
+function savedTabs(repo: string, id: string) {
+  try {
+    const saved = JSON.parse(localStorage.getItem(tabsKey(repo, id)) || "null") as SavedTabs | null;
+    if (!saved?.state?.groups || !saved.state.layout || !Array.isArray(saved.docs)) return null;
+    const docs: Record<string, Doc> = { preview: PREVIEW };
+    const drafts: Record<string, Draft> = {};
+    for (const { draft, base, ...doc } of saved.docs) {
+      if (!doc?.key || doc.key === "preview") continue;
+      docs[doc.key] = doc;
+      if (typeof draft === "string") drafts[doc.key] = { content: draft, base: base ?? null };
+    }
+    const groups = groupOrder(saved.state.layout).map((group) => saved.state.groups[group]);
+    if (!groups.length || groups.some((group) => !Array.isArray(group?.editors)) || !saved.state.groups[saved.state.focus]) return null;
+    const editors = groups.flatMap((group) => group.editors);
+    if (editors.some((editor) => !docs[editor.key]) || !editors.some((editor) => editor.key === "preview")) return null;
+    // New tabs and groups must not take a restored id.
+    for (const item of [...groups, ...editors]) ids = Math.max(ids, Number(item.id.slice(1)) || 0);
+    return { state: saved.state, docs, drafts };
+  } catch {
+    return null;
+  }
+}
 const sideLabels: Record<Side, string> = { right: "向右拆分", down: "向下拆分", left: "向左拆分", up: "向上拆分" };
 const sideIcons: Record<Side, ReactNode> = {
   right: <PanelRight size={14} />,
@@ -282,12 +312,56 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
   const { work, stage, readOnly } = useWorkbench();
   const toast = useToast();
   const confirm = useConfirm();
-  const [docs, setDocs] = useState<Record<string, Doc>>({ preview: PREVIEW });
-  const [state, setState] = useState<EditorState>(() => initialState("g0", { id: "e0", key: "preview" }));
+  // The tabs open before the page was reloaded come back, with text not saved yet.
+  const [restored] = useState(() => savedTabs(work.repo, work.id));
+  const [docs, setDocs] = useState<Record<string, Doc>>(() => restored?.docs ?? { preview: PREVIEW });
+  const [state, setState] = useState<EditorState>(() => restored?.state ?? initialState("g0", { id: "e0", key: "preview" }));
+  const drafts = useRef<Record<string, Draft>>(restored?.drafts ?? {});
   const docsRef = useRef(docs);
   docsRef.current = docs;
   const stateRef = useRef(state);
   stateRef.current = state;
+  /** Keep the tabs for a reload: a moment after changes, and at once when the page goes away. */
+  const keepTabs = useCallback(() => {
+    const groups = Object.fromEntries(
+      Object.entries(stateRef.current.groups).map(([id, group]) => [id, { ...group, editors: group.editors.map(({ line: _line, ...editor }) => editor) }]),
+    );
+    const docs = Object.values(docsRef.current)
+      .filter((doc) => doc.key !== "preview")
+      .map((doc) => {
+        const draft = dirty(doc) ? { content: doc.content!, base: doc.hash ?? null } : drafts.current[doc.key];
+        return {
+          key: doc.key,
+          file: doc.file,
+          source: doc.source,
+          kind: doc.kind,
+          title: doc.title,
+          diff: doc.diff,
+          ...(draft && { draft: draft.content, base: draft.base }),
+        };
+      });
+    const saved: SavedTabs = { state: { ...stateRef.current, groups }, docs };
+    try {
+      localStorage.setItem(tabsKey(work.repo, work.id), JSON.stringify(saved));
+    } catch {
+      // Too large for the browser's storage: the tabs without their unsaved text.
+      try {
+        localStorage.setItem(tabsKey(work.repo, work.id), JSON.stringify({ ...saved, docs: docs.map(({ draft: _draft, base: _base, ...doc }) => doc) }));
+      } catch {}
+    }
+  }, [work.repo, work.id]);
+  useEffect(() => {
+    const timer = window.setTimeout(keepTabs, 300);
+    return () => window.clearTimeout(timer);
+  }, [state, docs, keepTabs]);
+  useEffect(() => {
+    window.addEventListener("pagehide", keepTabs);
+    return () => {
+      window.removeEventListener("pagehide", keepTabs);
+      // Leaving the work without a reload (home page, another work).
+      keepTabs();
+    };
+  }, [keepTabs]);
   const apis: Record<Source, string> = {
     work: workPath(work.repo, work.id),
     experience: experiencePath(work.repo),
@@ -335,8 +409,14 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       if (loading.current.has(doc.key)) return;
       loading.current.add(doc.key);
       try {
-        updateDoc(doc.key, { ...(await load(doc, { cached: true })), unreadable: undefined });
+        const loaded = await load(doc, { cached: true });
+        // Text left unsaved before a reload: changed on disk since, it asks which version to keep.
+        const draft = drafts.current[doc.key];
+        delete drafts.current[doc.key];
+        const kept = draft && draft.content !== loaded.content ? { content: draft.content, external: draft.base !== loaded.hash } : {};
+        updateDoc(doc.key, { ...loaded, ...kept, unreadable: undefined });
       } catch (error) {
+        delete drafts.current[doc.key];
         if (error instanceof ApiError && error.status === 413) updateDoc(doc.key, { unreadable: error.message });
         else {
           toast((error as Error).message, "error");
@@ -415,9 +495,12 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     [open],
   );
   const openSkill = useCallback(
-    (path: string, { edit, ...options }: { preview?: boolean; edit?: boolean } = {}) =>
-      // Skills hold instructions and scripts (.py, .sh…): all are opened as text.
-      open({ key: `skill:${path}`, file: path, source: "skills", kind: "text" }, { ...options, rendered: !edit && /\.md$/i.test(path) }),
+    (path: string, { edit, ...options }: { preview?: boolean; edit?: boolean } = {}) => {
+      // Skills hold instructions and scripts (.py, .sh…), opened as text; pictures, sound and video are shown.
+      const media = kindOf(path);
+      const kind = media === "image" || media === "audio" || media === "video" ? media : "text";
+      open({ key: `skill:${path}`, file: path, source: "skills", kind }, { ...options, rendered: !edit && /\.md$/i.test(path) });
+    },
     [open],
   );
   const openDiff = useCallback(
@@ -825,19 +908,30 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
           ) : null
         }
       >
-        {active && activeDoc && activeDoc.kind !== "preview" && activeDoc.kind !== "sample" && (
-          <EditorContent
-            key={active.id}
-            doc={activeDoc}
-            editor={active}
-            onDoc={(change) => updateDoc(activeDoc.key, change)}
-            onEditor={(change) => setState((current) => updateEditor(current, groupId, active.id, change))}
-            onSave={() => save(activeDoc.key)}
-            onReload={() => load(activeDoc).then((loaded) => updateDoc(activeDoc.key, { ...loaded, external: false }))}
-            onNeedText={() => void fill(activeDoc)}
-            onSample={() => openSample(activeDoc.file)}
-          />
-        )}
+        {/* Every tab stays mounted until it is closed: switching tabs shows it again as it was. In
+            order of opening, so reordering tabs moves no element (a moved frame would reload). */}
+        {[...group.editors]
+          .sort((a, b) => Number(a.id.slice(1)) - Number(b.id.slice(1)))
+          .map((editor) => {
+            const doc = docs[editor.key];
+            if (!doc || doc.kind === "preview" || doc.kind === "sample") return null;
+            const shown = editor.id === group.active;
+            return (
+              <TabVisible.Provider key={editor.id} value={shown}>
+                <EditorContent
+                  doc={doc}
+                  editor={editor}
+                  hidden={!shown}
+                  onDoc={(change) => updateDoc(doc.key, change)}
+                  onEditor={(change) => setState((current) => updateEditor(current, groupId, editor.id, change))}
+                  onSave={() => save(doc.key)}
+                  onReload={() => load(doc).then((loaded) => updateDoc(doc.key, { ...loaded, external: false }))}
+                  onNeedText={() => void fill(doc)}
+                  onSample={() => openSample(doc.file)}
+                />
+              </TabVisible.Provider>
+            );
+          })}
       </GroupView>
     );
   };
@@ -1107,6 +1201,7 @@ function GroupView({
 function EditorContent({
   doc,
   editor,
+  hidden,
   onDoc,
   onEditor,
   onSave,
@@ -1116,6 +1211,8 @@ function EditorContent({
 }: {
   doc: Doc;
   editor: Editor;
+  /** Another tab of the group is shown. */
+  hidden: boolean;
   onDoc: (change: Partial<Doc>) => void;
   onEditor: (change: Partial<Editor>) => void;
   onSave: () => void;
@@ -1141,7 +1238,7 @@ function EditorContent({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [wantsText, doc.content, doc.unreadable]);
   return (
-    <div className="editor-content">
+    <div className="editor-content" hidden={hidden}>
       {doc.external && (
         <div className="editor-banner">
           这个文件已被 AI 或其他程序修改。
@@ -1206,6 +1303,8 @@ function EditorContent({
         )
       ) : doc.source === "materials" && !svg ? (
         <MaterialViewer key={doc.file} fileRef={doc.file} kind={doc.kind} playerId={editor.id} />
+      ) : doc.source === "skills" && doc.kind !== "text" ? (
+        <SkillMediaViewer key={doc.file} path={doc.file} kind={doc.kind} playerId={editor.id} />
       ) : doc.kind === "text" ? (
         rendered && page && doc.source === "work" ? (
           <PageViewer work={work} file={doc.file} version={doc.stamp} />
@@ -1239,10 +1338,14 @@ function EditorContent({
   );
 }
 
-/** A video or audio element made known as a player (for the synced timeline) while it is mounted. */
+/** A video or audio element made known as a player (for the synced timeline) while it is mounted; it pauses out of sight. */
 function useMediaPlayer(id: string, label: string) {
   const [element, setElement] = useState<HTMLMediaElement | null>(null);
+  const visible = useTabVisible();
   useEffect(() => (element ? registerPlayer(id, mediaPlayer(element, label)) : undefined), [id, element, label]);
+  useEffect(() => {
+    if (!visible) element?.pause();
+  }, [visible, element]);
   return setElement;
 }
 
@@ -1371,6 +1474,37 @@ function MediaViewer({ path, kind, playerId }: { path: string; kind: Kind; playe
         )}
       </div>
       {reference && kind !== "file" && <div className="faint small-text">把「素材」侧栏里的这个文件拖到时间轴即可使用（触屏上长按它选「添加到画面」）</div>}
+    </div>
+  );
+}
+
+/** A picture, sound or video in one of the repository's skills, as the skill has it now. */
+function SkillMediaViewer({ path, kind, playerId }: { path: string; kind: Kind; playerId: string }) {
+  const { work, addToChat } = useWorkbench();
+  const player = useMediaPlayer(playerId, path.split("/").pop()!);
+  const [version, setVersion] = useState(() => Date.now());
+  const [info, setInfo] = useState("");
+  useServerEvent(
+    (event) => {
+      if ((event.type === "skills" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `skills-${work.repo}`)) setVersion(Date.now());
+    },
+    [work.repo],
+  );
+  const url = `${skillsPath(work.repo)}/raw?path=${encodeURIComponent(path)}&v=${version}`;
+  const media = (element: HTMLVideoElement | HTMLAudioElement) =>
+    setInfo([element instanceof HTMLVideoElement && `${element.videoWidth}×${element.videoHeight}`, formatTime(element.duration)].filter(Boolean).join(" · "));
+  return (
+    <div className={`media-viewer ${kind === "image" ? "image" : ""}`}>
+      {kind === "image" && <ZoomImage src={url} alt={path} onLoad={(image) => setInfo(`${image.naturalWidth}×${image.naturalHeight}`)} />}
+      {kind === "audio" && <audio ref={player} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
+      {kind === "video" && <video ref={player} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
+      <div className="media-info">
+        <span className="faint mono ellipsis">技能 · {path}</span>
+        {info && <span className="faint">{info}</span>}
+        <button className="btn small" onClick={() => addToChat({ type: "skill", path })}>
+          <Sparkles size={13} /> 引用到 AI 聊天
+        </button>
+      </div>
     </div>
   );
 }
