@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { api, ApiError, formatTime, sampleName, workPath, experiencePath, useServerEvent, materialsPath, skillsPath } from "../lib/api";
 import { reviewsPath } from "../lib/reviews";
+import { keptText, useKeptFile } from "../lib/precache";
 import { RawViewer } from "../reviews/RawViewer";
 import { Markdown } from "../chat/Markdown";
 import { coarsePointer } from "../lib/touch";
@@ -300,8 +301,22 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
 
   /** Where a document's text is read and saved (a library's raw files are elsewhere). */
   const textApi = (source: Source) => (source === "materials" ? `${apisRef.current.materials}/text` : `${apisRef.current[source]}/file`);
-  const load = useCallback(async (doc: Pick<Doc, "file" | "source">) => {
-    const file = await api<{ content: string; hash: string }>(`${textApi(doc.source)}?path=${encodeURIComponent(doc.file)}`);
+  const workRef = useRef(work);
+  workRef.current = work;
+  /**
+   * A document's text, `cached`: a playback file the browser keeps is read from there (a library
+   * file only as the library has it now, which is what saving builds on).
+   */
+  const load = useCallback(async (doc: Pick<Doc, "file" | "source">, { cached = false } = {}) => {
+    const { repo, id, slug } = workRef.current;
+    const address =
+      doc.source === "work" && doc.file.startsWith("public/")
+        ? `films/${slug}/${doc.file.slice("public/".length)}`
+        : doc.source === "materials"
+          ? `materials/${doc.file}`
+          : null;
+    const kept = cached && address ? await keptText(repo, id, address, { current: doc.source === "materials" }).catch(() => null) : null;
+    const file = kept ?? (await api<{ content: string; hash: string }>(`${textApi(doc.source)}?path=${encodeURIComponent(doc.file)}`));
     return { content: file.content, saved: file.content, hash: file.hash };
   }, []);
   const updateDoc = useCallback((key: string, change: Partial<Doc>) => setDocs((all) => (all[key] ? { ...all, [key]: { ...all[key], ...change } } : all)), []);
@@ -320,7 +335,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       if (loading.current.has(doc.key)) return;
       loading.current.add(doc.key);
       try {
-        updateDoc(doc.key, { ...(await load(doc)), unreadable: undefined });
+        updateDoc(doc.key, { ...(await load(doc, { cached: true })), unreadable: undefined });
       } catch (error) {
         if (error instanceof ApiError && error.status === 413) updateDoc(doc.key, { unreadable: error.message });
         else {
@@ -1320,9 +1335,11 @@ function MediaViewer({ path, kind, playerId }: { path: string; kind: Kind; playe
     setVersion(Date.now());
     setInfo("");
   }, [path]);
-  const url = `${workPath(work.repo, work.id)}/raw?path=${encodeURIComponent(path)}&v=${version}`;
   // Assets are referenced from code as films/<slug>/<path under public/>.
   const reference = path.startsWith("public/") ? `films/${work.slug}/${path.slice(7)}` : null;
+  // A file the browser keeps for playback is shown from there (and anew when it changes).
+  const kept = useKeptFile(work.repo, work.id, reference);
+  const url = kept === undefined ? null : (kept?.url ?? `${workPath(work.repo, work.id)}/raw?path=${encodeURIComponent(path)}&v=${version}`);
   const media = (element: HTMLVideoElement | HTMLAudioElement) =>
     setInfo([element instanceof HTMLVideoElement && `${element.videoWidth}×${element.videoHeight}`, formatTime(element.duration)].filter(Boolean).join(" · "));
   if (drawn && reference)
@@ -1339,9 +1356,10 @@ function MediaViewer({ path, kind, playerId }: { path: string; kind: Kind; playe
     );
   return (
     <div className={`media-viewer ${kind === "image" ? "image" : ""}`}>
-      {kind === "image" && <ZoomImage src={url} alt={path} onLoad={(image) => setInfo(`${image.naturalWidth}×${image.naturalHeight}`)} />}
-      {kind === "audio" && <audio ref={player} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
-      {kind === "video" && <video ref={player} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
+      {!url && kind !== "file" && !drawn && <div className="empty">正在读取…</div>}
+      {url && kind === "image" && <ZoomImage src={url} alt={path} onLoad={(image) => setInfo(`${image.naturalWidth}×${image.naturalHeight}`)} />}
+      {url && kind === "audio" && <audio ref={player} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
+      {url && kind === "video" && <video ref={player} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
       {(kind === "file" || drawn) && <div className="empty">无法在这里预览这种文件{drawn ? "（只有 public/ 里的素材能预览）" : ""}</div>}
       <div className="media-info">
         <span className="faint mono ellipsis">{path}</span>
@@ -1372,7 +1390,8 @@ function MaterialViewer({ fileRef, kind, playerId }: { fileRef: string; kind: Ki
   const { work, addToChat, readOnly } = useWorkbench();
   const player = useMediaPlayer(playerId, fileRef.split("/").pop()!);
   const toast = useToast();
-  const [use, setUse] = useState<MaterialUse | null>(null);
+  // Undefined until known; null when the work neither uses nor locked it.
+  const [use, setUse] = useState<MaterialUse | null>();
   const [lockedVersion, setLockedVersion] = useState(false);
   const [version, setVersion] = useState(() => Date.now());
   const [info, setInfo] = useState("");
@@ -1383,7 +1402,7 @@ function MaterialViewer({ fileRef, kind, playerId }: { fileRef: string; kind: Ki
     () =>
       api<{ files: MaterialUse[] }>(`${workPath(work.repo, work.id)}/materials`).then(
         (result) => setUse(result.files.find((item) => item.ref === fileRef) ?? null),
-        () => {},
+        () => setUse((known) => known ?? null),
       ),
     [work.repo, work.id, fileRef],
   );
@@ -1401,14 +1420,23 @@ function MaterialViewer({ fileRef, kind, playerId }: { fileRef: string; kind: Ki
     [work.repo, work.id, fileRef, status],
   );
   const showLocked = lockedVersion && Boolean(use?.outdated);
-  const url = showLocked
-    ? `${work.preview.assetBase}materials/${fileRef.split("/").map(encodeURIComponent).join("/")}?v=${use?.locked}`
-    : `${materialsPath(work.repo)}/file?path=${encodeURIComponent(fileRef)}&v=${version}`;
+  // A file the work plays is kept by the browser as the work has it: the library's file as it
+  // is now, unless the work locked an older version (whether it did is known with `use`).
+  const kept = useKeptFile(work.repo, work.id, `materials/${fileRef}`);
+  const waiting = kept === undefined || (kept?.version.startsWith("git-") && use === undefined);
+  const workCopy = kept && (showLocked || !use?.outdated) ? kept : null;
+  const url = waiting
+    ? null
+    : workCopy
+      ? workCopy.url
+      : showLocked
+        ? `${work.preview.assetBase}materials/${fileRef.split("/").map(encodeURIComponent).join("/")}?v=${use?.locked}`
+        : `${materialsPath(work.repo)}/file?path=${encodeURIComponent(fileRef)}&v=${version}`;
   const missing = "文件不存在（可能已在素材库中移动或删除）";
   useEffect(() => {
     setInfo("");
     setFailed("");
-    if (kind !== "text") return;
+    if (kind !== "text" || !url) return;
     setText(null);
     let current = true;
     fetch(url)
@@ -1434,8 +1462,8 @@ function MaterialViewer({ fileRef, kind, playerId }: { fileRef: string; kind: Ki
       (error: Error) => toast(error.message, "error"),
     );
   const lottie = useMemo(() => /\.json$/i.test(fileRef) && isLottieText(text ?? undefined), [fileRef, text]);
-  // Drawn by the engine: as the library has it now, or at the version this work locked.
-  const assetBase = showLocked ? work.preview.assetBase : (work.preview.library?.assetBase ?? `/files/${encodeURIComponent(work.repo)}/-/`);
+  // Drawn by the engine: the work's copy (the version it locked, or kept by the browser), else the library as it is now.
+  const assetBase = showLocked || workCopy ? work.preview.assetBase : (work.preview.library?.assetBase ?? `/files/${encodeURIComponent(work.repo)}/-/`);
   const drawn = kind === "model" || kind === "environment" || kind === "font" || (lottie && !source);
   const state = !use?.locked
     ? use?.used
@@ -1483,12 +1511,14 @@ function MaterialViewer({ fileRef, kind, playerId }: { fileRef: string; kind: Ki
         </button>
       </div>
       {state && <div className={`material-state ${use?.outdated ? "warn-text" : "faint"}`}>{state}</div>}
-      {drawn ? (
+      {waiting && kind !== "text" && kind !== "file" ? (
+        <div className="empty">正在读取…</div>
+      ) : drawn ? (
         <AssetViewer
           key={`${assetBase}|${fileRef}`}
           assetBase={assetBase}
           src={`materials/${fileRef}`}
-          version={showLocked ? (use?.locked ?? undefined) : version}
+          version={workCopy ? workCopy.version : showLocked ? (use?.locked ?? undefined) : version}
         />
       ) : kind === "text" ? (
         text === null ? (
@@ -1498,7 +1528,7 @@ function MaterialViewer({ fileRef, kind, playerId }: { fileRef: string; kind: Ki
         )
       ) : (
         <div className={`media-viewer ${kind === "image" ? "image" : ""}`}>
-          {kind === "image" && (
+          {kind === "image" && url && (
             <ZoomImage
               key={url}
               src={url}
@@ -1507,10 +1537,10 @@ function MaterialViewer({ fileRef, kind, playerId }: { fileRef: string; kind: Ki
               onError={() => setFailed(missing)}
             />
           )}
-          {kind === "audio" && (
+          {kind === "audio" && url && (
             <audio ref={player} key={url} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} onError={() => setFailed(missing)} />
           )}
-          {kind === "video" && (
+          {kind === "video" && url && (
             <video ref={player} key={url} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} onError={() => setFailed(missing)} />
           )}
           {kind === "file" && <div className="empty">无法在这里预览这种文件</div>}

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { formatBytes, useServerEvent } from "../lib/api";
-import { onPrecacheProgress, requestPrecache, type PrecacheProgress } from "../lib/precache";
+import { forgetPrecache, onPrecacheProgress, requestPrecache, type PrecacheProgress } from "../lib/precache";
 import { useToast } from "../lib/ui";
 import { useWorkbench } from "./store";
 
@@ -24,16 +24,17 @@ export function PrecacheBar() {
       else timer.current = window.setTimeout(() => setVisible(false), next.state === "error" ? 4000 : 500);
       if (next.state === "error") toast("素材缓存未完成：" + (next.error || "未知错误"), "error");
     });
-    void requestPrecache(work.repo, work.id).catch(() => {});
+    void requestPrecache(work.repo, work.id);
     return () => {
       stop();
       window.clearTimeout(timer.current);
+      forgetPrecache(work.repo, work.id);
     };
   }, [key, work.repo, work.id, toast]);
 
   // Changed or added files are cached again (only those whose version changed): the work's
-  // own, and library files when its locks or the libraries change.
-  const debounce = useRef<number>(undefined);
+  // own, and library files when its locks or the libraries change. Editors opening one of them
+  // meanwhile wait for the new list.
   useServerEvent((event) => {
     if (event.repo !== work.repo) return;
     const changed =
@@ -41,9 +42,7 @@ export function PrecacheBar() {
       (event.type === "work-files" &&
         event.work === work.id &&
         (event.files as string[]).some((file) => /^projects\/[^/]+\/(public\/|materials\.lock\.json$)/.test(file)));
-    if (!changed) return;
-    window.clearTimeout(debounce.current);
-    debounce.current = window.setTimeout(() => void requestPrecache(work.repo, work.id).catch(() => {}), 400);
+    if (changed) void requestPrecache(work.repo, work.id, 400);
   });
 
   if (!progress) return null;

@@ -5,7 +5,9 @@
  * from there, including the Range requests media decoding makes, so playback never waits
  * on the network. The stage page carries the current list (the workbench sends it too, and
  * again after changes): kept files that changed are dropped before any of them is served,
- * and the preview stage drops files it is about to reload after an edit.
+ * and the preview stage drops files it is about to reload after an edit. The workbench's
+ * editors open kept files with the version from the list (?v=…) and are answered from here
+ * when the kept copy is that version.
  *
  * Modules: preview pages carry the etag of every module they will import. A kept module
  * whose etag is unchanged is answered from Cache Storage without asking the server, so
@@ -115,18 +117,25 @@ async function prune(listed) {
 // ---- serving ---------------------------------------------------------------
 
 async function serve(request) {
+  // The workbench's editors ask for a file at a version (?v=, from the same list): the kept
+  // copy answers only when it is that version, otherwise the server does.
+  const versioned = /^([^?#]*)\?v=([^&#]+)$/.exec(request.url);
+  const url = versioned ? versioned[1] : request.url;
+  const version = versioned ? decodeURIComponent(versioned[2]) : null;
+  const current = (response) => (response && (version === null || response.headers.get(VERSION) === version) ? response : undefined);
   // A newer list may drop a kept file that changed: let it be looked at first.
-  for (const job of jobs.values()) if (request.url.startsWith(job.prefix)) await job.applied.promise;
+  for (const job of jobs.values()) if (url.startsWith(job.prefix)) await job.applied.promise;
   const cache = await caches.open(CACHE);
-  let hit = await cache.match(request.url);
+  let hit = current(await cache.match(url));
   const range = request.headers.get("range");
   if (!hit) {
     // Let the precache deliver it (now, ahead of the queue) rather than downloading it twice.
     // Range reads of large media still go to the network so playback can start at once.
-    const pending = prioritize(request.url);
+    if (!range) for (const job of jobs.values()) if (url.startsWith(job.prefix)) await job.planned.promise;
+    const pending = prioritize(url);
     if (!pending || range) return fetch(request);
     await pending.catch(() => {});
-    hit = await cache.match(request.url);
+    hit = current(await cache.match(url));
     if (!hit) return fetch(request);
   }
   if (!range) return hit;
@@ -224,7 +233,8 @@ class ByteQueue {
 /**
  * Start keeping a work's files as listed (a job replaces the work's running one unless the
  * list is the same). Returns the job at once: requests for the work's files wait for its
- * `applied` (kept files checked against the list), not for the downloads.
+ * `applied` (kept files checked against the list), not for the downloads; one for a file not
+ * kept waits for `planned` (what will be downloaded is known) to join its download.
  */
 function precache(message) {
   const { key, base, files, at = 0 } = message;
@@ -240,6 +250,7 @@ function precache(message) {
     prefix: new URL(base, self.location.origin).href,
     abort: new AbortController(),
     applied: deferred(),
+    planned: deferred(),
     items: new Map(),
     tasks: [],
     wake: () => {},
@@ -248,6 +259,7 @@ function precache(message) {
   jobs.set(key, job);
   job.finished = run(job, message).finally(() => {
     job.applied.resolve();
+    job.planned.resolve();
     if (jobs.get(key) === job) jobs.delete(key);
   });
   return job;
@@ -341,6 +353,7 @@ async function run(job, { key, base, files }) {
       for (let index = 0; index < count; index++)
         job.tasks.push({ kind: "chunk", item, index, start: index * CHUNK, end: Math.min(item.file.size, (index + 1) * CHUNK) - 1 });
     }
+    job.planned.resolve();
     progress(true);
 
     const fetchBundle = async ({ items }) => {
