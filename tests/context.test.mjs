@@ -66,6 +66,33 @@ describe("session brief and per-message context", () => {
     expect(brief.docs["长文.md"].level).toBe("index");
   });
 
+  it("keeps detailed documents (详细/) out of the brief, as an index the AI reads from", () => {
+    const details = "一个作品的完整经过和数据。".repeat(800); // 30 KB: kept, but never in the brief
+    const root = makeLibrary({
+      "README.md": "# 知识类视频\n\n偏好：暖色",
+      "开场.md": "# 开场\n\n前 2 秒抛出问题，细节见 详细/开场.md",
+      "详细/开场.md": `# 开场的例子\n\n三部作品的对比\n\n${details}`,
+    });
+    const brief = libraryBrief(library, readLibrary(root));
+    // Conclusions are small: in full, however long the details are.
+    expect(brief.full).toBe(true);
+    expect(brief.conclusions).toBeLessThan(200);
+    expect(brief.text).toContain("### 开场.md");
+    expect(brief.text).toContain("### 详细文档（细节、例子和数据，需要时用 experience_read 读）\n\n- `详细/开场.md` 开场的例子：三部作品的对比");
+    expect(brief.text).not.toContain(details.slice(0, 40));
+    expect(brief.docs["详细/开场.md"].level).toBe("index");
+    expect(brief.text).not.toContain("需要整理");
+  });
+
+  it("says when a library's conclusions grew past the limit, and still lets the AI choose what to read", () => {
+    const root = makeLibrary({ "README.md": "# 知识类视频\n\n偏好", "长文.md": "# 长文\n\n讲节奏\n\n" + "结论。".repeat(3000) }); // 27 KB of conclusions
+    const brief = libraryBrief(library, readLibrary(root));
+    expect(brief.full).toBe(false);
+    expect(brief.text).toMatch(/^> 结论文档共 26 KB，超过 24 KB，需要整理/);
+    expect(brief.text).toContain("### 结论文档（动手前用 experience_read 读和当前任务相关的）\n\n- `长文.md` 长文：讲节奏");
+    expect(briefText([brief])).toContain("首页和结论文档的目录如下。");
+  });
+
   it("shares the brief's budget between several libraries", () => {
     const small = makeLibrary({ "README.md": "# 通用\n\n短" });
     const big = makeLibrary({ "README.md": "# 音乐视频\n\n" + "偏好。".repeat(1500), "长文.md": "# 长文\n\n" + "很长。".repeat(3000) });

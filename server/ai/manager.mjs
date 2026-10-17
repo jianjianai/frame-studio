@@ -696,6 +696,10 @@ export class AiManager {
         clearInterval(goalPoll);
         this.readGoal(session);
       }
+      // What the AI recorded in experience libraries this turn: a version of each.
+      const writes = session.experienceWrites;
+      session.experienceWrites = null;
+      if (writes?.size) await this.services.experience?.saveTurn([...writes.values()]);
       session.goalCapped = null;
       for (const [requestId, pending] of this.permissions)
         if (pending.session === session.meta.id) {
@@ -1248,6 +1252,18 @@ export class AiManager {
     if (!session?.meta.context?.experience) return;
     session.meta.context = { ...session.meta.context, experience: noteSeen(session.meta.context.experience, library, file, hash, level) };
     this.saveMeta(session);
+  }
+
+  /** The AI wrote to an experience library: saved as a version of that library when the turn ends. */
+  noteExperienceWrite(sessionId, { repo, library, files, note }) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.experienceWrites ??= new Map();
+    const key = `${repo}/${library}`;
+    const entry = session.experienceWrites.get(key) ?? { repo, library, files: new Set(), notes: [] };
+    for (const file of files) entry.files.add(file);
+    if (note) entry.notes.push(note);
+    session.experienceWrites.set(key, entry);
   }
 
   /** The AI linked or unlinked experience libraries itself: it knows the new ones as its tool showed them. */

@@ -73,9 +73,11 @@ describe("published works and copies", () => {
     const newLibrary = await tool("experience_link", { create: ["复盘"] });
     expect(newLibrary.body.data.created).toEqual(["复盘"]);
     expect(newLibrary.body.text).toContain("没有关联到它");
-    expect((await tool("experience_write", { library: "复盘", operations: [{ op: "write", path: "要点.md", content: "# 要点\n\n- 开场太慢\n" }] })).status).toBe(200);
+    // Written outside a conversation: saved as a version of the library at once.
+    const written = await tool("experience_write", { library: "复盘", note: "复盘要点", operations: [{ op: "write", path: "要点.md", content: "# 要点\n\n- 开场太慢\n" }] });
+    expect(written.body.data.commit).toMatch(/^[0-9a-f]{40}$/);
     expect((await tool("experience_read", { library: "复盘", path: "要点.md" })).body.text).toContain("开场太慢");
-    expect((await tool("experience_commit", { message: "复盘要点" })).body.data.saved.flatMap((item) => item.files)).toContain("复盘/要点.md");
+    expect((await call(`/api/repos/local/experience/libraries/${encodeURIComponent("复盘")}/history`)).body[0].message).toBe("复盘要点");
     expect((await tool("materials_link", { remove: ["x"] })).status).toBe(423);
     expect((await tool("materials_link", { create: ["精选"] })).body.data).toMatchObject({ created: ["精选"], materials: [] });
     expect((await tool("material_write", { library: "精选", operations: [{ op: "put", path: "note.txt", content: "好用" }] })).body.data[0].ok).toBe(true);

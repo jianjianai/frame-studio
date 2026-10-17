@@ -5,7 +5,8 @@ import { tree, readText, writeText, removePath, movePath } from "./files.mjs";
 import { readJson } from "./http.mjs";
 import { problem, notFound, confined } from "./util.mjs";
 import { workArg, repoArg, asJson } from "./tools/registry.mjs";
-import { readLibrary, libraryBrief, experienceBrief, briefText, describeDocument } from "./ai/context.mjs";
+import { readLibrary, libraryBrief, experienceBrief, briefText, describeDocument, clip, quote, LIMITS, isDetail, tidyConclusionsText } from "./ai/context.mjs";
+import { EXPERIENCE_INBOX } from "./works.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./tools/file-ops.mjs";
 import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST, trashed } from "./libraries.mjs";
 import { LibraryBranches, libraryVersionRoutes, validId, idFrom } from "./library-branches.mjs";
@@ -34,6 +35,12 @@ ${templateLead(title)}
 - （这类作品都适用的结构、节奏、风格。按主题展开的经验另建文档，例如“开场.md”“配色与字体.md”）
 `;
 
+/** A version's message from what the AI said it recorded (else the files it changed). */
+export const versionMessage = (notes, files) => {
+  const said = [...new Set(notes.map((note) => String(note || "").trim()).filter(Boolean))].join("；");
+  return (said || `记录经验：${files.join("、")}`).slice(0, 200);
+};
+
 export class Experience {
   constructor(services) {
     this.services = services;
@@ -60,7 +67,17 @@ export class Experience {
       .map((id) => {
         const files = tree(path.join(dir, id), { maxEntries: 100000 }).filter((item) => item.type === "file");
         const title = this.title(dir, id);
-        const library = { id, title, files: files.length, about: readmeLead(path.join(dir, id, "README.md"), templateLead(title)) };
+        // Conclusions (all but 详细/) are kept short: past the limit the studio asks for tidying up.
+        const conclusions = files.filter((item) => !isDetail(item.path) && /\.(md|txt)$/i.test(item.path)).reduce((sum, item) => sum + (item.size || 0), 0);
+        const library = {
+          id,
+          title,
+          files: files.length,
+          details: files.filter((item) => isDetail(item.path)).length,
+          conclusions,
+          tidy: conclusions > LIMITS.tidyConclusions,
+          about: readmeLead(path.join(dir, id, "README.md"), templateLead(title)),
+        };
         if (documents) {
           library.documents = files
             .filter((item) => /\.(md|txt)$/i.test(item.path) && item.path !== "README.md")
@@ -124,6 +141,19 @@ export class Experience {
     const result = await this.branches.purge(repoId, key);
     this.changed(repoId, []);
     return { purged: result.purged };
+  }
+
+  /**
+   * At the end of an AI turn: each library the AI wrote to becomes a version of what it wrote
+   * (only those files: someone's other edits stay unsaved). `writes`: [{ repo, library, files, notes }].
+   */
+  async saveTurn(writes) {
+    for (const { repo, library, files, notes } of writes)
+      try {
+        await this.branches.commitPaths(repo, library, [...files], versionMessage(notes, [...files]));
+      } catch (error) {
+        console.warn(`saving experience ${repo}/${library} after a turn failed:`, error.message);
+      }
   }
 
   /** The library a linked id stands for, or null when there is none (deleted, or in the bin). */
@@ -255,7 +285,30 @@ export class Experience {
   }
 
   /** The libraries' section of the session brief, and what it tells the AI. */
+  /**
+   * The work's 经验.md: reusable experience recorded with the work because no linked library
+   * suits it (or none is linked), waiting to be tidied into one. Its section of the brief.
+   */
+  inbox(work) {
+    let text = "";
+    try {
+      text = fs.readFileSync(path.join(work.dir, EXPERIENCE_INBOX), "utf8").trim();
+    } catch {}
+    const size = Buffer.byteLength(text);
+    const shown = clip(text, LIMITS.inbox);
+    const kb = (value) => `${Math.round(value / 1024)} KB`;
+    const section = [
+      `## 本作品记下的经验（projects/${work.slug}/${EXPERIENCE_INBOX}，待整理到经验库${shown.cut ? `；以下是开头部分，全文 ${kb(size)}` : ""}）`,
+      text ? quote(shown.text) : "（还没有）",
+      size > LIMITS.tidyInbox ? `> 已有 ${kb(size)}，超过 ${kb(LIMITS.tidyInbox)}，该整理到经验库了：先告诉用户，用户同意后整理。` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    return { text, size, section };
+  }
+
   brief(work) {
+    const inbox = this.inbox(work).section;
     const { missing } = this.linkedSync(work);
     const current = this.current(work);
     const gone = this.goneText(work, missing);
@@ -269,8 +322,8 @@ export class Experience {
         if (list.length)
           offer = `${label}${list.length < total ? `（作品库里共 ${total} 个，其他的用 experience_list 按主题查找）` : ""}：\n${list.map((library) => this.offerLine(library)).join("\n")}\n\n`;
       }
-      const text = `## 经验库\n\n${gone || "本作品没有关联经验库。"}${offer}需要参考或记录经验时，征得用户同意后用 experience_link 关联（可以多个）或新建一个；没关联的经验库也可以用 experience_read（library 参数）先看看。`;
-      return { text, state: { experience: {} } };
+      const text = `## 经验库\n\n${gone || "本作品没有关联经验库。"}${offer}可复用的经验先记在作品的 ${EXPERIENCE_INBOX}；需要参考经验时可以用 experience_read（library 参数）先看看没关联的，要关联或新建先征得用户同意（experience_link）。`;
+      return { text: `${text}\n\n${inbox}`, state: { experience: {} } };
     }
     const { sections, seen } = experienceBrief(current);
     const several =
@@ -279,14 +332,17 @@ export class Experience {
         : "";
     const others = total - current.length;
     const more = others > 0 ? `作品库里还有 ${others} 个经验库没有关联（experience_list 按主题查找；要关联先征得用户同意）。` : "";
-    const lead = `动手前对照经验库，照着做；和用户这次的要求冲突时以用户为准，并更新经验库。${several}${gone}${more}`;
-    return { text: `${lead}\n\n${briefText(sections)}`, state: { experience: seen } };
+    const lead = `动手前对照经验库的结论，照着做；和用户这次的要求冲突时以用户为准，并更新经验库。${several}${gone}${more}`;
+    return { text: `${lead}\n\n${briefText(sections)}\n\n${inbox}`, state: { experience: seen } };
   }
 
   /** For work_context: built-in agents already have the libraries in their brief, others get them here. */
   async summary(work, { inBrief = false } = {}) {
     const { missing } = this.linkedSync(work);
     const current = this.current(work);
+    // The work's own record of reusable experience (经验.md), not yet in a library.
+    const pending = this.inbox(work);
+    const inbox = pending.text ? { inbox: inBrief ? `内容在会话说明的「本作品记下的经验」一节（${EXPERIENCE_INBOX}）` : clip(pending.text, LIMITS.inbox).text } : {};
     if (!current.length) {
       const annotated = this.services.libraries ? await this.services.libraries.annotate("experiences", work.repo, await this.libraries(work.repo), work) : [];
       const { label, list } = this.offers(annotated);
@@ -296,18 +352,20 @@ export class Experience {
         ...(missing.length ? { gone: this.goneText(work, missing) } : {}),
         available: annotated.length,
         ...(list.length ? { offered: label, offers: list.map(({ id, title, about, files, works, why }) => ({ library: id, title, about, documents: files, works, why })) } : {}),
-        hint: `这个作品没有关联经验库${annotated.length ? `（作品库里有 ${annotated.length} 个，experience_list 按主题查找）` : ""}。用户同意后用 experience_link 关联（可以多个），用户也可以在「经验」面板的「管理…」（经验库选项卡）中关联。`,
+        hint: `这个作品没有关联经验库${annotated.length ? `（作品库里有 ${annotated.length} 个，experience_list 按主题查找）` : ""}。可复用的经验先记在作品的 ${EXPERIENCE_INBOX}；用户同意后用 experience_link 关联（可以多个），用户也可以在「经验」面板的「管理…」（经验库选项卡）中关联。`,
+        ...inbox,
       };
     }
     return {
       libraries: current.map(({ library, documents }) => ({
         library: library.id,
         title: library.title,
-        documents: documents.map(({ path: file, title, summary, chars }) => ({ path: file, title, summary, chars })),
+        documents: documents.map(({ path: file, title, summary, chars }) => ({ path: file, title, summary, chars, ...(isDetail(file) ? { detail: true } : {}) })),
         ...(inBrief ? {} : { readme: documents.find((doc) => doc.path === "README.md")?.content.slice(0, Math.floor(6000 / current.length)) ?? "" }),
       })),
       missing,
       ...(inBrief ? { note: "内容在会话说明的「经验库」一节" } : {}),
+      ...inbox,
     };
   }
 }
@@ -430,7 +488,7 @@ export function experiencePlugin(services) {
     name: "experience_read",
     title: "阅读经验库",
     description:
-      "阅读作品关联的经验库（同类作品积累的制作经验、用户偏好和避坑记录）。传 path 返回该文档全文，一次读多篇用 paths；不传返回首页和文档目录（内置 AI 的会话说明里已经有，通常不需要）。与当前任务相关的文档读全文，照着做。作品关联了多个经验库时，读文档要用 library 指定是哪个。还没有作品时用 repo 指定作品库，library 写明经验库。",
+      "阅读作品关联的经验库（同类作品积累的制作经验、用户偏好和避坑记录）。经验库里有结论文档（README 和 详细/ 以外的文档：精简的做法和结论）和详细文档（详细/ 下：细节、例子、数据）。传 path 返回该文档全文，一次读多篇用 paths；不传返回首页和两种文档的目录（内置 AI 的会话说明里已经有，通常不需要）。动手前读和当前任务相关的结论文档，照着做；需要细节时再读详细文档。作品关联了多个经验库时，读文档要用 library 指定是哪个。还没有作品时用 repo 指定作品库，library 写明经验库。",
     readOnly: true,
     input: { work: workArg, repo: repoArg, library: libraryArg, path: docPath.optional(), paths: z.array(docPath).max(30).optional().describe("一次读同一经验库的多篇文档") },
     async run({ library: name, path: file, paths }, ctx) {
@@ -469,7 +527,11 @@ export function experiencePlugin(services) {
               entry.level,
             );
         return {
-          data: current.map(({ library, documents }) => ({ library: library.id, title: library.title, documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary })) })),
+          data: current.map(({ library, documents }) => ({
+            library: library.id,
+            title: library.title,
+            documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary, ...(isDetail(doc) ? { detail: true } : {}) })),
+          })),
           text: briefText(sections),
         };
       }
@@ -483,7 +545,7 @@ export function experiencePlugin(services) {
       const brief = libraryBrief({ id: library.id, title: library.title }, documents);
       for (const [doc, entry] of Object.entries(brief.docs)) noteSeen(ctx, library, doc, entry.hash, entry.level);
       return {
-        data: { library: library.id, title: library.title, documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary })) },
+        data: { library: library.id, title: library.title, documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary, ...(isDetail(doc) ? { detail: true } : {}) })) },
         text: briefText([brief]),
       };
     },
@@ -598,7 +660,7 @@ export function experiencePlugin(services) {
     published: true, // the library branches, not the work: allowed on a published work
     title: "保存经验库版本",
     description:
-      "把经验库里未保存的修改保存为版本（Git 提交）。每个经验库是自己的分支，版本、未保存的修改和同步各自独立：library 指定只保存哪个经验库；不写时有修改的经验库各自保存一个版本（message 相同），和用户在「版本与同步」里逐个点「保存版本」一样。整理完经验、用户认可后调用；message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
+      "把经验库里未保存的修改保存为版本（Git 提交）。你用 experience_write 改的每轮结束时已经自动保存，这个工具用于用户在工作台里手动改了、要你保存的时候。每个经验库是自己的分支：library 指定只保存哪个；不写时有修改的经验库各自保存一个版本（message 相同）。message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
     input: { work: workArg, repo: repoArg, library: libraryArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
     async run({ library: name, message, push }, ctx) {
       const work = await ctx.place();
@@ -639,10 +701,16 @@ export function experiencePlugin(services) {
     published: true, // writes outside the work: allowed on a published (view-only) work
     title: "整理经验库",
     description:
-      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名）。整理经验时按主题合并到已有文档，不要重复记录；新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。失败的逐项说明原因，只需重试失败的。修改是未保存状态：用户认可后用 experience_commit 保存版本（用户也可以在「版本与同步」中保存）。还没有作品时用 repo 指定作品库，library 写明经验库。",
+      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md、详细/开场的例子.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete（合并到其他文档后删掉旧的）、move（改名或移到 详细/）。结论文档（README 和 详细/ 以外的）只写精简的做法和结论，按主题合并到已有文档，不重复；支撑它的细节、例子、数据、单个作品的记录写进 详细/ 下的文档。只用于关联的经验库适合这类作品的经验，不适合的写进作品的 经验.md。新文档第一行写「# 标题」，下一行一句话说明讲什么（会显示在目录里）。note 一句话说明这次记了什么：对话中每轮结束时，改过的经验库各自自动保存为一个版本，note 就是版本说明（没有对话时立即保存）。失败的逐项说明原因，只需重试失败的。还没有作品时用 repo 指定作品库，library 写明经验库。",
     destructive: true,
-    input: { work: workArg, repo: repoArg, library: libraryArg, operations: z.array(docOperation).min(1).max(30) },
-    async run({ library: name, operations }, ctx) {
+    input: {
+      work: workArg,
+      repo: repoArg,
+      library: libraryArg,
+      operations: z.array(docOperation).min(1).max(30),
+      note: z.string().max(120).optional().describe("一句话说明这次记了什么，用作版本说明，例如“开场：前 2 秒亮出冲突”"),
+    },
+    async run({ library: name, operations, note }, ctx) {
       const { work, library } = await libraryOf(ctx, name);
       const outcome = runFileOperations(library.root, operations, {
         reader: "experience_read",
@@ -656,11 +724,26 @@ export function experiencePlugin(services) {
         const exists = fs.existsSync(path.join(library.root, file));
         noteSeen(ctx, library, file, exists ? readText(library.root, file).hash : null, exists ? "content" : undefined);
       }
-      if (changed.length) experience.changed(work.repo, changed.map((file) => `${library.id}/${file}`));
+      let saved = null;
+      if (changed.length) {
+        experience.changed(work.repo, changed.map((file) => `${library.id}/${file}`));
+        // In a conversation the turn's end saves it; called from outside one, now.
+        if (ctx.scope.session && services.ai?.noteExperienceWrite) services.ai.noteExperienceWrite(ctx.scope.session, { repo: work.repo, library: library.id, files: changed, note });
+        else saved = await experience.branches.commitPaths(work.repo, library.id, changed, versionMessage([note], changed));
+      }
       const { summary } = describeFileOperations(outcome);
+      const conclusions = readLibrary(library.root)
+        .filter((doc) => !isDetail(doc.path))
+        .reduce((sum, doc) => sum + doc.bytes, 0);
       return {
-        data: { library: library.id, applied: outcome.applied, results: outcome.results },
-        text: `经验库「${library.title}」：${summary}${changed.length ? "\n修改未保存：用户认可后用 experience_commit 保存版本。" : ""}`,
+        data: { library: library.id, applied: outcome.applied, results: outcome.results, ...(saved ? { commit: saved } : {}), conclusions },
+        text: [
+          `经验库「${library.title}」：${summary}`,
+          !changed.length ? "" : saved ? `已保存为一个版本 ${saved.slice(0, 7)}。` : "这一轮结束时自动保存为一个版本。",
+          conclusions > LIMITS.tidyConclusions ? tidyConclusionsText(conclusions) : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
       };
     },
   });

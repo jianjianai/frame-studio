@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
+import { tidyProblems } from "../server/checks.mjs";
 
 describe("experience libraries", () => {
   let app, base;
@@ -69,21 +70,30 @@ describe("experience libraries", () => {
     expect(linked.readme).toContain("## 用户偏好");
     expect(context.body.data.notes).toContain("# 科普短片");
 
-    // The library's own versions (a branch of its own): new documents show up in the diff of
-    // unsaved changes as fully added, paths from the library's folder.
+    // The library's own versions (a branch of its own). Written by the AI outside a conversation,
+    // each change was saved at once (in a conversation: when the turn ends).
     const versions = `${lib}/libraries/${encodeURIComponent("知识类视频")}`;
-    expect((await call(`${versions}/diff?file=${encodeURIComponent("开场.md")}`)).body.diff).toContain("+- 前 2 秒给出问题");
-    const status = await call(`${versions}/status`);
-    expect(status.body.files.map((file) => file.path)).toEqual(["开场.md"]);
+    expect((await call(`${versions}/status`)).body.files).toEqual([]);
+    expect((await call(`${versions}/history`)).body.map((version) => version.message)).toEqual([
+      "记录经验：归档.md",
+      "记录经验：临时.md、归档.md",
+      "记录经验：开场.md",
+      "记录经验：开场.md",
+      "新建经验库：知识类视频",
+    ]);
+    // Edits made in the studio stay unsaved until saved; paths from the library's folder.
+    await call(`${lib}/file`, { method: "PUT", body: { path: "知识类视频/开场.md", content: "# 开场\n\n- 前 2 秒给出问题\n- 第 3 秒给答案\n", expectedHash: undefined } });
+    expect((await call(`${versions}/diff?file=${encodeURIComponent("开场.md")}`)).body.diff).toContain("+- 第 3 秒给答案");
+    expect((await call(`${versions}/status`)).body.files.map((file) => file.path)).toEqual(["开场.md"]);
     expect((await call(`${versions}/commit`, { method: "POST", body: { message: "开场经验" } })).body.commit).toMatch(/^[0-9a-f]{40}$/);
-    expect((await call(`${versions}/history`)).body.map((version) => version.message)).toEqual(["开场经验", "新建经验库：知识类视频"]);
+    expect((await call(`${versions}/history`)).body[0].message).toBe("开场经验");
     // A version's files, and one file's change in it (the 版本与同步 history opens them).
     const [saved] = (await call(`${versions}/history`)).body;
-    expect((await call(`${versions}/changes?commit=${saved.commit}`)).body).toEqual([{ status: "A", path: "开场.md" }]);
+    expect((await call(`${versions}/changes?commit=${saved.commit}`)).body).toEqual([{ status: "M", path: "开场.md" }]);
     const one = (await call(`${versions}/diff?commit=${saved.commit}&file=${encodeURIComponent("开场.md")}`)).body.diff;
-    expect(one).toContain("+- 前 2 秒给出问题");
+    expect(one).toContain("+- 第 3 秒给答案");
     expect(one).not.toContain("README.md");
-    expect((await call(`${versions}/diff?commit=HEAD`)).body.diff).toContain("+- 前 2 秒给出问题");
+    expect((await call(`${versions}/diff?commit=HEAD`)).body.diff).toContain("+- 第 3 秒给答案");
     expect((await call(`${versions}/diff?commit=--output=x`)).status).toBe(400);
     expect((await call(`${lib}/versions`)).body).toMatchObject([{ id: "知识类视频", files: 0, head: { message: "开场经验" } }]);
     // The template's introduction says nothing about the library: no `about` until someone writes one.
@@ -97,7 +107,9 @@ describe("experience libraries", () => {
     const brief = fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8");
     expect(brief).toContain(`## 本作品的需求与约定（projects/${opened.slug}/AGENTS.md）`);
     expect(brief).toContain("## 经验库「知识类视频」");
-    expect(brief).toContain("前 2 秒给出问题");
+    expect(brief).toContain("第 3 秒给答案");
+    // The work's own 经验.md has its place in the brief too (empty for now).
+    expect(brief).toContain("## 本作品记下的经验（projects/");
     expect(fs.readFileSync(path.join(opened.root, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
   });
 
@@ -107,6 +119,8 @@ describe("experience libraries", () => {
     await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experiences: [created.body.id] } });
     await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "做法.md", content: "# 做法\n\n- 先画分镜\n" }] });
     const versions = `${lib}/libraries/${encodeURIComponent("旧名称")}`;
+    // An edit in the studio, not saved yet.
+    await call(`${lib}/file`, { method: "PUT", body: { path: "旧名称/做法.md", content: "# 做法\n\n- 先画分镜\n- 再配音\n" } });
 
     expect((await call(`${versions}/rename`, { method: "POST", body: { name: "新名称" } })).body).toEqual({ id: "旧名称", title: "新名称" });
     expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "旧名称")).toMatchObject({ title: "新名称", files: 2 });
@@ -205,14 +219,51 @@ describe("experience libraries", () => {
     expect((await call(`${versions("新经验")}/status`)).body.files).toEqual([]);
     expect((await call(`${versions("新经验")}/history`)).body[0].message).toBe("新经验的做法");
     // The other library's edit was not saved with it. Without `library`, every library with
-    // changes gets a version of its own (竖屏短片 has the earlier test's unsaved document).
+    // changes gets a version of its own.
     expect((await call(`${versions("知识类视频")}/status`)).body.files.map((file) => file.path)).toEqual(["备忘.md"]);
-    expect((await tools.call("experience_commit", { message: "备忘" }, scope)).data.saved.map((item) => item.library)).toEqual(["知识类视频", "竖屏短片"]);
+    expect((await tools.call("experience_commit", { message: "备忘" }, scope)).data.saved.map((item) => item.library)).toEqual(["知识类视频"]);
+    // In a conversation what the AI writes waits for the turn's end, then each library it
+    // changed is a version of those files, its note the message (someone's other edits stay).
+    await call(`${lib}/file`, { method: "PUT", body: { path: "知识类视频/用户在改.md", content: "# 用户在改\n" } });
+    const written = await tools.call("experience_write", { library: "知识类视频", note: "开场要先给冲突", operations: [{ op: "write", path: "开场.md", content: "# 开场\n\n先给冲突\n" }] }, scope);
+    expect(written.text).toContain("这一轮结束时自动保存");
+    expect((await call(`${versions("知识类视频")}/status`)).body.files.map((file) => file.path).sort()).toEqual(["开场.md", "用户在改.md"]);
+    await app.services.experience.saveTurn([...session.experienceWrites.values()]);
+    expect((await call(`${versions("知识类视频")}/history`)).body[0].message).toBe("开场要先给冲突");
+    expect((await call(`${versions("知识类视频")}/status`)).body.files.map((file) => file.path)).toEqual(["用户在改.md"]);
+    await call(`${versions("知识类视频")}/discard`, { method: "POST", body: { files: ["用户在改.md"] } });
     expect((await tools.call("experience_commit", { message: "再存" }, scope)).text).toBe("经验库没有未保存的修改");
     // Linking changes the work, so a published work refuses it; saving experience does not.
     await call(`/api/works/local/${work.id}/publish`, { method: "POST" });
     await expect(tools.call("experience_link", { add: ["新经验"] }, scope)).rejects.toMatchObject({ status: 423 });
     expect((await tools.call("experience_commit", { message: "已发布也能存" }, scope)).text).toBe("经验库没有未保存的修改");
+  });
+
+  it("keeps the work's notes short, its other documents as an index, and its 经验.md in the brief", async () => {
+    const created = (await call("/api/works", { method: "POST", body: { title: "笔记很长" } })).body;
+    const work = await app.services.openWork(created.id, "local");
+    const notes = "# 笔记很长\n\n## 需求\n\n- 竖屏，45 秒\n\n## 历史\n\n" + "以前试过的做法。".repeat(560); // 13 KB
+    fs.writeFileSync(path.join(work.dir, "AGENTS.md"), notes);
+    fs.mkdirSync(path.join(work.dir, "production"), { recursive: true });
+    fs.writeFileSync(path.join(work.dir, "production", "被否的方案.md"), "# 被否的方案\n\n第一版开场太慢\n");
+    fs.writeFileSync(path.join(work.dir, "经验.md"), "# 经验\n\n## 竖屏字幕\n\n- 字幕放在 y≈0.78，底部 200px 留给平台界面\n");
+    app.services.works.writeBrief(work);
+    const brief = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
+    expect(brief).toContain("以下是开头部分，全文 13 KB，其余需要时自己读");
+    expect(brief).toContain("> 这个文件已有 13 KB，超过 12 KB，需要整理");
+    expect(brief).toContain("本作品的其他文档（需要时自己读）：\n- `production/被否的方案.md` 被否的方案：第一版开场太慢");
+    expect(brief).toMatch(/## 本作品记下的经验（projects\/[^/]+\/经验\.md，待整理到经验库）\n\n```markdown\n# 经验\n\n## 竖屏字幕/);
+    // work_context gives other AIs the same.
+    expect((await app.services.experience.summary(work)).inbox).toContain("## 竖屏字幕");
+
+    // The check says what has grown too long: the notes, and a linked library's conclusions.
+    await app.services.experience.branches.create("local", "长结论", { files: { "README.md": "# 长结论\n", "做法.md": "# 做法\n\n" + "结论。".repeat(3000) }, message: "长结论" });
+    await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experiences: ["长结论"] } });
+    const problems = tidyProblems(app.services, await app.services.openWork(work.id, "local")).map((problem) => problem.message);
+    expect(problems).toHaveLength(2);
+    expect(problems[0]).toMatch(/^作品说明 AGENTS\.md 有 13 KB，超过 12 KB/);
+    expect(problems[1]).toMatch(/^经验库「长结论」的结论文档有 26 KB，超过 24 KB/);
+    expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "长结论")).toMatchObject({ tidy: true, details: 0 });
   });
 
   it("tells the AI when GitHub has newer versions of the work or both sides do", async () => {

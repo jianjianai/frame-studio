@@ -262,3 +262,8 @@
   color: var(--fg-faint);
   font-size: 12px;
 }
+/* The work's 经验.md waiting to be tidied into a library. */
+.inbox-row {
+  gap: 6px;
+  padding: 2px 4px 6px;
+}

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, FilePlus, FileText, Library, Pencil, RefreshCw, Settings2, Sparkles, Trash2, Undo2, Unlink } from "lucide-react";
+import { AlertTriangle, BookOpen, ChevronDown, ChevronRight, FilePlus, FileText, Inbox, Library, Pencil, RefreshCw, Settings2, Sparkles, Trash2, Undo2, Unlink } from "lucide-react";
 import { api, del, experiencePath, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
@@ -8,8 +8,17 @@ import { buildTree, type Node } from "./ExplorerView";
 import { ViewHeader } from "./ViewHeader";
 import type { LibraryInfo, TrashedLibrary } from "./libraryShared";
 
-export const ORGANIZE = (titles: string[]) =>
-  `请整理经验库${titles.map((title) => `「${title}」`).join("")}：回顾我们这次的对话和作品的修改，把在同类作品里值得复用的做法、我明确表达过的偏好、踩过的坑和解决办法整理进去${titles.length > 1 ? "（按内容放进最合适的经验库）" : ""}。先阅读现有内容，按主题合并到已有文档，不要重复，过时的说法直接改掉；改完简单告诉我改了哪些文档。`;
+/** The work's own record of reusable experience no linked library suits yet (server: EXPERIENCE_INBOX). */
+export const INBOX = "经验.md";
+
+export const ORGANIZE = (titles: string[], { inbox = false } = {}) =>
+  `请整理经验${titles.length ? `库${titles.map((title) => `「${title}」`).join("")}` : ""}：回顾我们这次的对话和作品的修改，把在同类作品里值得复用的做法、我明确表达过的偏好、踩过的坑和解决办法整理进${titles.length ? `去${titles.length > 1 ? "（按内容放进最合适的经验库）" : ""}` : "合适的经验库"}${
+    inbox ? `；作品 ${INBOX} 里待整理的条目也合并进合适的经验库，合并后从 ${INBOX} 删掉，没有合适经验库的先留着，告诉我建议放哪个库或新建一个` : ""
+  }。先阅读现有内容：结论按主题合并到结论文档，保持精简，不重复，过时的说法直接改掉；细节、例子、数据和具体作品的记录放进 详细/ 下的详细文档。改完简单告诉我改了哪些文档。`;
+
+/** Conclusions grew past the limit: make them short again, keeping every detail in 详细/. */
+export const TIDY = (title: string, size: number) =>
+  `请精简经验库「${title}」的结论文档：现在共 ${Math.round(size / 1024)} KB，超过 24 KB。把结论合并、去重，写成简短的做法；例子、数据、过程和单个作品的记录移到 详细/ 下的详细文档，细节不要删。改完告诉我结论文档现在多大、移了哪些内容。`;
 
 /**
  * The experience libraries the work uses, each with its documents (opened as editor tabs).
@@ -17,7 +26,7 @@ export const ORGANIZE = (titles: string[]) =>
  * versions are in 版本与同步.
  */
 export function ExperienceView() {
-  const { work, reload, openExperience, openTool, addToChat, askAi, readOnly } = useWorkbench();
+  const { work, reload, openExperience, openFile, openTool, addToChat, askAi, readOnly } = useWorkbench();
   const [libraries, setLibraries] = useState<LibraryInfo[]>([]);
   const [trash, setTrash] = useState<TrashedLibrary[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -60,8 +69,20 @@ export function ExperienceView() {
   }, [openKey, libraries]);
   useServerEvent((event) => {
     if (event.type === "experience-files" && event.repo === work.repo) void load();
-    if (event.type === "work-versions" && event.work === `experience-${work.repo}`) void load();
+    if (event.type === "work-versions" && String(event.work).startsWith("experience/")) void load();
+    if (event.type === "work-files" && event.work === work.id && (event.files as string[]).some((file) => file.endsWith("/" + INBOX))) void loadInbox();
   });
+  // The work's 经验.md: what waits to be tidied into a library.
+  const [inbox, setInbox] = useState<{ entries: number; bytes: number } | null>(null);
+  const loadInbox = () =>
+    api<{ content: string }>(`${workPath(work.repo, work.id)}/file?path=${enc(INBOX)}`).then(
+      ({ content }) => setInbox(content.trim() ? { entries: (content.match(/^##\s+\S/gm) ?? []).length, bytes: new Blob([content]).size } : null),
+      () => setInbox(null),
+    );
+  useEffect(() => {
+    void loadInbox();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [work.repo, work.id]);
 
   const titleOf = (id: string) => libraries.find((item) => item.id === id)?.title ?? id;
   const setLinks = (names: string[], message: string) =>
@@ -201,6 +222,18 @@ export function ExperienceView() {
               {toggled.has(library.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
               <BookOpen size={14} className="folder-icon" />
               <span className="ellipsis grow">{library.title}</span>
+              {library.tidy && (
+                <button
+                  className="icon-btn warn-text"
+                  title={`结论文档 ${Math.round((library.conclusions ?? 0) / 1024)} KB，超过 24 KB，需要整理：点这里让 AI 精简（细节移到 详细/）`}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    askAi(TIDY(library.title, library.conclusions ?? 0));
+                  }}
+                >
+                  <AlertTriangle size={13} />
+                </button>
+              )}
               <span className="faint small-text">{library.files} 篇</span>
             </div>
             {!toggled.has(library.id) && (trees[library.id] ? renderNodes(buildTree(trees[library.id]), 1) : <div className="library-more">读取中…</div>)}
@@ -226,26 +259,34 @@ export function ExperienceView() {
             </p>
           );
         })}
-        {linked.length ? (
+        {inbox && (
+          <div className="row inbox-row" title={`可复用、但关联的经验库都不合适（或没有关联）的经验，先记在作品的 ${INBOX}`}>
+            <Inbox size={14} className="faint" />
+            <button className="link-btn grow ellipsis" style={{ textAlign: "left" }} onClick={() => openFile(INBOX)}>
+              本作品记下的经验 {inbox.entries ? `${inbox.entries} 条` : `${Math.round(inbox.bytes / 1024) || 1} KB`}，待整理
+            </button>
+          </div>
+        )}
+        {linked.length || inbox ? (
           <div className="row">
             <button
               className="btn small grow"
-              title="AI 回顾本次对话和作品修改，把经验整理进经验库"
-              onClick={() => askAi(ORGANIZE(linked.map((library) => library.title)))}
+              title={`AI 回顾本次对话和作品修改，把经验整理进经验库${inbox ? `，并把 ${INBOX} 里的条目合并进合适的经验库` : ""}`}
+              onClick={() => askAi(ORGANIZE(linked.map((library) => library.title), { inbox: Boolean(inbox) }))}
             >
               <Sparkles size={13} /> 让 AI 整理经验
             </button>
           </div>
-        ) : (
+        ) : null}
+        {!linked.length &&
           loaded && (
             <p className="view-hint">
-              还没有关联经验库。AI 制作这个作品前会先阅读关联的经验库（可以多个），并把新的经验整理进去。
+              还没有关联经验库。可以复用的经验会先记在作品的 {INBOX}；关联经验库后，AI 制作前会先阅读它（可以多个），并把新的经验整理进去。
               <button className="link-btn" onClick={() => openTool("libraries:experiences")}>
                 {readOnly ? "查看经验库…" : libraries.length ? "关联经验库…" : "新建经验库…"}
               </button>
             </p>
-          )
-        )}
+          )}
       </section>
       {menu}
     </div>

@@ -5,10 +5,12 @@ import { readProjectSource, readProjectDir, setProjectFields, removeProjectPrope
 import { appRoot } from "./config.mjs";
 import { problem, notFound, conflict, Locks, shortId, writeFileAtomic, diskUsage } from "./util.mjs";
 import { createWorkFiles, platformInstructions, workTsconfig, GIT_ATTRIBUTES } from "./templates.mjs";
-import { clip, quote, LIMITS } from "./ai/context.mjs";
+import { clip, quote, LIMITS, describeDocument } from "./ai/context.mjs";
 import { LOCAL_REPO } from "./repos.mjs";
 
 const WORK_PREFIX = "works/";
+/** A work's own record of reusable experience that no linked library suits yet (to be tidied into one). */
+export const EXPERIENCE_INBOX = "经验.md";
 const TRASH_PREFIX = "trash/";
 const validWorkId = (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id);
 
@@ -256,8 +258,19 @@ export class Works {
       notes = fs.readFileSync(path.join(work.dir, "AGENTS.md"), "utf8").trim();
     } catch {}
     const { text, cut } = clip(notes, LIMITS.notes);
+    const size = Buffer.byteLength(notes);
     parts.push(
-      `## 本作品的需求与约定（projects/${work.slug}/AGENTS.md${cut ? "，以下是开头部分" : ""}）\n\n${notes ? quote(text) : "（还没有记录）"}\n\n用户确认的新需求和这个作品专属的约定，写回这个文件。`,
+      [
+        `## 本作品的需求与约定（projects/${work.slug}/AGENTS.md${cut ? `，以下是开头部分，全文 ${Math.round(size / 1024)} KB，其余需要时自己读` : ""}）`,
+        notes ? quote(text) : "（还没有记录）",
+        "用户确认的新需求和这个作品专属的约定，写回这个文件：只留当前有效的，最重要的放在前面。",
+        size > LIMITS.tidyNotes
+          ? `> 这个文件已有 ${Math.round(size / 1024)} KB，超过 ${Math.round(LIMITS.tidyNotes / 1024)} KB，需要整理：过时的删掉，历史、被否的方案和详细分镜移到 production/ 下的文档。先告诉用户，用户同意后再整理。`
+          : "",
+        this.documentsIndex(work),
+      ]
+        .filter(Boolean)
+        .join("\n\n"),
     );
     const state = {};
     for (const provider of this.briefProviders) {
@@ -269,6 +282,45 @@ export class Works {
     writeIfChanged(path.join(work.root, "AGENTS.md"), parts.join("\n\n") + "\n");
     writeIfChanged(path.join(work.root, "CLAUDE.md"), "@AGENTS.md\n");
     return state;
+  }
+
+  /**
+   * The work's other Markdown documents (分镜表, production/ records…) as an index: the
+   * brief does not carry them, the AI reads the ones the task needs.
+   */
+  documentsIndex(work) {
+    const docs = [];
+    const walk = (dir, prefix) => {
+      let entries = [];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {}
+      for (const entry of entries) {
+        const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
+        if (entry.name.startsWith(".") || ["node_modules", "public", "exports"].includes(entry.name)) continue;
+        if (entry.isDirectory()) walk(path.join(dir, entry.name), relative);
+        else if (/\.md$/i.test(entry.name) && !["AGENTS.md", EXPERIENCE_INBOX].includes(relative)) docs.push(relative);
+      }
+    };
+    walk(work.dir, "");
+    if (!docs.length) return "";
+    const lines = [];
+    let used = 0;
+    for (const file of docs.sort((a, b) => a.localeCompare(b, "zh"))) {
+      let head = "";
+      try {
+        head = fs.readFileSync(path.join(work.dir, file), "utf8").slice(0, 2000);
+      } catch {}
+      const { title, summary } = describeDocument(file, head);
+      const line = `- \`${file}\` ${title}${summary && summary !== title ? "：" + summary : ""}`;
+      if (used + Buffer.byteLength(line) > LIMITS.works) {
+        lines.push(`- ……还有 ${docs.length - lines.length} 篇`);
+        break;
+      }
+      used += Buffer.byteLength(line);
+      lines.push(line);
+    }
+    return `本作品的其他文档（需要时自己读）：\n${lines.join("\n")}`;
   }
 
   async create({ repo = LOCAL_REPO, title, width = 1920, height = 1080, duration = 10, fps = 30, description = "" }) {

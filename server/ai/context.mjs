@@ -17,10 +17,17 @@ import { formatTime } from "../render.mjs";
  * takes three bytes per character.
  */
 export const LIMITS = {
-  notes: 6000, // the work's own AGENTS.md
-  inlineLibrary: 12000, // a library this small is put into the brief in full
+  notes: 6000, // the work's own AGENTS.md (the rest is read when needed)
+  inbox: 4000, // the work's 经验.md: experience not yet in a library
+  works: 1500, // index of the work's other documents
+  inlineLibrary: 12000, // a library's conclusions this small are put into the brief in full
   readme: 6000, // otherwise its README, plus an index of the other documents
   index: 3000,
+  details: 2000, // index of a library's detailed documents (详细/), never in full
+  // Past these the AI and the studio say it is time to tidy up (the brief stays as above).
+  tidyNotes: 12 * 1024,
+  tidyInbox: 8 * 1024,
+  tidyConclusions: 24 * 1024,
   changedDocument: 4000, // a changed document this small is shown again in full
   changedTotal: 8000,
   changedFiles: 12,
@@ -76,6 +83,16 @@ export function describeDocument(file, content) {
   return { title, summary: summary.length > 80 ? summary.slice(0, 79) + "…" : summary };
 }
 
+/** Where a library keeps its detailed documents: details, examples, data, kept for reference. The rest are its conclusions. */
+export const DETAILS = "详细";
+export const isDetail = (file) => file === DETAILS || file.startsWith(DETAILS + "/");
+/** Bytes of a library's conclusion documents (everything but 详细/). */
+export const conclusionBytes = (documents) => documents.filter((doc) => !isDetail(doc.path)).reduce((sum, doc) => sum + doc.bytes, 0);
+const kb = (value) => `${Math.round(value / 1024)} KB`;
+/** What the AI is told when a library's conclusions grew too long. */
+export const tidyConclusionsText = (bytes) =>
+  `结论文档共 ${kb(bytes)}，超过 ${kb(LIMITS.tidyConclusions)}，需要整理：结论合并精简，例子、数据、过程和单个作品的记录移到 ${DETAILS}/ 下的详细文档。先告诉用户，用户同意后再整理。`;
+
 /** The Markdown documents of a library folder, README first. */
 export function readLibrary(root) {
   const documents = tree(root)
@@ -89,46 +106,59 @@ export function readLibrary(root) {
 
 const indexLine = (doc) => `- \`${doc.path}\` ${doc.title}${doc.summary && doc.summary !== doc.title ? "：" + doc.summary : ""}（约 ${doc.chars} 字）`;
 
+/** Index lines of documents within a byte budget, with how many were left out. */
+function indexLines(documents, budget, more) {
+  const lines = [];
+  let used = 0;
+  for (const doc of documents) {
+    const line = indexLine(doc);
+    if (used + bytes(line) > budget) {
+      lines.push(`- ……还有 ${documents.length - lines.length} 篇，${more}`);
+      break;
+    }
+    used += bytes(line);
+    lines.push(line);
+  }
+  return lines.join("\n");
+}
+
 /**
- * One library as a brief shows it: in full when it fits `inline` bytes, else its README plus
- * an index of the other documents. `docs` is what the AI knows afterwards: per document its
- * hash and whether it has the content or only the index line.
+ * One library as a brief shows it. Its conclusions (everything but 详细/) in full when they
+ * fit `inline` bytes, else its README plus an index of the other conclusions: the AI reads
+ * what the task needs. Detailed documents (详细/) only as an index. `docs` is what the AI knows
+ * afterwards: per document its hash and whether it has the content or only the index line.
  */
-export function libraryBrief(library, documents, { inline = LIMITS.inlineLibrary, readme: readmeBudget = LIMITS.readme, index: indexBudget = LIMITS.index } = {}) {
-  const total = documents.reduce((sum, doc) => sum + doc.bytes, 0);
+export function libraryBrief(
+  library,
+  documents,
+  { inline = LIMITS.inlineLibrary, readme: readmeBudget = LIMITS.readme, index: indexBudget = LIMITS.index, details: detailBudget = LIMITS.details } = {},
+) {
+  const conclusions = documents.filter((doc) => !isDetail(doc.path));
+  const details = documents.filter((doc) => isDetail(doc.path));
+  const total = conclusionBytes(documents);
   const full = total <= inline;
   const docs = {};
   const parts = [];
+  if (total > LIMITS.tidyConclusions) parts.push(`> ${tidyConclusionsText(total)}`);
   if (full) {
-    for (const doc of documents) {
+    for (const doc of conclusions) {
       parts.push(`### ${doc.path}\n\n${quote(doc.content)}`);
       docs[doc.path] = { hash: doc.hash, level: "content" };
     }
   } else {
-    const readme = documents.find((doc) => doc.path === "README.md");
+    const readme = conclusions.find((doc) => doc.path === "README.md");
     if (readme) {
       const { text, cut } = clip(readme.content, readmeBudget);
       parts.push(`### README.md${cut ? "（开头部分，完整内容用 experience_read 阅读）" : ""}\n\n${quote(text)}`);
       docs[readme.path] = { hash: readme.hash, level: cut ? "index" : "content" };
     }
-    const others = documents.filter((doc) => doc.path !== "README.md");
-    if (others.length) {
-      const lines = [];
-      let used = 0;
-      for (const doc of others) {
-        const line = indexLine(doc);
-        if (used + bytes(line) > indexBudget) {
-          lines.push(`- ……还有 ${others.length - lines.length} 篇，用 experience_read 查看完整目录`);
-          break;
-        }
-        used += bytes(line);
-        lines.push(line);
-      }
-      parts.push(`### 其他文档（与当前任务相关时用 experience_read 阅读全文）\n\n${lines.join("\n")}`);
-    }
+    const others = conclusions.filter((doc) => doc.path !== "README.md");
+    if (others.length) parts.push(`### 结论文档（动手前用 experience_read 读和当前任务相关的）\n\n${indexLines(others, indexBudget, "用 experience_read 查看完整目录")}`);
     for (const doc of others) docs[doc.path] = { hash: doc.hash, level: "index" };
   }
-  return { library, text: parts.join("\n\n"), docs, full, bytes: total };
+  if (details.length) parts.push(`### 详细文档（细节、例子和数据，需要时用 experience_read 读）\n\n${indexLines(details, detailBudget, "用 experience_read 查看完整目录")}`);
+  for (const doc of details) docs[doc.path] = { hash: doc.hash, level: "index" };
+  return { library, text: parts.join("\n\n"), docs, full, bytes: full ? total : 0, conclusions: total };
 }
 
 /**
@@ -143,7 +173,12 @@ export function experienceBrief(libraries) {
   const seen = {};
   const sections = [];
   for (const { library, documents } of libraries) {
-    const brief = libraryBrief(library, documents, { inline, readme: Math.floor(LIMITS.readme / share), index: Math.floor(LIMITS.index / share) });
+    const brief = libraryBrief(library, documents, {
+      inline,
+      readme: Math.floor(LIMITS.readme / share),
+      index: Math.floor(LIMITS.index / share),
+      details: Math.floor(LIMITS.details / share),
+    });
     if (brief.full) inline -= brief.bytes;
     seen[library.id] = { title: library.title, docs: brief.docs };
     sections.push(brief);
@@ -154,7 +189,7 @@ export function experienceBrief(libraries) {
 /** Brief sections as text, one "## 经验库「标题」" per library. */
 export function briefText(sections) {
   return sections
-    .map(({ library, text, full }) => `## 经验库「${library.title}」\n\n${full ? "全部文档如下。" : "首页和其他文档的目录如下。"}\n\n${text}`)
+    .map(({ library, text, full }) => `## 经验库「${library.title}」\n\n${full ? "结论文档全文如下。" : "首页和结论文档的目录如下。"}\n\n${text}`)
     .join("\n\n");
 }
 

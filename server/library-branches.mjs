@@ -345,6 +345,27 @@ export class LibraryBranches {
     return { purged: notes.map((note) => note.key), notes };
   }
 
+  /** Save only these paths of a library (from its root) as a version; null when they hold no change. */
+  async commitPaths(repo, id, paths, message) {
+    const { works, repos } = this.services;
+    const scope = await this.scope(repo, id);
+    const commit = await works.locks.run(`${repo}/${scope.id}`, async () => {
+      const known = [];
+      for (const item of new Set(paths))
+        if (fs.existsSync(path.join(scope.root, item)) || (await git(scope.root, ["ls-files", "--", item])).trim()) known.push(item);
+      if (!known.length) return null;
+      await git(scope.root, ["add", "-A", "--", ...known], { env: repos.env(repos.get(repo)) });
+      if (await gitOk(scope.root, ["diff", "--cached", "--quiet", "--", ...known])) return null;
+      await git(scope.root, ["commit", "-q", "-m", message, "--", ...known]);
+      return (await git(scope.root, ["rev-parse", "HEAD"])).trim();
+    });
+    if (commit) {
+      this.services.events.emit({ type: "work-versions", work: scope.id });
+      works.saved(scope);
+    }
+    return commit;
+  }
+
   /** Save the unsaved changes of each library (`ids`, or all) as a version of its own, never one version of several. */
   async commitEach(repo, message, ids = null) {
     const { works } = this.services;

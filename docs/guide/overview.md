@@ -13,7 +13,9 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | `audio.json` | 多轨混音：素材、音轨、片段、总线、效果 |
 | `audio.ts` | 可选：代码生成的声音（合成器、采样、程序化音效） |
 | `public/` | 素材。代码中写 `assetUrl("films/<名称>/文件名")` |
-| `AGENTS.md` | 这个作品的需求和约定。新确认的需求写回这里 |
+| `AGENTS.md` | 这个作品的需求和约定。新确认的需求写回这里：只留当前有效的，最重要的放前面（会话开始时只带开头 6 KB）；历史、被否的方案、详细分镜放 `production/` 下的文档 |
+| `经验.md` | 可以复用、但关联的经验库都不合适（或没有关联）的经验，等着整理进经验库（见 `experience`） |
+| `production/` | 制作资料：记录、被否的方案、分镜、脚本、素材来源（`licenses.md`）。不参与运行，需要时读 |
 
 引擎（只读，源码在作品根目录的 `src/engine/`）在任何文件里都这样导入：`import { … } from "@frame/engine/<模块>"`，例如 `"@frame/engine/types"`、`"@frame/engine/math"`、`"@frame/engine/tempo"`。作品和素材库代码写法相同，移动文件不用改导入。
 
