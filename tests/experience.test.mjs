@@ -4,7 +4,6 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
-import { tidyProblems } from "../server/checks.mjs";
 
 describe("experience libraries", () => {
   let app, base;
@@ -63,11 +62,10 @@ describe("experience libraries", () => {
     await tool("experience_write", { work: work.id, operations: [{ op: "delete", path: "归档.md" }] });
 
     const context = await tool("work_context", { work: work.id });
-    // Callers without a chat session (external MCP clients) get the README and the index here.
+    // Its libraries' documents by name, and the work's notes in full: the AI reads what it needs.
     const [linked] = context.body.data.experiences.libraries;
     expect(linked.library).toBe("知识类视频");
     expect(linked.documents.map((doc) => doc.path)).toEqual(["README.md", "开场.md"]);
-    expect(linked.readme).toContain("## 用户偏好");
     expect(context.body.data.notes).toContain("# 科普短片");
 
     // The library's own versions (a branch of its own). Written by the AI outside a conversation,
@@ -102,14 +100,13 @@ describe("experience libraries", () => {
     expect((await call(`${lib}/tree?library=${encodeURIComponent("知识类视频")}`)).body.map((entry) => entry.path)).toEqual(["知识类视频/README.md", "知识类视频/开场.md"]);
     expect((await call(`${lib}/find?q=${encodeURIComponent("开场")}`)).body).toEqual([{ library: "知识类视频", path: "知识类视频/开场.md", title: "开场" }]);
 
-    // The session brief carries the work's notes and the whole (small) library.
+    // The session brief says where things are; contents are read when needed.
     const opened = await app.services.openWork(work.id, "local");
     const brief = fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8");
-    expect(brief).toContain(`## 本作品的需求与约定（projects/${opened.slug}/AGENTS.md）`);
-    expect(brief).toContain("## 经验库「知识类视频」");
-    expect(brief).toContain("第 3 秒给答案");
-    // The work's own 经验.md has its place in the brief too (empty for now).
-    expect(brief).toContain("## 本作品记下的经验（projects/");
+    expect(brief).toContain(`- 需求和约定：\`projects/${opened.slug}/AGENTS.md\``);
+    expect(brief).toContain("- 经验库：「知识类视频」，需要时用 experience_read 读");
+    expect(brief).toContain(`可以复用、但没有合适经验库的经验记在 \`projects/${opened.slug}/经验.md\`（还没有）`);
+    expect(brief).not.toContain("第 3 秒给答案");
     expect(fs.readFileSync(path.join(opened.root, "CLAUDE.md"), "utf8")).toBe("@AGENTS.md\n");
   });
 
@@ -136,7 +133,7 @@ describe("experience libraries", () => {
     expect((await tool("experience_read", { work: work.id, path: "做法.md" })).body.text).toContain("先画分镜");
     const opened = await app.services.openWork(work.id, "local");
     expect(Object.keys(app.services.works.writeBrief(opened).experience)).toEqual(["旧名称"]);
-    expect(fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8")).toContain("## 经验库「新名称」");
+    expect(fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8")).toContain("- 经验库：「新名称」（id 旧名称）");
     // The title is free for another library (with an id of its own); a name is required.
     expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "新名称" } })).body).toEqual({ id: "新名称", title: "新名称" });
     expect((await call(`${versions}/rename`, { method: "POST", body: { name: " " } })).status).toBe(400);
@@ -154,8 +151,7 @@ describe("experience libraries", () => {
     const opened = await app.services.openWork(work.id, "local");
     expect(Object.keys(app.services.works.writeBrief(opened).experience)).toEqual(["通用规范", "竖屏短片"]);
     const brief = fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8");
-    expect(brief).toContain("本作品关联了 2 个经验库");
-    expect(brief.indexOf("## 经验库「通用规范」")).toBeLessThan(brief.indexOf("## 经验库「竖屏短片」"));
+    expect(brief).toContain("- 经验库：「通用规范」、「竖屏短片」，需要时用 experience_read 读");
 
     const ambiguous = await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "节奏.md", content: "# 节奏\n" }] });
     expect(ambiguous.status).toBe(400);
@@ -170,7 +166,7 @@ describe("experience libraries", () => {
     expect((await tool("experience_read", { work: work.id, library: "竖屏", path: "节奏.md" })).body.error.message).toContain("最接近的：「竖屏短片」");
     const overview = await tool("experience_read", { work: work.id });
     expect(overview.body.text).toContain("## 经验库「通用规范」");
-    expect(overview.body.text).toMatch(/## 经验库「竖屏短片」[\s\S]*### 节奏.md[\s\S]*3 秒一切/);
+    expect(overview.body.text).toMatch(/## 经验库「竖屏短片」[\s\S]*### 文档\n\n- `节奏.md` 节奏：3 秒一切/);
     expect((await tool("work_context", { work: work.id })).body.data.experiences.libraries.map((item) => item.library)).toEqual(["通用规范", "竖屏短片"]);
   });
 
@@ -190,7 +186,7 @@ describe("experience libraries", () => {
 
     const linked = await tools.call("experience_link", { add: ["知识类视频"], create: ["新经验"] }, scope);
     expect(linked.data.experiences.map((item) => item.id)).toEqual(["知识类视频", "新经验"]);
-    expect(linked.text).toContain("## 经验库「新经验」");
+    expect(linked.text).toContain("新关联：「知识类视频」「新经验」，需要时用 experience_read 读。");
     expect(works.meta(work).meta.experiences).toEqual(["知识类视频", "新经验"]);
     // The AI saw them in the tool's answer: the next message does not repeat them.
     expect(context()).not.toContain("经验库");
@@ -239,31 +235,22 @@ describe("experience libraries", () => {
     expect((await tools.call("experience_commit", { message: "已发布也能存" }, scope)).text).toBe("经验库没有未保存的修改");
   });
 
-  it("keeps the work's notes short, its other documents as an index, and its 经验.md in the brief", async () => {
+  it("tells the AI where the work's notes and 经验.md are, without their contents or limits", async () => {
     const created = (await call("/api/works", { method: "POST", body: { title: "笔记很长" } })).body;
     const work = await app.services.openWork(created.id, "local");
     const notes = "# 笔记很长\n\n## 需求\n\n- 竖屏，45 秒\n\n## 历史\n\n" + "以前试过的做法。".repeat(560); // 13 KB
     fs.writeFileSync(path.join(work.dir, "AGENTS.md"), notes);
-    fs.mkdirSync(path.join(work.dir, "production"), { recursive: true });
-    fs.writeFileSync(path.join(work.dir, "production", "被否的方案.md"), "# 被否的方案\n\n第一版开场太慢\n");
-    fs.writeFileSync(path.join(work.dir, "经验.md"), "# 经验\n\n## 竖屏字幕\n\n- 字幕放在 y≈0.78，底部 200px 留给平台界面\n");
+    fs.writeFileSync(path.join(work.dir, "经验.md"), "# 经验\n\n## 竖屏字幕\n\n- 字幕放在 y≈0.78\n\n## 开场\n\n- 前 2 秒给冲突\n");
     app.services.works.writeBrief(work);
     const brief = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
-    expect(brief).toContain("以下是开头部分，全文 13 KB，其余需要时自己读");
-    expect(brief).toContain("> 这个文件已有 13 KB，超过 12 KB，需要整理");
-    expect(brief).toContain("本作品的其他文档（需要时自己读）：\n- `production/被否的方案.md` 被否的方案：第一版开场太慢");
-    expect(brief).toMatch(/## 本作品记下的经验（projects\/[^/]+\/经验\.md，待整理到经验库）\n\n```markdown\n# 经验\n\n## 竖屏字幕/);
-    // work_context gives other AIs the same.
+    expect(brief).toContain(`- 需求和约定：\`projects/${work.slug}/AGENTS.md\`（13 KB），开始工作前先读`);
+    expect(brief).toContain(`- 记下但还没整理进经验库的经验：\`projects/${work.slug}/经验.md\`（2 条）。`);
+    expect(brief).not.toContain("以前试过的做法");
+    expect(brief).not.toContain("需要整理");
+    expect(Buffer.byteLength(brief)).toBeLessThan(4500);
+    // work_context gives the contents to whoever asks.
     expect((await app.services.experience.summary(work)).inbox).toContain("## 竖屏字幕");
-
-    // The check says what has grown too long: the notes, and a linked library's conclusions.
-    await app.services.experience.branches.create("local", "长结论", { files: { "README.md": "# 长结论\n", "做法.md": "# 做法\n\n" + "结论。".repeat(3000) }, message: "长结论" });
-    await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { experiences: ["长结论"] } });
-    const problems = tidyProblems(app.services, await app.services.openWork(work.id, "local")).map((problem) => problem.message);
-    expect(problems).toHaveLength(2);
-    expect(problems[0]).toMatch(/^作品说明 AGENTS\.md 有 13 KB，超过 12 KB/);
-    expect(problems[1]).toMatch(/^经验库「长结论」的结论文档有 26 KB，超过 24 KB/);
-    expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "长结论")).toMatchObject({ tidy: true, details: 0 });
+    expect((await tool("work_context", { work: work.id })).body.data.notes).toBe(notes);
   });
 
   it("tells the AI when GitHub has newer versions of the work or both sides do", async () => {
@@ -312,8 +299,8 @@ describe("experience libraries", () => {
     const scene = (await call(`/api/works/local/${work.id}/file?path=scene.ts`)).body;
     await call(`/api/works/local/${work.id}/file`, { method: "PUT", body: { path: "scene.ts", content: scene.content + "\n// 用户修改\n", expectedHash: scene.hash } });
     text = context();
-    expect(text).toContain("### 开场.md（已更新，最新内容）");
-    expect(text).toContain("前 1 秒给出问题");
+    expect(text).toContain("经验库「知识类视频」有变化（来自用户或其他对话，不是你改的）：\n- `开场.md` 已修改");
+    expect(text).not.toContain("前 1 秒给出问题");
     expect(text).toContain("修改 scene.ts");
     expect(context()).not.toContain("开场.md");
     // Mid-turn (steering), changed files are mostly the AI's own: not reported as the user's.

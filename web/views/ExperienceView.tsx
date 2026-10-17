@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, BookOpen, ChevronDown, ChevronRight, FilePlus, FileText, Inbox, Library, Pencil, RefreshCw, Settings2, Sparkles, Trash2, Undo2, Unlink } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, FilePlus, FileText, Inbox, Library, Pencil, RefreshCw, Settings2, Sparkles, Trash2, Undo2, Unlink } from "lucide-react";
 import { api, del, experiencePath, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
@@ -14,11 +14,9 @@ export const INBOX = "经验.md";
 export const ORGANIZE = (titles: string[], { inbox = false } = {}) =>
   `请整理经验${titles.length ? `库${titles.map((title) => `「${title}」`).join("")}` : ""}：回顾我们这次的对话和作品的修改，把在同类作品里值得复用的做法、我明确表达过的偏好、踩过的坑和解决办法整理进${titles.length ? `去${titles.length > 1 ? "（按内容放进最合适的经验库）" : ""}` : "合适的经验库"}${
     inbox ? `；作品 ${INBOX} 里待整理的条目也合并进合适的经验库，合并后从 ${INBOX} 删掉，没有合适经验库的先留着，告诉我建议放哪个库或新建一个` : ""
-  }。先阅读现有内容：结论按主题合并到结论文档，保持精简，不重复，过时的说法直接改掉；细节、例子、数据和具体作品的记录放进 详细/ 下的详细文档。改完简单告诉我改了哪些文档。`;
+  }。顺便把经验库整理精简，不重复，过时的说法直接改掉。改完简单告诉我改了哪些文档。`;
 
-/** Conclusions grew past the limit: make them short again, keeping every detail in 详细/. */
-export const TIDY = (title: string, size: number) =>
-  `请精简经验库「${title}」的结论文档：现在共 ${Math.round(size / 1024)} KB，超过 24 KB。把结论合并、去重，写成简短的做法；例子、数据、过程和单个作品的记录移到 详细/ 下的详细文档，细节不要删。改完告诉我结论文档现在多大、移了哪些内容。`;
+
 
 /**
  * The experience libraries the work uses, each with its documents (opened as editor tabs).
@@ -222,18 +220,6 @@ export function ExperienceView() {
               {toggled.has(library.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
               <BookOpen size={14} className="folder-icon" />
               <span className="ellipsis grow">{library.title}</span>
-              {library.tidy && (
-                <button
-                  className="icon-btn warn-text"
-                  title={`结论文档 ${Math.round((library.conclusions ?? 0) / 1024)} KB，超过 24 KB，需要整理：点这里让 AI 精简（细节移到 详细/）`}
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    askAi(TIDY(library.title, library.conclusions ?? 0));
-                  }}
-                >
-                  <AlertTriangle size={13} />
-                </button>
-              )}
               <span className="faint small-text">{library.files} 篇</span>
             </div>
             {!toggled.has(library.id) && (trees[library.id] ? renderNodes(buildTree(trees[library.id]), 1) : <div className="library-more">读取中…</div>)}

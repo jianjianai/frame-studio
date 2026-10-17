@@ -638,15 +638,9 @@ export class Reviews {
     if (!review.posts.length && !waiting.length) return null;
     const platforms = [...new Set(review.posts.map((post) => post.platform))].join("、");
     return {
-      text: [
-        "## 复盘",
-        "",
-        `${review.posts.length ? `这个作品已经发布到${platforms}，记录了 ${review.snapshots.length} 次数据` : "这个作品还没有发布记录"}${documents.length ? `，复盘文档：${documents.map((doc) => doc.path).join("、")}` : ""}。`,
-        waiting.length ? `还没导入的原始文件：${waiting.map((file) => file.path).join("、")}（平台后台的导出用 review_import 导入）。` : "",
-        "用户问起作品的表现、要复盘或和其他作品比较时，用 review_read 看数据、留存（和同类作品比的倍数）和流量，reviews_compare 对比；复盘得出的可复用结论，征得用户同意后整理进经验库。",
-      ]
-        .filter(Boolean)
-        .join("\n"),
+      lines: [
+        `- 复盘：${review.posts.length ? `已发布到${platforms}，记录了 ${review.snapshots.length} 次数据` : "还没有发布记录"}${documents.length ? `，复盘文档 ${documents.map((doc) => doc.path).join("、")}` : ""}${waiting.length ? `；还没导入的原始文件 ${waiting.map((file) => file.path).join("、")}（review_import）` : ""}。用 review_read 看。`,
+      ],
       state: {},
     };
   }

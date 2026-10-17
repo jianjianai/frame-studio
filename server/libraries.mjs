@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { Lru, notFound } from "./util.mjs";
+import { notFound } from "./util.mjs";
 import { tree } from "./files.mjs";
 
 /**
@@ -325,7 +325,6 @@ export function trashNote(dir, key) {
 export class LibraryIndex {
   constructor(services) {
     this.services = services;
-    this.prepared = new Lru(200); // "<repo>/<work>" → { materials, experiences }, for the (synchronous) session brief
   }
 
   /** The works of a repository (not in the bin) with their words and links. */
@@ -376,25 +375,6 @@ export class LibraryIndex {
     return this.services.experience?.linkedSync(work).libraries.map((library) => library.id) ?? [];
   }
 
-  /** Both kinds for a work, ranked for it, kept for its session brief. */
-  async prepare(work) {
-    const works = await this.works(work.repo);
-    const result = {
-      // Material libraries with the words of what they hold (resources, sounds), when known.
-      materials: this.services.materials
-        ? await this.annotate("materials", work.repo, await (this.services.resources?.librariesWithWords(work.repo) ?? this.services.materials.libraries(work.repo)), work, works)
-        : [],
-      experiences: this.services.experience ? await this.annotate("experiences", work.repo, await this.services.experience.libraries(work.repo), work, works) : [],
-    };
-    // Kept for many works: without the libraries' words, which only served the ranking.
-    const lean = (list) => list.map(({ extra: _extra, documents: _documents, ...library }) => library);
-    this.prepared.set(`${work.repo}/${work.id}`, { materials: lean(result.materials), experiences: lean(result.experiences) });
-    return result;
-  }
-  /** What prepare() found last time for the work (null: never prepared). */
-  preparedFor(work) {
-    return this.prepared.get(`${work.repo}/${work.id}`) ?? null;
-  }
 }
 
 /**

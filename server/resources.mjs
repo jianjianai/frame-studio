@@ -856,39 +856,17 @@ export class ResourceCatalog {
    * the agent manager prepares both). Kept within a budget however many libraries there are.
    */
   brief(work) {
-    const overview = this.overviewed.get(work.repo);
-    if (!overview?.length) return null;
-    const linked = new Set(this.materials.names(work));
-    const meta = this.services.works.meta(work);
-    const { shown, rest, offered } = this.pick(work, overview, this.services.libraries?.preparedFor(work)?.materials ?? null);
-    const name = (library) => `「${library.id}」${library.title !== library.id ? `（${library.title}）` : ""}`;
-    const full = (library) => {
-      const kinds = Object.entries(library.kinds).map(([label, count]) => `${label} ${count}`).join("、");
-      const engines = Object.entries(library.engines ?? {}).map(([label, count]) => `${label} ${count}`).join("、");
-      const holds = [library.resources ? `资源 ${library.resources} 个（${kinds}${engines ? `；其中 ${engines}` : ""}）` : "", library.sounds ? `音效 ${library.sounds} 个` : "", `文件 ${library.files} 个`].filter(Boolean).join("、");
-      const note = library.canvas && meta.ok ? canvasNote(library.canvas, meta.meta) : "";
-      const why = !linked.has(library.id) && library.why?.length ? `（${library.why.join("；")}）` : "";
-      return `- ${name(library)}${linked.has(library.id) ? "（本作品已关联）" : why}：${holds}。${library.about ? library.about + " " : ""}${note}`.trim();
-    };
-    const short = (library) => `- ${name(library)}${linked.has(library.id) ? "（本作品已关联）" : ""}：${[library.resources ? `资源 ${library.resources} 个` : "", library.sounds ? `音效 ${library.sounds} 个` : "", `文件 ${library.files} 个`].filter(Boolean).join("、")}`;
-    // However many libraries the work links, the section stays small: details give way to names.
-    const budget = 6000;
-    const size = (lines) => Buffer.byteLength(lines.join("\n"), "utf8");
-    let lines = shown.map(full);
-    if (size(lines) > budget) lines = shown.map((library) => (linked.has(library.id) ? full(library) : short(library)));
-    if (size(lines) > budget) lines = shown.map(short);
-    let dropped = 0;
-    while (lines.length && size(lines) > budget) {
-      lines.pop();
-      dropped++;
-    }
-    const left = rest + dropped;
-    const label = rest ? `下面是${linked.size ? `本作品关联的和${offered === "suitable" ? "可能适合它的" : "用得最多的"}` : offered === "suitable" ? "可能适合本作品的" : "用得最多的"}` : "";
-    const tail = left
-      ? `\n\n作品库里共有 ${overview.length} 个素材库，${label ? label + "，" : ""}还有 ${left} 个没有列出：materials_list 的 query 按名称和介绍查找，resources_search 按内容找。`
-      : "";
+    const linked = this.materials.names(work);
+    const dir = this.materials.branches.root(work.repo);
+    let total = 0;
+    try {
+      total = fs.readdirSync(dir).filter((name) => this.materials.branches.exists(dir, name)).length;
+    } catch {}
+    if (!linked.length && !total) return null;
     return {
-      text: `## 素材库\n\n多个作品共用的角色、场景、道具、效果、转场、文字、音效和代码。画一个东西、配一个音效之前先用 resources_search 找，有就导入复用（不合适就给素材库代码加参数）；resource_view 看用法、参数和预览图；第一次用一个素材库先读它的 README（material_read）。地址里写素材库的文件夹名（「」里的第一个名字）。\n\n${lines.join("\n")}${tail}`,
+      lines: [
+        `- 素材库：${linked.length ? `本作品引用了${linked.map((id) => `「${id}」`).join("")}` : "本作品还没有引用素材库"}${total ? `；作品库里共 ${total} 个` : ""}。可以复用的角色、效果、音效和代码用 resources_search 找，materials_list 看素材库。`,
+      ],
     };
   }
 

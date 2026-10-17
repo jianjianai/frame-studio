@@ -7,17 +7,10 @@ import { readJson } from "./http.mjs";
 import { problem } from "./util.mjs";
 import { CORE_TOOLS } from "./tools/registry.mjs";
 
-export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 TypeScript 按绝对时间绘制的动画（Canvas/Pixi/Three/Lottie/gsap/图层合成），加多轨音频。
-工作顺序：work_context 了解现状（warnings 里的情况先处理）→ frame_guide 查接口（topics 一次查几个）→ 修改 → work_check（frames: true 同时得到分镜图）亲眼确认画面（preview_frames 看指定时刻或整体，preview_audio 确认声音）。
-找代码、用法和经验用 search（scope 可含 work、used（作品用到的素材库文件，锁定的版本）、materials、experience、guide、engine，返回 文件:行号 和上下文），不要逐个读文件。
-作品文件用 files_batch 读写（read / write / edit / delete / move，一次可以放多个；失败的逐项说明，只重试失败的；check: true 改完直接检查）。asset_import / material_write 一次可以导入多个；你所在电脑上的文件用 upload_link 拿到上传地址再用 curl 上传（不经过对话）；export_video 用 wait 等它完成，完成时返回下载地址。
-用户在播放器里实时看到保存后的修改；work_context 的 userView 是用户正在看的时间点和选区。
-看用户给的图片、视频素材用 asset_view；配乐要对上节拍时用 preview_audio 的 src + beats: true。
-work_context 的 notes 是作品的需求与约定，experiences 是关联的经验库（可以有多个，各自的首页和文档目录；结论文档精简，详细/ 下是细节）：动手前读和任务相关的结论文档，需要细节时再读详细文档；用户纠正你、确认了某种做法或解决了难题时记下来：只和这个作品有关的写进作品的 AGENTS.md，可复用且关联的经验库适合的用 experience_write 写进经验库（关联了多个时用 library 参数指定，写入后立即保存为版本），没有合适经验库的写进作品的 经验.md（experiences.inbox 是它的内容）；用户要求时用 experience_link / materials_link 关联或取消关联经验库、素材库；库很多时先用 experience_list / materials_list 的 query 查找（不给 query 时本作品的在前，其余按适合本作品的程度排列）。用户要删除作品时用 work_delete（只做标记，由用户在作品列表中确认）。
-作品发布后的复盘：平台后台的导出用 review_import 直接导入，review_read 看发布记录、按发布天数的数据、留存（每秒、每段是同类的几倍）、流量和复盘文档（其他表格读成文字，截图给你看），review_write 记录（每次自动保存版本），reviews_compare 和其他作品在同一发布天数对比；你电脑上的导出表格、截图用 upload_link 的 review: true 上传。
-混音：音效响时不要压低音乐（不加 duck）；只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求。
-图层用 layers_edit、混音用 audio_edit（update 只改给出的字段）/ audio_place、配音加字幕用 speech_synthesize（lines + place + subtitles）、字幕用 subtitles_edit；多个作品共用的素材和代码在素材库里（materials_list / materials_use，素材地址 materials/<库>/<文件>，代码用 import … from "@materials/<库>/<路径>" 导入；material_read / material_write 读改素材库）；参数格式不确定时先查 frame_guide 对应主题。
-素材库里声明的角色、物品、场景、界面、效果、转场、文字和音效用 resources_search 找、resource_view 看用法和预览图：画一个东西之前先找，有就导入复用（不合适就给素材库代码加参数，不要拷进作品），音效用 audio_place 的 sound 放到音轨。引擎在任何文件里都用 import … from "@frame/engine/<模块>"；配乐节拍写进 project.ts 的 tempo（work_update），代码用 @frame/engine/tempo 的 beatAt / barAt 卡点。`;
+export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 TypeScript 按绝对时间绘制的动画（Canvas/Pixi/Three/Lottie/gsap/图层合成），加多轨音频；用户在播放器里实时看到保存后的修改。
+接口、作品结构和制作方法见 frame_guide（入门看 overview），工具各自带说明；需要什么自己读，不确定时先查，不要猜。work_context 是作品现状和用户正在看的地方，notes 是作品的需求与约定，experiences 是关联的经验库和作品的 经验.md。
+只修改当前作品；同一作品库的其他作品只能读。需要用户同意：关联或取消关联经验库、素材库，新建经验库，保存作品版本（version_save），删除作品（work_delete 只做标记，由用户确认）。作品和 GitHub 有冲突或 GitHub 上有更新时先不要改，请用户在工作台里处理。已发布的作品不能修改。
+经验：只和这个作品有关的写进作品的 AGENTS.md，可复用的用 experience_write 写进合适的关联经验库（写入后立即保存为版本），没有合适的先写进作品的 经验.md；这些文档由你保持整理和精简。`;
 
 /** Built-in agents have all of this, and more, in their session brief (the work-root AGENTS.md). */
 const AGENT_INSTRUCTIONS = "FRAME Studio 视频作品工具。用法见作品根目录 AGENTS.md（会话说明）；作品文件用你自己的读写工具。";

@@ -4,8 +4,6 @@ import { spawn } from "node:child_process";
 import { appRoot } from "./config.mjs";
 import { projectSchema } from "../src/engine/types.ts";
 import { contentStamp } from "./render.mjs";
-import { LIMITS, readLibrary, isDetail } from "./ai/context.mjs";
-import { EXPERIENCE_INBOX } from "./works.mjs";
 
 const tsc = path.join(appRoot, "node_modules", "typescript", "bin", "tsc");
 
@@ -145,45 +143,6 @@ export function mixingRules(document) {
  * Full check: metadata, types, asset references and a real browser load that
  * renders a few frames and a little audio. Results are kept for the UI and AI.
  */
-/**
- * Notes that grew past what stays easy to use: the work's AGENTS.md (the AI starts with its
- * beginning only), its 经验.md (to be tidied into a library) and the conclusions of the
- * experience libraries it links (details belong in 详细/).
- */
-export function tidyProblems(services, work) {
-  const kb = (bytes) => `${Math.round(bytes / 1024)} KB`;
-  const size = (file) => fs.statSync(path.join(work.dir, file), { throwIfNoEntry: false })?.size ?? 0;
-  const problems = [];
-  const notes = size("AGENTS.md");
-  if (notes > LIMITS.tidyNotes)
-    problems.push({
-      severity: "warning",
-      source: "notes",
-      file: "AGENTS.md",
-      message: `作品说明 AGENTS.md 有 ${kb(notes)}，超过 ${kb(LIMITS.tidyNotes)}（AI 开始时只看到开头 ${kb(LIMITS.notes)}）：只留当前有效的需求和约定，过时的删掉，历史、被否的方案和详细分镜移到 production/ 下的文档`,
-    });
-  const inbox = size(EXPERIENCE_INBOX);
-  if (inbox > LIMITS.tidyInbox)
-    problems.push({
-      severity: "warning",
-      source: "notes",
-      file: EXPERIENCE_INBOX,
-      message: `${EXPERIENCE_INBOX} 里待整理的经验有 ${kb(inbox)}，超过 ${kb(LIMITS.tidyInbox)}：整理进合适的经验库（「经验」面板的「整理经验」）`,
-    });
-  for (const library of services.experience?.linkedSync(work).libraries ?? []) {
-    const conclusions = readLibrary(library.root)
-      .filter((doc) => !isDetail(doc.path))
-      .reduce((sum, doc) => sum + doc.bytes, 0);
-    if (conclusions > LIMITS.tidyConclusions)
-      problems.push({
-        severity: "warning",
-        source: "experience",
-        message: `经验库「${library.title}」的结论文档有 ${kb(conclusions)}，超过 ${kb(LIMITS.tidyConclusions)}：结论合并精简，例子、数据、过程和单个作品的记录移到 详细/ 下的详细文档`,
-      });
-  }
-  return problems;
-}
-
 export async function checkWork(services, work, { runtime = true, frames = false } = {}) {
   const started = Date.now();
   const problems = [];
@@ -199,7 +158,7 @@ export async function checkWork(services, work, { runtime = true, frames = false
   // The library code the work imports, at its versions, where tsc finds it.
   await services.materials?.refreshCopies({ root: work.root, repo: work.repo, dir: work.dir }, { all: true }).catch(() => {});
   const [types, assets, materials] = await Promise.all([typeCheck(work), Promise.resolve(assetReferences(work)), materialReferences(services, work)]);
-  problems.push(...types, ...assets, ...materials, ...tidyProblems(services, work));
+  problems.push(...types, ...assets, ...materials);
   let runtimeResult = null;
   if (runtime && meta.ok && !problems.some((problem) => problem.source === "project")) {
     runtimeResult = await services.renderer.check(work, { frames });

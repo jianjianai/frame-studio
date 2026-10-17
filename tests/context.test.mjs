@@ -4,14 +4,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   LIMITS,
-  clip,
   quote,
   describeDocument,
-  experienceBrief,
-  briefText,
+  experienceKnown,
   experienceDelta,
   filesNotice,
-  libraryBrief,
+  libraryOverview,
   noteSeen,
   readLibrary,
   rebaseSeen,
@@ -31,7 +29,7 @@ function makeLibrary(files) {
   return root;
 }
 const now = (root) => [{ library, documents: readLibrary(root) }];
-const known = (root) => experienceBrief(now(root)).seen;
+const known = (root) => experienceKnown(now(root));
 
 describe("session brief and per-message context", () => {
   it("describes documents by their heading and first line", () => {
@@ -39,73 +37,31 @@ describe("session brief and per-message context", () => {
     expect(describeDocument("x/无标题.md", "```js\n# not a heading\n```\n正文")).toEqual({ title: "无标题", summary: "正文" });
   });
 
-  it("clips by bytes and quotes documents verbatim", () => {
-    expect(clip("中文字符", 7)).toEqual({ text: "中文", cut: true });
+  it("quotes documents verbatim", () => {
     const doc = "# 标题\n\n```js\nconst a = 1;\n```\n";
     expect(quote(doc)).toBe("````markdown\n# 标题\n\n```js\nconst a = 1;\n```\n````");
   });
 
-  it("puts a small library into the brief in full, README first", () => {
+  it("knows every document of a linked library by name when a session starts, none read", () => {
     const root = makeLibrary({ "README.md": "# 知识类视频\n\n用户偏好：暖色", "开场.md": "# 开场\n\n前 2 秒抛出问题" });
-    const brief = libraryBrief(library, readLibrary(root));
-    expect(brief.full).toBe(true);
-    expect(brief.text.indexOf("### README.md")).toBeLessThan(brief.text.indexOf("### 开场.md"));
-    // Byte-identical to the file, so the AI can copy text into an exact-match edit.
-    expect(brief.text).toContain("```markdown\n# 开场\n\n前 2 秒抛出问题\n```");
-    expect(Object.values(brief.docs).every((entry) => entry.level === "content")).toBe(true);
+    const seen = known(root);
+    expect(Object.keys(seen[library.id].docs)).toEqual(["README.md", "开场.md"]);
+    expect(Object.values(seen[library.id].docs).every((entry) => entry.level === "index")).toBe(true);
   });
 
-  it("gives a large library as README plus an index", () => {
-    const big = "一段很长的经验。".repeat(600); // 14 KB, over the 12 KB inline budget
-    const root = makeLibrary({ "README.md": "# 知识类视频\n\n偏好", "长文.md": `# 长文\n\n讲转场节奏\n\n${big}` });
-    const brief = libraryBrief(library, readLibrary(root));
-    expect(brief.full).toBe(false);
-    expect(brief.text).toContain("`长文.md` 长文：讲转场节奏");
-    expect(brief.text).not.toContain(big.slice(0, 50));
-    expect(brief.docs["README.md"].level).toBe("content");
-    expect(brief.docs["长文.md"].level).toBe("index");
-  });
-
-  it("keeps detailed documents (详细/) out of the brief, as an index the AI reads from", () => {
-    const details = "一个作品的完整经过和数据。".repeat(800); // 30 KB: kept, but never in the brief
+  it("shows a library's README in full and every document by title, details apart", () => {
+    const details = "一个作品的完整经过和数据。".repeat(800);
     const root = makeLibrary({
       "README.md": "# 知识类视频\n\n偏好：暖色",
-      "开场.md": "# 开场\n\n前 2 秒抛出问题，细节见 详细/开场.md",
+      "开场.md": "# 开场\n\n前 2 秒抛出问题",
       "详细/开场.md": `# 开场的例子\n\n三部作品的对比\n\n${details}`,
     });
-    const brief = libraryBrief(library, readLibrary(root));
-    // Conclusions are small: in full, however long the details are.
-    expect(brief.full).toBe(true);
-    expect(brief.conclusions).toBeLessThan(200);
-    expect(brief.text).toContain("### 开场.md");
-    expect(brief.text).toContain("### 详细文档（细节、例子和数据，需要时用 experience_read 读）\n\n- `详细/开场.md` 开场的例子：三部作品的对比");
-    expect(brief.text).not.toContain(details.slice(0, 40));
-    expect(brief.docs["详细/开场.md"].level).toBe("index");
-    expect(brief.text).not.toContain("需要整理");
-  });
-
-  it("says when a library's conclusions grew past the limit, and still lets the AI choose what to read", () => {
-    const root = makeLibrary({ "README.md": "# 知识类视频\n\n偏好", "长文.md": "# 长文\n\n讲节奏\n\n" + "结论。".repeat(3000) }); // 27 KB of conclusions
-    const brief = libraryBrief(library, readLibrary(root));
-    expect(brief.full).toBe(false);
-    expect(brief.text).toMatch(/^> 结论文档共 26 KB，超过 24 KB，需要整理/);
-    expect(brief.text).toContain("### 结论文档（动手前用 experience_read 读和当前任务相关的）\n\n- `长文.md` 长文：讲节奏");
-    expect(briefText([brief])).toContain("首页和结论文档的目录如下。");
-  });
-
-  it("shares the brief's budget between several libraries", () => {
-    const small = makeLibrary({ "README.md": "# 通用\n\n短" });
-    const big = makeLibrary({ "README.md": "# 音乐视频\n\n" + "偏好。".repeat(1500), "长文.md": "# 长文\n\n" + "很长。".repeat(3000) });
-    const other = { id: "音乐视频", title: "音乐视频" };
-    const { sections, seen } = experienceBrief([
-      { library, documents: readLibrary(small) },
-      { library: other, documents: readLibrary(big) },
-    ]);
-    expect(sections.map((section) => section.full)).toEqual([true, false]);
-    expect(Object.keys(seen)).toEqual(["知识类视频", "音乐视频"]);
-    // Two libraries in README-and-index form share the README budget.
-    expect(Buffer.byteLength(sections[1].text)).toBeLessThan(LIMITS.readme / 2 + LIMITS.index);
-    expect(briefText(sections)).toMatch(/## 经验库「知识类视频」[\s\S]*## 经验库「音乐视频」/);
+    const text = libraryOverview(library, readLibrary(root));
+    // Byte-identical to the file, so the AI can copy text into an exact-match edit.
+    expect(text).toContain("### README.md\n\n```markdown\n# 知识类视频\n\n偏好：暖色\n```");
+    expect(text).toContain("### 文档\n\n- `开场.md` 开场：前 2 秒抛出问题");
+    expect(text).toContain("### 详细/\n\n- `详细/开场.md` 开场的例子：三部作品的对比");
+    expect(text).not.toContain(details.slice(0, 40));
   });
 
   it("says nothing when nothing changed, and only what others changed otherwise", () => {
@@ -116,9 +72,8 @@ describe("session brief and per-message context", () => {
     fs.writeFileSync(path.join(root, "开场.md"), "# 开场\n\n前 1 秒抛出问题");
     fs.writeFileSync(path.join(root, "配色.md"), "# 配色\n\n深蓝渐变");
     let delta = experienceDelta(seen, now(root));
-    expect(delta.text).toContain("### 开场.md（已更新，最新内容）");
-    expect(delta.text).toContain("前 1 秒抛出问题");
-    expect(delta.text).toContain("### 配色.md（新增，最新内容）");
+    // By name only: the AI reads what it needs.
+    expect(delta.text).toBe("经验库「知识类视频」有变化（来自用户或其他对话，不是你改的）：\n- `开场.md` 已修改\n- 新增 `配色.md` 配色：深蓝渐变（约 10 字）");
     expect(experienceDelta(delta.seen, now(root)).text).toBe("");
 
     fs.rmSync(path.join(root, "配色.md"));
@@ -136,7 +91,7 @@ describe("session brief and per-message context", () => {
     expect(noteSeen(seen, "别的库", "开场.md", "x")).toBe(seen);
   });
 
-  it("reports a stale large document the AI had read, without repeating its content", () => {
+  it("tells the AI when a document it had read changed, without repeating its content", () => {
     const big = "很长的内容。".repeat(1500);
     const root = makeLibrary({ "README.md": "# 知识类视频", "长文.md": `# 长文\n\n${big}` });
     let seen = known(root);
@@ -151,12 +106,11 @@ describe("session brief and per-message context", () => {
   it("introduces a newly linked library and forgets an unlinked one", () => {
     const root = makeLibrary({ "README.md": "# 知识类视频\n\n偏好" });
     const linked = experienceDelta({}, now(root));
-    expect(linked.text).toContain("作品现在关联了经验库「知识类视频」");
-    expect(linked.text).toContain("偏好");
+    expect(linked.text).toBe("作品现在关联了经验库「知识类视频」（id 知识类视频），需要时用 experience_read 读。");
+    expect(linked.seen[library.id].docs["README.md"].level).toBe("index");
     const second = makeLibrary({ "README.md": "# 通用\n\n规范" });
     const both = experienceDelta(linked.seen, [...now(root), { library: { id: "通用", title: "通用" }, documents: readLibrary(second) }]);
-    expect(both.text).toContain("作品现在关联了经验库「通用」");
-    expect(both.text).not.toContain("偏好"); // the first library is known already
+    expect(both.text).toBe("作品现在关联了经验库「通用」（id 通用），需要时用 experience_read 读。"); // the first library is known already
     expect(experienceDelta(linked.seen, [])).toEqual({ text: "作品不再关联经验库「知识类视频」，之前读到的那些经验不再适用于这个作品。", seen: {} });
     expect(experienceDelta({}, [])).toEqual({ text: "", seen: {} });
   });
@@ -168,7 +122,10 @@ describe("session brief and per-message context", () => {
     expect(seen[library.id].docs["开场.md"].level).toBe("index");
     const refs = ["开场.md", "长文.md", "README.md", "不存在.md"].map((file) => ({ library: library.id, path: file }));
     const referenced = referencedExperience(seen, now(root), refs);
-    expect(referenced.text).toBe("### 开场.md（用户引用的经验库「知识类视频」文档）\n\n```markdown\n# 开场\n\n前 2 秒\n```");
+    // Small ones the AI has not read come along (the README too: a session starts knowing names only).
+    expect(referenced.text).toBe(
+      "### 开场.md（用户引用的经验库「知识类视频」文档）\n\n```markdown\n# 开场\n\n前 2 秒\n```\n\n### README.md（用户引用的经验库「知识类视频」文档）\n\n```markdown\n# 知识类视频\n```",
+    );
     expect(referenced.seen[library.id].docs["开场.md"].level).toBe("content");
     expect(referencedExperience(referenced.seen, now(root), [{ path: "开场.md" }]).text).toBe("");
   });
@@ -229,6 +186,8 @@ describe("session brief", () => {
     const brief = platformInstructions();
     // Claude answered a Chinese request in English; Bash edits made the user approve each one.
     expect(brief).toContain("和用户交流用用户的语言（默认简体中文）");
-    expect(brief).toContain("不要用 sed -i、cat > 文件、tee 这类命令改文件");
+    expect(brief).toContain("不要用 sed -i、cat >、tee 这类命令");
+    // Basic rules only: the rest is in frame_guide and the tools' own descriptions.
+    expect(Buffer.byteLength(brief)).toBeLessThan(4000);
   });
 });

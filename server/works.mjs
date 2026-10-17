@@ -5,7 +5,6 @@ import { readProjectSource, readProjectDir, setProjectFields, removeProjectPrope
 import { appRoot } from "./config.mjs";
 import { problem, notFound, conflict, Locks, shortId, writeFileAtomic, diskUsage } from "./util.mjs";
 import { createWorkFiles, platformInstructions, workTsconfig, GIT_ATTRIBUTES } from "./templates.mjs";
-import { clip, quote, LIMITS, describeDocument } from "./ai/context.mjs";
 import { LOCAL_REPO } from "./repos.mjs";
 
 const WORK_PREFIX = "works/";
@@ -246,81 +245,32 @@ export class Works {
 
   /**
    * The session brief at the work root: AGENTS.md (read by Codex; Claude Code imports it
-   * through CLAUDE.md). Platform rules, the work's own notes, and sections from
-   * `briefProviders` (the linked experience library). Agents load it when a session starts
-   * or resumes and keep it through context compaction. Returns what the brief told the AI
-   * (`{ experience: seen }`), the baseline for later per-message changes.
+   * through CLAUDE.md). The platform's basic rules and where the work's things are — its notes,
+   * and lines from `briefProviders` (experience, material libraries, reviews) — which the AI
+   * reads itself as it needs them. Agents load it when a session starts or resumes and keep it
+   * through context compaction. Returns what the AI knows (`{ experience: seen }`), the
+   * baseline for later per-message changes.
    */
   writeBrief(work) {
-    const parts = [platformInstructions()];
-    let notes = "";
-    try {
-      notes = fs.readFileSync(path.join(work.dir, "AGENTS.md"), "utf8").trim();
-    } catch {}
-    const { text, cut } = clip(notes, LIMITS.notes);
-    const size = Buffer.byteLength(notes);
-    parts.push(
-      [
-        `## 本作品的需求与约定（projects/${work.slug}/AGENTS.md${cut ? `，以下是开头部分，全文 ${Math.round(size / 1024)} KB，其余需要时自己读` : ""}）`,
-        notes ? quote(text) : "（还没有记录）",
-        "用户确认的新需求和这个作品专属的约定，写回这个文件：只留当前有效的，最重要的放在前面。",
-        size > LIMITS.tidyNotes
-          ? `> 这个文件已有 ${Math.round(size / 1024)} KB，超过 ${Math.round(LIMITS.tidyNotes / 1024)} KB，需要整理：过时的删掉，历史、被否的方案和详细分镜移到 production/ 下的文档。先告诉用户，用户同意后再整理。`
-          : "",
-        this.documentsIndex(work),
-      ]
-        .filter(Boolean)
-        .join("\n\n"),
-    );
+    const size = (file) => fs.statSync(path.join(work.dir, file), { throwIfNoEntry: false })?.size ?? 0;
+    const kb = (bytes) => `${Math.max(1, Math.round(bytes / 1024))} KB`;
+    const notes = size("AGENTS.md");
+    const lines = [
+      `- 作品文件在 \`projects/${work.slug}/\`。`,
+      notes
+        ? `- 需求和约定：\`projects/${work.slug}/AGENTS.md\`（${kb(notes)}），开始工作前先读；新确认的需求和这个作品专属的约定写回这里。`
+        : `- 需求和约定写在 \`projects/${work.slug}/AGENTS.md\`（还没有）。`,
+    ];
     const state = {};
     for (const provider of this.briefProviders) {
       const section = provider(work);
       if (!section) continue;
-      if (section.text) parts.push(section.text);
+      if (section.lines) lines.push(...section.lines);
       Object.assign(state, section.state);
     }
-    writeIfChanged(path.join(work.root, "AGENTS.md"), parts.join("\n\n") + "\n");
+    writeIfChanged(path.join(work.root, "AGENTS.md"), `${platformInstructions()}\n## 本作品\n\n${lines.join("\n")}\n`);
     writeIfChanged(path.join(work.root, "CLAUDE.md"), "@AGENTS.md\n");
     return state;
-  }
-
-  /**
-   * The work's other Markdown documents (分镜表, production/ records…) as an index: the
-   * brief does not carry them, the AI reads the ones the task needs.
-   */
-  documentsIndex(work) {
-    const docs = [];
-    const walk = (dir, prefix) => {
-      let entries = [];
-      try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-      } catch {}
-      for (const entry of entries) {
-        const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
-        if (entry.name.startsWith(".") || ["node_modules", "public", "exports"].includes(entry.name)) continue;
-        if (entry.isDirectory()) walk(path.join(dir, entry.name), relative);
-        else if (/\.md$/i.test(entry.name) && !["AGENTS.md", EXPERIENCE_INBOX].includes(relative)) docs.push(relative);
-      }
-    };
-    walk(work.dir, "");
-    if (!docs.length) return "";
-    const lines = [];
-    let used = 0;
-    for (const file of docs.sort((a, b) => a.localeCompare(b, "zh"))) {
-      let head = "";
-      try {
-        head = fs.readFileSync(path.join(work.dir, file), "utf8").slice(0, 2000);
-      } catch {}
-      const { title, summary } = describeDocument(file, head);
-      const line = `- \`${file}\` ${title}${summary && summary !== title ? "：" + summary : ""}`;
-      if (used + Buffer.byteLength(line) > LIMITS.works) {
-        lines.push(`- ……还有 ${docs.length - lines.length} 篇`);
-        break;
-      }
-      used += Buffer.byteLength(line);
-      lines.push(line);
-    }
-    return `本作品的其他文档（需要时自己读）：\n${lines.join("\n")}`;
   }
 
   async create({ repo = LOCAL_REPO, title, width = 1920, height = 1080, duration = 10, fps = 30, description = "" }) {

@@ -308,7 +308,7 @@ export function registerWorkTools(registry) {
         files,
         assets: assets.map(({ url, kind, size, duration, width, height, animations, triangles, problem }) => ({ url, kind, size, duration, width, height, animations, triangles, problem })),
         // Built-in agents have the work's notes and its experience libraries in their session brief.
-        ...(ctx.scope.session ? {} : { notes: fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8").slice(0, 6000) : "" }),
+        notes: fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8") : "",
         unsavedChanges: status.files.map((file) => `${file.status} ${file.path}`),
         lastVersion: status.head,
         userView: view && { time: view.time, playing: view.playing, selection: view.selection, at: view.at },
@@ -324,7 +324,7 @@ export function registerWorkTools(registry) {
           .slice(0, 5)
           .map(({ name, createdAt, duration, width, height, size }) => ({ name, createdAt, duration, width, height, size })),
         // The production know-how to follow; read it in full with experience_read.
-        experiences: services.experience ? await services.experience.summary(work, { inBrief: Boolean(ctx.scope.session) }) : null,
+        experiences: services.experience ? await services.experience.summary(work) : null,
         // What the shared libraries hold (resources, sounds) and whether they fit this picture.
         materials: services.resources ? await services.resources.librariesFor(work).catch(() => null) : null,
         // Where the work was posted and how it did (only when there is review data).

@@ -109,26 +109,19 @@ describe("many libraries", () => {
     expect(experiences.find((item) => item.id === "产品视频")).toMatchObject({ works: 2, files: 2 });
   });
 
-  it("keeps the session brief small and names the libraries that suit the work", async () => {
+  it("keeps the session brief small: how many libraries there are, the AI looks for the ones that suit", async () => {
     const work = await app.services.openWork(ids.c, "local");
-    await app.services.resources.overview("local");
-    await app.services.libraries.prepare(work);
     works.writeBrief(work);
     const brief = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
-    expect(Buffer.byteLength(brief)).toBeLessThan(32 * 1024);
-    const materials = brief.slice(brief.indexOf("## 素材库\n"));
-    expect(materials).toMatch(/「三维模型库」（名称、介绍或内容和作品相近；类似的作品「三维产品展示 第.集」「三维产品展示 第.集」在用）：资源 6 个（角色 2、物品 2、场景 2）、文件 46 个。/);
-    expect(materials).toContain("作品库里共有 60 个素材库，下面是可能适合本作品的，还有 59 个没有列出");
-    expect(materials).not.toContain("素材42");
-    expect(brief).toMatch(/本作品没有关联经验库。可能适合本作品的（作品库里共 40 个[^\n]*）：\n- 「产品视频」：产品展示类短片的节奏和镜头。/);
-    // A work linking every library still gets a brief Codex reads in full.
+    expect(Buffer.byteLength(brief)).toBeLessThan(4500);
+    expect(brief).toContain("- 素材库：本作品还没有引用素材库；作品库里共 60 个。");
+    expect(brief).toContain("- 经验库：本作品没有关联；作品库里有 40 个（experience_list）。");
+    // However many libraries a work links, one line names them.
     await works.update(work, { materials: listedIds(await call("/api/repos/local/materials/libraries")) });
-    await app.services.libraries.prepare(work);
     works.writeBrief(work);
     const crowded = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
     await works.update(work, { materials: [] });
-    expect(Buffer.byteLength(crowded.slice(crowded.indexOf("## 素材库\n")))).toBeLessThan(7000);
-    expect(crowded).toContain("「素材59」（本作品已关联）");
+    expect(crowded).toMatch(/- 素材库：本作品引用了(「[^」]+」){60}；作品库里共 60 个。/);
   });
 
   it("pages and searches the libraries for the AI", async () => {
