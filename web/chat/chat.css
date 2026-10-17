@@ -585,6 +585,23 @@
   background: var(--fg);
   color: var(--bg);
 }
+/* Voice input while listening: grows a halo with the microphone's loudness (--level, set from code). */
+.dictate-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  margin: 0 2px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--danger);
+  color: #fff;
+  font: 12px var(--mono);
+  cursor: pointer;
+  box-shadow: 0 0 0 calc(var(--level, 0) * 5px) rgb(238 100 100 / 0.25);
+  transition: box-shadow 0.1s linear;
+}
 .chat-pickers {
   display: flex;
   flex-wrap: wrap;

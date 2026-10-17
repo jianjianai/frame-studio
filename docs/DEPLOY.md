@@ -32,7 +32,7 @@ FRAME_PASSWORD='设置一个强密码' docker compose -f deploy/compose.yaml up 
 
 ### 反向代理
 
-对外提供服务请放在 HTTPS 反向代理之后（麦克风录音要求 HTTPS），并设置 `FRAME_PUBLIC_URL=https://你的域名`。代理需要转发 WebSocket（`/api/ws`、Vite HMR）。Caddy 示例：
+对外提供服务请放在 HTTPS 反向代理之后（麦克风录音要求 HTTPS），并设置 `FRAME_PUBLIC_URL=https://你的域名`。代理需要转发 WebSocket（`/api/ws`、`/api/speech/listen`、Vite HMR）。Caddy 示例：
 
 ```
 frame.example.com {

@@ -38,6 +38,7 @@ import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
 import { useWorkbench, type ChatAttachment } from "../workbench/store";
 import { TranscriptReducer, formatTokens, groupTurns, reduceTranscript, runningTurn, writtenTokens, type Entry, type ToolBlock, type Turn } from "./reduce";
 import { TurnBlocks, activity, runningTool, type TurnProgress } from "./Transcript";
+import { DictationButton, useDictation } from "./Dictation";
 import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
 import { insertPrompt, newPromptId, usePrompts, type PromptNode } from "../lib/prompts";
@@ -133,6 +134,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   // Shown until the server echoes the message (session start can take a few seconds).
   const [pending, setPending] = useState<{ text: string; attachments: ChatAttachment[] } | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
+  const dictation = useDictation({ input, text, setText });
   const scroller = useRef<HTMLDivElement>(null);
   const historyList = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -763,11 +765,25 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           ref={input}
           rows={1}
           placeholder={
-            readOnly ? "和 AI 复盘这个作品，或者让它整理经验" : running ? "AI 正在工作，新消息会排队…" : "描述你想要的修改（Enter 发送，Shift+Enter 换行）"
+            dictation.active
+              ? "正在听…说完点 ■ 或按 Enter，Esc 取消"
+              : readOnly
+                ? "和 AI 复盘这个作品，或者让它整理经验"
+                : running
+                  ? "AI 正在工作，新消息会排队…"
+                  : "描述你想要的修改（Enter 发送，Shift+Enter 换行）"
           }
           value={text}
+          readOnly={dictation.active}
           onChange={(event) => setText(event.target.value)}
           onKeyDown={(event) => {
+            // While speaking, the text is the recognizer's: Enter finishes, Esc throws it away.
+            if (dictation.active) {
+              if (event.key === "Enter" || event.key === "Escape") event.preventDefault();
+              if (event.key === "Enter") dictation.stop();
+              if (event.key === "Escape") dictation.cancel();
+              return;
+            }
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
               void send();
@@ -821,12 +837,13 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           <PromptPicker draft={text} onPick={insertText} onManage={() => showView("prompts")} />
           <span className="grow" />
           <ContextRing usage={session?.usage} busy={running} onCompact={compact} />
+          <DictationButton dictation={dictation} />
           {running ? (
             <button className="send-btn stop" title="停止" onClick={stop}>
               <Square size={13} fill="currentColor" />
             </button>
           ) : (
-            <button className="send-btn" title="发送" disabled={sending || (!text.trim() && !attachments.length)} onClick={() => send()}>
+            <button className="send-btn" title="发送" disabled={sending || dictation.active || (!text.trim() && !attachments.length)} onClick={() => send()}>
               {sending ? <span className="spinner" /> : <Send size={14} />}
             </button>
           )}

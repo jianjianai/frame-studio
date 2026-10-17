@@ -322,7 +322,31 @@ describe("websocket access", () => {
           ws.on("error", () => resolve("error"));
         });
       expect(await attempt("/api/ws")).toBe(401);
+      expect(await attempt("/api/speech/listen")).toBe(401);
       expect(await attempt("/", "vite-hmr")).toBe(401);
+    } finally {
+      await server.app.close();
+    }
+  });
+
+  it("voice input offers the recognition model while none is installed", async () => {
+    const server = await start();
+    try {
+      const providers = await server.call("/api/speech/providers");
+      expect(providers.body.recognition.provider).toBeNull();
+      expect(providers.body.recognition.models[0]).toMatchObject({ id: expect.stringMatching(/^sense-voice/), installed: false });
+      const { WebSocket } = await import("ws");
+      const messages = await new Promise((resolve, reject) => {
+        const ws = new WebSocket(server.base.replace("http", "ws") + "/api/speech/listen");
+        const received = [];
+        ws.on("message", (data) => received.push(JSON.parse(String(data))));
+        ws.on("close", () => resolve(received));
+        ws.on("error", reject);
+      });
+      expect(messages).toEqual([expect.objectContaining({ type: "error", code: "NO_RECOGNIZER", model: expect.objectContaining({ id: providers.body.recognition.models[0].id }) })]);
+      // A configured service is used once it is the only engine there is.
+      await server.call("/api/speech/settings", { method: "PATCH", body: { recognition: { openai: { baseUrl: "http://127.0.0.1:9/v1", apiKey: "k" } } } });
+      expect((await server.call("/api/speech/providers")).body.recognition).toMatchObject({ provider: "openai", openai: { baseUrl: "http://127.0.0.1:9/v1", hasKey: true } });
     } finally {
       await server.app.close();
     }

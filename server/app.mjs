@@ -37,7 +37,8 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
   const preview = await createPreview({ config, httpServer: server, events });
   const watcher = new WorkWatcher({ events, preview });
   repos.beforeRemove.push((id) => watcher.unwatchRepo(id));
-  const services = { config, events, settings, auth, github, repos, works, preview, watcher, router, closers: [], starters: [] };
+  // WebSocket endpoints besides /api/ws, by path: (ws, req) => void.
+  const services = { config, events, settings, auth, github, repos, works, preview, watcher, router, sockets: new Map(), closers: [], starters: [] };
 
   /** Open a work for editing and start watching it. Used by every route/tool that touches a work. */
   services.openWork = async (id, repo) => {
@@ -239,10 +240,11 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
   server.on("upgrade", (req, socket, head) => {
     const { pathname } = new URL(req.url, "http://local");
-    if (pathname !== "/api/ws" || socket.destroyed) return; // Vite HMR handles its own upgrades.
-    sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit("connection", ws, req));
+    const handler = pathname === "/api/ws" ? serveEvents : services.sockets.get(pathname);
+    if (!handler || socket.destroyed) return; // Vite HMR handles its own upgrades.
+    sockets.handleUpgrade(req, socket, head, (ws) => handler(ws, req));
   });
-  sockets.on("connection", (ws) => {
+  function serveEvents(ws) {
     const unsubscribe = events.subscribe((event) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
     });
@@ -257,7 +259,7 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
         if (message.type === "preview-state") events.emit({ ...message, type: "preview-state" });
       } catch {}
     });
-  });
+  }
 
   return {
     services,

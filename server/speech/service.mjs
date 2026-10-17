@@ -4,7 +4,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { createRequire } from "node:module";
 import * as tar from "tar";
-import { SPEECH_MODELS } from "./models.mjs";
+import { SPEECH_MODELS, RECOGNITION_MODELS, VAD_MODEL } from "./models.mjs";
 import { problem, notFound } from "../util.mjs";
 
 const require = createRequire(import.meta.url);
@@ -29,11 +29,14 @@ export function wavFromSamples(samples, sampleRate) {
   return Buffer.concat([header, data]);
 }
 
+const MODELS = [...SPEECH_MODELS, ...RECOGNITION_MODELS];
+
 /**
  * Speech providers:
  *   edge    Microsoft Edge online voices (free, needs internet)
  *   openai  OpenAI or any OpenAI-compatible /v1/audio/speech service
  *   local:<model>  installed sherpa-onnx model, fully offline
+ * Recognition (voice input) providers: local:<model> or openai (/v1/audio/transcriptions).
  */
 export class SpeechService {
   constructor({ config, settings, tasks, events }) {
@@ -43,6 +46,8 @@ export class SpeechService {
     this.tasks = tasks;
     this.events = events;
     this.engines = new Map();
+    this.recognizers = new Map();
+    this.decoding = Promise.resolve();
     this.installing = new Map();
     this.edgeVoices = null;
   }
@@ -55,8 +60,8 @@ export class SpeechService {
   installed(id) {
     return fs.existsSync(path.join(this.modelDir(id), ".installed"));
   }
-  models() {
-    return SPEECH_MODELS.map((model) => ({ ...model, installed: this.installed(model.id), installing: this.installing.get(model.id) ?? null }));
+  models(list = SPEECH_MODELS) {
+    return list.map((model) => ({ ...model, installed: this.installed(model.id), installing: this.installing.get(model.id) ?? null }));
   }
   providers() {
     const openai = this.conf().providers?.openai ?? {};
@@ -104,11 +109,23 @@ export class SpeechService {
       ? wanted
       : (this.providers().find((item) => item.id.startsWith("local:"))?.id ?? "edge");
   }
-  updateSettings({ defaultProvider, openai }) {
+  updateSettings({ defaultProvider, openai, recognition }) {
     if (openai?.apiKey !== undefined) this.settings.setSecret("speech:openai", openai.apiKey);
+    if (recognition?.openai?.apiKey !== undefined) this.settings.setSecret("speech:recognition-openai", recognition.openai.apiKey);
     return this.settings.update("speech", (speech) => ({
       ...speech,
       ...(defaultProvider ? { defaultProvider } : {}),
+      ...(recognition
+        ? {
+            recognition: {
+              ...speech.recognition,
+              ...(recognition.provider ? { provider: recognition.provider } : {}),
+              ...(recognition.openai
+                ? { openai: { baseUrl: (recognition.openai.baseUrl || "").replace(/\/+$/, ""), model: recognition.openai.model || "" } }
+                : {}),
+            },
+          }
+        : {}),
       ...(openai
         ? {
             providers: {
@@ -202,6 +219,117 @@ export class SpeechService {
     throw notFound("未知语音引擎：" + provider);
   }
 
+  recognitionProviders() {
+    const openai = this.conf().recognition?.openai ?? {};
+    const list = RECOGNITION_MODELS.filter((model) => this.installed(model.id)).map((model) => ({
+      id: "local:" + model.id,
+      name: `本地 · ${model.name}`,
+      ready: true,
+      detail: "离线运行 · " + model.languages.join(" / "),
+    }));
+    list.push({
+      id: "openai",
+      name: "OpenAI 兼容识别接口",
+      ready: Boolean(openai.baseUrl || this.settings.hasSecret("speech:recognition-openai")),
+      detail: openai.baseUrl || "未配置",
+    });
+    return list;
+  }
+  /** The voice input engine: the chosen one while it works, else an installed model, else a configured service; null when there is none. */
+  recognitionProvider() {
+    const ready = this.recognitionProviders().filter((item) => item.ready);
+    return (ready.find((item) => item.id === this.conf().recognition?.provider) ?? ready[0])?.id ?? null;
+  }
+  recognitionInfo() {
+    const openai = this.conf().recognition?.openai ?? {};
+    return {
+      providers: this.recognitionProviders(),
+      provider: this.recognitionProvider(),
+      models: this.models(RECOGNITION_MODELS),
+      openai: { baseUrl: openai.baseUrl ?? "", model: openai.model ?? "", hasKey: this.settings.hasSecret("speech:recognition-openai") },
+    };
+  }
+
+  /**
+   * Recognize 16 kHz mono samples; returns the text. One at a time across all voice inputs:
+   * the sentences of one come back in order, and decoding never takes more than its threads.
+   */
+  recognize(provider, samples) {
+    const run = this.decoding.then(() => (provider === "openai" ? this.transcribe(samples) : this.decode(provider.replace(/^local:/, ""), samples)));
+    this.decoding = run.catch(() => {});
+    return run;
+  }
+  async decode(id, samples) {
+    const recognizer = await this.recognizer(id);
+    const stream = recognizer.createStream();
+    stream.acceptWaveform({ samples, sampleRate: 16000 });
+    const result = await recognizer.decodeAsync(stream);
+    return String(result.text ?? "").trim();
+  }
+  async transcribe(samples) {
+    const conf = this.conf().recognition?.openai ?? {};
+    const key = this.settings.secret("speech:recognition-openai");
+    const form = new FormData();
+    form.append("file", new Blob([wavFromSamples(samples, 16000)], { type: "audio/wav" }), "speech.wav");
+    form.append("model", conf.model || "gpt-4o-mini-transcribe");
+    const response = await fetch(`${conf.baseUrl || "https://api.openai.com/v1"}/audio/transcriptions`, {
+      method: "POST",
+      headers: key ? { Authorization: "Bearer " + key } : {},
+      body: form,
+      signal: AbortSignal.timeout(60000),
+    });
+    if (!response.ok) throw problem(502, `语音识别接口返回 ${response.status}：${(await response.text()).slice(0, 300)}`);
+    return String((await response.json()).text ?? "").trim();
+  }
+  /** A loaded recognition model (about 2 s to load, then kept); let go after ten idle minutes, it holds a few hundred MB. */
+  async recognizer(id) {
+    if (!this.installed(id)) throw problem(400, "模型尚未安装：" + id);
+    clearTimeout(this.unloadTimer);
+    this.unloadTimer = setTimeout(() => this.recognizers.clear(), 600_000);
+    this.unloadTimer.unref?.();
+    if (!this.recognizers.has(id))
+      this.recognizers.set(
+        id,
+        this.createRecognizer(id).catch((error) => (this.recognizers.delete(id), Promise.reject(error))),
+      );
+    return this.recognizers.get(id);
+  }
+  async createRecognizer(id) {
+    const sherpa = require("sherpa-onnx-node");
+    const dir = this.contentDir(id);
+    const onnx = fs.readdirSync(dir).filter((name) => name.endsWith(".onnx"));
+    return sherpa.OfflineRecognizer.createAsync({
+      featConfig: { sampleRate: 16000, featureDim: 80 },
+      modelConfig: {
+        senseVoice: { model: path.join(dir, onnx.find((name) => name.includes("int8")) || onnx[0]), language: "", useInverseTextNormalization: 1 },
+        tokens: path.join(dir, "tokens.txt"),
+        // Measured on an 8-core server: four threads decoded slower than two.
+        numThreads: 2,
+        debug: 0,
+      },
+    });
+  }
+  /** The VAD model file, downloaded the first time (under 1 MB). */
+  vadModel() {
+    const file = path.join(this.modelDir(VAD_MODEL.id), VAD_MODEL.file);
+    if (fs.existsSync(file)) return Promise.resolve(file);
+    this.vadDownload ??= (async () => {
+      const response = await fetch(VAD_MODEL.url, { redirect: "follow", signal: AbortSignal.timeout(120000) });
+      if (!response.ok) throw problem(502, `下载语音检测模型失败：HTTP ${response.status}`);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file + ".partial", Buffer.from(await response.arrayBuffer()));
+      fs.renameSync(file + ".partial", file);
+      return file;
+    })().finally(() => (this.vadDownload = null));
+    return this.vadDownload;
+  }
+  /** Where an installed model's files are: archives extract into one folder of their own. */
+  contentDir(id) {
+    const dir = this.modelDir(id);
+    const entries = fs.readdirSync(dir).filter((name) => !name.startsWith("."));
+    return entries.length === 1 && fs.statSync(path.join(dir, entries[0])).isDirectory() ? path.join(dir, entries[0]) : dir;
+  }
+
   async engine(id) {
     if (!this.installed(id)) throw problem(400, "模型尚未安装：" + id);
     if (!this.engines.has(id))
@@ -214,9 +342,7 @@ export class SpeechService {
   async createEngine(id) {
     const sherpa = require("sherpa-onnx-node");
     const model = SPEECH_MODELS.find((item) => item.id === id);
-    let dir = this.modelDir(id);
-    const entries = fs.readdirSync(dir).filter((name) => !name.startsWith("."));
-    if (entries.length === 1 && fs.statSync(path.join(dir, entries[0])).isDirectory()) dir = path.join(dir, entries[0]);
+    const dir = this.contentDir(id);
     const file = (name) => (fs.existsSync(path.join(dir, name)) ? path.join(dir, name) : "");
     const onnx = fs.readdirSync(dir).filter((name) => name.endsWith(".onnx"));
     const pick = onnx.find((name) => name.includes("int8")) || onnx.find((name) => name.startsWith("model")) || onnx[0];
@@ -249,14 +375,15 @@ export class SpeechService {
 
   /** Download + extract a model as a background task. */
   install(id) {
-    const model = SPEECH_MODELS.find((item) => item.id === id);
+    const model = MODELS.find((item) => item.id === id);
     if (!model) throw notFound("未知模型");
     if (this.installed(id)) return null;
     if (this.installing.has(id)) throw problem(409, "正在下载这个模型");
     const target = this.modelDir(id);
     const temp = target + ".partial";
     this.installing.set(id, { progress: 0, message: "准备下载" });
-    return this.tasks.start({ kind: "speech-model", title: `下载语音模型 ${model.name}` }, async ({ signal, progress }) => {
+    const recognition = RECOGNITION_MODELS.includes(model);
+    return this.tasks.start({ kind: "speech-model", title: `下载${recognition ? "语音识别" : "语音"}模型 ${model.name}` }, async ({ signal, progress }) => {
       const report = (value, message) => {
         this.installing.set(id, { progress: value, message });
         progress(value, message);
@@ -276,6 +403,8 @@ export class SpeechService {
         });
         const bunzip = require("unbzip2-stream");
         await pipeline(counted, bunzip(), tar.x({ cwd: temp, strict: true }), { signal });
+        // Voice input also needs the pause detector: fetched now, so it works offline afterwards.
+        if (recognition) await this.vadModel();
         fs.writeFileSync(path.join(temp, ".installed"), new Date().toISOString());
         fs.rmSync(target, { recursive: true, force: true });
         fs.renameSync(temp, target);
@@ -291,6 +420,7 @@ export class SpeechService {
   }
   remove(id) {
     this.engines.delete(id);
+    this.recognizers.delete(id);
     fs.rmSync(this.modelDir(id), { recursive: true, force: true });
     this.events.emit({ type: "speech-models" });
   }

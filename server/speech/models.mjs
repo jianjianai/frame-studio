@@ -72,3 +72,30 @@ export const SPEECH_MODELS = [
     homepage: "https://github.com/KittenML/KittenTTS",
   },
 ];
+
+const ASR_RELEASE = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/";
+
+/** Speech recognition models for voice input in the chat (sherpa-onnx), downloaded on demand like the voices. */
+export const RECOGNITION_MODELS = [
+  {
+    id: "sense-voice-zh-en-ja-ko-yue-int8-2024-07-17",
+    name: "SenseVoice Small",
+    description: "中文、英文、粤语、日语、韩语，可以混着说；自带标点，数字写成阿拉伯数字。推荐。",
+    languages: ["中文", "English", "粤语", "日本語", "한국어"],
+    type: "sense-voice",
+    archive: ASR_RELEASE + "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2",
+    size: 163_000_000,
+    license: "FunASR 模型许可",
+    licenseUrl: "https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE",
+    homepage: "https://github.com/FunAudioLLM/SenseVoice",
+  },
+];
+
+/** Voice activity detection: cuts what is said into sentences at the pauses. One small file, fetched when first needed. */
+export const VAD_MODEL = {
+  id: "silero-vad",
+  file: "silero_vad.onnx",
+  url: ASR_RELEASE + "silero_vad.onnx",
+  license: "MIT",
+  homepage: "https://github.com/snakers4/silero-vad",
+};

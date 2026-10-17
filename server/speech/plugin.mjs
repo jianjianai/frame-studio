@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
 import { SpeechService } from "./service.mjs";
+import { listenSocket } from "./listen.mjs";
 import { readJson } from "../http.mjs";
 import { uniquePath } from "../files.mjs";
 import { probe } from "../media.mjs";
@@ -36,11 +37,14 @@ export function speechPlugin(services) {
     defaultProvider: speech.defaultProvider(),
     models: speech.models(),
     openai: { ...(speech.conf().providers?.openai ?? { baseUrl: "", model: "", voices: [] }), hasKey: services.settings.hasSecret("speech:openai") },
+    recognition: speech.recognitionInfo(),
   }));
   router.patch("/api/speech/settings", async ({ req }) => speech.updateSettings(await readJson(req)));
   router.get("/api/speech/voices", ({ query }) => speech.voices(query.provider || undefined));
   router.post("/api/speech/models/:id/install", ({ params }) => speech.install(params.id));
   router.delete("/api/speech/models/:id", ({ params }) => speech.remove(params.id));
+  // Voice input in the chat: microphone audio in, recognized text out.
+  services.sockets.set("/api/speech/listen", listenSocket(speech));
   router.post("/api/works/:repo/:id/speech", async ({ params, req }) =>
     synthesizeInto(services, await services.openEditable(params.id, params.repo), await readJson(req)),
   );

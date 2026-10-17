@@ -336,32 +336,43 @@ function ProfileDialog({ value, onClose, onSaved }: { value: Partial<Profile> & 
 }
 
 // ---- speech -------------------------------------------------------------------
+interface SpeechModel {
+  id: string;
+  name: string;
+  description: string;
+  languages: string[];
+  size: number;
+  installed: boolean;
+  installing?: { progress: number | null; message: string } | null;
+  license: string;
+  licenseUrl?: string;
+  homepage?: string;
+}
+interface SpeechProvider {
+  id: string;
+  name: string;
+  ready: boolean;
+  detail?: string;
+}
 interface SpeechData {
-  providers: { id: string; name: string; ready: boolean; detail?: string }[];
+  providers: SpeechProvider[];
   defaultProvider: string;
-  models: {
-    id: string;
-    name: string;
-    description: string;
-    languages: string[];
-    size: number;
-    installed: boolean;
-    installing?: { progress: number | null; message: string } | null;
-    license: string;
-    homepage?: string;
-  }[];
+  models: SpeechModel[];
   openai: { baseUrl: string; model: string; voices: string[]; hasKey: boolean };
+  recognition: { providers: SpeechProvider[]; provider: string | null; models: SpeechModel[]; openai: { baseUrl: string; model: string; hasKey: boolean } };
 }
 
 function SpeechSettings() {
   const [data, setData] = useState<SpeechData | null>(null);
   const [openai, setOpenai] = useState({ baseUrl: "", apiKey: "", model: "", voices: "" });
+  const [recognizer, setRecognizer] = useState({ baseUrl: "", apiKey: "", model: "" });
   const [run] = useAction();
   const confirm = useConfirm();
   const load = () =>
     api<SpeechData>("/api/speech/providers").then((value) => {
       setData(value);
       setOpenai((form) => ({ ...form, baseUrl: value.openai.baseUrl, model: value.openai.model, voices: value.openai.voices.join(", ") }));
+      setRecognizer((form) => ({ ...form, baseUrl: value.recognition.openai.baseUrl, model: value.recognition.openai.model }));
     });
   useEffect(() => {
     void load();
@@ -370,71 +381,75 @@ function SpeechSettings() {
     if (event.type === "speech-models" || (event.type === "task" && (event.task as { kind: string }).kind === "speech-model")) void load();
   });
   if (!data) return null;
-  return (
-    <>
-      <h2>语音引擎</h2>
-      <p className="muted">配音与 AI 的 speech_synthesize 工具使用这里的引擎。本地模型完全离线运行，按需下载，不随程序内置。</p>
-      {data.providers.map((provider) => (
-        <div className="setting-card" key={provider.id}>
-          <AudioLines size={16} className="muted" />
-          <div className="grow">
-            <strong>{provider.name}</strong>
-            <div className="muted small-text">{provider.detail}</div>
-          </div>
-          {provider.ready ? <span className="badge ok">可用</span> : <span className="badge">未就绪</span>}
-          <label className="row small-text">
-            <input
-              type="radio"
-              name="default-provider"
-              disabled={!provider.ready}
-              checked={data.defaultProvider === provider.id}
-              onChange={() => run(() => patch("/api/speech/settings", { defaultProvider: provider.id }).then(load))}
-            />{" "}
-            默认
-          </label>
-        </div>
-      ))}
-      <h2>本地模型</h2>
-      {data.models.map((model) => (
-        <div className="setting-card" key={model.id}>
-          <div className="grow" style={{ minWidth: 0 }}>
-            <strong>{model.name}</strong> <span className="faint small-text">{model.languages.join(" / ")}</span>
-            <div className="muted small-text">{model.description}</div>
-            <div className="faint small-text">
-              约 {formatBytes(model.size)} · {model.license}
-              {model.homepage && (
-                <>
-                  {" · "}
-                  <a href={model.homepage} target="_blank" rel="noreferrer">
-                    主页
-                  </a>
-                </>
-              )}
-            </div>
-            {model.installing && (
-              <div className="progress" style={{ marginTop: 6 }}>
-                <div style={{ width: `${Math.round((model.installing.progress ?? 0) * 100)}%` }} />
-              </div>
-            )}
-          </div>
-          {model.installed ? (
-            <button
-              className="btn small"
-              onClick={async () =>
-                (await confirm(`删除模型 ${model.name}？`, { danger: true, confirm: "删除" })) && run(() => del(`/api/speech/models/${model.id}`).then(load))
-              }
-            >
-              <Trash2 size={13} /> 删除
-            </button>
-          ) : model.installing ? (
-            <span className="muted small-text">{model.installing.message}</span>
+  const modelRow = (model: SpeechModel) => (
+    <div className="setting-card" key={model.id}>
+      <div className="grow" style={{ minWidth: 0 }}>
+        <strong>{model.name}</strong> <span className="faint small-text">{model.languages.join(" / ")}</span>
+        <div className="muted small-text">{model.description}</div>
+        <div className="faint small-text">
+          约 {formatBytes(model.size)} ·{" "}
+          {model.licenseUrl ? (
+            <a href={model.licenseUrl} target="_blank" rel="noreferrer">
+              {model.license}
+            </a>
           ) : (
-            <button className="btn small primary" onClick={() => run(() => api(`/api/speech/models/${model.id}/install`, { method: "POST" }).then(load))}>
-              <Download size={13} /> 下载
-            </button>
+            model.license
+          )}
+          {model.homepage && (
+            <>
+              {" · "}
+              <a href={model.homepage} target="_blank" rel="noreferrer">
+                主页
+              </a>
+            </>
           )}
         </div>
-      ))}
+        {model.installing && (
+          <div className="progress" style={{ marginTop: 6 }}>
+            <div style={{ width: `${Math.round((model.installing.progress ?? 0) * 100)}%` }} />
+          </div>
+        )}
+      </div>
+      {model.installed ? (
+        <button
+          className="btn small"
+          onClick={async () =>
+            (await confirm(`删除模型 ${model.name}？`, { danger: true, confirm: "删除" })) && run(() => del(`/api/speech/models/${model.id}`).then(load))
+          }
+        >
+          <Trash2 size={13} /> 删除
+        </button>
+      ) : model.installing ? (
+        <span className="muted small-text">{model.installing.message}</span>
+      ) : (
+        <button className="btn small primary" onClick={() => run(() => api(`/api/speech/models/${model.id}/install`, { method: "POST" }).then(load))}>
+          <Download size={13} /> 下载
+        </button>
+      )}
+    </div>
+  );
+  const providerRow = (provider: SpeechProvider, name: string, chosen: string | null, choose: () => void, label: string) => (
+    <div className="setting-card" key={provider.id}>
+      <AudioLines size={16} className="muted" />
+      <div className="grow">
+        <strong>{provider.name}</strong>
+        <div className="muted small-text">{provider.detail}</div>
+      </div>
+      {provider.ready ? <span className="badge ok">可用</span> : <span className="badge">未就绪</span>}
+      <label className="row small-text">
+        <input type="radio" name={name} disabled={!provider.ready} checked={chosen === provider.id} onChange={choose} /> {label}
+      </label>
+    </div>
+  );
+  return (
+    <>
+      <h2>配音引擎</h2>
+      <p className="muted">配音与 AI 的 speech_synthesize 工具使用这里的引擎。本地模型完全离线运行，按需下载，不随程序内置。</p>
+      {data.providers.map((provider) =>
+        providerRow(provider, "default-provider", data.defaultProvider, () => run(() => patch("/api/speech/settings", { defaultProvider: provider.id }).then(load)), "默认"),
+      )}
+      <h2>本地配音模型</h2>
+      {data.models.map(modelRow)}
       <h2>OpenAI 兼容语音接口</h2>
       <p className="muted">OpenAI TTS，或任何提供 /v1/audio/speech 的服务（例如自行部署的 CosyVoice、Kokoro-FastAPI）。</p>
       <div className="field-grid">
@@ -485,6 +500,59 @@ function SpeechSettings() {
                     .map((item) => item.trim())
                     .filter(Boolean),
                 },
+              }).then(load),
+            "已保存",
+          )
+        }
+      >
+        保存
+      </button>
+      <h2>语音输入</h2>
+      <p className="muted">
+        聊天输入框的麦克风按钮：说的话转成文字放进输入框，改好再发送。本地模型在服务器上离线识别，边说边出字；识别接口在每句说完后出字。
+      </p>
+      {data.recognition.providers.map((provider) =>
+        providerRow(
+          provider,
+          "recognition-provider",
+          data.recognition.provider,
+          () => run(() => patch("/api/speech/settings", { recognition: { provider: provider.id } }).then(load)),
+          "使用",
+        ),
+      )}
+      {data.recognition.models.map(modelRow)}
+      <p className="muted">OpenAI 兼容识别接口：OpenAI，或任何提供 /v1/audio/transcriptions 的服务（例如 Groq、SiliconFlow、自行部署的 Whisper）。</p>
+      <div className="field-grid">
+        <label className="field">
+          <span>接口地址</span>
+          <input
+            className="input"
+            placeholder="https://api.openai.com/v1"
+            value={recognizer.baseUrl}
+            onChange={(event) => setRecognizer({ ...recognizer, baseUrl: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>API Key{data.recognition.openai.hasKey ? "（已设置）" : ""}</span>
+          <input className="input" type="password" value={recognizer.apiKey} onChange={(event) => setRecognizer({ ...recognizer, apiKey: event.target.value })} />
+        </label>
+        <label className="field">
+          <span>模型</span>
+          <input
+            className="input"
+            placeholder="gpt-4o-mini-transcribe"
+            value={recognizer.model}
+            onChange={(event) => setRecognizer({ ...recognizer, model: event.target.value })}
+          />
+        </label>
+      </div>
+      <button
+        className="btn"
+        onClick={() =>
+          run(
+            () =>
+              patch("/api/speech/settings", {
+                recognition: { openai: { baseUrl: recognizer.baseUrl, apiKey: recognizer.apiKey || undefined, model: recognizer.model } },
               }).then(load),
             "已保存",
           )
