@@ -9,8 +9,6 @@ export interface LibraryInfo {
   about?: string;
   files: number;
   size?: number;
-  /** Experience libraries: how many documents are detailed ones (详细/). */
-  details?: number;
   /** How many works link it, and when the latest of them changed. */
   works?: number;
   usedAt?: string | null;
@@ -66,11 +64,11 @@ export function libraryMatches(library: LibraryInfo, query: string) {
 }
 
 /** What a library row says about it: files and their size (or documents), and how many works use it. */
-export function libraryFacts(kind: LibraryKind, library: Pick<LibraryInfo, "files" | "size" | "works" | "details">) {
+export function libraryFacts(kind: LibraryKind, library: Pick<LibraryInfo, "files" | "size" | "works">) {
   return [
     kind === "materials"
       ? `${library.files} 个文件${library.size ? ` · ${formatBytes(library.size)}` : ""}`
-      : `${library.files} 篇${library.details ? `（详细 ${library.details} 篇）` : ""}`,
+      : `${library.files} 篇`,
     library.works ? `${library.works} 个作品在用` : "",
   ]
     .filter(Boolean)

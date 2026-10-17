@@ -55,10 +55,6 @@ export function describeDocument(file, content) {
   return { title, summary: summary.length > 80 ? summary.slice(0, 79) + "…" : summary };
 }
 
-/** Where a library may keep its detailed documents (details, examples, data), apart from its conclusions. */
-export const DETAILS = "详细";
-export const isDetail = (file) => file === DETAILS || file.startsWith(DETAILS + "/");
-
 /** The Markdown documents of a library folder, README first. */
 export function readLibrary(root) {
   const documents = tree(root)
@@ -83,13 +79,11 @@ export function experienceKnown(libraries) {
 /** A library as experience_read shows it without a path: its README in full and the list of its documents. */
 export function libraryOverview(library, documents) {
   const readme = documents.find((doc) => doc.path === "README.md");
-  const others = documents.filter((doc) => doc.path !== "README.md" && !isDetail(doc.path));
-  const details = documents.filter((doc) => isDetail(doc.path));
+  const others = documents.filter((doc) => doc.path !== "README.md");
   return [
     `## 经验库「${library.title}」（id ${library.id}）`,
     readme ? `### README.md\n\n${quote(readme.content)}` : "",
     others.length ? `### 文档\n\n${others.map(indexLine).join("\n")}` : "",
-    details.length ? `### ${DETAILS}/\n\n${details.map(indexLine).join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");

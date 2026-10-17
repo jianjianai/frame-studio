@@ -115,7 +115,7 @@ describe("many libraries", () => {
     const brief = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
     expect(Buffer.byteLength(brief)).toBeLessThan(4500);
     expect(brief).toContain("- 素材库：本作品还没有引用素材库；作品库里共 60 个。");
-    expect(brief).toContain("- 经验库：本作品没有关联；作品库里有 40 个（experience_list）。");
+    expect(brief).toContain("- 经验库：本作品没有关联。");
     // However many libraries a work links, one line names them.
     await works.update(work, { materials: listedIds(await call("/api/repos/local/materials/libraries")) });
     works.writeBrief(work);

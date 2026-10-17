@@ -49,19 +49,19 @@ describe("session brief and per-message context", () => {
     expect(Object.values(seen[library.id].docs).every((entry) => entry.level === "index")).toBe(true);
   });
 
-  it("shows a library's README in full and every document by title, details apart", () => {
-    const details = "一个作品的完整经过和数据。".repeat(800);
+  it("shows a library's README in full and every document by title, however the AI organized it", () => {
+    const long = "一个作品的完整经过和数据。".repeat(800);
     const root = makeLibrary({
       "README.md": "# 知识类视频\n\n偏好：暖色",
       "开场.md": "# 开场\n\n前 2 秒抛出问题",
-      "详细/开场.md": `# 开场的例子\n\n三部作品的对比\n\n${details}`,
+      "例子/开场.md": `# 开场的例子\n\n三部作品的对比\n\n${long}`,
     });
     const text = libraryOverview(library, readLibrary(root));
     // Byte-identical to the file, so the AI can copy text into an exact-match edit.
     expect(text).toContain("### README.md\n\n```markdown\n# 知识类视频\n\n偏好：暖色\n```");
     expect(text).toContain("### 文档\n\n- `开场.md` 开场：前 2 秒抛出问题");
-    expect(text).toContain("### 详细/\n\n- `详细/开场.md` 开场的例子：三部作品的对比");
-    expect(text).not.toContain(details.slice(0, 40));
+    expect(text).toContain("- `例子/开场.md` 开场的例子：三部作品的对比");
+    expect(text).not.toContain(long.slice(0, 40));
   });
 
   it("says nothing when nothing changed, and only what others changed otherwise", () => {
@@ -181,12 +181,12 @@ describe("session brief and per-message context", () => {
 });
 
 describe("session brief", () => {
-  it("tells the agent to answer in the user's language and to edit with its own tools", async () => {
+  it("tells the agent to answer in the user's language, and little else", async () => {
     const { platformInstructions } = await import("../server/templates.mjs");
     const brief = platformInstructions();
-    // Claude answered a Chinese request in English; Bash edits made the user approve each one.
+    // Claude answered a Chinese request in English.
     expect(brief).toContain("和用户交流用用户的语言（默认简体中文）");
-    expect(brief).toContain("不要用 sed -i、cat >、tee 这类命令");
+    expect(brief).toContain("一篇文档太长、不好读也不好找时，按主题拆成几篇");
     // Basic rules only: the rest is in frame_guide and the tools' own descriptions.
     expect(Buffer.byteLength(brief)).toBeLessThan(4000);
   });

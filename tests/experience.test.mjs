@@ -39,7 +39,7 @@ describe("experience libraries", () => {
     expect((await tool("experience_read", { repo: "local" })).body.error.code).toBe("LIBRARY_REQUIRED");
     const overview = await tool("experience_read", { work: work.id });
     expect(overview.body.text).toContain("经验库「知识类视频」");
-    expect(overview.body.text).toContain("## 用户偏好");
+    expect(overview.body.text).toContain("类作品的制作经验");
 
     const written = await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "开场.md", content: "# 开场\n\n- 前 3 秒给出问题\n" }] });
     expect(written.status).toBe(200);

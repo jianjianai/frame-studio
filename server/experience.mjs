@@ -5,7 +5,7 @@ import { tree, readText, writeText, removePath, movePath } from "./files.mjs";
 import { readJson } from "./http.mjs";
 import { problem, notFound, confined } from "./util.mjs";
 import { workArg, repoArg, asJson } from "./tools/registry.mjs";
-import { readLibrary, experienceKnown, libraryOverview, describeDocument, isDetail } from "./ai/context.mjs";
+import { readLibrary, experienceKnown, libraryOverview, describeDocument } from "./ai/context.mjs";
 import { EXPERIENCE_INBOX } from "./works.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./tools/file-ops.mjs";
 import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST, trashed } from "./libraries.mjs";
@@ -25,14 +25,6 @@ const templateLead = (title) => `「${title}」类作品的制作经验。关联
 const libraryReadme = (title) => `# ${title}
 
 ${templateLead(title)}
-
-## 用户偏好
-
-- （用户明确提出过的喜好和要求）
-
-## 通用做法
-
-- （这类作品都适用的结构、节奏、风格。按主题展开的经验另建文档，例如“开场.md”“配色与字体.md”）
 `;
 
 /** A version's message from what the AI said it recorded (else the files it changed). */
@@ -71,7 +63,6 @@ export class Experience {
           id,
           title,
           files: files.length,
-          details: files.filter((item) => isDetail(item.path)).length,
           about: readmeLead(path.join(dir, id, "README.md"), templateLead(title)),
         };
         if (documents) {
@@ -287,7 +278,6 @@ export class Experience {
   brief(work) {
     const { missing } = this.linkedSync(work);
     const current = this.current(work);
-    const total = this.countSync(work.repo);
     const inbox = this.inbox(work);
     const entries = (inbox.match(/^##\s+\S/gm) ?? []).length;
     const lines = [
@@ -295,8 +285,8 @@ export class Experience {
         ? `- 记下但还没整理进经验库的经验：\`projects/${work.slug}/${EXPERIENCE_INBOX}\`（${entries ? `${entries} 条` : `${Math.max(1, Math.round(Buffer.byteLength(inbox) / 1024))} KB`}）。`
         : `- 可以复用、但没有合适经验库的经验记在 \`projects/${work.slug}/${EXPERIENCE_INBOX}\`（还没有）。`,
       current.length
-        ? `- 经验库：${current.map((item) => `「${item.library.title}」${item.library.title !== item.library.id ? `（id ${item.library.id}）` : ""}`).join("、")}，需要时用 experience_read 读${total > current.length ? `；作品库里还有 ${total - current.length} 个没有关联（experience_list）` : ""}。`
-        : `- 经验库：本作品没有关联${total ? `；作品库里有 ${total} 个（experience_list）` : ""}。`,
+        ? `- 经验库：${current.map((item) => `「${item.library.title}」${item.library.title !== item.library.id ? `（id ${item.library.id}）` : ""}`).join("、")}，需要时用 experience_read 读。`
+        : "- 经验库：本作品没有关联。",
     ];
     const gone = this.goneText(work, missing);
     if (gone) lines.push(`- ${gone}`);
@@ -327,7 +317,7 @@ export class Experience {
       libraries: current.map(({ library, documents }) => ({
         library: library.id,
         title: library.title,
-        documents: documents.map(({ path: file, title, summary, chars }) => ({ path: file, title, summary, chars, ...(isDetail(file) ? { detail: true } : {}) })),
+        documents: documents.map(({ path: file, title, summary, chars }) => ({ path: file, title, summary, chars })),
       })),
       missing,
       note: "需要的文档用 experience_read 读",
@@ -491,7 +481,7 @@ export function experiencePlugin(services) {
           data: current.map(({ library, documents }) => ({
             library: library.id,
             title: library.title,
-            documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary, ...(isDetail(doc) ? { detail: true } : {}) })),
+            documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary })),
           })),
           text: current.map(({ library, documents }) => libraryOverview(library, documents)).join("\n\n"),
         };
@@ -506,7 +496,7 @@ export function experiencePlugin(services) {
       const readme = documents.find((doc) => doc.path === "README.md");
       if (readme) noteSeen(ctx, library, readme.path, readme.hash, "content");
       return {
-        data: { library: library.id, title: library.title, documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary, ...(isDetail(doc) ? { detail: true } : {}) })) },
+        data: { library: library.id, title: library.title, documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary })) },
         text: libraryOverview({ id: library.id, title: library.title }, documents),
       };
     },
@@ -662,7 +652,7 @@ export function experiencePlugin(services) {
     published: true, // writes outside the work: allowed on a published (view-only) work
     title: "整理经验库",
     description:
-      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete、move（改名、移动）。怎么组织由你决定（例如结论简短地放在前面，细节、例子放 详细/）。note 一句话说明这次记了什么：对话中每轮结束时改过的经验库各自自动保存为一个版本，note 就是版本说明；没有对话时写入后立即保存。失败的逐项说明原因，只需重试失败的。还没有作品时用 repo 指定作品库，library 写明经验库。",
+      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete、move（改名、移动）。怎么组织由你决定。note 一句话说明这次记了什么：对话中每轮结束时改过的经验库各自自动保存为一个版本，note 就是版本说明；没有对话时写入后立即保存。失败的逐项说明原因，只需重试失败的。还没有作品时用 repo 指定作品库，library 写明经验库。",
     destructive: true,
     input: {
       work: workArg,
