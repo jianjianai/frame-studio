@@ -740,8 +740,23 @@
   text-align: left;
   cursor: pointer;
 }
-.command-list button:hover {
+.command-list button:hover,
+.command-list button.selected {
   background: var(--bg-hover);
+}
+.command-list button svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--fg-muted);
+}
+.command-list button strong {
+  flex: none;
+  white-space: nowrap;
+}
+/* A skill a message names with @<name>. */
+.skill-mention {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .permission-card .btn {

@@ -190,7 +190,7 @@ export function SkillsView() {
         onClick: () => openSkill(`${skill.name}/SKILL.md`),
         disabled: !skill.files.some((file) => file.path === "SKILL.md"),
       },
-      { label: "在 AI 聊天中使用", icon: <MessageSquarePlus size={14} />, onClick: () => insertPrompt(`/${skill.name} `) },
+      { label: "在 AI 聊天中点名使用", icon: <MessageSquarePlus size={14} />, onClick: () => insertPrompt(`@${skill.name} `) },
       { label: "下载", icon: <Download size={14} />, onClick: () => download(skill.name) },
       "separator",
       { label: "删除技能", icon: <Trash2 size={14} />, danger: true, onClick: () => removeSkill(skill.name) },
@@ -265,7 +265,7 @@ export function SkillsView() {
       {busy && <div className="view-progress" />}
       {versioned && <RemoteBar base={`${base}/remote`} repo={work.repo} scope={`skills-${work.repo}`} what="技能" onSettled={() => void load()} />}
       <p className="view-hint">
-        这个作品库的 AI 技能，库里的所有作品共用，其他作品库看不到。AI 按每个技能的说明自己决定什么时候用，也可以在聊天里输入 / 和技能名直接调用。
+        这个作品库的 AI 技能，库里的所有作品共用，其他作品库看不到。AI 按每个技能的说明自己决定什么时候用；要指定用哪个，在聊天里输入 @ 选技能。
       </p>
       <div className="tree">
         {(skills ?? []).map((skill) => (
@@ -273,7 +273,7 @@ export function SkillsView() {
             <div
               className="tree-row skill-row"
               style={{ paddingLeft: 8 }}
-              title={`/${skill.name}${skill.title !== skill.name ? `（SKILL.md 里叫 ${skill.title}）` : ""}\n${skill.description}${skill.problem ? `\n⚠ ${skill.problem}` : ""}`}
+              title={`@${skill.name}${skill.title !== skill.name ? `（SKILL.md 里叫 ${skill.title}）` : ""}\n${skill.description}${skill.problem ? `\n⚠ ${skill.problem}` : ""}`}
               onClick={() => flip(skill.name)}
               onContextMenu={(event) => skillMenu(event, skill)}
             >

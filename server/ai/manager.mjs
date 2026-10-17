@@ -12,6 +12,7 @@ import { formatTime } from "../render.mjs";
 import { experienceDelta, filesNotice, noteSeen, rebaseSeen, referencedExperience, selectionText, snapshotFiles } from "./context.mjs";
 import { lastReceived } from "./heartbeat.mjs";
 import { ClaudeGoalReader, CODEX_STATUSES, goalCommand, goalOutput, hookCap } from "./goal.mjs";
+import { mentionedSkills } from "../skills.mjs";
 
 const IDLE_MS = 15 * 60 * 1000;
 const HEARTBEAT_MS = 3000;
@@ -1205,6 +1206,15 @@ export class AiManager {
     const images = message.attachments.filter((item) => item.type === "image").length;
     if (images) references.push(`${images} 张图片（用户直接发给你的，见附图，不是作品里的画面）`);
     if (references.length) lines.push("用户引用：" + references.join("；"));
+    // Skills the user picked with @<name>: which one to use is theirs to say.
+    const skills = mentionedSkills(message.text, services.skills?.namesSync(work.repo) ?? []);
+    if (skills.length) {
+      const codex = session.process?.agent === "codex";
+      const where = (name) => `${codex ? ".agents" : ".claude"}/skills/${name}/SKILL.md`;
+      lines.push(
+        `用户点名要用技能 ${skills.map((name) => `${name}（${where(name)}）`).join("、")}：${codex ? "先读它的 SKILL.md" : "先用 Skill 工具加载"}，按它的说明做。`,
+      );
+    }
     // Published: the files are read-only and FRAME's changing tools refuse; talking it over and the experience library are fine.
     if (services.works.published(work))
       lines.push(

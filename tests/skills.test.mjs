@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
 import { git } from "../server/git.mjs";
-import { frontmatter, readUpload } from "../server/skills.mjs";
+import { frontmatter, mentionedSkills, readUpload } from "../server/skills.mjs";
 import { platformInstructions } from "../server/templates.mjs";
 
 const skillMd = (name, description) => `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`;
@@ -163,6 +163,24 @@ describe("the repository's skills in the studio and for the AI", () => {
     const before = history.find((version) => version.message === "上传技能：titles");
     expect((await call("/api/repos/local/skills/revert", { method: "POST", body: { commit: before.commit } })).status).toBe(200);
     expect((await call("/api/repos/local/skills")).body.skills.map((skill) => skill.name)).toEqual(["titles", "节奏"]);
+  });
+
+  it("tells the AI which skills the user named with @<name>", async () => {
+    expect(mentionedSkills("用 @节奏 剪，再看 @titles。还有 @没有 和 a@titles @节奏", ["节奏", "titles"])).toEqual(["节奏", "titles"]);
+    const created = (await call("/api/works", { method: "POST", body: { title: "点名" } })).body;
+    const work = await app.services.openWork(created.id, "local");
+    const { ai } = app.services;
+    const session = { meta: { id: "s-skills", work: work.id, repo: "local", queue: [], status: "idle", commands: [] } };
+    ai.sessions.set(session.meta.id, session);
+    const context = (text) => ai.turnPrompt(session, { text, attachments: [], view: null }, work);
+    const named = context("@节奏 帮我卡点");
+    expect(named[0].text).toBe("@节奏 帮我卡点");
+    expect(named.at(-1).text).toContain("用户点名要用技能 节奏（.claude/skills/节奏/SKILL.md）：先用 Skill 工具加载，按它的说明做。");
+    expect(context("帮我卡点，@不存在").at(-1).text).not.toContain("点名");
+    // Codex finds them under .agents/ and reads them itself.
+    session.process = { agent: "codex" };
+    expect(context("@titles 做标题").at(-1).text).toContain("用户点名要用技能 titles（.agents/skills/titles/SKILL.md）：先读它的 SKILL.md");
+    ai.sessions.delete(session.meta.id);
   });
 
   it("asks the AI to have the user agree before changing them", () => {

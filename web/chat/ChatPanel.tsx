@@ -32,6 +32,7 @@ import {
   ChevronLeft,
   Shapes,
   Target,
+  Puzzle,
 } from "lucide-react";
 import { api, del, patch, formatTime, sampleName, timeAgo, useServerEvent } from "../lib/api";
 import { useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
@@ -43,6 +44,7 @@ import { uploadBlobs } from "../views/upload";
 import { readImage } from "./images";
 import { insertPrompt, newPromptId, usePrompts, type PromptNode } from "../lib/prompts";
 import { COMMAND_TEXT, GoalBar, GoalCommandMessage, GoalTip, goalCommand, type GoalAction, type GoalState } from "./Goal";
+import { MentionText, SkillMenu, SkillNames, matchSkills, mentionAt, useRepoSkills, type SkillChoice } from "./SkillMention";
 import "./chat.css";
 
 export interface ChatHandle {
@@ -126,6 +128,10 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const [defaultModes, setDefaultModes] = useState<Record<string, string>>({});
   const [profileId, setProfileId] = usePersistent<string>("ai-profile", "");
   const [text, setText] = useState("");
+  // The caret, for an @<name> being typed; Esc shuts the skill menu until the text changes.
+  const [caret, setCaret] = useState(0);
+  const [mentionShut, setMentionShut] = useState<string | null>(null);
+  const [mentionIndex, setMentionIndex] = useState(0);
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [accounts, setAccounts] = useState<Record<string, boolean | undefined>>({});
@@ -491,6 +497,35 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     }
   };
   const commands = text.startsWith("/") && !text.includes(" ") ? (session?.commands ?? []).filter((command) => command.name.startsWith(text.slice(1))) : [];
+  // @<name> picks a skill of the work's repository for this message (any AI; server: turnPrompt).
+  const skills = useRepoSkills(work.repo);
+  const skillNames = useMemo(() => skills.map((skill) => skill.name), [skills]);
+  const mention = !dictation.active && mentionShut !== text ? mentionAt(text, caret) : null;
+  const mentionChoices = mention ? matchSkills(skills, mention.query).slice(0, 8) : [];
+  const mentionActive = Math.min(mentionIndex, Math.max(0, mentionChoices.length - 1));
+  const placeCaret = (at: number) => {
+    setCaret(at);
+    setTimeout(() => {
+      input.current?.focus();
+      input.current?.setSelectionRange(at, at);
+    }, 0);
+  };
+  const pickSkill = (skill: SkillChoice) => {
+    if (!mention) return;
+    const before = `${text.slice(0, mention.start)}@${skill.name} `;
+    setText(before + text.slice(caret).replace(/^[^\S\n]+/, ""));
+    setMentionIndex(0);
+    placeCaret(before.length);
+  };
+  /** The toolbar's button: an @ at the caret, which opens the skill menu. */
+  const startMention = () => {
+    const at = input.current?.selectionStart ?? text.length;
+    const before = text.slice(0, at);
+    const insert = before && !/\s$/.test(before) ? " @" : "@";
+    setText(before + insert + text.slice(at));
+    setMentionShut(null);
+    placeCaret(at + insert.length);
+  };
   const goalAction = (action: GoalAction) => {
     if (!session) return;
     stick.current = true;
@@ -511,6 +546,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
   const typingGoal = goalCommand(text)?.action === "set";
 
   return (
+    <SkillNames.Provider value={skillNames}>
     <div className="chat">
       <div className="chat-head">
         <button className="chat-title" data-history-toggle onClick={() => setShowHistory(!showHistory)} title="对话记录">
@@ -752,6 +788,20 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
             })}
           </div>
         )}
+        {/* Shut when nothing fits what follows the @ (an @ that is not for a skill). */}
+        {mention && (mentionChoices.length > 0 || (!skills.length && !mention.query)) && (
+          <SkillMenu
+            choices={mentionChoices}
+            active={mentionActive}
+            empty={!skills.length}
+            onPick={pickSkill}
+            onHover={setMentionIndex}
+            onManage={() => {
+              setMentionShut(text);
+              showView("skills");
+            }}
+          />
+        )}
         {attachments.length > 0 && (
           <div className="attachments">
             {attachments.map((attachment, index) => (
@@ -775,7 +825,12 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
           }
           value={text}
           readOnly={dictation.active}
-          onChange={(event) => setText(event.target.value)}
+          onChange={(event) => {
+            setText(event.target.value);
+            setCaret(event.target.selectionStart);
+            setMentionIndex(0);
+          }}
+          onSelect={(event) => setCaret(event.currentTarget.selectionStart)}
           onKeyDown={(event) => {
             // While speaking, the text is the recognizer's: Enter finishes, Esc throws it away.
             if (dictation.active) {
@@ -783,6 +838,25 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
               if (event.key === "Enter") dictation.stop();
               if (event.key === "Escape") dictation.cancel();
               return;
+            }
+            // The skill menu: arrows choose, Enter or Tab picks, Esc shuts it.
+            if (mention && !event.nativeEvent.isComposing) {
+              const count = mentionChoices.length;
+              if ((event.key === "ArrowDown" || event.key === "ArrowUp") && count) {
+                event.preventDefault();
+                setMentionIndex((mentionActive + (event.key === "ArrowDown" ? 1 : count - 1)) % count);
+                return;
+              }
+              if ((event.key === "Enter" || event.key === "Tab") && count) {
+                event.preventDefault();
+                pickSkill(mentionChoices[mentionActive]);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setMentionShut(text);
+                return;
+              }
             }
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
               event.preventDefault();
@@ -833,6 +907,9 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
             }}
           >
             <Paperclip size={15} />
+          </button>
+          <button className="icon-btn" title="点名要用的技能（也可以直接输入 @）" onClick={startMention}>
+            <Puzzle size={15} />
           </button>
           <PromptPicker draft={text} onPick={insertText} onManage={() => showView("prompts")} />
           <span className="grow" />
@@ -914,6 +991,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
       {menu}
       <CacheOptions session={session} />
     </div>
+    </SkillNames.Provider>
   );
 }
 
@@ -1089,7 +1167,9 @@ function UserMessage({
         </div>
       )}
       {draft === null ? (
-        <div className="user-text">{text}</div>
+        <div className="user-text">
+          <MentionText text={text} />
+        </div>
       ) : (
         <div className="user-edit">
           <textarea

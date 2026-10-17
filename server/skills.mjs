@@ -116,6 +116,16 @@ export function readUpload(fileName, data) {
   return skills;
 }
 
+/** The skills a message names with @<name> (at its start or after a space), in order, once each. */
+export function mentionedSkills(text, names) {
+  const found = [];
+  for (const match of String(text || "").matchAll(/(?:^|\s)@([\p{L}\p{N}][\p{L}\p{N}._-]*)/gu)) {
+    const name = match[1].replace(/\.+$/, "");
+    if (names.includes(name) && !found.includes(name)) found.push(name);
+  }
+  return found;
+}
+
 export class Skills {
   constructor(services) {
     this.services = services;
@@ -183,6 +193,19 @@ export class Skills {
   async scopeIfAny(repo) {
     const dir = await this.ready(repo);
     return this.isCheckout(dir) ? this.handle(repo, dir) : null;
+  }
+
+  /** The names of the skills (folders with a SKILL.md), read at once (for a turn's prompt). */
+  namesSync(repo) {
+    const dir = path.join(this.services.config.dirs.skills, repo);
+    try {
+      return fs
+        .readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith(".") && fs.existsSync(path.join(dir, entry.name, SKILL_FILE)))
+        .map((entry) => entry.name);
+    } catch {
+      return [];
+    }
   }
 
   /** The skill folders, each with what its SKILL.md says and its files. */
