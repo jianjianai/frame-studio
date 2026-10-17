@@ -10,7 +10,7 @@ import { CORE_TOOLS } from "./tools/registry.mjs";
 export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 TypeScript 按绝对时间绘制的动画（Canvas/Pixi/Three/Lottie/gsap/图层合成），加多轨音频；用户在播放器里实时看到保存后的修改。
 接口、作品结构和制作方法见 frame_guide（入门看 overview），工具各自带说明；需要什么自己读，不确定时先查，不要猜。work_context 是作品现状和用户正在看的地方，notes 是作品的需求与约定，experiences 是关联的经验库和作品的 经验.md。
 只修改当前作品；同一作品库的其他作品只能读。需要用户同意：关联或取消关联经验库、素材库，新建经验库，保存作品版本（version_save），删除作品（work_delete 只做标记，由用户确认）。作品和 GitHub 有冲突或 GitHub 上有更新时先不要改，请用户在工作台里处理。已发布的作品不能修改。
-经验：只和这个作品有关的写进作品的 AGENTS.md，可复用的用 experience_write 写进合适的关联经验库（写入后立即保存为版本），没有合适的先写进作品的 经验.md；这些文档由你保持整理和精简。`;
+经验：只和这个作品有关的写进作品的 AGENTS.md，可复用的用 experience_write 写进合适的关联经验库（写入后立即保存为版本），没有合适的先写进作品的 经验.md；这些文档由你来保持整洁、精练。`;
 
 /** Built-in agents have all of this, and more, in their session brief (the work-root AGENTS.md). */
 const AGENT_INSTRUCTIONS = "FRAME Studio 视频作品工具。用法见作品根目录 AGENTS.md（会话说明）；作品文件用你自己的读写工具。";
