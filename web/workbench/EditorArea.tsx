@@ -202,7 +202,8 @@ const docIcon = (doc: Doc) =>
 const labelOf = (doc: Doc) => {
   const label = documentLabel(doc);
   const selected = doc.selection?.slice(0, 8).join("、");
-  return selected ? `${label}（SVG 编辑器里选中了 ${selected}${(doc.selection?.length ?? 0) > 8 ? " 等" : ""}）` : label;
+  // Only while something is selected in it does the AI hear of the SVG editor (and where to read about it).
+  return selected ? `${label}（SVG 编辑器里选中了 ${selected}${(doc.selection?.length ?? 0) > 8 ? " 等" : ""}；一起改 SVG 见 frame_guide svg）` : label;
 };
 const documentLabel = (doc: Doc) =>
   doc.kind === "preview"
