@@ -340,6 +340,8 @@
   min-width: 0;
   overflow-x: auto;
   overflow-y: hidden;
+  /* Page buttons show that tabs are cut off. */
+  scrollbar-width: none;
 }
 .editor-tabs-fill {
   flex: 1;
@@ -378,18 +380,37 @@
   }
 }
 .editor-tabs::-webkit-scrollbar {
-  height: 3px;
+  display: none;
 }
+.editor-paging {
+  display: flex;
+  align-items: center;
+  padding: 0 2px;
+  border-left: 1px solid var(--border);
+  flex: none;
+}
+/* Crowded tabs shrink, cutting long titles first; the active one and the stage keep theirs. */
 .editor-tab {
   display: flex;
   align-items: center;
   gap: 6px;
-  max-width: 220px;
+  min-width: 120px;
+  max-width: 200px;
   padding: 0 6px 0 12px;
   border-right: 1px solid var(--border);
   color: var(--fg-muted);
   cursor: pointer;
   white-space: nowrap;
+  flex: 0 1 auto;
+}
+.editor-tab.active {
+  flex-shrink: 0;
+}
+.editor-tab.stage {
+  min-width: 0;
+  flex-shrink: 0;
+}
+.editor-tab > svg {
   flex: none;
 }
 .editor-tab.is-preview .ellipsis {
@@ -412,6 +433,7 @@
 .tab-close {
   display: grid;
   place-items: center;
+  flex: none;
   width: 20px;
   height: 20px;
   border: 0;
@@ -2410,10 +2432,6 @@ a.btn.disabled {
 }
 /* Fingers get room to grab without anything looking different: wider invisible hit areas. */
 @media (pointer: coarse) {
-  .editor-tabs {
-    overflow-x: auto;
-    scrollbar-width: none;
-  }
   .sash.vertical::after {
     inset: 0 -10px;
   }

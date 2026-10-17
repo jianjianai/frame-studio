@@ -34,6 +34,8 @@ import {
   PenTool,
   Code2,
   Save,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { api, ApiError, formatTime, sampleName, workPath, experiencePath, useServerEvent, materialsPath, skillsPath } from "../lib/api";
 import { reviewsPath } from "../lib/reviews";
@@ -1109,6 +1111,47 @@ function GroupView({
     }
     return group.editors.length;
   };
+  // Tabs that do not fit, even shrunk, are paged through (or scrolled with the wheel or a finger).
+  const [paging, setPaging] = useState<{ back: boolean; forward: boolean } | null>(null);
+  const measure = useCallback(() => {
+    const bar = tabs.current;
+    if (!bar) return;
+    const over = bar.scrollWidth > bar.clientWidth + 1;
+    const box = bar.getBoundingClientRect();
+    const items = bar.querySelectorAll<HTMLElement>("[data-index]");
+    const back = (items[0]?.getBoundingClientRect().left ?? 0) < box.left - 1;
+    const forward = (items[items.length - 1]?.getBoundingClientRect().right ?? 0) > box.right + 1;
+    setPaging((current) => (!over ? null : current?.back === back && current.forward === forward ? current : { back, forward }));
+  }, []);
+  useLayoutEffect(measure);
+  useEffect(() => {
+    const bar = tabs.current;
+    if (!bar || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, [measure]);
+  // The active tab comes into sight when it changes, is opened again, or the page buttons take room.
+  useLayoutEffect(() => {
+    const bar = tabs.current;
+    const item = bar?.querySelector<HTMLElement>(`[data-editor="${group.active}"]`);
+    if (!bar || !item) return;
+    const box = bar.getBoundingClientRect();
+    const rect = item.getBoundingClientRect();
+    if (rect.left < box.left) bar.scrollLeft += rect.left - box.left;
+    else if (rect.right > box.right) bar.scrollLeft += Math.min(rect.right - box.right, rect.left - box.left);
+  }, [group.active, group.editors, paging !== null]);
+  /** The next page: the first tab cut off at that side moves to the other side. */
+  const page = (direction: 1 | -1) => {
+    const bar = tabs.current;
+    if (!bar) return;
+    const box = bar.getBoundingClientRect();
+    const rects = [...bar.querySelectorAll<HTMLElement>("[data-index]")].map((item) => item.getBoundingClientRect());
+    const cut = direction > 0 ? rects.find((rect) => rect.right > box.right + 1) : rects.reverse().find((rect) => rect.left < box.left - 1);
+    const offset = cut ? (direction > 0 ? cut.left - box.left : cut.right - box.right) : 0;
+    // A tab wider than the bar turns a whole page.
+    bar.scrollBy({ left: offset * direction > 1 ? offset : direction * box.width });
+  };
   return (
     <div className={`editor-group ${focused ? "focused" : ""}`} data-group={group.id} onPointerDownCapture={onFocus}>
       <div className="editor-tabbar">
@@ -1132,6 +1175,11 @@ function GroupView({
             if (drag) onDrop(drag, indexAt(event.clientX), event.ctrlKey || event.altKey);
             setDropIndex(null);
           }}
+          onScroll={measure}
+          onWheel={(event) => {
+            // A mouse wheel turns the tabs sideways.
+            if (!event.deltaX && event.deltaY) event.currentTarget.scrollLeft += event.deltaY * (event.deltaMode === 1 ? 20 : 1);
+          }}
         >
           {group.editors.map((editor, index) => {
             const doc = docs[editor.key];
@@ -1141,11 +1189,12 @@ function GroupView({
               <div
                 key={editor.id}
                 data-index={index}
+                data-editor={editor.id}
                 role="tab"
                 aria-selected={editor.id === group.active}
-                className={`editor-tab ${editor.id === group.active ? "active" : ""} ${editor.preview ? "is-preview" : ""} ${dropIndex === index ? "drop-before" : ""} ${
-                  drag?.type === "editor" && drag.editor === editor.id ? "dragging" : ""
-                }`}
+                className={`editor-tab ${editor.id === group.active ? "active" : ""} ${editor.preview ? "is-preview" : ""} ${isPreview ? "stage" : ""} ${
+                  dropIndex === index ? "drop-before" : ""
+                } ${drag?.type === "editor" && drag.editor === editor.id ? "dragging" : ""}`}
                 title={tooltipOf(doc, editor)}
                 draggable={draggable}
                 onDragStart={(event) => {
@@ -1179,6 +1228,24 @@ function GroupView({
           })}
           <div className="editor-tabs-fill" />
         </div>
+        {paging && (
+          <div className="editor-paging">
+            {([-1, 1] as const).map((direction) => (
+              <button
+                key={direction}
+                className="icon-btn"
+                title={direction < 0 ? "上一页标签" : "下一页标签"}
+                aria-label={direction < 0 ? "上一页标签" : "下一页标签"}
+                disabled={direction < 0 ? !paging.back : !paging.forward}
+                onClick={() => page(direction)}
+                // A dragged tab held over the button scrolls the tabs toward that side.
+                onDragOver={() => drag && tabs.current?.scrollBy({ left: direction * 24 })}
+              >
+                {direction < 0 ? <ChevronLeft size={15} /> : <ChevronRight size={15} />}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="editor-actions">
           {sync}
           <button
