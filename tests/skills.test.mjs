@@ -193,6 +193,23 @@ describe("the repository's skills in the studio and for the AI", () => {
     ai.sessions.delete(session.meta.id);
   });
 
+  it("offers a new conversation the commands its AI offered last, before the AI has started", async () => {
+    const { ai } = app.services;
+    const created = (await call("/api/works", { method: "POST", body: { title: "新对话" } })).body;
+    const work = await app.services.openWork(created.id, "local");
+    const meta = { work: work.id, repo: "local", profile: "claude-account", queue: [], status: "idle" };
+    const older = { meta: { ...meta, id: "s-older", updatedAt: "2026-10-17T00:00:00.000Z", commands: [{ name: "init", description: "写 CLAUDE.md" }] } };
+    const fresh = { meta: { ...meta, id: "s-fresh", updatedAt: "2026-10-17T01:00:00.000Z", commands: [] } };
+    ai.sessions.set(older.meta.id, older);
+    ai.sessions.set(fresh.meta.id, fresh);
+    expect((await call("/api/ai/profiles/claude-account/commands")).body).toEqual([{ name: "init", description: "写 CLAUDE.md" }]);
+    // Sent as typed, not with the work's state appended as its arguments.
+    expect(ai.turnPrompt(fresh, { text: "/init", attachments: [], view: null }, work)).toEqual([{ type: "text", text: "/init" }]);
+    ai.sessions.delete(older.meta.id);
+    ai.sessions.delete(fresh.meta.id);
+    expect((await call("/api/ai/profiles/claude-account/commands")).body).toEqual([]);
+  });
+
   it("asks the AI to have the user agree before changing them", () => {
     expect(platformInstructions()).toContain("新建、修改或删除技能");
   });

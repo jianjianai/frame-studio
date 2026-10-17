@@ -178,6 +178,20 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     );
   }, [session, profile, profileOptions]);
   const newChatOptions = profile ? (profileOptions[profile.id]?.length ? profileOptions[profile.id] : cachedOptions(profile.id)) : [];
+  // The same for the / menu: the AI sends its commands only once it has started.
+  const [profileCommands, setProfileCommands] = useState<Record<string, NonNullable<SessionMeta["commands"]>>>({});
+  useEffect(() => {
+    if (session?.commands?.length || !profile || profileCommands[profile.id]) return;
+    void api<NonNullable<SessionMeta["commands"]>>(`/api/ai/profiles/${encodeURIComponent(profile.id)}/commands`).then(
+      (commands) => setProfileCommands((map) => ({ ...map, [profile.id]: commands })),
+      () => {},
+    );
+  }, [session, profile, profileCommands]);
+  // An AI never used yet: the commands FRAME knows every AI has.
+  const knownCommands = session?.commands?.length ? session.commands : (profile && profileCommands[profile.id]) || [];
+  const availableCommands = knownCommands.length
+    ? knownCommands
+    : Object.entries(COMMAND_TEXT).map(([name, { description, hint }]) => ({ name, description, hint }));
   /** The server's answer to a session change is authoritative (also when live updates are slow). */
   const applyMeta = (meta: SessionMeta) => setSessions((list) => list.map((item) => (item.id === meta.id && newer(meta, item) ? meta : item)));
 
@@ -507,15 +521,17 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     : [
         ...matchSkills(skills, suggest.query).map((skill) => ({ ...skill, skill: true })),
         ...(suggest.kind === "/"
-          ? (session?.commands ?? [])
+          ? availableCommands
               .filter((command) => command.name.startsWith(suggest.query) && !command.name.startsWith("$") && !skillNames.includes(command.name))
+              // FRAME's own (/goal, /compact) before the rest of the AI's.
+              .sort((a, b) => Number(b.name in COMMAND_TEXT) - Number(a.name in COMMAND_TEXT))
               .map((command) => ({
                 name: command.name,
                 description: COMMAND_TEXT[command.name]?.description ?? command.description,
                 hint: COMMAND_TEXT[command.name]?.hint ?? command.hint,
               }))
           : []),
-      ].slice(0, 8);
+      ].slice(0, 60);
   // An @ in a repository without skills says where to add them (until something follows it).
   const noSkills = suggest?.kind === "@" && !skills.length && !suggest.query;
   const suggestActive = Math.min(suggestIndex, Math.max(0, suggestions.length - 1));

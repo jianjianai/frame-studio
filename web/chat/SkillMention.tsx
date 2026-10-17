@@ -1,4 +1,4 @@
-import { createContext, Fragment, useContext, useEffect, useState } from "react";
+import { createContext, Fragment, useContext, useEffect, useRef, useState } from "react";
 import { Puzzle } from "lucide-react";
 import { api, skillsPath, useServerEvent } from "../lib/api";
 
@@ -77,8 +77,14 @@ export function SuggestMenu({
   /** Shown instead of choices: the repository has no skills yet. */
   onManage?: () => void;
 }) {
+  // The list scrolls: keep the chosen line in view as the arrows move.
+  const list = useRef<HTMLDivElement>(null);
+  // (Braces: scrollIntoView returns a promise in newer browsers, which React would take for a cleanup.)
+  useEffect(() => {
+    list.current?.querySelector(".selected")?.scrollIntoView({ block: "nearest" });
+  }, [active]);
   return (
-    <div className="command-list" role="listbox">
+    <div className="command-list" role="listbox" ref={list}>
       {onManage ? (
         <button onMouseDown={(event) => event.preventDefault()} onClick={onManage}>
           <Puzzle size={13} />

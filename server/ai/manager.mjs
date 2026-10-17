@@ -375,10 +375,20 @@ export class AiManager {
   }
   /** The options (model, mode, effort) a profile offered last, for the pickers of a new conversation. */
   optionsOf(profileId) {
-    const latest = [...this.sessions.values()]
-      .filter((session) => session.meta.profile === profileId && session.meta.configOptions?.length)
+    return this.latestWith(profileId, "configOptions")?.meta.configOptions ?? [];
+  }
+  /** The commands a profile's AI offered last, for the / menu of a conversation whose AI has not started yet. */
+  commandsOf(profileId) {
+    return this.latestWith(profileId, "commands")?.meta.commands ?? [];
+  }
+  /** A session's commands; before its AI sent them (just started), those the profile's AI offered last. */
+  commandsFor(session) {
+    return session.meta.commands?.length ? session.meta.commands : this.commandsOf(session.meta.profile);
+  }
+  latestWith(profileId, key) {
+    return [...this.sessions.values()]
+      .filter((session) => session.meta.profile === profileId && session.meta[key]?.length)
       .sort((a, b) => b.meta.updatedAt.localeCompare(a.meta.updatedAt))[0];
-    return latest?.meta.configOptions ?? [];
   }
   mcpServers(session) {
     const token = (session.token ||= this.services.auth.issueInternal({ work: session.meta.work, repo: session.meta.repo, session: session.meta.id }));
@@ -646,7 +656,7 @@ export class AiManager {
     session.heartbeat = undefined;
     // A conversation is named by its first message; one started with a goal, by the goal.
     const skillNames = this.services.skills?.namesSync(session.meta.repo) ?? [];
-    const named = goalCommand(message.text)?.objective ?? (isCommand(session, message.text, skillNames) ? "" : message.text);
+    const named = goalCommand(message.text)?.objective ?? (isCommand(message.text, this.commandsFor(session), skillNames) ? "" : message.text);
     if (session.meta.title === "新对话" && named.trim()) session.meta.title = named.trim().replace(/\s+/g, " ").slice(0, 40);
     this.publish(session);
     const turnStart = fs.statSync(path.join(this.sessionsDir, session.meta.id + ".jsonl"), { throwIfNoEntry: false })?.size ?? 0;
@@ -1168,7 +1178,7 @@ export class AiManager {
     const { services } = this;
     const skillNames = services.skills?.namesSync(work.repo) ?? [];
     // A slash command goes as typed: anything appended would become its arguments.
-    if (isCommand(session, message.text, skillNames) && !message.attachments.length) return [{ type: "text", text: message.text.trim() }];
+    if (isCommand(message.text, this.commandsFor(session), skillNames) && !message.attachments.length) return [{ type: "text", text: message.text.trim() }];
     const lines = [`[FRAME] 作品 ${work.id}，作品文件在 projects/${work.slug}/`];
     const view = message.view ?? services.viewState.get(`${work.repo}/${work.id}`);
     const meta = services.works.meta(work).meta;
@@ -1347,10 +1357,10 @@ const isModel = (options, id) => options.some((option) => option.id === id && (o
  * a new conversation's list of commands has arrived (a goal is often its first message).
  */
 /** A message that is one of the AI's own commands (/compact, /goal…); a skill of the repository's (`skills`) is not one. */
-function isCommand(session, text, skills = []) {
+function isCommand(text, commands = [], skills = []) {
   const name = /^\/([a-z][\w-]*)(\s|$)/i.exec(text.trim())?.[1];
   if (!name || skills.includes(name)) return false;
-  return name === "compact" || name === "goal" || Boolean(session.meta.commands?.some((command) => command.name === name));
+  return name === "compact" || name === "goal" || commands.some((command) => command.name === name);
 }
 
 const userAttachments = (message) => message.attachments.map((item) => (item.data ? { ...item, type: "image", kind: item.type } : item));

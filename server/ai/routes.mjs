@@ -24,6 +24,7 @@ export function aiPlugin(services) {
   router.post("/api/ai/profiles", async ({ req }) => ai.profiles.save(await readJson(req)));
   router.delete("/api/ai/profiles/:id", ({ params }) => ai.profiles.remove(params.id));
   router.get("/api/ai/profiles/:id/options", ({ params }) => ai.optionsOf(ai.profiles.get(params.id).id));
+  router.get("/api/ai/profiles/:id/commands", ({ params }) => ai.commandsOf(ai.profiles.get(params.id).id));
   router.patch("/api/ai/settings", async ({ req }) => {
     const body = await readJson(req);
     return settings.update("ai", (current) => ({

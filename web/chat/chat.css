@@ -722,6 +722,8 @@
   bottom: 100%;
   left: 0;
   right: 0;
+  max-height: 280px;
+  overflow-y: auto;
   margin-bottom: 4px;
   padding: 4px;
   border: 1px solid var(--border-strong);
