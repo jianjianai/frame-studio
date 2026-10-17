@@ -291,3 +291,8 @@
   outline: 2px dashed var(--accent);
   outline-offset: -4px;
 }
+/* A document's file name next to its title: the name keeps most of the room. */
+.tree-row .doc-name {
+  flex-shrink: 0;
+  max-width: 60%;
+}

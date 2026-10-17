@@ -135,6 +135,9 @@ export interface FileEntry {
   /** Plays on its own: "sample" declares itself a 样片 (its literal duration, when given); "module" only exports createScene. */
   scene?: "sample" | "module";
   duration?: number;
+  /** An experience document's title (its first heading) and first line. */
+  title?: string;
+  summary?: string;
 }
 
 export interface Asset {

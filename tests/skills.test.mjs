@@ -236,6 +236,67 @@ describe("the repository's skills in the studio and for the AI", () => {
     expect(ai.turnPrompt(session, message, work).at(-1).text).toContain("技能里的 .agents/skills/motion/references/index.md");
   });
 
+  it("links a skill's documents to a work like an experience library, changed where they are", async () => {
+    const { tools, works, experience } = app.services;
+    const lib = "/api/repos/local/experience";
+    const created = (await call("/api/works", { method: "POST", body: { title: "关联技能的经验" } })).body;
+    const work = await app.services.openWork(created.id, "local");
+    // Each skill is listed with the libraries: its Markdown, not its programs and pictures.
+    const listed = (await call(`${lib}/libraries`)).body.find((item) => item.id === "skill:motion");
+    expect(listed).toMatchObject({ title: "motion", skill: "motion", files: 2, about: "动效知识库" });
+    const linked = await tools.call("experience_link", { add: ["motion"] }, { work: work.id, repo: "local" });
+    expect(linked.data.added).toEqual(["skill:motion"]);
+    expect(works.meta(work).meta.experiences).toEqual(["skill:motion"]);
+    works.writeBrief(work);
+    expect(fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8")).toContain("经验库：「motion」（id skill:motion），需要时用 experience_read 读。");
+    const tree = (await call(`${lib}/tree?library=${encodeURIComponent("skill:motion")}`)).body.map((entry) => entry.path);
+    expect(tree).toEqual(["skill:motion/references", "skill:motion/references/index.md", "skill:motion/SKILL.md"]);
+
+    // The AI reads and writes them with the experience tools: in the skill, a version of the skills.
+    const overview = await tools.call("experience_read", { work: work.id }, { work: work.id, repo: "local" });
+    expect(overview.text).toContain("经验库「motion」（id skill:motion）");
+    expect(overview.text).toContain("### SKILL.md");
+    const written = await tools.call(
+      "experience_write",
+      { work: work.id, operations: [{ op: "write", path: "references/开场.md", content: "# 开场\n" }], note: "记下开场的做法" },
+      { work: work.id, repo: "local" },
+    );
+    expect(written.data.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect(fs.readFileSync(path.join(home, "skills/local/motion/references/开场.md"), "utf8")).toBe("# 开场\n");
+    expect((await messages())[0]).toBe("记下开场的做法");
+    const refused = await tools.call(
+      "experience_write",
+      {
+        work: work.id,
+        operations: [
+          { op: "write", path: "data.txt", content: "x" },
+          { op: "delete", path: "SKILL.md" },
+        ],
+      },
+      { work: work.id, repo: "local" },
+    );
+    expect(refused.data.results.map((item) => item.status)).toEqual(["failed", "failed"]);
+    // In a conversation the turn's end saves it, with what the AI said it recorded.
+    fs.writeFileSync(path.join(home, "skills/local/motion/references/开场.md"), "# 开场\n\n- 先给结果\n");
+    await experience.saveTurn([{ repo: "local", library: "skill:motion", files: new Set(["references/开场.md"]), notes: ["开场先给结果"] }]);
+    expect((await messages())[0]).toBe("开场先给结果");
+
+    // In the studio: the same file API as the libraries', each change a version of the skills at once.
+    const doc = (await call(`${lib}/file?path=${encodeURIComponent("skill:motion/references/index.md")}`)).body;
+    expect(doc).toMatchObject({ path: "skill:motion/references/index.md", content: "# 索引" });
+    const saved = await call(`${lib}/file`, {
+      method: "PUT",
+      body: { path: "skill:motion/references/index.md", content: "# 索引\n\n- 开场.md\n", expectedHash: doc.hash },
+    });
+    expect(saved.status).toBe(200);
+    expect((await messages())[0]).toBe("修改技能「motion」：references/index.md");
+    expect((await call(`${lib}/file`, { method: "PUT", body: { path: "skill:motion/notes.txt", content: "x" } })).status).toBe(400);
+    expect((await call(`${lib}/file?path=${encodeURIComponent("skill:motion/SKILL.md")}`, { method: "DELETE" })).status).toBe(400);
+    expect((await call(`${lib}/libraries/${encodeURIComponent("skill:motion")}/rename`, { method: "POST", body: { name: "x" } })).status).toBe(400);
+    expect((await call(`${lib}/libraries/${encodeURIComponent("skill:motion")}`, { method: "DELETE" })).status).toBe(400);
+    expect((await call(`${lib}/file?path=${encodeURIComponent("skill:motion/../titles/SKILL.md")}`)).status).toBe(400);
+  });
+
   it("asks the AI to have the user agree before changing them", () => {
     expect(platformInstructions()).toContain("新建、修改或删除技能");
   });

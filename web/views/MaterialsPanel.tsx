@@ -5,7 +5,7 @@ import { useAction, useContextMenu } from "../lib/ui";
 import { useWorkbench } from "../workbench/store";
 import { libraryFacts, type LibraryInfo, type TrashedLibrary } from "./libraryShared";
 import { MaterialFileGrid, type MaterialFile, type MaterialStatus } from "./MaterialFiles";
-import { SkillSection } from "./SkillLibraries";
+import { SkillFiles } from "./SkillLibraries";
 
 /**
  * The material libraries the work references, each with its files (dragged onto the timeline or
@@ -160,7 +160,7 @@ export function MaterialsPanel() {
           </section>
         );
       })}
-      <SkillSection part="files" />
+      <SkillFiles />
       {loaded && (status.missing.length > 0 || !shown.length || (outdated.length > 0 && !readOnly)) && (
         <section className="view-section">
           {status.missing.map((name) => {

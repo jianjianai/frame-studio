@@ -614,7 +614,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       } else if ((event.type === "reviews" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `reviews-${work.repo}`)) {
         refresh((doc) => doc.source === "reviews" && (!event.work || doc.file.startsWith(`${event.work}/`)));
       } else if ((event.type === "skills" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `skills-${work.repo}`)) {
-        refresh((doc) => doc.source === "skills");
+        // A skill's documents are also open as an experience library's (skill:<skill>/…).
+        refresh((doc) => doc.source === "skills" || (doc.source === "experience" && doc.file.startsWith("skill:")));
       } else if (event.type === "materials" && event.repo === work.repo) {
         // A library changed (paths: its id), or all of them.
         const libraries = (event.paths as string[] | undefined) ?? [];

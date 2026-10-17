@@ -12,6 +12,7 @@ import {
   Link2,
   MoreHorizontal,
   Pencil,
+  Puzzle,
   RefreshCw,
   Search,
   Sparkles,
@@ -53,7 +54,7 @@ const SHOWN = 200;
  * the recycle bin, from where they come back or go for good.
  */
 export function LibrariesTab({ kind }: { kind: LibraryKind }) {
-  const { work, reload, readOnly, openExperience, openMaterial, askAi, showVersions } = useWorkbench();
+  const { work, reload, readOnly, openExperience, openMaterial, askAi, showVersions, showView } = useWorkbench();
   const noun = NOUN[kind];
   const materials = kind === "materials";
   const base = materials ? materialsPath(work.repo) : experiencePath(work.repo);
@@ -113,6 +114,8 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
     if (materials && event.type === "materials" && event.repo === work.repo) void load();
     if (materials && (event.type === "work-materials" || event.type === "work-files") && event.work === work.id) void load();
     if (!materials && event.type === "experience-files" && event.repo === work.repo) void load();
+    // Skills are listed as experience libraries too (their documents).
+    if (!materials && event.type === "skills" && event.repo === work.repo) void load();
     if (event.type === "work-versions" && event.work === `${materials ? "materials" : "experience"}-${work.repo}`) void load();
   });
   // Files or documents of every library matching the search, shortly after typing.
@@ -230,6 +233,15 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
     else {
       items.push({ label: "新建文档", icon: <FilePlus size={14} />, onClick: () => newDocument(library.id) });
       if (linkedIds.has(library.id)) items.push({ label: "让 AI 整理这个经验库", icon: <Sparkles size={14} />, onClick: () => askAi(ORGANIZE([library.title])) });
+    }
+    if (library.skill) {
+      // A skill's documents: the skill is renamed, deleted and versioned in 技能.
+      items.push(
+        { label: "打开 SKILL.md", icon: <FileText size={14} />, onClick: () => openExperience(`${library.id}/SKILL.md`) },
+        { label: "技能的版本历史", icon: <History size={14} />, onClick: () => showVersions("skills") },
+        { label: "在「技能」中管理…", icon: <Puzzle size={14} />, onClick: () => showView("skills") },
+      );
+      return openMenu(event, items);
     }
     items.push({
       label: "打开 README",
@@ -410,6 +422,11 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
                           <Marked text={library.title} query={query} />
                         </strong>
                         {library.title !== library.id && <span className="faint small-text ellipsis">{library.id}</span>}
+                        {library.skill && (
+                          <span className="badge" title="技能里的文档，就是技能的文件：改了就是改技能，每次改动保存为技能的一个版本">
+                            <Puzzle size={11} /> 技能
+                          </span>
+                        )}
                         {isLinked && <span className="badge accent">本作品</span>}
                       </div>
                       {library.about && (
@@ -466,12 +483,13 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
                               <div
                                 key={entry.path}
                                 className="library-doc-row"
-                                title={entry.path}
+                                title={[entry.path, entry.title, entry.summary].filter(Boolean).join("\n")}
                                 onClick={() => openExperience(entry.path, { preview: true })}
                                 onDoubleClick={() => openExperience(entry.path)}
                               >
                                 <FileText size={14} />
                                 <span className="ellipsis grow">{entry.path.slice(library.id.length + 1)}</span>
+                                {entry.title && <span className="faint small-text ellipsis">{entry.title}</span>}
                               </div>
                             ))}
                         </div>

@@ -16,6 +16,8 @@ export interface LibraryInfo {
   linked?: boolean;
   score?: number;
   why?: string[];
+  /** An experience library that is a skill's documents (id `skill:<skill>`): the skill's name. */
+  skill?: string;
 }
 export type LibraryKind = "materials" | "experiences";
 /** A library in the recycle bin: `key` names it there, `id` is the name it comes back under. */

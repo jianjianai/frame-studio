@@ -55,10 +55,10 @@ export function describeDocument(file, content) {
   return { title, summary: summary.length > 80 ? summary.slice(0, 79) + "…" : summary };
 }
 
-/** The Markdown documents of a library folder, README first. */
-export function readLibrary(root) {
+/** The Markdown documents of a library folder (`only`: which files count), README first. */
+export function readLibrary(root, only = /\.(md|txt)$/i) {
   const documents = tree(root)
-    .filter((entry) => entry.type === "file" && /\.(md|txt)$/i.test(entry.path))
+    .filter((entry) => entry.type === "file" && only.test(entry.path))
     .map((entry) => {
       const content = fs.readFileSync(path.join(root, entry.path), "utf8");
       return { path: entry.path, content, hash: sha256(content), bytes: bytes(content), chars: content.length, ...describeDocument(entry.path, content) };
@@ -76,13 +76,13 @@ export function experienceKnown(libraries) {
   return seen;
 }
 
-/** A library as experience_read shows it without a path: its README in full and the list of its documents. */
+/** A library as experience_read shows it without a path: its README (a skill's SKILL.md) in full and the list of its documents. */
 export function libraryOverview(library, documents) {
-  const readme = documents.find((doc) => doc.path === "README.md");
-  const others = documents.filter((doc) => doc.path !== "README.md");
+  const readme = documents.find((doc) => doc.path === "README.md") ?? documents.find((doc) => doc.path === "SKILL.md");
+  const others = documents.filter((doc) => doc !== readme);
   return [
     `## 经验库「${library.title}」（id ${library.id}）`,
-    readme ? `### README.md\n\n${quote(readme.content)}` : "",
+    readme ? `### ${readme.path}\n\n${quote(readme.content)}` : "",
     others.length ? `### 文档\n\n${others.map(indexLine).join("\n")}` : "",
   ]
     .filter(Boolean)

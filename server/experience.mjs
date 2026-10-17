@@ -10,6 +10,7 @@ import { EXPERIENCE_INBOX } from "./works.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./tools/file-ops.mjs";
 import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST, trashed } from "./libraries.mjs";
 import { LibraryBranches, libraryVersionRoutes, validId, idFrom } from "./library-branches.mjs";
+import { frontmatter, validSkillName } from "./skills.mjs";
 
 /**
  * Experience libraries: Markdown documents of production know-how, shared by the works
@@ -26,6 +27,24 @@ const libraryReadme = (title) => `# ${title}
 
 ${templateLead(title)}
 `;
+
+/**
+ * A skill of the repository (skills.mjs) linked like an experience library: its id is
+ * `skill:<skill>`, its documents are the skill's Markdown files where they are (nothing is
+ * copied), and a change to them is a version of the skills, saved at once like any change made
+ * in the studio (an AI's at the end of its turn).
+ */
+export const SKILL_LIBRARY = "skill:";
+const skillOf = (id) => (typeof id === "string" && id.startsWith(SKILL_LIBRARY) && validSkillName(id.slice(SKILL_LIBRARY.length)) ? id.slice(SKILL_LIBRARY.length) : null);
+/** What of a skill is its documents: its Markdown (a .txt in a skill is mostly a program's data). */
+const SKILL_DOCUMENT = /\.(md|markdown)$/i;
+/** A skill's documents, and the folders leading to them. */
+const skillTree = (root) => {
+  const entries = tree(root, { maxEntries: 100000 });
+  const documents = entries.filter((entry) => entry.type === "file" && SKILL_DOCUMENT.test(entry.path));
+  const folders = new Set(documents.flatMap((entry) => entry.path.split("/").slice(0, -1).map((_, index, parts) => parts.slice(0, index + 1).join("/"))));
+  return entries.filter((entry) => (entry.type === "dir" ? folders.has(entry.path) : SKILL_DOCUMENT.test(entry.path)));
+};
 
 /** A version's message from what the AI said it recorded (else the files it changed). */
 export const versionMessage = (notes, files) => {
@@ -55,31 +74,73 @@ export class Experience {
    */
   async libraries(repoId, { documents = false } = {}) {
     const dir = await this.dir(repoId);
-    return (await this.branches.ids(repoId))
-      .map((id) => {
-        const files = tree(path.join(dir, id), { maxEntries: 100000 }).filter((item) => item.type === "file");
-        const title = this.title(dir, id);
-        const library = {
-          id,
-          title,
-          files: files.length,
-          about: readmeLead(path.join(dir, id, "README.md"), templateLead(title)),
-        };
-        if (documents) {
-          library.documents = files
-            .filter((item) => /\.(md|txt)$/i.test(item.path) && item.path !== "README.md")
-            .map((item) => {
-              let title = "";
-              try {
-                title = describeDocument(item.path, fs.readFileSync(path.join(dir, id, item.path), "utf8").slice(0, 2000)).title;
-              } catch {}
-              return { path: item.path, title };
-            });
-          library.extra = library.documents.map((doc) => `${doc.path.replace(/\.(md|txt)$/i, "")} ${doc.title}`).join(" ");
-        }
-        return library;
-      })
-      .sort((a, b) => a.title.localeCompare(b.title, "zh"));
+    const entry = (library, root, files) => {
+      library.files = files.length;
+      if (documents) {
+        library.documents = files
+          .filter((item) => /\.(md|markdown|txt)$/i.test(item.path) && item.path !== "README.md")
+          .map((item) => {
+            let title = "";
+            try {
+              title = describeDocument(item.path, fs.readFileSync(path.join(root, item.path), "utf8").slice(0, 2000)).title;
+            } catch {}
+            return { path: item.path, title };
+          });
+        library.extra = library.documents.map((doc) => `${doc.path.replace(/\.(md|markdown|txt)$/i, "")} ${doc.title}`).join(" ");
+      }
+      return library;
+    };
+    const branches = (await this.branches.ids(repoId)).map((id) => {
+      const title = this.title(dir, id);
+      const files = tree(path.join(dir, id), { maxEntries: 100000 }).filter((item) => item.type === "file");
+      return entry({ id, title, about: readmeLead(path.join(dir, id, "README.md"), templateLead(title)) }, path.join(dir, id), files);
+    });
+    const skills = (await this.skills(repoId)).map(({ id, name, root, about }) =>
+      entry({ id, title: name, about, skill: name }, root, skillTree(root).filter((item) => item.type === "file")),
+    );
+    return [...branches, ...skills].sort((a, b) => a.title.localeCompare(b.title, "zh"));
+  }
+
+  /** The repository's skills as libraries: `skill:<name>`, the folder, what SKILL.md says the skill is for. */
+  async skills(repoId) {
+    const { skills } = this.services;
+    if (!skills) return [];
+    await skills.ready(repoId);
+    return skills.namesSync(repoId).map((name) => {
+      const root = path.join(skills.folder(repoId), name);
+      let about = "";
+      try {
+        about = frontmatter(fs.readFileSync(path.join(root, "SKILL.md"), "utf8"))?.description ?? "";
+      } catch {}
+      return { id: SKILL_LIBRARY + name, name, root, about: about.length > 160 ? about.slice(0, 159) + "…" : about };
+    });
+  }
+
+  /**
+   * A library by id as it is here: { id, title, root, dir }, and `skill` for a skill's
+   * documents (its folder is the skill's). Null when there is none (deleted, in the bin).
+   */
+  locate(repoId, id) {
+    const name = skillOf(id);
+    if (name) {
+      const dir = path.join(this.services.config.dirs.skills, repoId);
+      return fs.existsSync(path.join(dir, name, "SKILL.md")) ? { id, title: name, root: path.join(dir, name), dir, skill: name } : null;
+    }
+    const dir = path.join(this.services.config.dirs.experience, repoId);
+    return this.branches.exists(dir, id) ? { id, title: this.title(dir, id), root: path.join(dir, id), dir } : null;
+  }
+  /** A library's documents with their text (a skill's: its Markdown only). */
+  documents(library) {
+    return readLibrary(library.root, library.skill ? SKILL_DOCUMENT : undefined);
+  }
+  /** The document a path from the libraries' root means (`<library id>/<path>`): its library and the path in it. */
+  async place(repoId, file) {
+    await this.dir(repoId);
+    if (skillOf(String(file || "").split("/")[0])) await this.services.skills?.ready(repoId);
+    const [id, ...rest] = String(file || "").split("/");
+    const library = this.locate(repoId, id);
+    if (!library || !rest.length) throw problem(400, `${file} 不在任何经验库里：路径写成 <经验库 id>/<文档>，新经验库先新建`);
+    return { library, path: rest.join("/") };
   }
 
   title(dir, id) {
@@ -137,15 +198,13 @@ export class Experience {
   async saveTurn(writes) {
     for (const { repo, library, files, notes } of writes)
       try {
-        await this.branches.commitPaths(repo, library, [...files], versionMessage(notes, [...files]));
+        const skill = skillOf(library);
+        // A skill's documents: a version of the skills (with whatever else the AI changed in them).
+        if (skill) await this.services.skills?.save(repo, versionMessage(notes, [...files].map((file) => `${skill}/${file}`)));
+        else await this.branches.commitPaths(repo, library, [...files], versionMessage(notes, [...files]));
       } catch (error) {
         console.warn(`saving experience ${repo}/${library} after a turn failed:`, error.message);
       }
-  }
-
-  /** The library a linked id stands for, or null when there is none (deleted, or in the bin). */
-  resolve(dir, id) {
-    return this.branches.exists(dir, id) ? id : null;
   }
 
   /** `moved` ({from, to}) lets open editor tabs follow a moved document. */
@@ -156,7 +215,7 @@ export class Experience {
   /** The library names a work links (project.ts `experiences`), in its order. */
   names(work) {
     const value = this.services.works.meta(work).meta?.experiences;
-    return Array.isArray(value) ? [...new Set(value.filter(validId))] : [];
+    return Array.isArray(value) ? [...new Set(value.filter((name) => validId(name) || skillOf(name)))] : [];
   }
 
   /**
@@ -164,13 +223,12 @@ export class Experience {
    * names that lead nowhere (deleted libraries). Needs the libraries checked out (prepare).
    */
   linkedSync(work) {
-    const dir = path.join(this.services.config.dirs.experience, work.repo);
     const libraries = [];
     const missing = [];
     for (const name of this.names(work)) {
-      const id = this.resolve(dir, name);
-      if (!id) missing.push(name);
-      else if (!libraries.some((item) => item.id === id)) libraries.push({ id, title: this.title(dir, id), root: path.join(dir, id), dir });
+      const library = this.locate(work.repo, name);
+      if (!library) missing.push(name);
+      else if (!libraries.some((item) => item.id === library.id)) libraries.push(library);
     }
     return { libraries, missing };
   }
@@ -210,7 +268,9 @@ export class Experience {
 
   /** Check the libraries out if the work links any (the synchronous readers need the folder). */
   async prepare(work) {
-    if (this.names(work).length) await this.dir(work.repo);
+    const names = this.names(work);
+    if (names.length) await this.dir(work.repo);
+    if (names.some(skillOf)) await this.services.skills?.ready(work.repo);
   }
 
   /** The linked libraries' ids and titles, cheaply (for the work's description). */
@@ -221,14 +281,18 @@ export class Experience {
 
   /** The linked libraries with their documents (session brief, per-message changes). */
   current(work) {
-    return this.linkedSync(work).libraries.map(({ id, title, root }) => ({ library: { id, title }, documents: readLibrary(root) }));
+    return this.linkedSync(work).libraries.map((library) => ({ library: { id: library.id, title: library.title }, documents: this.documents(library) }));
   }
 
   /** What the AI knew of each library, under its title as it is now: a renamed library is not a new one. */
   follow(work, seen) {
     if (!seen) return {};
-    const dir = path.join(this.services.config.dirs.experience, work.repo);
-    return Object.fromEntries(Object.entries(seen).map(([id, entry]) => [id, this.branches.exists(dir, id) ? { ...entry, title: this.title(dir, id) } : entry]));
+    return Object.fromEntries(
+      Object.entries(seen).map(([id, entry]) => {
+        const library = this.locate(work.repo, id);
+        return [id, library ? { ...entry, title: library.title } : entry];
+      }),
+    );
   }
 
   /** What the AI is told about linked names that lead nowhere: in the recycle bin, or deleted. */
@@ -236,8 +300,10 @@ export class Experience {
     if (!missing.length) return "";
     const bin = trashed(path.join(this.services.config.dirs.experience, work.repo));
     const binned = missing.filter((name) => bin.some((entry) => entry.id === name));
-    const deleted = missing.filter((name) => !binned.includes(name));
+    const skills = missing.filter((name) => skillOf(name));
+    const deleted = missing.filter((name) => !binned.includes(name) && !skills.includes(name));
     return [
+      skills.length ? `作品关联的技能${skills.map((name) => `「${skillOf(name)}」`).join("")}已不在这个作品库的技能里。` : "",
       binned.length ? `作品关联的经验库${binned.map((name) => `「${name}」`).join("")}在回收站里，用户恢复后才能用（在「经验库」选项卡的回收站中恢复）。` : "",
       deleted.length ? `作品关联的经验库${deleted.map((name) => `「${name}」`).join("")}已被删除。` : "",
     ].join("");
@@ -340,6 +406,15 @@ export function experiencePlugin(services) {
       if (!experience.branches.exists(dir, String(file || "").split("/")[0])) throw problem(400, `${file} 不在任何经验库里：路径写成 <经验库 id>/<文档>，新经验库先新建`);
     return dir;
   };
+  /** A skill's documents are the skill's own files: they are renamed and deleted with the skill, in 技能. */
+  const notSkill = (id) => {
+    if (skillOf(id)) throw problem(400, "这是技能里的文档，技能在「技能」中改名或删除");
+  };
+  /** What may be written to a skill's documents (and SKILL.md stays where it is). */
+  const skillDocument = (file, { moving = false } = {}) => {
+    if (!SKILL_DOCUMENT.test(file)) throw problem(400, "技能里作为经验的是 Markdown 文档（.md）");
+    if (moving && file === "SKILL.md") throw problem(400, "SKILL.md 是技能的入口，不能删除、改名或移动");
+  };
   // GitHub was asked: it may have libraries made on another device.
   services.events.subscribe((event) => event.type === "repos" && experience.branches.refresh());
 
@@ -352,55 +427,89 @@ export function experiencePlugin(services) {
     return services.libraries.annotate("experiences", params.repo, libraries, work);
   });
   router.post(`${base}/libraries`, async ({ params, req }) => experience.create(params.repo, (await readJson(req)).name));
-  router.delete(`${base}/libraries/:lib`, ({ params }) => experience.remove(params.repo, params.lib));
+  router.delete(`${base}/libraries/:lib`, ({ params }) => (notSkill(params.lib), experience.remove(params.repo, params.lib)));
   // The recycle bin of deleted libraries.
   router.get(`${base}/trash`, ({ params }) => experience.trash(params.repo));
   router.post(`${base}/trash/:key/restore`, ({ params }) => experience.restore(params.repo, params.key));
   router.delete(`${base}/trash/:key`, ({ params }) => experience.purge(params.repo, params.key));
   router.delete(`${base}/trash`, ({ params }) => experience.purge(params.repo));
-  router.post(`${base}/libraries/:lib/rename`, async ({ params, req }) => experience.rename(params.repo, params.lib, (await readJson(req)).name));
+  router.post(`${base}/libraries/:lib/rename`, async ({ params, req }) => (notSkill(params.lib), experience.rename(params.repo, params.lib, (await readJson(req)).name)));
 
   // ---- files (same shape as a work's file API, so the editor tabs reuse it) --------------
   // One library's documents (paths from the branch root), or the whole branch.
+  // A document comes with its title and first line, so the trees say what it is about without opening it.
   router.get(`${base}/tree`, async ({ params, query }) => {
     const dir = await experience.dir(params.repo);
     if (!query.library) return tree(dir);
-    if (!experience.branches.exists(dir, query.library)) throw notFound("经验库不存在");
-    return tree(confined(dir, query.library)).map((entry) => ({ ...entry, path: `${query.library}/${entry.path}` }));
+    if (skillOf(query.library)) await services.skills?.ready(params.repo);
+    const library = experience.locate(params.repo, String(query.library));
+    if (!library) throw notFound("经验库不存在");
+    return (library.skill ? skillTree(library.root) : tree(confined(dir, library.id))).map((entry) => {
+      let about = {};
+      if (entry.type === "file" && /\.(md|markdown|txt)$/i.test(entry.path))
+        try {
+          about = describeDocument(entry.path, fs.readFileSync(path.join(library.root, entry.path), "utf8").slice(0, 2000));
+        } catch {}
+      return { ...entry, ...about, path: `${library.id}/${entry.path}` };
+    });
   });
   /** Documents of every library whose name or title has all the words (the 经验 view's filter). */
   router.get(`${base}/find`, async ({ params, query }) => {
     const words = searchWords(query.q);
     if (!words.length) return [];
-    const dir = await experience.dir(params.repo);
     const found = [];
-    for (const library of await experience.libraries(params.repo))
-      for (const entry of tree(path.join(dir, library.id), { maxEntries: 100000 })) {
-        if (entry.type !== "file" || !/\.(md|txt)$/i.test(entry.path)) continue;
+    for (const { id } of await experience.libraries(params.repo)) {
+      const library = experience.locate(params.repo, id);
+      if (!library) continue;
+      for (const entry of library.skill ? skillTree(library.root) : tree(library.root, { maxEntries: 100000 })) {
+        if (entry.type !== "file" || !/\.(md|markdown|txt)$/i.test(entry.path)) continue;
         let title = "";
         try {
-          title = describeDocument(entry.path, fs.readFileSync(path.join(dir, library.id, entry.path), "utf8").slice(0, 2000)).title;
+          title = describeDocument(entry.path, fs.readFileSync(path.join(library.root, entry.path), "utf8").slice(0, 2000)).title;
         } catch {}
         const text = `${entry.path} ${title}`.toLowerCase();
         if (words.every((word) => text.includes(word))) found.push({ library: library.id, path: `${library.id}/${entry.path}`, title });
         if (found.length >= 200) return found;
       }
+    }
     return found;
   });
-  router.get(`${base}/file`, async ({ params, query }) => readText(await experience.dir(params.repo), query.path));
+  // A skill's documents (`skill:<skill>/…`) are its own files; each change is a version of the skills at once, as in 技能.
+  router.get(`${base}/file`, async ({ params, query }) => {
+    const { library, path: file } = await experience.place(params.repo, query.path);
+    return { ...readText(library.root, file), path: query.path };
+  });
   router.put(`${base}/file`, async ({ params, req }) => {
     const body = await readJson(req);
-    const result = writeText(await within(params.repo, body.path), body.path, body.content, { expectedHash: body.expectedHash });
+    const { library, path: file } = await experience.place(params.repo, body.path);
+    if (library.skill) skillDocument(file);
+    const result = writeText(library.skill ? library.root : await within(params.repo, body.path), library.skill ? file : body.path, body.content, {
+      expectedHash: body.expectedHash,
+    });
+    if (library.skill) await services.skills.save(params.repo, `修改技能「${library.skill}」：${file}`);
     experience.changed(params.repo, [body.path]);
-    return result;
+    return { ...result, path: body.path };
   });
   router.post(`${base}/move`, async ({ params, req }) => {
     const body = await readJson(req);
-    movePath(await within(params.repo, body.from, body.to), body.from, body.to);
+    const from = await experience.place(params.repo, body.from);
+    const to = await experience.place(params.repo, body.to);
+    if (from.library.skill || to.library.skill) {
+      if (from.library.id !== to.library.id) throw problem(400, "技能里的文档只能在同一个技能里移动");
+      skillDocument(from.path, { moving: true });
+      skillDocument(to.path, { moving: true });
+      movePath(from.library.root, from.path, to.path);
+      await services.skills.save(params.repo, `移动技能「${from.library.skill}」的文档：${from.path} → ${to.path}`);
+    } else movePath(await within(params.repo, body.from, body.to), body.from, body.to);
     experience.changed(params.repo, [body.from, body.to], { from: body.from, to: body.to });
   });
   router.delete(`${base}/file`, async ({ params, query }) => {
-    removePath(await within(params.repo, query.path), query.path);
+    const { library, path: file } = await experience.place(params.repo, query.path);
+    if (library.skill) {
+      skillDocument(file, { moving: true });
+      removePath(library.root, file);
+      await services.skills.save(params.repo, `删除技能「${library.skill}」的文档：${file}`);
+    } else removePath(await within(params.repo, query.path), query.path);
     experience.changed(params.repo, [query.path]);
   });
 
@@ -418,12 +527,13 @@ export function experiencePlugin(services) {
     const { libraries, missing } = work.dir ? await experience.linked(work) : { libraries: [], missing: [] };
     if (name?.trim()) {
       const dir = await experience.dir(work.repo);
+      if (skillOf(name.trim())) await services.skills?.ready(work.repo);
       // Linked libraries by name or title first (cheap); any other library of the repository after.
       const id =
-        experience.resolve(dir, name.trim()) ?? findLibrary(name, libraries)?.id ?? findLibrary(name, await experience.libraries(work.repo))?.id;
+        experience.locate(work.repo, name.trim())?.id ?? findLibrary(name, libraries)?.id ?? findLibrary(name, await experience.libraries(work.repo))?.id;
       if (!id)
         throw problem(400, unknownLibraries("experiences", [name.trim()], await experience.libraries(work.repo), trashed(dir)).replace(/新建用 create$/, "新建用 experience_link 的 create"), "NO_EXPERIENCE");
-      return { work, library: libraries.find((item) => item.id === id) ?? { id, title: experience.title(dir, id), root: path.join(dir, id), dir } };
+      return { work, library: libraries.find((item) => item.id === id) ?? experience.locate(work.repo, id) };
     }
     if (!work.dir) throw problem(400, "只指定作品库（repo）时，用 library 写明是哪个经验库（experience_list 查找）", "LIBRARY_REQUIRED");
     if (!libraries.length)
@@ -471,7 +581,7 @@ export function experiencePlugin(services) {
         if (!work.dir) throw problem(400, "只指定作品库（repo）时，用 library 写明读哪个经验库（experience_list 查找）", "LIBRARY_REQUIRED");
         const { libraries } = await experience.linked(work);
         if (!libraries.length) await libraryOf(ctx); // explains why there is none
-        const current = libraries.map(({ id, title, root }) => ({ library: { id, title }, documents: readLibrary(root) }));
+        const current = libraries.map((library) => ({ library: { id: library.id, title: library.title }, documents: experience.documents(library) }));
         // The READMEs come in full: the AI has read them.
         for (const { library, documents } of current) {
           const readme = documents.find((doc) => doc.path === "README.md");
@@ -492,7 +602,7 @@ export function experiencePlugin(services) {
         noteSeen(ctx, library, file, result.hash, "content");
         return { data: { path: file, sha256: result.hash }, meta: { library: library.id, path: file, sha256: result.hash }, text: result.content };
       }
-      const documents = readLibrary(library.root);
+      const documents = experience.documents(library);
       const readme = documents.find((doc) => doc.path === "README.md");
       if (readme) noteSeen(ctx, library, readme.path, readme.hash, "content");
       return {
@@ -526,7 +636,15 @@ export function experiencePlugin(services) {
       const page = ordered.slice(offset, offset + limit);
       const words = searchWords(query);
       const line = (library) => {
-        const facts = [`${library.files} 篇文档`, library.works ? `${library.works} 个作品在用` : "没有作品在用", library.linked ? "本作品已关联" : "", ...(library.linked ? [] : (library.why ?? []))].filter(Boolean).join("；");
+        const facts = [
+          library.skill ? `技能 ${library.skill} 里的文档` : "",
+          `${library.files} 篇文档`,
+          library.works ? `${library.works} 个作品在用` : "没有作品在用",
+          library.linked ? "本作品已关联" : "",
+          ...(library.linked ? [] : (library.why ?? [])),
+        ]
+          .filter(Boolean)
+          .join("；");
         const docs = words.length ? (library.documents ?? []).filter((doc) => words.some((word) => `${doc.path} ${doc.title}`.toLowerCase().includes(word))).slice(0, 4) : [];
         return [
           `- 「${library.id}」${library.title !== library.id ? `（${library.title}）` : ""}${library.about ? `：${library.about}` : ""}（${facts}）`,
@@ -557,7 +675,7 @@ export function experiencePlugin(services) {
     published: true, // creating libraries is fine on a published work; changing its links is checked below
     title: "关联经验库",
     description:
-      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。名称写 id 或标题（大小写、空格、标点不同也能认出）；作品按 id 关联，经验库改名（只改标题）不影响关联；不存在时返回最接近的几个，经验库很多时先用 experience_list 查找。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
+      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。名称写 id 或标题（大小写、空格、标点不同也能认出）；作品按 id 关联，经验库改名（只改标题）不影响关联；作品库的技能里的文档也可以作为经验库关联（id 是 skill:<技能名>，它的文档就是技能里的 Markdown，改了就是改技能）；不存在时返回最接近的几个，经验库很多时先用 experience_list 查找。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
     input: { work: workArg, add: z.array(nameArg).max(10).default([]), remove: z.array(nameArg).max(10).default([]), create: z.array(nameArg).max(5).default([]) },
     async run({ add, remove, create }, ctx) {
       const work = await ctx.work();
@@ -591,7 +709,7 @@ export function experiencePlugin(services) {
       const added = after.filter((item) => !before.some((old) => old.id === item.id));
       const removed = before.filter((item) => !after.some((now) => now.id === item.id));
       // The session knows the new libraries' documents by name, as a new session would.
-      const seen = experienceKnown(added.map(({ id, title, root }) => ({ library: { id, title }, documents: readLibrary(root) })));
+      const seen = experienceKnown(added.map((library) => ({ library: { id: library.id, title: library.title }, documents: experience.documents(library) })));
       if (ctx.scope.session) services.ai?.noteExperienceLibraries(ctx.scope.session, { added: seen, removed: removed.map((item) => item.id) });
       return {
         data: { experiences: after.map(({ id, title }) => ({ id, title })), added: added.map((item) => item.id), removed: removed.map((item) => item.id) },
@@ -617,6 +735,12 @@ export function experiencePlugin(services) {
       const work = await ctx.place();
       const ids = name?.trim() ? [(await libraryOf(ctx, name)).library.id] : await experience.branches.ids(work.repo);
       const saved = [];
+      // A skill's documents: their changes are saved with the skills (at once, or at the end of the turn).
+      const skill = skillOf(ids[0]);
+      if (skill) {
+        const commit = await services.skills.save(work.repo, message);
+        return asJson({ saved: commit ? [{ library: ids[0], commit }] : [] }, commit ? `已保存技能的版本 ${commit.slice(0, 7)}` : `技能「${skill}」没有未保存的修改`);
+      }
       for (const id of ids) {
         const scope = await experience.scope(work.repo, id);
         const files = (await works.status(scope)).files.map((file) => `${id}/${file.path}`);
@@ -666,6 +790,7 @@ export function experiencePlugin(services) {
       const outcome = runFileOperations(library.root, operations, {
         reader: "experience_read",
         allow: (item, paths) => {
+          if (library.skill) return paths.forEach((file, index) => skillDocument(file, { moving: index === 0 && (item.op === "delete" || item.op === "move") }));
           if (paths.some((file) => !/\.(md|txt)$/i.test(file))) throw problem(400, "经验库只存放 .md 或 .txt 文档");
           if (paths[0] === "README.md" && (item.op === "delete" || item.op === "move")) throw problem(400, "README.md 是经验库的入口，不能删除或改名");
         },
@@ -680,7 +805,9 @@ export function experiencePlugin(services) {
         experience.changed(work.repo, changed.map((file) => `${library.id}/${file}`));
         // In a conversation the turn's end saves it; called from outside one, now.
         if (ctx.scope.session && services.ai?.noteExperienceWrite) services.ai.noteExperienceWrite(ctx.scope.session, { repo: work.repo, library: library.id, files: changed, note });
+        else if (library.skill) saved = await services.skills.save(work.repo, versionMessage([note], changed.map((file) => `${library.skill}/${file}`)));
         else saved = await experience.branches.commitPaths(work.repo, library.id, changed, versionMessage([note], changed));
+        if (library.skill) services.skills.changed(work.repo);
       }
       const { summary } = describeFileOperations(outcome);
       return {

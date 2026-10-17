@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ChevronDown, ChevronRight, Copy, Eye, FilePlus, Folder, FolderOpen, MessageSquarePlus, Pencil, Puzzle, Sparkles, Trash2 } from "lucide-react";
-import { api, del, skillsPath, useServerEvent } from "../lib/api";
-import { useAction, useConfirm, useContextMenu, usePersistent, usePrompt, useToast, type MenuItem } from "../lib/ui";
+import { ChevronDown, ChevronRight, Copy, Eye, Folder, FolderOpen, MessageSquarePlus, Puzzle, Sparkles, Trash2 } from "lucide-react";
+import { api, del, formatBytes, skillsPath, useServerEvent } from "../lib/api";
+import { useAction, useConfirm, useContextMenu, usePersistent, useToast, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
 import { fileIcon } from "../workbench/EditorArea";
@@ -22,8 +22,8 @@ export interface Skill {
 /** Files that are not text: shown as what they are, never opened as text. */
 const BINARY =
   /\.(png|jpe?g|webp|gif|avif|bmp|ico|svg|wav|mp3|m4a|ogg|opus|flac|aac|mp4|webm|mov|m4v|glb|gltf|fbx|obj|hdr|exr|ttf|otf|woff2?|pdf|xlsx?|docx?|pptx?|zip|gz|tgz|tar|7z|rar|bin|exe|dll|so|dylib|wasm|onnx|pt|sqlite|db)$/i;
-/** A skill's documents (SKILL.md, references…): its knowledge and experience, shown with the experience libraries (a .txt there is mostly a program's data). */
-export const isDocument = (path: string) => /\.(md|markdown)$/i.test(path);
+/** A skill's documents (SKILL.md, references…): its knowledge and experience, listed with the experience libraries (server: SKILL_DOCUMENT). */
+const isDocument = (path: string) => /\.(md|markdown)$/i.test(path);
 /** Files a tab shows as they are (pictures, sound, video). */
 const PREVIEW = /\.(png|jpe?g|webp|gif|svg|avif|wav|mp3|m4a|ogg|opus|flac|aac|weba|mp4|webm|mov|m4v)$/i;
 /** A skill's file opens as a tab: as text, or shown as the picture, sound or video it is. */
@@ -57,9 +57,9 @@ export function useSkills(repo: string) {
   return { skills, versioned, load };
 }
 
-/** The entries of one part of a skill (its documents, or everything else), with the folders leading to them. */
-function partOf(files: FileEntry[], part: "documents" | "files") {
-  const kept = new Set(files.filter((file) => file.type === "file" && isDocument(file.path) === (part === "documents")).map((file) => file.path));
+/** A skill's files other than its documents (those are with the experience libraries), with the folders leading to them. */
+function filesOf(files: FileEntry[]) {
+  const kept = new Set(files.filter((file) => file.type === "file" && !isDocument(file.path)).map((file) => file.path));
   const folders = new Set(
     [...kept].flatMap((file) =>
       file
@@ -71,48 +71,30 @@ function partOf(files: FileEntry[], part: "documents" | "files") {
   return files.filter((file) => (file.type === "dir" ? folders.has(file.path) : kept.has(file.path)));
 }
 
-export const ORGANIZE_SKILL = (name: string) =>
-  `@${name} 请整理这个技能里的经验和知识：回顾我们这次的对话和作品的修改，把这类作品值得复用的做法、我明确表达过的偏好、踩过的坑和解决办法，按这个技能自己的结构整理进它的文档。不重复，过时的说法直接改掉。改完简单告诉我改了哪些文件。`;
-
 /**
- * The repository's skills where the experience libraries (`documents`: SKILL.md and the other
- * documents) or the material libraries (`files`: everything else) are shown. These are the
- * skill's own files, not copies: what is changed here is changed in the skill, and saved as
- * one of its versions at once, like in the 技能 view. Nothing shows without skills.
+ * The repository's skills where the material libraries are shown: each skill's files besides
+ * its documents (programs, previews, data). They are the skill's own files, not copies: what is
+ * deleted here is deleted in the skill, as a version of it at once, like in the 技能 view. A
+ * work does not reference them as materials; a picture or video is copied into the work to use
+ * it. Nothing shows without skills.
  */
-export function SkillSection({ part }: { part: "documents" | "files" }) {
-  const { work, readOnly, openSkill, addToChat, askAi, insertPrompt, showView } = useWorkbench();
+export function SkillFiles() {
+  const { work, readOnly, openSkill, addToChat, insertPrompt, showView } = useWorkbench();
   const { skills, load } = useSkills(work.repo);
   // Skills the user folded; folders inside them the user opened (as "+<path>").
-  const [toggled, setToggled] = usePersistent<string[]>(`skill-${part}-toggled`, []);
+  const [toggled, setToggled] = usePersistent<string[]>("skill-files-toggled", []);
   const [run, busy] = useAction();
   const confirm = useConfirm();
-  const prompt = usePrompt();
   const toast = useToast();
   const [openMenu, menu] = useContextMenu();
   const base = skillsPath(work.repo);
   const enc = encodeURIComponent;
   const shown = (skills ?? [])
-    .map((skill) => ({ skill, entries: partOf(skill.files, part) }))
+    .map((skill) => ({ skill, entries: filesOf(skill.files) }))
     .filter(({ entries }) => entries.some((entry) => entry.type === "file"));
   if (!shown.length) return null;
-  const noun = part === "documents" ? "经验" : "素材";
 
   const flip = (key: string) => setToggled((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
-  const open = (path: string, options: { preview?: boolean; edit?: boolean } = {}) => openSkill(path, options);
-  const newDocument = (skill: string, folder: string) =>
-    run(async () => {
-      const name = (await prompt("新文档（技能里的路径，可以包含子文件夹）", `${folder ? folder + "/" : ""}新经验.md`))?.trim();
-      if (!name) return;
-      const file = `${skill}/${isDocument(name) ? name : name + ".md"}`;
-      const title = name
-        .replace(/\.(md|markdown)$/i, "")
-        .split("/")
-        .pop();
-      await api(`${base}/file`, { method: "PUT", body: { path: file, content: `# ${title}\n\n`, expectedHash: null } });
-      await load();
-      open(file, { edit: true });
-    });
   const remove = (path: string, folder: boolean) =>
     run(async () => {
       if (!(await confirm(`从技能里删除${folder ? "文件夹" : ""} ${path}？可以在技能的版本历史中恢复。`, { confirm: "删除", danger: true }))) return;
@@ -124,22 +106,13 @@ export function SkillSection({ part }: { part: "documents" | "files" }) {
       const response = await fetch(`${base}/raw?path=${enc(path)}`);
       if (!response.ok) throw new Error(`读取失败（${response.status}）`);
       const [uploaded] = await uploadBlobs(work, [new File([await response.blob()], path.split("/").pop()!)]);
-      toast(`已复制到作品的 ${uploaded.path}，在「作品素材」里使用`, "ok");
+      toast(`已复制到作品的 ${uploaded.path}，在「本作品」里使用`, "ok");
     });
 
   const skillMenu = (event: React.MouseEvent, skill: Skill) => {
     const items: MenuItem[] = [];
     if (skill.files.some((file) => file.path === "SKILL.md"))
-      items.push({ label: "打开 SKILL.md", icon: <Eye size={14} />, onClick: () => open(`${skill.name}/SKILL.md`) });
-    if (part === "documents")
-      items.push(
-        {
-          label: "新建文档",
-          icon: <FilePlus size={14} />,
-          onClick: () => newDocument(skill.name, skill.files.some((file) => file.path === "references") ? "references" : ""),
-        },
-        { label: "让 AI 整理这个技能里的经验", icon: <Sparkles size={14} />, onClick: () => askAi(ORGANIZE_SKILL(skill.name)) },
-      );
+      items.push({ label: "打开 SKILL.md", icon: <Eye size={14} />, onClick: () => openSkill(`${skill.name}/SKILL.md`) });
     items.push(
       { label: "在 AI 聊天中点名使用", icon: <MessageSquarePlus size={14} />, onClick: () => insertPrompt(`@${skill.name} `) },
       { label: "在「技能」中管理…", icon: <Puzzle size={14} />, onClick: () => showView("skills") },
@@ -148,23 +121,17 @@ export function SkillSection({ part }: { part: "documents" | "files" }) {
   };
   const nodeMenu = (event: React.MouseEvent, skill: Skill, node: Node) => {
     const path = `${skill.name}/${node.path}`;
-    const folder = node.type === "dir" ? node.path : node.path.split("/").slice(0, -1).join("/");
     const items: MenuItem[] = [];
-    if (node.type === "file" && opensHere(node.path)) {
-      items.push({ label: "打开", icon: <Eye size={14} />, onClick: () => open(path) });
-      if (/\.(md|markdown)$/i.test(node.path)) items.push({ label: "编辑", icon: <Pencil size={14} />, onClick: () => open(path, { edit: true }) });
-    }
-    if (part === "documents") items.push({ label: "新建文档", icon: <FilePlus size={14} />, onClick: () => newDocument(skill.name, folder) });
+    if (node.type === "file" && opensHere(node.path)) items.push({ label: "打开", icon: <Eye size={14} />, onClick: () => openSkill(path) });
     items.push({ label: "引用到 AI 聊天", icon: <Sparkles size={14} />, onClick: () => addToChat({ type: "skill", path }) });
     if (node.type === "file" && MEDIA.test(node.path) && !readOnly)
       items.push({ label: "复制到作品素材", icon: <Copy size={14} />, onClick: () => copyToWork(path) });
-    if (node.path !== "SKILL.md")
-      items.push("separator", {
-        label: node.type === "dir" ? "删除文件夹" : "删除",
-        icon: <Trash2 size={14} />,
-        danger: true,
-        onClick: () => remove(path, node.type === "dir"),
-      });
+    items.push("separator", {
+      label: node.type === "dir" ? "删除文件夹" : "删除",
+      icon: <Trash2 size={14} />,
+      danger: true,
+      onClick: () => remove(path, node.type === "dir"),
+    });
     openMenu(event, items);
   };
 
@@ -172,14 +139,21 @@ export function SkillSection({ part }: { part: "documents" | "files" }) {
     nodes.map((node) => {
       const path = `${skill.name}/${node.path}`;
       const opened = toggled.includes("+" + path);
+      const file = node.type === "file" ? skill.files.find((entry) => entry.path === node.path) : undefined;
+      const openable = node.type === "dir" || opensHere(node.path);
       return (
         <div key={path}>
           <div
             className="tree-row"
             style={{ paddingLeft: 8 + depth * 12 }}
-            title={node.type === "dir" || opensHere(node.path) ? path : `${path}（不能在这里打开：引用到 AI 聊天，或复制到作品素材）`}
-            onClick={() => (node.type === "dir" ? flip("+" + path) : opensHere(node.path) && open(path, { preview: true }))}
-            onDoubleClick={() => node.type === "file" && opensHere(node.path) && open(path)}
+            title={[
+              path + (file?.size !== undefined ? ` · ${formatBytes(file.size)}` : ""),
+              openable ? "" : "不能在这里打开：右键引用到 AI 聊天，或复制到作品素材",
+            ]
+              .filter(Boolean)
+              .join("\n")}
+            onClick={() => (node.type === "dir" ? flip("+" + path) : openable && openSkill(path, { preview: true }))}
+            onDoubleClick={() => node.type === "file" && openable && openSkill(path)}
             onContextMenu={(event) => nodeMenu(event, skill, node)}
           >
             {node.type === "dir" ? (
@@ -193,7 +167,8 @@ export function SkillSection({ part }: { part: "documents" | "files" }) {
                 {fileIcon(node.path)}
               </>
             )}
-            <span className={`ellipsis grow ${node.type === "dir" || opensHere(node.path) ? "" : "faint"}`}>{node.name}</span>
+            <span className={`ellipsis grow ${openable ? "" : "faint"}`}>{node.name}</span>
+            {file?.size !== undefined && <span className="faint small-text">{formatBytes(file.size)}</span>}
           </div>
           {node.type === "dir" && opened && renderNodes(skill, node.children, depth + 1)}
         </div>
@@ -205,9 +180,9 @@ export function SkillSection({ part }: { part: "documents" | "files" }) {
       {busy && <div className="view-progress" />}
       <div
         className="library-group"
-        title={`作品库里技能自带的${part === "documents" ? "文档（经验和知识）" : "文件（程序、预览、数据等，文档在「经验库」里）"}，所有作品都能用。这里就是技能里的文件：在这里改，就是改技能，每次改动保存为技能的一个版本。`}
+        title="作品库里技能自带的文件（程序、预览、数据等；技能的文档在「经验库」里），就是技能里的文件，不是副本。图片、视频要用到作品里时，右键「复制到作品素材」。"
       >
-        技能里的{noun} <span className="count">{shown.length}</span>
+        技能里的素材 <span className="count">{shown.length}</span>
         <span className="grow" />
         <button className="link-btn" title="在「技能」中上传、下载或删除技能" onClick={() => showView("skills")}>
           <Puzzle size={13} /> 技能…
@@ -220,19 +195,19 @@ export function SkillSection({ part }: { part: "documents" | "files" }) {
           return (
             <div key={skill.name}>
               <div
-                className="tree-row linked"
+                className="tree-row skill-row"
                 style={{ paddingLeft: 8 }}
-                title={`技能 @${skill.name}${skill.description ? `\n${skill.description}` : ""}\n${count} ${part === "documents" ? "篇文档" : "个文件"}，就在技能里：这里改了就是改技能`}
+                title={`技能 @${skill.name}${skill.description ? `\n${skill.description}` : ""}\n${count} 个文件，就是技能里的文件，不是副本`}
                 onClick={() => flip(skill.name)}
                 onContextMenu={(event) => skillMenu(event, skill)}
               >
                 {folded ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
                 <Puzzle size={14} className="folder-icon" />
-                <span className="ellipsis grow">{skill.name}</span>
-                <span className="faint small-text">
-                  {count}
-                  {part === "documents" ? " 篇" : ""}
-                </span>
+                <div className="grow" style={{ minWidth: 0 }}>
+                  <div className="ellipsis">{skill.name}</div>
+                  {skill.description && <div className="faint small-text skill-description">{skill.description}</div>}
+                </div>
+                <span className="faint small-text">{count} 个</span>
               </div>
               {!folded && renderNodes(skill, buildTree(entries), 1)}
             </div>

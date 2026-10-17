@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, ChevronDown, ChevronRight, FilePlus, FileText, Inbox, Library, Pencil, RefreshCw, Settings2, Sparkles, Trash2, Undo2, Unlink } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, FilePlus, FileText, Inbox, Library, Link2, Pencil, Puzzle, RefreshCw, Settings2, Sparkles, Trash2, Undo2, Unlink } from "lucide-react";
 import { api, del, experiencePath, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
@@ -7,7 +7,6 @@ import { useWorkbench } from "../workbench/store";
 import { buildTree, type Node } from "./ExplorerView";
 import { ViewHeader } from "./ViewHeader";
 import type { LibraryInfo, TrashedLibrary } from "./libraryShared";
-import { SkillSection } from "./SkillLibraries";
 
 /** The work's own record of reusable experience no linked library suits yet (server: EXPERIENCE_INBOX). */
 export const INBOX = "经验.md";
@@ -22,10 +21,12 @@ export const ORGANIZE = (titles: string[], { inbox = false } = {}) =>
 /**
  * The experience libraries the work uses, each with its documents (opened as editor tabs).
  * Finding, linking, creating and deleting libraries happens in the 经验库 tab (管理…); their
- * versions are in 版本与同步.
+ * versions are in 版本与同步. The repository's skills are libraries too (`skill:<skill>`: the
+ * skill's own Markdown, changed in place and saved as a version of the skills at once): the
+ * ones the work does not link are listed below its own, to link with one click.
  */
 export function ExperienceView() {
-  const { work, reload, openExperience, openFile, openTool, addToChat, askAi, readOnly } = useWorkbench();
+  const { work, reload, openExperience, openFile, openTool, addToChat, askAi, readOnly, showView } = useWorkbench();
   const [libraries, setLibraries] = useState<LibraryInfo[]>([]);
   const [trash, setTrash] = useState<TrashedLibrary[]>([]);
   const [loaded, setLoaded] = useState(false);
@@ -43,6 +44,8 @@ export function ExperienceView() {
   const libraryOfName = (name: string) => libraries.find((item) => item.id === name);
   const linked = [...new Set(linkedNames.map((name) => libraryOfName(name)).filter((item): item is LibraryInfo => Boolean(item)))];
   const missingNames = loaded ? linkedNames.filter((name) => !libraryOfName(name)) : [];
+  const skills = libraries.filter((library) => library.skill && !linked.includes(library));
+  const isLinked = (id: string) => linked.some((library) => library.id === id);
 
   const load = () =>
     Promise.all([api<LibraryInfo[]>(`${base}/libraries`), api<TrashedLibrary[]>(`${base}/trash`)]).then(
@@ -58,7 +61,7 @@ export function ExperienceView() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, work.id]);
-  const openKey = linked
+  const openKey = [...linked, ...skills]
     .filter((library) => !toggled.has(library.id))
     .map((library) => library.id)
     .join("|");
@@ -69,6 +72,7 @@ export function ExperienceView() {
   useServerEvent((event) => {
     if (event.type === "experience-files" && event.repo === work.repo) void load();
     if (event.type === "work-versions" && String(event.work).startsWith("experience/")) void load();
+    if ((event.type === "skills" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `skills-${work.repo}`)) void load();
     if (event.type === "work-files" && event.work === work.id && (event.files as string[]).some((file) => file.endsWith("/" + INBOX))) void loadInbox();
   });
   // The work's 经验.md: what waits to be tidied into a library.
@@ -90,6 +94,7 @@ export function ExperienceView() {
       await reload();
     }, message);
   const unlink = (id: string) => setLinks(linkedNames.filter((name) => libraryOfName(name)?.id !== id), `已取消关联「${titleOf(id)}」`);
+  const link = (id: string) => setLinks([...linkedNames, id], `已关联「${titleOf(id)}」：AI 制作前会先看它，并把新的经验整理进去`);
   const restore = (item: TrashedLibrary) =>
     run(async () => {
       await api(`${base}/trash/${enc(item.key)}/restore`, { method: "POST" });
@@ -139,13 +144,21 @@ export function ExperienceView() {
       { label: "让 AI 整理这个经验库", icon: <Sparkles size={14} />, onClick: () => askAi(ORGANIZE([titleOf(library)])) },
     ];
     if (depth === 0) {
+      const skill = libraryOfName(library)?.skill;
       items.push({ label: "管理经验库…", icon: <Library size={14} />, onClick: () => openTool("libraries:experiences") });
-      if (!readOnly) items.push("separator", { label: "不再用于当前作品", icon: <Unlink size={14} />, onClick: () => unlink(library) });
+      if (skill) items.push({ label: "在「技能」中管理…", icon: <Puzzle size={14} />, onClick: () => showView("skills") });
+      if (!readOnly)
+        items.push(
+          "separator",
+          isLinked(library)
+            ? { label: "不再用于当前作品", icon: <Unlink size={14} />, onClick: () => unlink(library) }
+            : { label: "用于当前作品（关联）", icon: <Link2 size={14} />, onClick: () => link(library) },
+        );
     } else
       items.push(
         "separator",
         { label: "重命名 / 移动", icon: <Pencil size={14} />, onClick: () => rename(node) },
-        { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(node), disabled: node.path === `${library}/README.md` },
+        { label: "删除", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(node), disabled: node.path === `${library}/README.md` || node.path === `${library}/SKILL.md` },
       );
     openMenu(event, items);
   };
@@ -157,13 +170,23 @@ export function ExperienceView() {
       else next.add(key);
       return next;
     });
+  // What each document is about (its title and first line), shown beside its name.
+  const documents = new Map(
+    Object.values(trees)
+      .flat()
+      .map((entry) => [entry.path, entry]),
+  );
+  const docTitle = (node: Node) => {
+    const title = documents.get(node.path)?.title;
+    return title && title !== node.name.replace(/\.(md|markdown|txt)$/i, "") ? title : "";
+  };
   const renderNodes = (nodes: Node[], depth: number): React.ReactNode =>
     nodes.map((node) => (
       <div key={node.path}>
         <div
           className="tree-row"
           style={{ paddingLeft: 8 + depth * 12 }}
-          title={node.path}
+          title={[node.path, documents.get(node.path)?.title, documents.get(node.path)?.summary].filter(Boolean).join("\n")}
           onClick={() => (node.type === "dir" ? flip("+" + node.path) : openExperience(node.path, { preview: true }))}
           onDoubleClick={() => node.type === "file" && openExperience(node.path)}
           onContextMenu={(event) => menuFor(event, node, depth)}
@@ -176,11 +199,54 @@ export function ExperienceView() {
               <FileText size={14} />
             </>
           )}
-          <span className="ellipsis grow">{node.name}</span>
+          <span className={`ellipsis ${docTitle(node) ? "doc-name" : "grow"}`}>{node.name}</span>
+          {docTitle(node) && <span className="faint small-text ellipsis grow">{docTitle(node)}</span>}
         </div>
         {node.type === "dir" && toggled.has("+" + node.path) && renderNodes(node.children, depth + 1)}
       </div>
     ));
+
+  /** A library's row and, unfolded, its documents. A skill shows what it is for, and links with one click. */
+  const renderLibrary = (library: LibraryInfo) => {
+    const own = isLinked(library.id);
+    const unfolded = !toggled.has(library.id);
+    return (
+      <div key={library.id}>
+        <div
+          className={`tree-row ${own ? "linked" : ""} ${library.skill ? "skill-row" : ""}`}
+          style={{ paddingLeft: 8 }}
+          title={
+            library.skill
+              ? `技能 ${library.skill} 里的文档（id ${library.id}）${library.about ? `\n${library.about}` : ""}\n${library.files} 篇，就是技能里的文件：在这里改就是改技能${own ? "" : "\n关联到本作品后，AI 制作前会先看它，并把新的经验整理进去"}`
+              : `${library.title}（${library.id}）${library.about ? `\n${library.about}` : ""}\n${library.files} 篇${library.works ? ` · ${library.works} 个作品在用` : ""}`
+          }
+          onClick={() => flip(library.id)}
+          onContextMenu={(event) => menuFor(event, { path: library.id, type: "dir" }, 0)}
+        >
+          {unfolded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+          {library.skill ? <Puzzle size={14} className="folder-icon" /> : <BookOpen size={14} className="folder-icon" />}
+          <div className="grow" style={{ minWidth: 0 }}>
+            <div className="ellipsis">{library.title}</div>
+            {library.skill && library.about && <div className="faint small-text skill-description">{library.about}</div>}
+          </div>
+          <span className="faint small-text">{library.files} 篇</span>
+          {library.skill && !own && !readOnly && (
+            <button
+              className="btn small"
+              title="用于当前作品：AI 制作前会先看它的文档，并把新的经验整理进去"
+              onClick={(event) => {
+                event.stopPropagation();
+                link(library.id);
+              }}
+            >
+              <Link2 size={12} /> 关联
+            </button>
+          )}
+        </div>
+        {unfolded && (trees[library.id] ? renderNodes(buildTree(trees[library.id]), 1) : <div className="library-more">读取中…</div>)}
+      </div>
+    );
+  };
 
   return (
     <div className="view library-panel">
@@ -208,26 +274,22 @@ export function ExperienceView() {
           <Settings2 size={13} /> 管理…
         </button>
       </div>
-      <div className="tree">
-        {linked.map((library) => (
-          <div key={library.id}>
-            <div
-              className="tree-row linked"
-              style={{ paddingLeft: 8 }}
-              title={`${library.title}（${library.id}）${library.about ? `\n${library.about}` : ""}\n${library.files} 篇${library.works ? ` · ${library.works} 个作品在用` : ""}`}
-              onClick={() => flip(library.id)}
-              onContextMenu={(event) => menuFor(event, { path: library.id, type: "dir" }, 0)}
-            >
-              {toggled.has(library.id) ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-              <BookOpen size={14} className="folder-icon" />
-              <span className="ellipsis grow">{library.title}</span>
-              <span className="faint small-text">{library.files} 篇</span>
-            </div>
-            {!toggled.has(library.id) && (trees[library.id] ? renderNodes(buildTree(trees[library.id]), 1) : <div className="library-more">读取中…</div>)}
+      <div className="tree">{linked.map(renderLibrary)}</div>
+      {skills.length > 0 && (
+        <>
+          <div
+            className="library-group"
+            title="作品库里技能自带的文档（经验和知识），就是技能里的文件：在这里改，就是改技能，每次改动保存为技能的一个版本。关联到本作品后，AI 制作前会先看它们，并把新的经验整理进去。"
+          >
+            技能里的经验 <span className="count">{skills.length}</span>
+            <span className="grow" />
+            <button className="link-btn" title="在「技能」中上传、下载或删除技能" onClick={() => showView("skills")}>
+              <Puzzle size={13} /> 技能…
+            </button>
           </div>
-        ))}
-      </div>
-      <SkillSection part="documents" />
+          <div className="tree">{skills.map(renderLibrary)}</div>
+        </>
+      )}
       <section className="view-section">
         {missingNames.map((name) => {
           const bin = trash.find((item) => item.id === name);
