@@ -9,7 +9,7 @@ export const SHARED_BRANCHES = ["materials", "materials-trash", "experience", "e
 const REPO_README = `# FRAME 作品库
 
 本仓库由 FRAME Studio 管理。每个作品是一个独立分支 \`works/<作品 id>\`，作品文件位于 \`projects/<名称>/\`；
-每个素材库是一个分支 \`materials/<id>\`，每个经验库是一个分支 \`experience/<id>\`（回收站里的在 \`materials-trash/\`、\`experience-trash/\`），作品发布后的复盘数据位于 \`frame/reviews\` 分支。请在 FRAME Studio 中打开与编辑。
+每个素材库是一个分支 \`materials/<id>\`，每个经验库是一个分支 \`experience/<id>\`（回收站里的在 \`materials-trash/\`、\`experience-trash/\`），作品发布后的复盘数据位于 \`frame/reviews\` 分支，AI 技能位于 \`frame/skills\` 分支。请在 FRAME Studio 中打开与编辑。
 `;
 
 const repoIdFrom = (fullName) =>
@@ -68,7 +68,7 @@ export class Repos {
   async prepare(dir) {
     const exclude = path.join(dir, "info", "exclude");
     fs.mkdirSync(path.dirname(exclude), { recursive: true });
-    const lines = ["/src", "/node_modules", "/docs", "/tsconfig.json", "/AGENTS.md", "/CLAUDE.md", "/.materials/", "exports/", ".cache/", "node_modules/"];
+    const lines = ["/src", "/node_modules", "/docs", "/tsconfig.json", "/AGENTS.md", "/CLAUDE.md", "/.materials/", "/.claude/skills", "/.agents/skills", "exports/", ".cache/", "node_modules/"];
     const current = fs.existsSync(exclude) ? fs.readFileSync(exclude, "utf8") : "";
     const missing = lines.filter((line) => !current.split("\n").includes(line));
     if (missing.length) fs.appendFileSync(exclude, (current.endsWith("\n") || !current ? "" : "\n") + missing.join("\n") + "\n");
@@ -198,7 +198,7 @@ export class Repos {
     return { error, branches, worktrees, backups };
   }
 
-  /** Checkouts of the repository's branches (works, libraries, reviews). */
+  /** Checkouts of the repository's branches (works, libraries, reviews, skills). */
   async worktrees(id) {
     const out = await git(this.dir(id), ["worktree", "list", "--porcelain"]);
     const result = [];
@@ -212,11 +212,11 @@ export class Repos {
 
   /** Where this machine keeps a repository: its clone, the works checked out, the shared branches' checkouts, exported videos. */
   places(id) {
-    const { works, libraries, experience, reviews, exports } = this.config.dirs;
+    const { works, libraries, experience, reviews, skills, exports } = this.config.dirs;
     return {
       clone: this.dir(id),
       works: path.join(works, id),
-      shared: [libraries, experience, reviews].map((base) => path.join(base, id)),
+      shared: [libraries, experience, reviews, skills].map((base) => path.join(base, id)),
       exports: path.join(exports, id),
     };
   }

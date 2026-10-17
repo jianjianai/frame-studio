@@ -13,12 +13,13 @@ import {
   GitBranch,
   History,
   Library,
+  Puzzle,
   RefreshCw,
   RotateCcw,
   Save,
   Undo2,
 } from "lucide-react";
-import { api, timeAgo, workPath, experiencePath, materialsPath, useServerEvent, type ApiError } from "../lib/api";
+import { api, timeAgo, workPath, experiencePath, materialsPath, skillsPath, useServerEvent, type ApiError } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePersistent, useToast } from "../lib/ui";
 import type { Version, WorkInfo, WorkStatus } from "../lib/types";
 import { useWorkbench, type VersionSource } from "../workbench/store";
@@ -29,8 +30,8 @@ import { reviewsPath } from "../lib/reviews";
 import { ViewHeader } from "./ViewHeader";
 
 const statusLabel: Record<string, string> = { M: "修改", A: "新增", D: "删除", "?": "新增", R: "重命名", U: "冲突", C: "复制", T: "类型改变" };
-export const SOURCE_NAMES: Record<VersionSource, string> = { work: "作品", experience: "经验库", materials: "素材库", reviews: "复盘资料" };
-const SOURCE_ICONS: Record<VersionSource, typeof GitBranch> = { work: GitBranch, experience: BookOpen, materials: Library, reviews: BarChart3 };
+export const SOURCE_NAMES: Record<VersionSource, string> = { work: "作品", experience: "经验库", materials: "素材库", reviews: "复盘资料", skills: "技能" };
+const SOURCE_ICONS: Record<VersionSource, typeof GitBranch> = { work: GitBranch, experience: BookOpen, materials: Library, reviews: BarChart3, skills: Puzzle };
 /** Each library of these kinds is a branch of its own, with its own versions. */
 type LibraryKind = "experience" | "materials";
 const LIBRARY_KINDS: LibraryKind[] = ["experience", "materials"];
@@ -48,14 +49,16 @@ interface LibraryVersions {
   behind: number;
 }
 
-/** The API base of what has versions: the work, one library (`library`), or the repository's reviews. */
+/** The API base of what has versions: the work, one library (`library`), or the repository's reviews or skills. */
 export const versionsBase = (source: VersionSource, repo: string, id: string, library?: string) =>
   isLibraryKind(source)
     ? `${source === "experience" ? experiencePath(repo) : materialsPath(repo)}${library ? `/libraries/${encodeURIComponent(library)}` : ""}`
     : source === "reviews"
       ? reviewsPath(repo)
-      : workPath(repo, id);
-/** The server's name of it in events: the work's id, a library's branch, the reviews' scope. */
+      : source === "skills"
+        ? skillsPath(repo)
+        : workPath(repo, id);
+/** The server's name of it in events: the work's id, a library's branch, the reviews' or skills' scope. */
 export const scopeOf = (source: VersionSource, repo: string, id: string, library?: string) =>
   source === "work" ? id : isLibraryKind(source) ? `${source}/${library}` : `${source}-${repo}`;
 
@@ -99,18 +102,19 @@ function useLibraryVersions(refresh: number) {
 
 /**
  * 版本与同步, like VS Code's Source Control: what has versions — the work, each experience and
- * material library (a branch each, listed under their kind) and the repository's reviews —
+ * material library (a branch each, listed under their kind) and the repository's reviews and skills —
  * each with where it stands; the one picked shows its unsaved changes and history below (a
  * version opens to the files it changed, a file opens its change in a tab), saving and GitHub sync.
  */
 export function VersionsView() {
   const { work, versionSource, versionLibrary, showVersions } = useWorkbench();
   const [refresh, setRefresh] = useState(0);
-  // The review branch exists once a review was recorded.
+  // The review and skill branches exist once a review was recorded, a skill saved.
   const [reviews, setReviews] = useState(false);
+  const [skills, setSkills] = useState(false);
   const libraries = useLibraryVersions(refresh);
   const [expanded, setExpanded] = usePersistent<Partial<Record<LibraryKind, boolean>>>("versions-expanded", { experience: true, materials: true });
-  const source = versionSource === "reviews" && !reviews ? "work" : versionSource;
+  const source = (versionSource === "reviews" && !reviews) || (versionSource === "skills" && !skills) ? "work" : versionSource;
   // The library shown of a kind: the one picked last, else the first one.
   const libraryOf = (kind: LibraryKind) => {
     const list = libraries[kind] ?? [];
@@ -121,6 +125,7 @@ export function VersionsView() {
     const bases = [
       versionsBase("work", work.repo, work.id),
       ...(reviews ? [versionsBase("reviews", work.repo, work.id)] : []),
+      ...(skills ? [versionsBase("skills", work.repo, work.id)] : []),
       ...LIBRARY_KINDS.flatMap((kind) => (libraries[kind] ?? []).map((item) => versionsBase(kind, work.repo, work.id, item.id))),
     ];
     return Promise.all(
@@ -148,6 +153,7 @@ export function VersionsView() {
           />
         ))}
         <BranchRow source="reviews" selected={source === "reviews"} refresh={refresh} onSelect={() => showVersions("reviews")} onPresence={setReviews} />
+        <BranchRow source="skills" selected={source === "skills"} refresh={refresh} onSelect={() => showVersions("skills")} onPresence={setSkills} />
       </div>
       {isLibraryKind(source) ? (
         library ? (
@@ -190,7 +196,7 @@ function AheadBehind({ ahead, behind }: { ahead: number; behind: number }) {
 }
 const troubled = (state: { state: string } | null) => Boolean(state && ["behind", "diverged", "conflict", "error"].includes(state.state));
 
-/** The work or the reviews: its name, unsaved changes or last version, versions to push or pull, trouble with GitHub. */
+/** The work, the reviews or the skills: its name, unsaved changes or last version, versions to push or pull, trouble with GitHub. */
 function BranchRow({
   source,
   selected,
@@ -198,7 +204,7 @@ function BranchRow({
   onSelect,
   onPresence,
 }: {
-  source: "work" | "reviews";
+  source: "work" | "reviews" | "skills";
   selected: boolean;
   refresh: number;
   onSelect: () => void;
@@ -216,10 +222,10 @@ function BranchRow({
   }, [base, refresh]);
   useServerEvent((event) => {
     if ((event.type === "work-files" || event.type === "work-versions") && event.work === scope) void load();
-    if (source === "reviews" && event.type === "reviews" && event.repo === work.repo) void load();
+    if (source !== "work" && event.type === source && event.repo === work.repo) void load();
   });
-  // No review data yet: no branch to show.
-  const present = Boolean(status && (source !== "reviews" || status.head || status.files.length));
+  // No review data or skills yet: no branch to show.
+  const present = Boolean(status && (source === "work" || status.head || status.files.length));
   useEffect(() => onPresence?.(present), [present, onPresence]);
   if (!status || !present) return null;
   const Icon = SOURCE_ICONS[source];
@@ -309,9 +315,9 @@ function LibraryRow({ kind, library, selected, onSelect }: { kind: LibraryKind; 
  */
 export function VersionsPanel({ source, library, title, refresh = 0 }: { source: VersionSource; library?: string; title?: string; refresh?: number }) {
   const { work, reload: reloadWork, openDiff, readOnly } = useWorkbench();
-  // Shared branches use the work's version UI; material libraries and the reviews save every change at once.
+  // Shared branches use the work's version UI; material libraries, the reviews and the skills save every change at once.
   const shared = source !== "work";
-  const autosaved = source === "materials" || source === "reviews";
+  const autosaved = source === "materials" || source === "reviews" || source === "skills";
   // A published work keeps its history viewable and syncs, but takes no new versions.
   const locked = !shared && readOnly;
   const scope = scopeOf(source, work.repo, work.id, library);
@@ -348,7 +354,7 @@ export function VersionsPanel({ source, library, title, refresh = 0 }: { source:
     if ((event.type === "work-files" || event.type === "work-versions") && event.work === scope) void load();
     if (source === "experience" && event.type === "experience-files" && event.repo === work.repo) void load();
     if (source === "materials" && event.type === "materials" && event.repo === work.repo) void load();
-    if (source === "reviews" && event.type === "reviews" && event.repo === work.repo) void load();
+    if ((source === "reviews" || source === "skills") && event.type === source && event.repo === work.repo) void load();
   });
   const diff = (tab: string, query: string, preview: boolean) => openDiff(tab, query, { preview, source, library });
 
@@ -442,7 +448,9 @@ export function VersionsPanel({ source, library, title, refresh = 0 }: { source:
       {busy && <div className="view-progress" />}
       <section className="view-section">
         {autosaved ? (
-          <p className="view-hint">{name}的每次修改都自动保存为一个版本{library ? "，和其他素材库互不影响" : ""}。</p>
+          <p className="view-hint">
+            {name}的每次修改都自动保存为一个版本{library ? "，和其他素材库互不影响" : source === "skills" ? "（AI 的修改在每轮结束时保存）" : ""}。
+          </p>
         ) : locked ? (
           <p className="view-hint">作品已发布，不再保存新版本。</p>
         ) : (

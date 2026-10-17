@@ -20,6 +20,7 @@ import {
   Send,
   Copy,
   BarChart3,
+  Puzzle,
 } from "lucide-react";
 import { api, workPath, experiencePath, useServerEvent, sendEvent } from "../lib/api";
 import { Sash, usePersistent, useToast, Dialog, useConfirm, usePrompt } from "../lib/ui";
@@ -31,6 +32,7 @@ import { useTimelineHistory } from "./timelineHistory";
 import { PropertiesView } from "../views/PropertiesView";
 import { ExperienceView } from "../views/ExperienceView";
 import { PromptsView } from "../views/PromptsView";
+import { SkillsView } from "../views/SkillsView";
 import { EditorArea, type EditorHandle } from "./EditorArea";
 import { PrecacheBar } from "./PrecacheBar";
 import { BottomPanel } from "./BottomPanel";
@@ -53,6 +55,7 @@ const VIEWS = [
   { id: "explorer", label: "资源管理器", icon: Files, component: ExplorerView },
   { id: "assets", label: "素材", icon: ImageIcon, component: AssetsView },
   { id: "experience", label: "经验库", icon: BookOpen, component: ExperienceView },
+  { id: "skills", label: "技能", icon: Puzzle, component: SkillsView },
   { id: "versions", label: "版本与同步", icon: GitBranch, component: VersionsView },
   { id: "properties", label: "属性", icon: SlidersHorizontal, component: PropertiesView },
   { id: "prompts", label: "提示词", icon: BookMarked, component: PromptsView },
@@ -205,6 +208,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     openMaterial: (ref, options) => editor.current?.openMaterial(ref, options),
     openResource: (id, options) => editor.current?.openResource(id, options),
     openReview: (path, options) => editor.current?.openReview(path, options),
+    openSkill: (path, options) => editor.current?.openSkill(path, options),
     openDiff: (title, query, options) => editor.current?.openDiff(title, query, options),
     openTool: (tool) => {
       editor.current?.openTool(tool);

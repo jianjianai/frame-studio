@@ -46,6 +46,7 @@ import {
 import { retentionAnalysis, flowAnalysis, reviewText, secondsText, compareText, lyricsText, momentColumns } from "./review-analysis.mjs";
 import { readExports } from "./review-import.mjs";
 import { workSegments } from "./review-segments.mjs";
+import { sharedBranchRoutes } from "./branch-routes.mjs";
 
 /**
  * Reviews of posted videos: for each work, where it was posted, the platforms' numbers over
@@ -682,7 +683,6 @@ export function reviewsPlugin(services) {
   const reviews = (services.reviews = new Reviews(services));
   works.briefProviders.push((work) => reviews.brief(work));
   const base = "/api/repos/:repo/reviews";
-  const scope = (params) => reviews.scope(params.repo);
   const workOf = (params) => services.openWork(params.work, params.repo);
   const folderFile = async (params, file) => {
     const work = await workOf(params);
@@ -772,51 +772,10 @@ export function reviewsPlugin(services) {
   });
 
   // ---- versions: every change is one already; history and sync like a work's --------------
-  // Looking at them starts no branch: a repository without reviews has no versions yet.
-  const unborn = (params) => ({
+  sharedBranchRoutes(services, base, {
     branch: REVIEWS_BRANCH,
-    upstream: "",
-    ahead: 0,
-    behind: 0,
-    files: [],
-    head: null,
-    remote: Boolean(services.repos.get(params.repo).remote),
-  });
-  router.get(`${base}/status`, async ({ params }) => {
-    const handle = await reviews.scopeIfAny(params.repo);
-    return handle ? works.status(handle) : unborn(params);
-  });
-  router.get(`${base}/history`, async ({ params, query }) => {
-    const handle = await reviews.scopeIfAny(params.repo);
-    return handle ? works.history(handle, { limit: Number(query.limit || 50), skip: Number(query.skip || 0) }) : [];
-  });
-  router.get(`${base}/changes`, async ({ params, query }) => {
-    const handle = await reviews.scopeIfAny(params.repo);
-    return handle ? works.changes(handle, query.commit) : [];
-  });
-  router.get(`${base}/diff`, async ({ params, query }) => {
-    const handle = await reviews.scopeIfAny(params.repo);
-    return { diff: handle ? await works.diff(handle, { commit: query.commit, file: query.file }) : "" };
-  });
-  const changedAll = (params) => services.events.emit({ type: "reviews", repo: params.repo });
-  router.post(`${base}/revert`, async ({ params, req }) => {
-    const result = { commit: await works.revert(await scope(params), (await readJson(req)).commit) };
-    changedAll(params);
-    return result;
-  });
-  router.post(`${base}/commit`, () => ({ commit: null }));
-  router.post(`${base}/discard`, () => null);
-  router.post(`${base}/sync`, async ({ params }) => works.sync(await scope(params)));
-  router.post(`${base}/push`, async ({ params }) => works.push(await scope(params)));
-  router.post(`${base}/pull`, async ({ params }) => {
-    const result = await works.pull(await scope(params));
-    changedAll(params);
-    return result;
-  });
-  router.post(`${base}/resolve`, async ({ params, req }) => {
-    const result = await works.resolve(await scope(params), (await readJson(req)).strategy);
-    changedAll(params);
-    return result;
+    scopeIfAny: (repo) => reviews.scopeIfAny(repo),
+    changed: (repo) => services.events.emit({ type: "reviews", repo }),
   });
 
   /** All works' posts side by side (the home page's comparison). */

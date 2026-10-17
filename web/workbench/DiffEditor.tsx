@@ -3,17 +3,17 @@ import { FileCode2, WrapText } from "lucide-react";
 import { api, useServerEvent } from "../lib/api";
 import { usePersistent } from "../lib/ui";
 import { versionsBase, scopeOf } from "../views/VersionsView";
-import { useWorkbench } from "./store";
+import { useWorkbench, type VersionSource } from "./store";
 import { parseDiff, type DiffLine } from "./diff";
 
 /**
  * A diff shown as an editor tab. `query` is the /diff query: `file=<path>` (uncommitted
  * changes of a file), empty (all uncommitted changes) or `commit=<sha>` (one version).
  * Uncommitted diffs follow the files as they change. `source` picks the work, a library
- * (`library`, of the experience or material libraries) or the repository's reviews.
+ * (`library`, of the experience or material libraries) or the repository's reviews or skills.
  */
-export function DiffEditor({ query, source = "work", library }: { query: string; source?: "work" | "experience" | "materials" | "reviews"; library?: string }) {
-  const { work, openFile, openExperience, openReview } = useWorkbench();
+export function DiffEditor({ query, source = "work", library }: { query: string; source?: VersionSource; library?: string }) {
+  const { work, openFile, openExperience, openReview, openSkill } = useWorkbench();
   const [text, setText] = useState<string | null>(null);
   const [error, setError] = useState("");
   // Long lines (prose, JSON) wrap by default, so a change is seen without scrolling sideways.
@@ -36,12 +36,21 @@ export function DiffEditor({ query, source = "work", library }: { query: string;
     if (!live) return;
     if ((event.type === "work-files" || event.type === "work-versions") && event.work === scope) void load();
     if (experience && event.type === "experience-files" && event.repo === work.repo) void load();
+    if (source === "skills" && event.type === "skills" && event.repo === work.repo) void load();
   });
   const files = useMemo(() => parseDiff(text ?? ""), [text]);
   const prefix = source === "work" ? `projects/${work.slug}/` : "";
   // Material library files are media: their changes show here, they do not open as text.
   const open = (path: string) =>
-    experience ? openExperience(`${library}/${path}`) : source === "reviews" ? openReview(path) : source === "work" ? openFile(path) : undefined;
+    experience
+      ? openExperience(`${library}/${path}`)
+      : source === "reviews"
+        ? openReview(path)
+        : source === "skills"
+          ? openSkill(path)
+          : source === "work"
+            ? openFile(path)
+            : undefined;
 
   if (error) return <div className="empty">{error}</div>;
   if (text === null) return <div className="empty">正在读取改动…</div>;

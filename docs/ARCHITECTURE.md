@@ -22,10 +22,12 @@ works/<库>/<作品>/                   作品工作目录 = works/<作品> 分�
    projects/<名称>/                  作品文件（这才是作品内容）
    src → 引擎, node_modules → 依赖, docs → 文档     （链接，不提交）
    AGENTS.md, CLAUDE.md, tsconfig.json             （平台生成，不提交；AGENTS.md 是 AI 的会话说明）
+   .claude/skills, .agents/skills                  作品库技能文件夹的链接（AI 会话开始时建立，不提交）
    .materials/<素材库>/<路径>                        作品导入的素材库代码（@materials/…）在作品所用版本的副本（平台生成，不提交）
 libraries/<库>/<id>/                 素材库：每个库是分支 materials/<id>，各自一个 worktree（作品在 project.ts 的 materials 中按 id 引用，用到的文件版本锁定在作品的 materials.lock.json）；.trash/<名称>/ 是回收站里的素材库（分支 materials-trash/<名称>，附 .trashed.json）
 experience/<库>/<id>/                经验库：每个库是分支 experience/<id>，各自一个 worktree（作品在 project.ts 的 experiences 中按 id 关联）；.trash/ 同上（experience-trash/<名称>）
 reviews/<库>/                        frame/reviews 分支的 worktree：作品发布后的复盘（每个作品一个文件夹 <作品 id>/：review.json、复盘文档、raw/ 原始文件）
+skills/<库>/                         frame/skills 分支的 worktree：作品库的 AI 技能（每个技能一个文件夹，入口 SKILL.md）；还没有技能时是普通文件夹
 exports/<库>/<作品>/                  导出的视频
 models/speech/                       下载的语音模型
 models/beat-this/                    节拍分析模型（本机运行时第一次分析下载；Docker 镜像自带）
@@ -65,6 +67,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `resources.mjs` | 素材库代码里声明的资源（`defineResources` 的角色、场景、效果……，`defineSounds` 的音效）和导出的函数：不运行代码，用 Babel 静态读出字面量字段、zod 参数和注释，按 Git blob 缓存；`resources_search` / `resource_view` 工具、工作台的资源列表、缩略图（无界面浏览器在后台逐个渲染，最新的请求先画；没画好时接口返回 202，画好后广播 `resource-thumb`；按代码版本缓存在 `cache/resources/`，画不出来的按版本记住几分钟）；素材库概况（资源和音效数量、常用画布、README 第一段）给 `work_context` 和会话说明。预览和缩略图运行素材库现在的代码（`tmp/library/<库>/`，素材地址 `/files/<库>/-/`），不混用作品锁定的旧文件 |
 | `reviews.mjs` `review-data.mjs` `review-analysis.mjs` `review-import.mjs` `review-segments.mjs` `sheets.mjs` | 复盘：作品发到平台后的发布记录、按时间记录的累计数据、留存曲线（和同类作品的）、每小时数据、关键时刻和自定义分段（`review.json`）、平台导出的原始文件（`raw/`，原样保存）和复盘文档，放在 `frame/reviews` 分支而不是作品分支（已发布的作品只读，数据却一直在增加；所有作品在一个文件夹里便于对比）。每次修改立即保存为一个版本并自动推送；只读的请求不会建出这个分支。`review-data.mjs`：数据格式和操作、按发布后同一天数取数（有每小时数据时正好算到那一天）、比例、中位数；`review-analysis.mjs`：每秒和每段流失率是同类的几倍、“按同类走”的收益、流量的几波，以及给 AI 的文字；`review-import.mjs`：按表格内容认出抖音创作者中心的导出和评论导出，直接读成数据；`review-segments.mjs`：从作品本身取分段（visual.json 的图层、镜头标记、字幕，配乐旁的 .lrc 按 audio.json 的剪辑换算到作品时间）；`sheets.mjs` 不执行公式地把 xlsx / csv 读成文字表格（GB18030、UTF-16 编码的导出也能读）。工具 `review_import` / `review_read` / `review_write` / `reviews_compare`，工作台「复盘」视图和首页的复盘对比页 |
 | `libraries.mjs` | 素材库、经验库的回收站（删除的库移到分支里的 `.trash/<名称>/`，可以恢复——名称被占用时换一个——或彻底删除；每次都立即保存为一个版本，经验库只提交这些路径，其他未保存的修改不受影响；列表、搜索、资源目录都不看回收站），以及在很多库里挑选：检索词（中文按相邻两字比较）、名称的宽松匹配和最接近的名称、每个库有几个作品在用，以及“适合某个作品”的程度和理由（库的名称、介绍和内容——素材库里资源的名称和标签、经验库的文档标题——与作品的标题、说明、标签相近；同一系列、标题相近或关联了相同库的作品在用）。工作台的选择弹窗、面板的推荐、AI 工具的排序和会话说明都用它；会话开始前 `prepare` 一次，会话说明（同步生成）读它的结果 |
+| `skills.mjs` `branch-routes.mjs` | 作品库的 AI 技能（Agent Skills）：放在 `frame/skills` 分支，同一作品库的所有作品共用，其他作品库看不到。AI 会话开始前，把作品根目录的 `.claude/skills`（Claude Code）和 `.agents/skills`（Codex）链接到 `skills/<库>/`，两个代理都按自己找项目技能的方式找到它们（Claude 和账号、本机的全局技能照常可用）；两个代理改 `.claude/`、`.agents/` 下的文件前都会先请求确认。工作台「技能」视图上传（文件夹在浏览器里打成 zip；.zip / .skill 压缩包；单个 SKILL.md，按 `name` 命名）、新建、在编辑器标签页里改、下载、删除，每次修改立即保存为一个版本；AI 用自己的工具改的，在每轮结束时保存。分支在第一个技能保存时才建立（读取不建）。`branch-routes.mjs` 是复盘和技能这类“每次修改即一个版本”的共用分支的版本接口 |
 | `materials.mjs` `exports.mjs` `tasks.mjs` | 素材库（`/files/<库>/<作品>/materials/...` 按作品锁定的版本取文件，作品写 `-` 时取现在的版本：Git blob，LFS 内容按需下载；`@materials/...` 代码导入由 Vite 插件解析到作品根目录 `.materials/` 中的副本，锁定版本或素材库当前版本，锁定时沿导入关系一并锁定；保存版本和发布前锁定文件只保留作品用到的）、导出文件、后台任务 |
 
 ## 预览与热更新
@@ -96,6 +99,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 - 新会话的工作目录是作品目录，并注入 FRAME MCP（`/mcp`，带只对该作品有效的内部令牌）。代理自己的确认不经过 FRAME 工具（Claude 预先允许，Codex 不询问），由 FRAME 按会话当前模式决定：手动确认和计划模式下，会修改作品的工具先在聊天中请求用户确认（`confirmTool`）。
 - 账号登录调用随依赖安装的 `claude` / `codex` 程序（`auth login`、`login --device-auth`），凭据在它们自己的目录（`~/.claude`、`~/.codex`；容器中为 `/data/home`）。
 - 自定义 API：Anthropic 兼容接口通过 `ANTHROPIC_BASE_URL` / `ANTHROPIC_AUTH_TOKEN` / `ANTHROPIC_MODEL` 交给 Claude Code；OpenAI 兼容接口通过 `CODEX_CONFIG` 中的自定义 model provider 交给 Codex。
+- 技能：开始或恢复会话时把作品库的技能链接到作品根目录的 `.claude/skills`、`.agents/skills`（`skills.mjs`），每轮结束时保存 AI 对技能的修改。
 - 上下文（`ai/context.mjs`）：开始或恢复会话时重新生成作品根目录的 `AGENTS.md`（平台规则、作品需求、关联的经验库，`works.briefProviders` 提供）；每条消息附加 `[FRAME]`，只写 AI 还不知道的：播放位置与选中对象、上一轮之后被改动的作品文件、别人对经验库的修改。会话元数据中的 `context` 记录 AI 已知的经验库文档哈希；MCP 内部令牌带会话 id，工具读写经验库时据此更新。
 - 分支（`fork`）：复制到分支点为止的对话记录，并用 ACP `session/fork`（`_meta.jetbrains.air.fork.messageId` 指定分叉点）分叉代理的上下文；会话元数据 `branch` 记录来源和保留的轮数，界面据此显示同一处的多个版本。
 - 心跳（`ai/heartbeat.mjs`）：Claude 思考时只回传签名、不回传文字，API 保持连接的心跳包也在 Claude 内部丢掉，ACP 上什么都没有。Claude 回合运行时，服务端每 3 秒用 `ss`（iproute2，仅 Linux）读该会话 Claude 进程（命令行带会话 id）的 TCP 连接：发出请求 3 秒后仍在收数据的连接算作正在接收回答，取最近一次收到数据的时间，以 `ai-heartbeat` 事件推送。界面在 AI 不在运行工具、不在等用户时显示“心跳 N 秒前”（与最近一条记录的时间取较晚者），超过 30 秒没有数据时提示可能卡住。没有 `ss` 或非 Linux 时不显示；Codex 尚未确认其服务在推理时会发心跳，暂不显示。

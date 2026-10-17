@@ -14,7 +14,8 @@ function sharedBranch(branch) {
     if (branch.startsWith(prefix + "/")) return { service, library: branch.slice(prefix.length + 1), title: `${noun}「${branch.slice(prefix.length + 1)}」` };
     if (branch.startsWith(prefix + "-trash/")) return { service, title: `${noun}回收站「${branch.slice(prefix.length + 7)}」` };
   }
-  return branch === "frame/reviews" ? { service: "reviews", title: "复盘资料" } : null;
+  if (branch === "frame/reviews") return { service: "reviews", title: "复盘资料" };
+  return branch === "frame/skills" ? { service: "skills", title: "技能" } : null;
 }
 
 export function repoRoutes(services) {
@@ -114,8 +115,8 @@ export function repoRoutes(services) {
             ? works.describe(id, entry.work)
             : library?.library
               ? await services[library.service].scope(id, library.library)
-              : library?.service === "reviews"
-                ? await services.reviews.scope(id)
+              : library?.service === "reviews" || library?.service === "skills"
+                ? await services[library.service].scope(id)
                 : null;
         if (!scope) continue;
         await works.commit(scope, "取消链接前自动保存");

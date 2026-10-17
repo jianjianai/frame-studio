@@ -146,8 +146,8 @@ export interface Selection {
   index?: number;
 }
 
-/** What has versions: the work, each experience and material library (a branch each), and the repository's reviews. */
-export type VersionSource = "work" | "experience" | "materials" | "reviews";
+/** What has versions: the work, each experience and material library (a branch each), and the repository's reviews and skills. */
+export type VersionSource = "work" | "experience" | "materials" | "reviews" | "skills";
 /**
  * Tools that open as editor tabs (wide, many options or much data) instead of side bar views:
  * export, reviews, the libraries' resources, and the management of the material or
@@ -177,6 +177,8 @@ export interface WorkbenchContextValue {
   openResource: (id: string, options?: { preview?: boolean; title?: string }) => void;
   /** Open a file of a work's review (`<work id>/<path>`): documents to edit, original files to view. */
   openReview: (path: string, options?: { preview?: boolean }) => void;
+  /** Open a file of the repository's skills (`<skill>/<path>`); `edit`: a document in the editor, not rendered. */
+  openSkill: (path: string, options?: { preview?: boolean; edit?: boolean }) => void;
   /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. `library`: whose (experience, materials). */
   openDiff: (title: string, query: string, options?: { preview?: boolean; source?: VersionSource; library?: string }) => void;
   /** Open (or show) a tool's tab: export, reviews, resources, library management. */

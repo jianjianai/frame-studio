@@ -267,3 +267,27 @@
   gap: 6px;
   padding: 2px 4px 6px;
 }
+
+/* ---- the 技能 view: a skill shows its description under its name ---- */
+.tree-row.skill-row {
+  height: auto;
+  min-height: 24px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  align-items: flex-start;
+  white-space: normal;
+}
+.tree-row.skill-row > svg {
+  margin-top: 2px;
+}
+.skill-description {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.4;
+}
+.library-panel.drop-target {
+  outline: 2px dashed var(--accent);
+  outline-offset: -4px;
+}

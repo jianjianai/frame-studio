@@ -14,6 +14,7 @@ export const appVersion = JSON.parse(fs.readFileSync(path.join(appRoot, "package
  *   libraries/<repo>/<id>/         worktree of each material library's branch materials/<id> (.trash/<key>/: materials-trash/<key>)
  *   experience/<repo>/<id>/        worktree of each experience library's branch experience/<id> (.trash/<key>/: experience-trash/<key>)
  *   reviews/<repo>/                worktree of the frame/reviews branch (data of posted videos)
+ *   skills/<repo>/                 worktree of the frame/skills branch (the AI skills of the repository's works)
  *   exports/<work>/                rendered videos
  *   models/                        installed speech models
  *   ai/                            chat transcripts
@@ -43,6 +44,7 @@ export function loadConfig(env = process.env) {
       libraries: path.join(home, "libraries"),
       experience: path.join(home, "experience"),
       reviews: path.join(home, "reviews"),
+      skills: path.join(home, "skills"),
       exports: path.join(home, "exports"),
       models: path.join(home, "models"),
       ai: path.join(home, "ai"),

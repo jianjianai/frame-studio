@@ -111,6 +111,8 @@ export const workPath = (repo: string, id: string) => `/api/works/${encodeURICom
 export const experiencePath = (repo: string) => `/api/repos/${encodeURIComponent(repo)}/experience`;
 /** API base of a repository's material libraries (history and sync like a work's). */
 export const materialsPath = (repo: string) => `/api/repos/${encodeURIComponent(repo)}/materials`;
+/** API base of a repository's AI skills (files, and history and sync like a work's). */
+export const skillsPath = (repo: string) => `/api/repos/${encodeURIComponent(repo)}/skills`;
 
 /** What a module of the work played on its own is called: its file name (sheets/剪纸.ts → 剪纸). */
 export const sampleName = (path: string) => path.replace(/^.*\//, "").replace(/\.[^.]+$/, "");

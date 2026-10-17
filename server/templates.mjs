@@ -182,6 +182,7 @@ export function platformInstructions() {
 
 ## 需要用户同意
 - 关联或取消关联经验库、素材库，新建经验库。
+- 新建、修改或删除技能。\`.claude/skills/\`（Codex 是 \`.agents/skills/\`，同一个文件夹）里是这个作品库所有作品共用的技能，改动在每轮结束时自动保存为版本。
 - 保存作品版本（version_save）。
 - 删除作品：work_delete 只做标记，由用户在作品列表里确认。
 - [FRAME] 说 GitHub 上有更新的版本或有冲突时，先不要改作品文件，请用户在工作台顶部处理。

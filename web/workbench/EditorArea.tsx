@@ -15,6 +15,7 @@ import {
   Eye,
   Shapes,
   BarChart3,
+  Puzzle,
   Box,
   Globe2,
   Type,
@@ -31,7 +32,7 @@ import {
   ArrowRightLeft,
   Pin,
 } from "lucide-react";
-import { api, ApiError, formatTime, sampleName, workPath, experiencePath, useServerEvent, materialsPath } from "../lib/api";
+import { api, ApiError, formatTime, sampleName, workPath, experiencePath, useServerEvent, materialsPath, skillsPath } from "../lib/api";
 import { reviewsPath } from "../lib/reviews";
 import { RawViewer } from "../reviews/RawViewer";
 import { Markdown } from "../chat/Markdown";
@@ -90,6 +91,8 @@ export interface EditorHandle {
   openResource(id: string, options?: { preview?: boolean; title?: string }): void;
   /** A file of a work's review (`<work id>/<path>`): documents are edited, original files viewed. */
   openReview(path: string, options?: { preview?: boolean }): void;
+  /** A file of the repository's skills (`<skill>/<path>`), edited like a work file. */
+  openSkill(path: string, options?: { preview?: boolean; edit?: boolean }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
   openDiff(title: string, query: string, options?: { preview?: boolean; source?: VersionSource; library?: string }): void;
   /** A tool in its own tab (export, reviews, resources, library management). */
@@ -97,11 +100,11 @@ export interface EditorHandle {
   /** Split the focused group's tab off to a side (Ctrl+\). */
   split(side: Side): void;
 }
-type Source = "work" | "experience" | "materials" | "resource" | "reviews";
+type Source = "work" | "experience" | "materials" | "resource" | "reviews" | "skills";
 type Kind = "preview" | "text" | "image" | "audio" | "video" | "model" | "environment" | "font" | "file" | "diff" | "resource" | "raw" | "tool" | "sample";
 /** What an editor shows. Several editors (in different groups) can show one document; they share its text. */
 interface Doc {
-  /** The work file path, "preview" for the film's preview, `sample:<path>` for a module played on its own, `exp:<path>` for experience documents, `mat:<ref>` for material files, `rev:<path>` for review files, `diff:…` for diffs, `tool:<tool>` for tools. */
+  /** The work file path, "preview" for the film's preview, `sample:<path>` for a module played on its own, `exp:<path>` for experience documents, `mat:<ref>` for material files, `rev:<path>` for review files, `skill:<path>` for skill files, `diff:…` for diffs, `tool:<tool>` for tools. */
   key: string;
   /** Path inside its source (sent to the source's file API). */
   file: string;
@@ -125,6 +128,8 @@ const single = (doc: Doc | undefined) => doc?.kind === "preview" || doc?.kind ==
 const dirty = (doc: Doc | undefined) => Boolean(doc && doc.content !== doc.saved);
 
 const isPage = (path: string) => /\.html?$/i.test(path);
+/** A document's frontmatter (a skill's SKILL.md: name, description) reads as the block it is, not as a heading. */
+const frontmatterAsCode = (text: string) => text.replace(/^\uFEFF?---\r?\n([\s\S]*?)\r?\n---[ \t]*(?:\r?\n|$)/, (_, yaml: string) => "```yaml\n" + yaml + "\n```\n\n");
 
 const kindOf = (path: string): Kind =>
   /\.(png|jpe?g|webp|gif|svg|avif)$/i.test(path)
@@ -179,6 +184,8 @@ const docIcon = (doc: Doc) =>
     <BookOpen size={14} />
   ) : doc.source === "reviews" ? (
     <BarChart3 size={14} />
+  ) : doc.source === "skills" ? (
+    <Puzzle size={14} />
   ) : (
     fileIcon(doc.file)
   );
@@ -199,7 +206,9 @@ const labelOf = (doc: Doc) =>
               ? `经验库文档 ${doc.file.split("/").slice(1).join("/")}`
               : doc.source === "reviews"
                 ? `复盘资料 ${doc.file.split("/").slice(1).join("/")}`
-                : doc.source === "materials"
+                : doc.source === "skills"
+                  ? `技能文件 .claude/skills/${doc.file}`
+                  : doc.source === "materials"
                   ? `素材库文件 materials/${doc.file}`
                   : doc.file;
 
@@ -219,7 +228,9 @@ const tooltipOf = (doc: Doc, editor: Editor) =>
                 ? `经验库：${doc.file}`
                 : doc.source === "reviews"
                   ? `复盘：${doc.file}`
-                  : doc.source === "materials"
+                  : doc.source === "skills"
+                    ? `技能：${doc.file}`
+                    : doc.source === "materials"
                     ? `素材库：materials/${doc.file}`
                     : doc.file
   }${editor.preview ? "（预览，双击保持打开）" : ""}`;
@@ -268,6 +279,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     materials: materialsPath(work.repo),
     resource: "",
     reviews: reviewsPath(work.repo),
+    skills: skillsPath(work.repo),
   };
   const apisRef = useRef(apis);
   apisRef.current = apis;
@@ -367,6 +379,12 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     },
     [open],
   );
+  const openSkill = useCallback(
+    (path: string, { edit, ...options }: { preview?: boolean; edit?: boolean } = {}) =>
+      // Skills hold instructions and scripts (.py, .sh…): all are opened as text.
+      open({ key: `skill:${path}`, file: path, source: "skills", kind: "text" }, { ...options, rendered: !edit && /\.md$/i.test(path) }),
+    [open],
+  );
   const openDiff = useCallback(
     (title: string, query: string, options: { preview?: boolean; source?: VersionSource; library?: string } = {}) => {
       const source = options.source ?? "work";
@@ -399,6 +417,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
       openMaterial,
       openResource,
       openReview,
+      openSkill,
       openDiff,
       openTool,
       split: (side) => {
@@ -407,7 +426,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         if (active) splitEditor(current.focus, active, side);
       },
     }),
-    [openFile, openSample, openExperience, openMaterial, openResource, openReview, openDiff, openTool, splitEditor],
+    [openFile, openSample, openExperience, openMaterial, openResource, openReview, openSkill, openDiff, openTool, splitEditor],
   );
 
   // Documents without editors are forgotten (the preview stays).
@@ -476,6 +495,8 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         refresh((doc) => doc.source === "experience" && doc.file.startsWith(library + "/"));
       } else if ((event.type === "reviews" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `reviews-${work.repo}`)) {
         refresh((doc) => doc.source === "reviews" && (!event.work || doc.file.startsWith(`${event.work}/`)));
+      } else if ((event.type === "skills" && event.repo === work.repo) || (event.type === "work-versions" && event.work === `skills-${work.repo}`)) {
+        refresh((doc) => doc.source === "skills");
       }
     },
     [work.id, work.repo],
@@ -1087,7 +1108,7 @@ function EditorContent({
       {doc.kind === "text" && (((/\.md$/i.test(doc.file) || lottie) && doc.content !== undefined) || (page && doc.source === "work")) && (
         <div className="editor-toolbar">
           <span className="faint small-text ellipsis grow">
-            {doc.source === "experience" ? `经验库 · ${doc.file}` : doc.source === "reviews" ? `复盘 · ${doc.file}` : doc.file}
+            {doc.source === "experience" ? `经验库 · ${doc.file}` : doc.source === "reviews" ? `复盘 · ${doc.file}` : doc.source === "skills" ? `技能 · ${doc.file}` : doc.file}
             {lottie ? " · Lottie 动画" : ""}
           </span>
           {page && rendered && <PageLink file={doc.file} version={doc.stamp} />}
@@ -1130,7 +1151,7 @@ function EditorContent({
           <AssetViewer assetBase={work.preview.assetBase} src={`films/${work.slug}/${doc.file.slice("public/".length)}`} version={doc.hash ?? undefined} />
         ) : rendered ? (
           <div className="markdown-page" onDoubleClick={() => onEditor({ rendered: false })} title="双击编辑">
-            <Markdown text={doc.content} />
+            <Markdown text={frontmatterAsCode(doc.content)} />
           </div>
         ) : (
           <CodeEditor

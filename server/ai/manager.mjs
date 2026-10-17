@@ -532,6 +532,9 @@ export class AiManager {
     // The agent loads the brief (AGENTS.md) as the session starts or resumes: it is the baseline.
     await this.services.experience?.prepare(work);
     await this.services.materials?.dir(work.repo).catch(() => {}); // the brief counts the material libraries
+    // The repository's skills, where Claude Code and Codex look for a project's skills. Both
+    // agents ask before changing files under .claude/ or .agents/, which suits the brief's rule.
+    await this.services.skills?.link(work);
     const brief = this.services.works.writeBrief(work);
     let result;
     // The work root holds the platform AGENTS.md/CLAUDE.md and the engine links; the work itself is projects/<name>/.
@@ -699,6 +702,8 @@ export class AiManager {
       const writes = session.experienceWrites;
       session.experienceWrites = null;
       if (writes?.size) await this.services.experience?.saveTurn([...writes.values()]);
+      // What it changed in the repository's skills (with its own tools, through the links): one version.
+      await this.services.skills?.saveTurn(work.repo);
       session.goalCapped = null;
       for (const [requestId, pending] of this.permissions)
         if (pending.session === session.meta.id) {
