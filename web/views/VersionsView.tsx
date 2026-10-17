@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { api, timeAgo, workPath, experiencePath, materialsPath, useServerEvent, type ApiError } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePersistent, useToast } from "../lib/ui";
-import type { Version, WorkStatus } from "../lib/types";
+import type { Version, WorkInfo, WorkStatus } from "../lib/types";
 import { useWorkbench, type VersionSource } from "../workbench/store";
 import { RepoDialog } from "../components/RepoDialog";
 import { MoveWorkDialog } from "../components/MoveWorkDialog";
@@ -59,7 +59,13 @@ export const versionsBase = (source: VersionSource, repo: string, id: string, li
 export const scopeOf = (source: VersionSource, repo: string, id: string, library?: string) =>
   source === "work" ? id : isLibraryKind(source) ? `${source}/${library}` : `${source}-${repo}`;
 
-/** The libraries of both kinds with their unsaved changes and last versions, kept up to date. */
+/** The libraries of each kind this work links, by id. */
+const linkedIds = (work: WorkInfo, kind: LibraryKind) => (kind === "experience" ? work.meta?.experiences : work.meta?.materials) ?? [];
+
+/**
+ * The libraries this work links (both kinds, in the work's order) with their unsaved changes
+ * and last versions, kept up to date. The repository's other libraries are not listed here.
+ */
 function useLibraryVersions(refresh: number) {
   const { work } = useWorkbench();
   const [lists, setLists] = useState<Record<LibraryKind, LibraryVersions[] | null>>({ experience: null, materials: null });
@@ -82,7 +88,13 @@ function useLibraryVersions(refresh: number) {
     },
     [work.repo],
   );
-  return lists;
+  const linked = (kind: LibraryKind) =>
+    lists[kind] &&
+    linkedIds(work, kind).flatMap((id) => {
+      const library = lists[kind]!.find((item) => item.id === id);
+      return library ? [library] : [];
+    });
+  return { experience: linked("experience"), materials: linked("materials") };
 }
 
 /**
@@ -141,7 +153,10 @@ export function VersionsView() {
         library ? (
           <VersionsPanel key={`${source}/${library.id}`} source={source} library={library.id} title={library.title} refresh={refresh} />
         ) : (
-          <p className="view-hint">还没有{SOURCE_NAMES[source]}。在「{SOURCE_NAMES[source]}」选项卡（管理…）里新建，每个{SOURCE_NAMES[source]}有自己的版本。</p>
+          <p className="view-hint">
+            本作品没有{source === "materials" ? "引用" : "关联"}{SOURCE_NAMES[source]}。这里只列出本作品的{SOURCE_NAMES[source]}，在「{SOURCE_NAMES[source]}」选项卡（管理…）里{source === "materials" ? "引用" : "关联"}或新建，每个
+            {SOURCE_NAMES[source]}有自己的版本。
+          </p>
         )
       ) : (
         <VersionsPanel key={source} source={source} refresh={refresh} />
@@ -245,12 +260,14 @@ function LibraryGroup({
   const open = expanded && list.length > 0;
   return (
     <>
-      <div className="branch-row" title={`每个${SOURCE_NAMES[kind]}是一个分支，版本、修改和同步各自独立`} onClick={onToggle}>
+      <div className="branch-row" title={`本作品${kind === "materials" ? "引用" : "关联"}的${SOURCE_NAMES[kind]}：每个是一个分支，版本、修改和同步各自独立`} onClick={onToggle}>
         <Icon size={14} />
         <div className="grow" style={{ minWidth: 0 }}>
           <div className="ellipsis">{SOURCE_NAMES[kind]}</div>
           <div className="faint small-text ellipsis">
-            {list.length ? `${list.length} 个${SOURCE_NAMES[kind]}${changes ? ` · ${changes} 个未保存的修改` : ""}` : `还没有${SOURCE_NAMES[kind]}`}
+            {list.length
+              ? `本作品的 ${list.length} 个${changes ? ` · ${changes} 个未保存的修改` : ""}`
+              : `本作品没有${kind === "materials" ? "引用" : "关联"}${SOURCE_NAMES[kind]}`}
           </div>
         </div>
         {!open && changes > 0 && <span className="badge accent">{changes}</span>}

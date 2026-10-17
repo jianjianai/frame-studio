@@ -109,16 +109,17 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   const readOnlyRef = useRef(false);
   const history = useTimelineHistory(base, reload, () => readOnlyRef.current);
   const reloadStatus = useCallback(() => api<WorkStatus>(base + "/status").then(setStatus, () => {}), [base]);
-  // Unsaved changes of the experience libraries, for the badge on the 版本与同步 icon.
-  const [experienceChanges, setExperienceChanges] = useState(0);
+  // Unsaved changes of the experience libraries the work links, for the badge on the 版本与同步 icon.
+  const [experienceVersions, setExperienceVersions] = useState<{ id: string; files: number }[]>([]);
   const reloadExperience = useCallback(
     () =>
-      api<{ files: number }[]>(experiencePath(repo) + "/versions").then(
-        (libraries) => setExperienceChanges(libraries.reduce((sum, library) => sum + library.files, 0)),
+      api<{ id: string; files: number }[]>(experiencePath(repo) + "/versions").then(
+        (libraries) => setExperienceVersions(libraries),
         () => {},
       ),
     [repo],
   );
+  const experienceChanges = experienceVersions.filter((library) => work?.meta?.experiences?.includes(library.id)).reduce((sum, library) => sum + library.files, 0);
   useEffect(() => void reloadExperience(), [reloadExperience]);
   useServerEvent(
     (event) => {

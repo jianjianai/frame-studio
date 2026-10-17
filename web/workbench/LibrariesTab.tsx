@@ -237,7 +237,8 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
       onClick: () => (materials ? openMaterial(`${library.id}/README.md`) : openExperience(`${library.id}/README.md`)),
     });
     items.push({ label: "重命名", icon: <Pencil size={14} />, onClick: () => rename(library) });
-    items.push({ label: "版本与同步", icon: <History size={14} />, onClick: () => showVersions(materials ? "materials" : "experience", library.id) });
+    // 版本与同步 lists the work's own libraries.
+    if (linkedIds.has(library.id)) items.push({ label: "版本与同步", icon: <History size={14} />, onClick: () => showVersions(materials ? "materials" : "experience", library.id) });
     items.push("separator", { label: "删除（移到回收站）", icon: <Trash2 size={14} />, danger: true, onClick: () => remove(library) });
     openMenu(event, items);
   };
