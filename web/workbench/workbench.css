@@ -490,6 +490,26 @@ a.btn.disabled {
   max-height: 70vh;
   background: repeating-conic-gradient(var(--bg-hover) 0 25%, transparent 0 50%) 0 0 / 16px 16px;
 }
+/* An image takes the room there is, so zooming in has the whole tab to show it in. */
+.media-viewer.image {
+  grid-template-rows: minmax(0, 1fr);
+  align-content: stretch;
+  overflow: hidden;
+}
+.zoom-box {
+  position: relative;
+  place-self: stretch;
+  min-height: 0;
+  display: grid;
+  /* Definite tracks, so the image's max-height resolves against the box. */
+  grid-template: minmax(0, 1fr) / minmax(0, 1fr);
+  place-items: center;
+  overflow: hidden;
+  outline: none;
+}
+.media-viewer .zoom-box img {
+  max-height: 100%;
+}
 
 /* ---- preview ---- */
 .preview {

@@ -44,6 +44,7 @@ import { CodeEditor } from "./CodeEditor";
 import { DiffEditor } from "./DiffEditor";
 import { ResourceViewer } from "./ResourceViewer";
 import { AssetViewer } from "./AssetViewer";
+import { ZoomImage } from "./ZoomImage";
 import { SampleTab, playable } from "./SampleTab";
 import { PageViewer, usePageUrl } from "./PageViewer";
 import { isLottieText } from "../views/media";
@@ -1213,8 +1214,8 @@ function MediaViewer({ path, kind, playerId }: { path: string; kind: Kind; playe
       </>
     );
   return (
-    <div className="media-viewer">
-      {kind === "image" && <img src={url} alt={path} onLoad={(event) => setInfo(`${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`)} />}
+    <div className={`media-viewer ${kind === "image" ? "image" : ""}`}>
+      {kind === "image" && <ZoomImage src={url} alt={path} onLoad={(image) => setInfo(`${image.naturalWidth}×${image.naturalHeight}`)} />}
       {kind === "audio" && <audio ref={player} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
       {kind === "video" && <video ref={player} src={url} controls onLoadedMetadata={(event) => media(event.currentTarget)} />}
       {(kind === "file" || drawn) && <div className="empty">无法在这里预览这种文件{drawn ? "（只有 public/ 里的素材能预览）" : ""}</div>}
@@ -1372,13 +1373,13 @@ function MaterialViewer({ fileRef, kind, playerId }: { fileRef: string; kind: Ki
           <CodeEditor key={url} path={fileRef} value={text} onChange={() => {}} onSave={() => {}} readOnly />
         )
       ) : (
-        <div className="media-viewer">
+        <div className={`media-viewer ${kind === "image" ? "image" : ""}`}>
           {kind === "image" && (
-            <img
+            <ZoomImage
               key={url}
               src={url}
               alt={fileRef}
-              onLoad={(event) => setInfo(`${event.currentTarget.naturalWidth}×${event.currentTarget.naturalHeight}`)}
+              onLoad={(image) => setInfo(`${image.naturalWidth}×${image.naturalHeight}`)}
               onError={() => setFailed(missing)}
             />
           )}

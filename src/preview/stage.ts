@@ -2,6 +2,7 @@ import { createPlayerSession, type PlaybackSnapshot } from "../engine/player-ses
 import { projectAudioTracks, type AnimationProject, type Quality } from "../engine/types";
 import type { StudioApi } from "../engine/debug";
 import { importWork, workSourceFromQuery, changeKinds } from "./load-work";
+import { attachZoom, type Zoom } from "./zoom";
 import "./stage.css";
 
 /**
@@ -34,6 +35,8 @@ export interface StageApi {
   setQuality(quality: Quality): void;
   setSubtitles(enabled: boolean): void;
   reload(): Promise<void>;
+  /** Looking closer at the frame; the studio hears of changes as `zoom` messages. */
+  zoom: Pick<Zoom, "toggle" | "reset">;
 }
 declare global {
   interface Window {
@@ -72,10 +75,16 @@ const trackControls: Record<string, { gain: number; muted: boolean }> = {};
 const post = (message: Record<string, unknown>) => {
   if (parent !== window) parent.postMessage({ source: "frame-stage", ...message }, location.origin);
 };
+// Zoomed in, the frame shows at the work's own size as "100%" (the canvas may draw fewer pixels).
+const zoom = attachZoom(root, canvas, {
+  natural: () => state.project,
+  keys: document,
+  onChange: (value) => post({ type: "zoom", ...value }),
+});
 // A click on the preview gives this frame the keyboard; the studio's shortcuts (space,
-// arrows, undo) still belong to the studio, so key presses are handed up.
+// arrows, undo) still belong to the studio, so key presses are handed up (but not the zoom's).
 addEventListener("keydown", (event) => {
-  if (parent === window || (event.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]")) return;
+  if (parent === window || event.defaultPrevented || (event.target as HTMLElement | null)?.closest?.("input, textarea, select, [contenteditable]")) return;
   if ([" ", "ArrowLeft", "ArrowRight", "Home"].includes(event.key)) event.preventDefault();
   const { key, code, ctrlKey, metaKey, shiftKey, altKey } = event;
   post({ type: "key", key, code, ctrlKey, metaKey, shiftKey, altKey });
@@ -219,6 +228,7 @@ window.__FRAME_STAGE__ = {
     if (session) void session.api.seek(lastSnapshot.time);
   },
   reload: () => load(Date.now()),
+  zoom: { toggle: zoom.toggle, reset: zoom.reset },
 };
 
 window.addEventListener("error", (event) => setStatus({ error: "运行错误：" + event.message }));

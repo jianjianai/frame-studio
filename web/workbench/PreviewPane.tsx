@@ -16,6 +16,7 @@ import {
   AlertTriangle,
   Loader2,
   GalleryThumbnails,
+  ZoomIn,
 } from "lucide-react";
 import { formatTime } from "../lib/api";
 import { coverFromFrame } from "../lib/covers";
@@ -223,6 +224,7 @@ function Transport({
 }) {
   const { playback, time, drag } = useScrub(stage);
   const status = useObservable(stage.status);
+  const zoomed = useObservable(stage.zoom).scale > 1;
   const duration = status.project?.duration ?? 0;
   const ready = status.status === "ready";
   return (
@@ -289,6 +291,14 @@ function Transport({
           <option value="standard">标准</option>
           <option value="high">高清</option>
         </select>
+        <button
+          className={`icon-btn ${zoomed ? "active" : ""}`}
+          title={zoomed ? "恢复适应窗口 (Ctrl + 0，或双击画面)" : "放大查看：Ctrl/Alt + 滚轮或双指捏合缩放，拖动移动画面，双击在适应窗口和原始大小之间切换"}
+          disabled={!ready}
+          onClick={() => stage.toggleZoom()}
+        >
+          <ZoomIn size={16} />
+        </button>
         <button className="icon-btn" title="全屏" onClick={onFullscreen}>
           <Maximize2 size={15} />
         </button>

@@ -3,6 +3,7 @@ import { Download, Sparkles } from "lucide-react";
 import { api } from "../lib/api";
 import { useWorkbench } from "../workbench/store";
 import { reviewsPath } from "../lib/reviews";
+import { ZoomImage } from "../workbench/ZoomImage";
 
 interface Table {
   sheets: { name: string; rows: string[][]; total: number }[];
@@ -92,8 +93,8 @@ export function RawViewer({ fileRef }: { fileRef: string }) {
           </div>
         )
       ) : IMAGE.test(file) ? (
-        <div className="media-viewer">
-          <img src={url} alt={file} />
+        <div className="media-viewer image">
+          <ZoomImage src={url} alt={file} />
         </div>
       ) : /\.pdf$/i.test(file) ? (
         <iframe className="raw-pdf" src={url} title={file} />

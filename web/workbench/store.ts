@@ -1,6 +1,7 @@
 import { createContext, useContext, useSyncExternalStore } from "react";
 import type { CheckResult, PlaybackSnapshot, StageStatus, WorkInfo } from "../lib/types";
 import type { TimelineHistory } from "./timelineHistory";
+import type { ZoomState } from "../../src/preview/zoom";
 
 /** Tiny observable value for high-frequency state (playhead) outside React's tree. */
 export class Observable<T> {
@@ -40,6 +41,7 @@ export interface StageApi {
   setQuality(quality: "draft" | "standard" | "high"): void;
   setSubtitles(enabled: boolean): void;
   reload(): Promise<void>;
+  zoom: { toggle(): void; reset(): void };
 }
 
 /**
@@ -58,6 +60,8 @@ export class StageController {
   playback = new Observable<PlaybackSnapshot>({ time: 0, playing: false, buffering: false, rate: 1, loop: false, volume: 1, muted: false });
   status = new Observable<StageStatus>({ status: "loading", revision: 0 });
   fps = new Observable<number>(0);
+  /** How far the frame is zoomed in (1: fitted), as the stage reports it. */
+  zoom = new Observable<ZoomState>({ scale: 1, percent: null });
   private stage(): StageApi | undefined {
     return (this.frame?.contentWindow as unknown as { __FRAME_STAGE__?: StageApi } | null)?.__FRAME_STAGE__;
   }
@@ -109,6 +113,10 @@ export class StageController {
   reload() {
     return this.stage()?.reload();
   }
+  /** Fitted ↔ zoomed in to the frame's actual size. */
+  toggleZoom() {
+    this.stage()?.zoom.toggle();
+  }
   handleMessage(data: Record<string, unknown>) {
     if (data.type === "playback") this.playback.set(data.snapshot as PlaybackSnapshot);
     else if (data.type === "status") {
@@ -117,6 +125,7 @@ export class StageController {
       void type;
       this.status.set(status as unknown as StageStatus);
     } else if (data.type === "fps") this.fps.set(data.fps as number);
+    else if (data.type === "zoom") this.zoom.set({ scale: data.scale as number, percent: data.percent as number | null });
   }
 }
 
