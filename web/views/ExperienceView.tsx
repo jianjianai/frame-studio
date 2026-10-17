@@ -7,6 +7,7 @@ import { useWorkbench } from "../workbench/store";
 import { buildTree, type Node } from "./ExplorerView";
 import { ViewHeader } from "./ViewHeader";
 import type { LibraryInfo, TrashedLibrary } from "./libraryShared";
+import { SkillSection } from "./SkillLibraries";
 
 /** The work's own record of reusable experience no linked library suits yet (server: EXPERIENCE_INBOX). */
 export const INBOX = "经验.md";
@@ -226,6 +227,7 @@ export function ExperienceView() {
           </div>
         ))}
       </div>
+      <SkillSection part="documents" />
       <section className="view-section">
         {missingNames.map((name) => {
           const bin = trash.find((item) => item.id === name);

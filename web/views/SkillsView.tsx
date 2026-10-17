@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { zipSync } from "fflate";
 import {
   AlertTriangle,
@@ -16,28 +16,15 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { api, ApiError, del, skillsPath, useServerEvent } from "../lib/api";
+import { api, ApiError, del, skillsPath } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePersistent, usePrompt, useToast, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { RemoteBar } from "../workbench/RemoteBar";
 import { useWorkbench } from "../workbench/store";
 import { buildTree, type Node } from "./ExplorerView";
 import { ViewHeader } from "./ViewHeader";
+import { opensHere, useSkills, type Skill } from "./SkillLibraries";
 
-/** A skill as the server lists it (server/skills.mjs). */
-interface Skill {
-  name: string;
-  /** SKILL.md's name (the folder's name is what the AI and the chat's / know it by). */
-  title: string;
-  description: string;
-  files: FileEntry[];
-  /** Why the AI would not use it as it is. */
-  problem?: string;
-}
-
-/** Files that are not text: listed, not opened. */
-const BINARY =
-  /\.(png|jpe?g|webp|gif|avif|bmp|ico|svg|wav|mp3|m4a|ogg|opus|flac|aac|mp4|webm|mov|glb|gltf|fbx|obj|hdr|exr|ttf|otf|woff2?|pdf|xlsx?|docx?|pptx?|zip|gz|tgz|tar|7z|rar|bin|exe|dll|so|dylib|wasm|onnx|pt|sqlite|db)$/i;
 const ACCEPT = ".zip,.skill,.md";
 const WRITE_PROMPT = "请把我们这次的做法整理成这个作品库的一个技能（.claude/skills/<名称>/SKILL.md），名称和说明你来定；动手前先告诉我打算怎么写。";
 
@@ -79,8 +66,7 @@ async function droppedFiles(items: DataTransferItemList) {
  */
 export function SkillsView() {
   const { work, openSkill, insertPrompt, showVersions } = useWorkbench();
-  const [skills, setSkills] = useState<Skill[] | null>(null);
-  const [versioned, setVersioned] = useState(false);
+  const { skills, versioned, load } = useSkills(work.repo);
   const [open, setOpen] = usePersistent<string[]>("skills-open", []);
   const [dropping, setDropping] = useState(false);
   const [run, busy] = useAction();
@@ -90,23 +76,6 @@ export function SkillsView() {
   const [openMenu, menu] = useContextMenu();
   const base = skillsPath(work.repo);
   const enc = encodeURIComponent;
-
-  const load = () =>
-    api<{ skills: Skill[]; versioned: boolean }>(base).then(
-      (result) => {
-        setSkills(result.skills);
-        setVersioned(result.versioned);
-      },
-      () => setSkills([]),
-    );
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base]);
-  useServerEvent((event) => {
-    if (event.type === "skills" && event.repo === work.repo) void load();
-    if (event.type === "work-versions" && event.work === `skills-${work.repo}`) void load();
-  });
 
   const upload = (file: File) =>
     run(async () => {
@@ -181,7 +150,7 @@ export function SkillsView() {
     });
 
   const flip = (key: string) => setOpen((current) => (current.includes(key) ? current.filter((item) => item !== key) : [...current, key]));
-  const editable = (file: FileEntry) => file.type === "file" && !BINARY.test(file.path);
+  const editable = (file: FileEntry) => file.type === "file" && opensHere(file.path);
   const skillMenu = (event: React.MouseEvent, skill: Skill) =>
     openMenu(event, [
       {
@@ -213,7 +182,7 @@ export function SkillsView() {
           <div
             className="tree-row"
             style={{ paddingLeft: 8 + depth * 12, cursor: node.type === "dir" || text ? "pointer" : "default" }}
-            title={text || node.type === "dir" ? key : `${key}（不是文本，下载技能后查看）`}
+            title={text || node.type === "dir" ? key : `${key}（不能在这里打开，下载技能后查看）`}
             onClick={() => (node.type === "dir" ? flip(key) : text && openSkill(key, { preview: true }))}
             onDoubleClick={() => text && openSkill(key)}
             onContextMenu={(event) => fileMenu(event, skill, node)}

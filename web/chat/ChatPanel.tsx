@@ -1259,7 +1259,7 @@ function UserMessage({
 }
 
 function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; onRemove?: () => void }) {
-  const { stage, openFile, openSample, openMaterial, openResource } = useWorkbench();
+  const { stage, openFile, openSample, openMaterial, openResource, openSkill } = useWorkbench();
   let icon = <Paperclip size={12} />,
     label = "";
   if (attachment.type === "frame") {
@@ -1282,6 +1282,9 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
   } else if (attachment.type === "experience") {
     icon = <BookOpen size={12} />;
     label = `经验：${attachment.library}/${attachment.path}`;
+  } else if (attachment.type === "skill") {
+    icon = <Puzzle size={12} />;
+    label = `技能：${attachment.path}`;
   } else if (attachment.type === "resource") {
     icon = <Shapes size={12} />;
     label = `资源 ${attachment.title || attachment.id.split("#").pop()}`;
@@ -1297,6 +1300,8 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
         else if (attachment.type === "frame") void stage.seek(attachment.time);
         else if (attachment.type === "range") void stage.seek(attachment.start);
         else if (attachment.type === "resource") openResource(attachment.id, { preview: true, title: attachment.title });
+        // (a folder has nothing to open)
+        else if (attachment.type === "skill" && /\.[^/]+$/.test(attachment.path)) openSkill(attachment.path, { preview: true });
         else if (attachment.type === "asset") {
           // A material library file, or one of the work's own (films/<slug>/x is public/x).
           const material = /^materials\/(.+)$/.exec(attachment.url)?.[1];

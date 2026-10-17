@@ -1211,6 +1211,7 @@ export class AiManager {
       if (attachment.type === "asset") references.push(`素材 ${attachment.url}`);
       if (attachment.type === "file") references.push(`文件 ${attachment.path}`);
       if (attachment.type === "experience") references.push(`经验库${attachment.library ? `「${attachment.library}」` : ""}的文档 ${attachment.path}`);
+      if (attachment.type === "skill") references.push(`技能里的 ${session.process?.agent === "codex" ? ".agents" : ".claude"}/skills/${attachment.path}`);
       if (attachment.type === "resource")
         references.push(`素材库资源 ${attachment.id}${attachment.title ? `「${attachment.title}」` : ""}（resource_view 看详情和预览图）`);
       if (attachment.type === "problem") references.push(`问题：${attachment.message}`);

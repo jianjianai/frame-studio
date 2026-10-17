@@ -3,7 +3,7 @@ import path from "node:path";
 import { unzipSync } from "fflate";
 import { git, parseStatus } from "./git.mjs";
 import { tree, readText, writeText, downloadPlan, sendZip } from "./files.mjs";
-import { readBody, readJson } from "./http.mjs";
+import { readBody, readJson, sendFile } from "./http.mjs";
 import { problem, notFound, conflict, confined } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
 import { sharedBranchRoutes } from "./branch-routes.mjs";
@@ -402,6 +402,12 @@ export function skillsPlugin(services) {
     return skills.write(params.repo, body.path, body.content, body.expectedHash);
   });
   router.delete(`${base}/file`, async ({ params, query }) => skills.removeFile(params.repo, query.path));
+  // A file as it is (pictures, videos…): the 经验 and 素材 views show a skill's files where they are.
+  router.get(`${base}/raw`, async ({ params, query, req, res }) => {
+    const file = String(query.path || "");
+    skills.split(file);
+    return sendFile(req, res, confined(await skills.ready(params.repo), file));
+  });
 
   sharedBranchRoutes(services, base, {
     branch: SKILLS_BRANCH,

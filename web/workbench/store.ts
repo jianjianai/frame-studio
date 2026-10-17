@@ -137,6 +137,8 @@ export type ChatAttachment =
   | { type: "asset"; url: string; path?: string }
   | { type: "file"; path: string }
   | { type: "experience"; library: string; path: string }
+  /** A file or folder of the repository's skills (`<skill>/<path>`). */
+  | { type: "skill"; path: string }
   | { type: "resource"; id: string; title?: string }
   | { type: "problem"; message: string };
 

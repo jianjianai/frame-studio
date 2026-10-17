@@ -10,7 +10,12 @@ import { frontmatter, mentionedSkills, readUpload } from "../server/skills.mjs";
 import { platformInstructions } from "../server/templates.mjs";
 
 const skillMd = (name, description) => `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`;
-const zip = (files) => Buffer.from(zipSync(Object.fromEntries(Object.entries(files).map(([name, text]) => [name, strToU8(text)]))));
+const zip = (files) =>
+  Buffer.from(
+    zipSync(
+      Object.fromEntries(Object.entries(files).map(([name, content]) => [name, typeof content === "string" ? strToU8(content) : new Uint8Array(content)])),
+    ),
+  );
 
 describe("SKILL.md frontmatter", () => {
   it("reads plain, quoted, folded and literal fields", () => {
@@ -208,6 +213,27 @@ describe("the repository's skills in the studio and for the AI", () => {
     ai.sessions.delete(older.meta.id);
     ai.sessions.delete(fresh.meta.id);
     expect((await call("/api/ai/profiles/claude-account/commands")).body).toEqual([]);
+  });
+
+  it("hands out a skill's files as they are, for the 经验 and 素材 views, and lets the user point the AI at one", async () => {
+    const png = Buffer.from("89504e470d0a1a0a0000000d49484452", "hex");
+    const bundle = zip({ "motion/SKILL.md": skillMd("motion", "动效知识库"), "motion/references/index.md": "# 索引", "motion/assets/a/preview.png": png });
+    expect((await call("/api/repos/local/skills/upload?name=motion.zip", { method: "POST", raw: bundle })).status).toBe(200);
+    const raw = await fetch(`${base}/api/repos/local/skills/raw?path=${encodeURIComponent("motion/assets/a/preview.png")}`);
+    expect(raw.status).toBe(200);
+    expect(raw.headers.get("content-type")).toBe("image/png");
+    expect(Buffer.from(await raw.arrayBuffer())).toEqual(png);
+    expect((await call("/api/repos/local/skills/raw?path=motion/../../../secrets.json")).status).toBe(400);
+    expect((await call("/api/repos/local/skills/raw?path=motion/none.png")).status).toBe(404);
+    // A file picked in those views and sent with a message: where the AI finds it.
+    const created = (await call("/api/works", { method: "POST", body: { title: "引用技能文件" } })).body;
+    const work = await app.services.openWork(created.id, "local");
+    const { ai } = app.services;
+    const session = { meta: { id: "s-skill-file", work: work.id, repo: "local", queue: [], status: "idle", commands: [] } };
+    const message = { text: "参考这个", attachments: [{ type: "skill", path: "motion/references/index.md" }], view: null };
+    expect(ai.turnPrompt(session, message, work).at(-1).text).toContain("用户引用：技能里的 .claude/skills/motion/references/index.md");
+    session.process = { agent: "codex" };
+    expect(ai.turnPrompt(session, message, work).at(-1).text).toContain("技能里的 .agents/skills/motion/references/index.md");
   });
 
   it("asks the AI to have the user agree before changing them", () => {
