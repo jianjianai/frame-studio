@@ -129,4 +129,4 @@ export function createScene(options: SceneOptions) {
 - 相机路径可用 `THREE.CatmullRomCurve3` 按时间取点，或 `cameraCurve(time, keys)`（`src/engine/camera-curve.ts`）做一维关键帧插值。
 - 作为 visual.json 的 scene 图层时，`engine` 写 `"three"`；背景不设置就是透明的，可以叠在其他图层上。
 - 引擎在 `dispose` 时释放场景内几何体、材质和纹理；自己创建的 RenderTarget 等需要自行释放（自定义 Scene 时）。
-- 预览窗口没有 WebGL 时会显示错误；`preview_frames` 使用软件渲染，三维场景较慢，取少量时间点。
+- 预览窗口没有 WebGL 时会显示错误。`preview_frames` 等工具在用户电脑上开着 FRAME 时用那台电脑的显卡画；否则在服务器上软件渲染，三维场景一帧要几秒，取少量时间点（结果里写明在哪里画的）。

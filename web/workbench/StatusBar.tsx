@@ -1,14 +1,16 @@
 import { useEffect, useState } from "react";
-import { GitBranch, ArrowUp, ArrowDown, CircleDot, CheckCircle2, AlertCircle, Loader2, Wifi, WifiOff, Sparkles, Cloud, CloudOff, CloudDownload, AlertTriangle } from "lucide-react";
+import { GitBranch, ArrowUp, ArrowDown, CircleDot, CheckCircle2, AlertCircle, Loader2, Wifi, WifiOff, Sparkles, Cloud, CloudOff, CloudDownload, AlertTriangle, Gpu } from "lucide-react";
 import { formatTime, onConnection, useServerEvent, workPath } from "../lib/api";
 import { useRemoteState, type RemoteState } from "./RemoteBar";
 import type { WorkStatus } from "../lib/types";
 import { useObservable, useWorkbench } from "./store";
 import { ExportStatus } from "../components/ExportDock";
+import { graphicsCard, useGpuRendering } from "../lib/gpu-render";
 
 export function StatusBar({ status, version, onOpenVersions }: { status: WorkStatus | null; version: string; onOpenVersions: () => void }) {
   const { stage, check, showPanel, work } = useWorkbench();
   const playback = useObservable(stage.playback);
+  const gpuRendering = useGpuRendering();
   const stageStatus = useObservable(stage.status);
   const fps = useObservable(stage.fps);
   const [online, setOnline] = useState(true);
@@ -59,6 +61,11 @@ export function StatusBar({ status, version, onOpenVersions }: { status: WorkSta
       {Object.values(aiSessions).some((value) => value !== "idle") && (
         <span>
           <Sparkles size={13} /> AI 工作中
+        </span>
+      )}
+      {gpuRendering && (
+        <span title={`AI 查看画面、测速时用这台设备的显卡画（${graphicsCard()}）`}>
+          <Gpu size={13} /> AI 在用本机显卡画
         </span>
       )}
       <span className="grow" />

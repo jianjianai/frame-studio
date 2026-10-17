@@ -7,6 +7,7 @@ import { Workbench } from "./workbench/Workbench";
 import { ComparePage } from "./reviews/ComparePage";
 import { ExportStatus } from "./components/ExportDock";
 import { initExports } from "./lib/exports";
+import { initGpuRender } from "./lib/gpu-render";
 
 export function navigate(path: string, { replace = false } = {}) {
   if (replace) history.replaceState(null, "", path);
@@ -68,10 +69,13 @@ export function App() {
         );
     });
   }, [build]);
-  // Exports run in the background of whatever page is open; interrupted ones go on.
+  // Exports run in the background of whatever page is open; interrupted ones go on. Any open
+  // page also draws for the AI on this device's GPU.
   const authenticated = Boolean(state?.authenticated);
   useEffect(() => {
-    if (authenticated) initExports();
+    if (!authenticated) return;
+    initExports();
+    initGpuRender();
   }, [authenticated]);
   if (!state) return null;
   const work = /^\/work\/([^/]+)\/([^/]+)/.exec(path);

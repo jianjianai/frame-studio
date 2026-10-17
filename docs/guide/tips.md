@@ -18,7 +18,7 @@ const random = seeded(42);           // 固定种子随机数：每次 createSce
 ## 性能
 
 - 预览实时播放：每帧绘制预算约 16 ms。大量对象用 Pixi/Three；Canvas 2D 中缓存不变的内容（离屏 canvas）。
-- 哪里画得慢：`work_check` 的 `timing: true` 按工作台预览的尺寸和画质测全片，列出明显慢的地方和那里的图层、镜头（服务器没有 GPU，数值比一般电脑慢，用来比较）；`preview_frames` 也给出每张画了多少毫秒。
+- 哪里画得慢：`work_check` 的 `timing: true` 按工作台预览的尺寸和画质测全片，列出明显慢的地方和那里的图层、镜头（用户电脑上开着 FRAME 时在那里用显卡测，接近实际速度；否则在服务器上软件渲染，数值比一般电脑慢，只用来比较）；`preview_frames` 也给出每张画了多少毫秒。
 - 不要在 `render` 里创建大对象、加载图片或编译着色器；在 `createScene` 中准备。
 - `quality === "draft"` 时可以减少粒子、关闭阴影。
 - 长作品分成多个 scene 图层，只在需要的时间段活跃（不活跃的图层会被释放）。
@@ -32,7 +32,7 @@ const random = seeded(42);           // 固定种子随机数：每次 createSce
 | 素材 404 | 路径没有 `films/<名称>/` 前缀，或文件不在 `public/` |
 | `project.ts 元数据无效` | 字段不是字面量，或缺少必需字段（见 `project`） |
 | 声音无输出 | audio.json 没在 project.ts 声明，clip 时间超出，或生成器名字与 `module` 不一致 |
-| WebGL context 创建失败 | 当前浏览器没有 GPU 加速；用 `preview_frames` 检查（软件渲染） |
+| WebGL context 创建失败 | 当前浏览器没有 GPU 加速（浏览器设置里关了硬件加速）；用 `preview_frames` 检查 |
 
 ## 交付前
 

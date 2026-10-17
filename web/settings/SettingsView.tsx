@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { api, del, patch, formatBytes, useServerEvent } from "../lib/api";
 import { Dialog, useAction, useConfirm, useToast } from "../lib/ui";
+import { graphicsCard, gpuRenderWanted, setGpuRenderWanted } from "../lib/gpu-render";
 import { GithubIcon } from "../components/icons";
 import "./settings.css";
 
@@ -158,8 +159,36 @@ function AiSettings() {
           <option value="full">完全信任，不再询问</option>
         </select>
       </label>
+      <GpuRenderSetting />
       {editing && <ProfileDialog value={editing} onClose={() => setEditing(null)} onSaved={load} />}
     </>
+  );
+}
+
+/** This device's choice (kept in the browser): whether the AI draws on its GPU. */
+function GpuRenderSetting() {
+  const [wanted, setWanted] = useState(gpuRenderWanted);
+  const card = graphicsCard();
+  return (
+    <div className="field">
+      <label className="row">
+        <input
+          type="checkbox"
+          checked={Boolean(card) && wanted}
+          disabled={!card}
+          onChange={(event) => {
+            setGpuRenderWanted(event.target.checked);
+            setWanted(event.target.checked);
+          }}
+        />
+        AI 查看画面、测渲染速度、检查动作时，用这台设备的显卡画
+      </label>
+      <span className="muted small-text">
+        {card
+          ? `服务器没有显卡，三维画面一帧要画几秒。这台设备开着 FRAME 时 AI 改在这里画（显卡：${card}），画的时候预览可能卡一下。只对这台设备的这个浏览器有效；手机和平板默认不用。`
+          : "这个浏览器没有可用的显卡加速（软件渲染），AI 不会用这台设备画。"}
+      </span>
+    </div>
   );
 }
 

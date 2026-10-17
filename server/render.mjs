@@ -10,6 +10,7 @@ import { frameDimensions, fitComposition } from "../src/engine/dimensions.mjs";
 import { appRoot } from "./config.mjs";
 import { problem, sha256, Locks } from "./util.mjs";
 import { cleanBrowserError, mergeTimedErrors } from "./stack.mjs";
+import { GpuBrowsers, isGone } from "./render-gpu.mjs";
 
 const require = createRequire(import.meta.url);
 
@@ -86,6 +87,7 @@ export class Renderer {
     this.token = services.auth.issueInternal({ purpose: "render" });
     this.assetQueue = new Locks();
     this.analysis = new Locks();
+    this.gpu = new GpuBrowsers(services);
     services.events.subscribe((event) => {
       if (event.type === "preview-update") this.invalidate(`${event.repo}/${event.work}`);
       if (event.type === "materials" && event.repo) this.invalidateResources(event.repo);
@@ -163,16 +165,21 @@ export class Renderer {
     };
   }
 
-  /** Open the headless render page for a work source at an output width. */
-  async openPage(source, { width, project, timeoutMs = 90000, quality }) {
-    const browser = await this.browser();
+  /**
+   * Open the headless render page for a work source at an output width. `on`: a studio page in
+   * the user's browser that opens it instead and draws on its GPU (see GpuBrowsers).
+   */
+  async openPage(source, { width, project, timeoutMs = 90000, quality, on }) {
+    const browser = on ?? (await this.browser());
     const size = frameDimensions(project, width);
-    this.openPages++;
+    // Only pages here keep the headless browser from closing.
+    const here = on ? 0 : 1;
+    this.openPages += here;
     let closed = false;
     const closeContext = () => {
       if (!closed) {
         closed = true;
-        this.openPages--;
+        this.openPages -= here;
         this.lastUse = Date.now();
       }
       return context.close().catch(() => {});
@@ -185,7 +192,7 @@ export class Renderer {
         extraHTTPHeaders: { Authorization: "Bearer " + this.token },
       });
     } catch (error) {
-      this.openPages--;
+      this.openPages -= here;
       throw error;
     }
     const page = await context.newPage();
@@ -229,20 +236,39 @@ export class Renderer {
     }
     // A module drawn on its own decides its length (and sound) itself.
     const { duration, sample } = source.scene ? await page.evaluate(() => ({ duration: window.__FRAME_STUDIO__.duration, sample: window.__FRAME_STUDIO__.sample ?? null })) : {};
-    return { page, context, size, errors, logs, close: closeContext, fresh: true, duration, sample };
+    return { page, context, size, errors, logs, close: closeContext, fresh: true, duration, sample, on: on ?? null };
+  }
+
+  /**
+   * Draw on a studio page open in the user's browser when there is one: its GPU draws a 3D
+   * frame in milliseconds, the server's software renderer in seconds. `run(on)` gets that page,
+   * or null to draw here; when the page goes away halfway (closed, asleep), it runs again here.
+   */
+  async anywhere(run) {
+    const on = await this.gpu.pick();
+    if (on)
+      try {
+        return await run(on);
+      } catch (error) {
+        if (!isGone(error)) throw error;
+      }
+    return run(null);
   }
 
   /** How long a module drawn on its own is, and what it declared as a sample (null: nothing). */
   async sceneInfo(work, scene) {
-    const lease = await this.lease(work, { scene }).catch((error) => {
-      error.message = this.clean(work, error.message);
-      throw error;
+    // Where its frames will be drawn next, so that page is loaded once.
+    return this.anywhere(async (on) => {
+      const lease = await this.lease(work, { scene, on }).catch((error) => {
+        error.message = this.clean(work, error.message);
+        throw error;
+      });
+      try {
+        return { duration: lease.handle.project.duration, sample: lease.handle.sample ?? null };
+      } finally {
+        lease.release();
+      }
     });
-    try {
-      return { duration: lease.handle.project.duration, sample: lease.handle.sample ?? null };
-    } finally {
-      lease.release();
-    }
   }
 
   /**
@@ -253,10 +279,10 @@ export class Renderer {
    * would take each other's frames), at the width it asks for — the page changes size in
    * place instead of loading the work again. Call `release()` when done.
    */
-  async lease(work, { width, scene } = {}) {
+  async lease(work, { width, scene, on } = {}) {
     const meta = this.services.works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
-    const key = `${work.repo}/${work.id}` + (scene ? `|scene:${scene}` : "");
+    const key = `${work.repo}/${work.id}` + (scene ? `|scene:${scene}` : "") + (on ? `|gpu:${on.id}` : "");
     const stamp = this.freshen(work);
     const existing = this.pages.get(key);
     let entry = existing;
@@ -267,7 +293,7 @@ export class Renderer {
       }
       const first = width || fitComposition(meta.meta, 1280).width;
       entry = { usedAt: Date.now(), stale: false, stamp, users: 0, tail: Promise.resolve() };
-      entry.handle = this.openPage(this.sourceOf(work, scene), { width: first, project: meta.meta });
+      entry.handle = this.openPage(this.sourceOf(work, scene), { width: first, project: meta.meta, on });
       this.pages.set(key, entry);
       entry.handle.catch(() => this.pages.get(key) === entry && this.pages.delete(key));
     }
@@ -358,11 +384,14 @@ export class Renderer {
    * draws a module of the work instead of the film; `crop` ({x, y, width, height} in pixels of
    * the `width`-wide frame) returns only that part.
    */
-  async frames(work, { times, width, subtitles = true, scene, crop }) {
+  async frames(work, options) {
     this.lastUse = Date.now();
+    return this.anywhere((on) => this.framesWith(work, options, on));
+  }
+  async framesWith(work, { times, width, subtitles = true, scene, crop }, on) {
     let lease;
     try {
-      lease = await this.lease(work, { width, scene });
+      lease = await this.lease(work, { width, scene, on });
     } catch (error) {
       error.message = this.clean(work, error.message);
       throw error;
@@ -398,6 +427,7 @@ export class Renderer {
         result.push({ time, png: Buffer.from(data, "base64"), ms: Math.round(ms), ...(handle.fresh ? { loading: true } : {}) });
         handle.fresh = false;
       } catch (error) {
+        if (isGone(error)) throw error;
         // Keep the frames that did render; one broken moment should not hide the rest.
         failed.push(`${formatTime(time)} 渲染失败：${error.message}`);
       }
@@ -405,17 +435,20 @@ export class Renderer {
     const errors = mergeTimedErrors([...new Set([...failed, ...handle.errors.slice(errorsBefore)].map((text) => this.clean(work, text)))]);
     if (!result.length) throw problem(422, errors.join("\n") || "没有渲染出画面", "RENDER_FAILED");
     const size = crop ?? handle.size;
-    return { frames: result, width: size.width, height: size.height, errors, console: [...handle.logs] };
+    return { frames: result, width: size.width, height: size.height, errors, console: [...handle.logs], gpu: handle.on?.gpu ?? null };
   }
 
   /**
-   * One heavy job (motion analysis, timing a whole film) at a time on the server: they draw
+   * One heavy job (motion analysis, timing a whole film) at a time where it is drawn: they draw
    * hundreds of frames, and several at once would slow every studio page and export down.
-   * Resolves with the task's result and how long it waited for its turn.
+   * `task(on)` draws on that page in the user's browser (null: here, see `anywhere`); resolves
+   * with the task's result and how long it waited for its turn.
    */
   async heavy(task) {
-    const queued = Date.now();
-    return this.analysis.run("heavy", async () => ({ waited: Date.now() - queued, result: await task() }));
+    return this.anywhere((on) => {
+      const queued = Date.now();
+      return this.analysis.run(on ? `heavy:${on.id}` : "heavy", async () => ({ waited: Date.now() - queued, result: await task(on) }));
+    });
   }
 
   /**
@@ -424,12 +457,12 @@ export class Renderer {
    * come as PNG. `budgetMs` counts from the call (loading the work included): drawing stops
    * when it is used up and says so (`cut`), rather than hold the server for minutes.
    */
-  async motionFrames(work, { times, width, thumbs = [], budgetMs = 45000, consume }) {
+  async motionFrames(work, { times, width, thumbs = [], budgetMs = 45000, consume, on }) {
     this.lastUse = Date.now();
     const began = Date.now();
     let lease;
     try {
-      lease = await this.lease(work, { width });
+      lease = await this.lease(work, { width, on });
     } catch (error) {
       error.message = this.clean(work, error.message);
       throw error;
@@ -481,7 +514,7 @@ export class Renderer {
         if (drawn) handle.fresh = false;
         const errors = mergeTimedErrors([...new Set([...(failure ? [failure] : []), ...handle.errors.slice(errorsBefore)].map((text) => this.clean(work, text)))]);
         const drawing = Date.now() - started;
-        return { drawn, cut: drawn < times.length && !failure, ms: Date.now() - began, loadMs: started - began, perFrame: drawn ? drawing / drawn : null, width: handle.size.width, height: handle.size.height, errors };
+        return { drawn, cut: drawn < times.length && !failure, ms: Date.now() - began, loadMs: started - began, perFrame: drawn ? drawing / drawn : null, width: handle.size.width, height: handle.size.height, errors, gpu: handle.on?.gpu ?? null };
       });
     } finally {
       lease.release();
@@ -496,7 +529,7 @@ export class Renderer {
    * the call, loading included) allows, the moments still to come spread out so the
    * measurement reaches the end of the film.
    */
-  async timing(work, { step, budgetMs = 45000 } = {}) {
+  async timing(work, { step, budgetMs = 45000, on } = {}) {
     this.lastUse = Date.now();
     const began = Date.now();
     const meta = this.services.works.meta(work);
@@ -506,7 +539,7 @@ export class Renderer {
     let handle;
     try {
       this.freshen(work);
-      handle = await this.openPage(this.sourceOf(work), { width: size.width, project, quality: "standard", timeoutMs: 60000 });
+      handle = await this.openPage(this.sourceOf(work), { width: size.width, project, quality: "standard", timeoutMs: 60000, on });
       const started = Date.now();
       const draw = (batch) =>
         again(handle.page, READY.work, () =>
@@ -550,6 +583,9 @@ export class Renderer {
         ms: Date.now() - began,
         loadMs: started - began,
         errors: mergeTimedErrors([...new Set(handle.errors.map((text) => this.clean(work, text)))]),
+        gpu: on?.gpu ?? null,
+        // A tab in the background may be given less time to draw.
+        background: Boolean(on && !on.visible),
       };
     } catch (error) {
       error.message = this.clean(work, error.message);
@@ -605,7 +641,7 @@ export class Renderer {
   /** One labelled contact sheet; much cheaper for AI context than many images. */
   /** `cell`: the width of each picture in the sheet when the frames come bigger (crops). */
   async storyboard(work, { times, columns, width = 480, subtitles = true, format = "jpeg", scene, crop, cell }) {
-    const { frames, width: w, height: h, errors } = await this.frames(work, { times, width, subtitles, scene, crop });
+    const { frames, width: w, height: h, errors, gpu } = await this.frames(work, { times, width, subtitles, scene, crop });
     let cells = frames,
       cw = w,
       ch = h;
@@ -621,6 +657,7 @@ export class Renderer {
       digests: frames.map((frame) => digest(frame.png)),
       ms: frames.map((frame) => frame.ms),
       loading: frames.map((frame) => Boolean(frame.loading)),
+      gpu,
     };
   }
 

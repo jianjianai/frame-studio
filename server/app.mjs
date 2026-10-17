@@ -241,11 +241,18 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     }
   });
   const sockets = new WebSocketServer({ noServer: true, maxPayload: 1024 * 1024 });
+  // A socket that receives more at once (frames drawn in the user's browser) names its limit.
+  const larger = new Map();
+  const serverFor = (limit) => {
+    if (!limit) return sockets;
+    if (!larger.has(limit)) larger.set(limit, new WebSocketServer({ noServer: true, maxPayload: limit }));
+    return larger.get(limit);
+  };
   server.on("upgrade", (req, socket, head) => {
     const { pathname } = new URL(req.url, "http://local");
     const handler = pathname === "/api/ws" ? serveEvents : services.sockets.get(pathname);
     if (!handler || socket.destroyed) return; // Vite HMR handles its own upgrades.
-    sockets.handleUpgrade(req, socket, head, (ws) => handler(ws, req));
+    serverFor(handler.maxPayload).handleUpgrade(req, socket, head, (ws) => handler(ws, req));
   });
   function serveEvents(ws) {
     const unsubscribe = events.subscribe((event) => {
@@ -285,7 +292,7 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     async close() {
       for (const close of services.closers.reverse()) await close();
       watcher.close();
-      for (const client of sockets.clients) client.terminate();
+      for (const each of [sockets, ...larger.values()]) for (const client of each.clients) client.terminate();
       await preview.close();
       await new Promise((resolve) => server.close(resolve));
     },

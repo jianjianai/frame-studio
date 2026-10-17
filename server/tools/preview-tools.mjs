@@ -49,6 +49,9 @@ export function regionPlan(project, region, scale) {
   return { width, crop, scale: sx, capped: scale !== undefined && scale > most + 1e-6, most };
 }
 
+/** Where frames were drawn, for reading their milliseconds. */
+export const drawnOn = (gpu) => (gpu ? `在用户电脑上用显卡画（${gpu}）` : "在服务器上软件渲染（没有显卡），毫秒数比用户电脑慢得多");
+
 const timeOf = (frame, digest) => `${formatTime(frame.time)}（${digest}，${frame.ms} ms${frame.loading ? "，含加载" : ""}）`;
 
 const listTimes = (times) => times.map((time) => time.toFixed(2)).join(" ");
@@ -140,7 +143,7 @@ export function registerPreviewTools(registry) {
     name: "preview_frames",
     title: "查看画面",
     description:
-      "在浏览器中渲染作品画面给你看，用来亲眼确认修改效果。times 指定绝对时间（秒，超出 0–作品时长的按 0 或最后一刻 时长−0.001 秒画）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张；取的是等分后每一份的中点，不含首尾两端，看首尾和切点用 times）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。默认 JPEG；format 设为 png 时返回无损 PNG（看细小文字、颜色）。每张都有画面指纹（同一时刻两次渲染指纹相同，画面就完全一样）和服务器画这一帧的毫秒数（服务器没有 GPU，只用来比较快慢；整片哪里慢用 work_check 的 timing）。" +
+      "在浏览器中渲染作品画面给你看，用来亲眼确认修改效果。times 指定绝对时间（秒，超出 0–作品时长的按 0 或最后一刻 时长−0.001 秒画）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张；取的是等分后每一份的中点，不含首尾两端，看首尾和切点用 times）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。默认 JPEG；format 设为 png 时返回无损 PNG（看细小文字、颜色）。每张都有画面指纹（同一时刻两次渲染指纹相同，画面就完全一样）和画这一帧的毫秒数（整片哪里慢用 work_check 的 timing）。用户电脑上开着 FRAME 时在那台电脑上用显卡画，三维作品也快；否则在服务器上软件渲染（没有 GPU），三维作品一帧要几秒，取少量时间点。" +
       "region 放大看一块（脸、手、细线、小字）：[x, y, 宽, 高] 按作品画面像素，scale 是放大倍数（默认放到长边约 1000 像素，最多到画面长边 3840）。" +
       "scene 单独画作品里的另一个模块（例如 sheets/人物.ts，导出 createScene，写法和 scenes/*.ts 一样）：人物设定图、表情和动作表、一个组件单独看、样片，不用放进时间轴、不影响用户的预览；时间是这个模块自己的（0 到它 sample 的 duration，没写就是作品时长），不给 times 时样片均匀取样、其他模块画 0 秒那一刻，不叠字幕。",
     readOnly: true,
@@ -219,7 +222,7 @@ export function registerPreviewTools(registry) {
       if (sheet ?? times.length > 4) {
         const cells = columns ?? Math.min(4, Math.ceil(Math.sqrt(times.length)));
         const cell = cells > 4 ? 320 : 480;
-        const { image, times: rendered, errors, digests, ms, loading } = await services.renderer.storyboard(work, {
+        const { image, times: rendered, errors, digests, ms, loading, gpu } = await services.renderer.storyboard(work, {
           times,
           columns: cells,
           width: zoom ? zoom.width : cell,
@@ -231,7 +234,7 @@ export function registerPreviewTools(registry) {
         });
         return {
           data: { times: rendered, errors, digests, ms },
-          text: `${label}总览 ${rendered.length} 张：${rendered.map((time, index) => `#${index + 1} ${timeOf({ time, ms: ms[index], loading: loading[index] }, digests[index])}`).join("，")}${errors.length ? "\n错误：\n" + errors.join("\n") : ""}`,
+          text: `${label}总览 ${rendered.length} 张：${rendered.map((time, index) => `#${index + 1} ${timeOf({ time, ms: ms[index], loading: loading[index] }, digests[index])}`).join("，")}。${drawnOn(gpu)}。${errors.length ? "\n错误：\n" + errors.join("\n") : ""}`,
           images: [{ data: image, mimeType: `image/${format}` }],
         };
       }
@@ -245,7 +248,7 @@ export function registerPreviewTools(registry) {
         })),
       );
       const digests = result.frames.map((frame) => digest(frame.png));
-      const notes = [`${label}${result.width}×${result.height}，时间：${result.frames.map((frame, index) => timeOf(frame, digests[index])).join("、")}`];
+      const notes = [`${label}${result.width}×${result.height}，时间：${result.frames.map((frame, index) => timeOf(frame, digests[index])).join("、")}。${drawnOn(result.gpu)}。`];
       if (result.errors.length) notes.push("渲染时出现错误：\n" + result.errors.join("\n"));
       return {
         data: { times: result.frames.map((frame) => frame.time), width: result.width, height: result.height, errors: result.errors, digests, ms: result.frames.map((frame) => frame.ms) },
@@ -260,7 +263,7 @@ export function registerPreviewTools(registry) {
     title: "检查运动",
     description:
       `逐帧分析一段画面怎么动，检查动画和运镜顺不顺：画面整体的平移、推拉（缩放）、旋转速度，切换点，以及急起急停（没有缓入缓出）、突然变速、单帧跳动、局部一帧内突变（弹出、换图或穿帮）、重复帧（画面在动时有帧和前一帧一样，看起来会顿）和 1 秒以上的完全静止。返回每个镜头的运动和问题列表，附一张图：一排取样小图加速度曲线（灰线是切换，红点是问题）。` +
-      `按小图（长边 ${MOTION_EDGE} 像素）逐帧画，一次最多 ${MOTION_FRAMES} 帧；从开始算（含加载作品）满 ${MOTION_BUDGET_MS / 1000} 秒就停，并说明这个作品一次能看多长（服务器上同时只做一个这样的分析，其他的排队）。推荐：一个镜头或一个转场 start–end 取 2–6 秒、默认帧率（30 fps 是 60–180 帧，一般作品 5–15 秒出结果；三维、体素这类画得慢的作品一次只能看 1–2 秒）；一整段（10–20 秒）只看快慢节奏时 fps 用 10–15；全片分段看，不要一次看完。速度单位是作品画面像素/秒。`,
+      `按小图（长边 ${MOTION_EDGE} 像素）逐帧画，一次最多 ${MOTION_FRAMES} 帧；从开始算（含加载作品）满 ${MOTION_BUDGET_MS / 1000} 秒就停，并说明这个作品一次能看多长（同时只做一个这样的分析，其他的排队）。用户电脑上开着 FRAME 时用那台电脑的显卡画，三维作品也快；否则在服务器上软件渲染，三维、体素这类作品一次只能看 1–2 秒。推荐：一个镜头或一个转场 start–end 取 2–6 秒、默认帧率（30 fps 是 60–180 帧，一般作品 5–15 秒出结果）；一整段（10–20 秒）只看快慢节奏时 fps 用 10–15；全片分段看，不要一次看完。速度单位是作品画面像素/秒。`,
     readOnly: true,
     input: {
       work: workArg,
@@ -291,26 +294,29 @@ export function registerPreviewTools(registry) {
       const size = fitComposition(project, MOTION_EDGE);
       const design = compositionSize(project);
       const thumbs = [...new Set(Array.from({ length: 6 }, (_, index) => Math.round(((total - 1) * index) / 5)))];
-      const track = new MotionTrack({ width: size.width, height: size.height, design, fps: rate });
-      const pictures = [];
-      const { waited, result: drawn } = await services.renderer.heavy(() =>
-        services.renderer.motionFrames(work, {
+      let track, pictures;
+      const { waited, result: drawn } = await services.renderer.heavy((on) => {
+        // From the start each time: a page in the user's browser that went away halfway is drawn again here.
+        track = new MotionTrack({ width: size.width, height: size.height, design, fps: rate });
+        pictures = [];
+        return services.renderer.motionFrames(work, {
           times,
           width: size.width,
           thumbs,
           budgetMs: MOTION_BUDGET_MS,
+          on,
           consume: (frame) => {
             track.add(frame);
             if (frame.png) pictures.push({ time: frame.time, png: frame.png });
           },
-        }),
-      );
+        });
+      });
       if (track.frames.length < 2) throw problem(422, drawn.errors.join("\n") || "没有画出画面", "RENDER_FAILED");
       const analysis = analyzeMotion(track);
       const last = track.frames[track.frames.length - 1].time;
       const spent = Math.round(drawn.ms / 100) / 10;
       const lines = [
-        `运动检查 ${formatTime(start)}–${formatTime(last)}：${rate} fps，${track.frames.length} 帧（按 ${size.width}×${size.height} 画来分析，用时 ${spent} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}）。`,
+        `运动检查 ${formatTime(start)}–${formatTime(last)}：${rate} fps，${track.frames.length} 帧（按 ${size.width}×${size.height} 画来分析，${drawn.gpu ? "在用户电脑上画" : "在服务器上画"}，用时 ${spent} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}）。`,
         ...motionText(analysis, { design }),
       ];
       if (drawn.cut) {

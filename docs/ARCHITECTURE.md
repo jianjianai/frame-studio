@@ -56,6 +56,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `preview.mjs` | Vite 中间件；拦截作品文件的热更新，改为向舞台发送 `preview-update`；预览页附带要导入的全部模块（modulepreload 与各模块的 etag） |
 | `precache.mjs` | 浏览器本地缓存的播放文件清单（作品 `public/` 的文件和作品用到的素材库文件，带内容版本）和小文件打包下载 |
 | `render.mjs` | 无界面 Chromium：渲染帧、分镜、封面画面、响度分析、运行检查、MP4 导出（ffmpeg） |
+| `render-gpu.mjs` | 用户浏览器里打开着的工作台页面，代替无界面 Chromium 用显卡画 AI 要看的画面（见「用用户的显卡画」） |
 | `remote-sync.mjs` | 连接 GitHub 的作品库自动同步：保存版本后在后台推送（作品、经验库、素材库、复盘分支）；打开作品、手动刷新和推送被拒时只取这个分支和 GitHub 对比，能快进就自动更新，否则广播 `remote-state`（`behind` / `diverged` / `conflict` / `error`），工作台和 AI 的每条消息都会提示；用户选择更新、合并、采用 GitHub 或保留本机；启动后和每半小时补推只领先于 GitHub 的分支 |
 | `covers.mjs` | 首页封面：`project.ts` 的 `poster` 图片，或作品在 `posterTime`（不写时自动挑选）的画面。按作品文件的版本缓存；列出作品时在后台逐个重做过期的封面，完成后广播 `work-cover` |
 | `checks.mjs` | 作品检查：元数据、TypeScript、素材引用、真实加载 |
@@ -123,6 +124,16 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 - 分段、进度和成品都保存在浏览器的私有文件系统（OPFS，格式见 `src/preview/export-jobs.ts`），页面关闭、刷新或崩溃后从最后完成的一段继续，接着导出的结果和一次导完的逐字节相同。渲染导出的页面持有 Web Lock `frame-export:<id>`：没人持有锁却标着进行中的导出就是中断了；持有锁也让 Chrome 不冻结后台标签页。导出循环和离线音频的让步不用计时器（`src/engine/scheduling.ts`），后台标签页里的计时器节流不会拖慢导出。
 - `web/lib/exports.ts` 管理导出：一个页面一次导出一个，其余排队；打开工作台时（任何页面）继续中断的导出，另一个标签页里的导出页面消失时（关闭、崩溃）由这个标签页接着导出；作品文件（名称、大小、修改时间）和开始导出时不同，先问用户继续还是重新导出；完成后自动下载，成品在浏览器里保留 7 天。各标签页之间用 BroadcastChannel `frame-exports` 传进度和暂停、取消的请求。
 - 左下角的导出状态（`web/components/ExportDock.tsx`：工作台状态栏的最左边，其他页面的左下角）显示本机导出和服务器导出的进度、剩余时间和完成时刻，点开可以暂停、继续、取消、下载。
+
+## 用用户的显卡画
+
+服务器没有显卡，无界面 Chromium 用 SwiftShader 软件渲染，三维画面一帧要几秒。AI 的 `preview_frames`、`work_check` 的 `timing`、`preview_motion` 改在用户电脑上打开着的 FRAME 页面里画：
+
+- 每个登录的页面（任何页面，`web/lib/gpu-render.ts`）在浏览器有显卡加速（WebGL 的渲染器不是 SwiftShader 之类的软件渲染）、设备有鼠标（不是手机、平板）、用户没在 设置 → AI 里关掉时，连接 `/api/render/gpu`，报告显卡名称、页面是否在前台、最近一次操作。
+- 服务器把这些页面当作 Playwright 浏览器用（`render-gpu.mjs`）：新建页面、打开地址、等待、在页面里执行函数，页面在隐藏框架里打开同一个 `/preview/render.html` 照做，所以 `render.mjs` 的绘制代码不变（`openPage` 的 `on`）。页面的结果（截图的 base64 等）gzip 后用二进制消息发回；渲染页在框架里时把未捕获的错误、控制台警告和错误、失败的请求通过 postMessage 报给工作台，工作台在回复每次调用之前先转给服务器，与无界面浏览器的页面事件一样。
+- 每次画之前选页面（`Renderer.anywhere`）：前台的优先，再按最近操作；3 秒内不回应的（电脑睡眠、标签页冻结）跳过。没有可用的页面，或者画到一半页面关了、不再回应（`GPU_PAGE_GONE`），就在服务器上画（`preview_motion` 从头再画）。预热的页面按作品和用户页面分开保存；重的分析（运动、测速）每个用户页面同时一个，与服务器的分开排队。
+- 工具结果写明在哪里画的（显卡名称，或服务器软件渲染），测速说明数值是不是用户电脑的实际速度、页面当时是否在后台。工作台状态栏在画的时候显示「AI 在用本机显卡画」。打开着框架时页面持有 Web Lock `frame-gpu-render`，后台标签页不被冻结。
+- 其他渲染（运行检查、封面、缩略图、声音、服务器 MP4 导出）仍在服务器上。
 
 ## 安全边界
 

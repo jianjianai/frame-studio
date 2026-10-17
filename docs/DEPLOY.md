@@ -27,7 +27,7 @@ FRAME_PASSWORD='设置一个强密码' docker compose -f deploy/compose.yaml up 
 ```
 
 - 所有数据在 `deploy/data`（容器内 `/data`）：作品库、设置、对话、导出、语音模型、AI 账号凭据（`/data/home`）。
-- 镜像包含 Chromium、中日韩字体、Beat This!（Python + CPU 版 PyTorch + 模型，约 1 GB）和语音输入的识别模型（SenseVoice + Silero VAD，约 240 MB）。三维场景在容器中用软件渲染，导出较慢。
+- 镜像包含 Chromium、中日韩字体、Beat This!（Python + CPU 版 PyTorch + 模型，约 1 GB）和语音输入的识别模型（SenseVoice + Silero VAD，约 240 MB）。三维场景在容器中用软件渲染，服务器导出较慢；AI 查看画面、测速时，用户电脑上开着 FRAME 的页面会代替服务器用自己的显卡画。
 - 更新：`git pull && docker compose -f deploy/compose.yaml up -d --build`。
 
 ### 反向代理
