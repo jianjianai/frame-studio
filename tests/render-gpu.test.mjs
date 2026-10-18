@@ -10,24 +10,22 @@ function fakePage({ gpu = "Test GPU", visible = true, answer = true } = {}) {
   const ws = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, sent: [], ping() {}, terminate() {}, close() {} });
   ws.send = (text) => {
     const message = JSON.parse(text);
-    // The server's first word: which extension to ask for the computer.
-    if (message.type === "hello") return void (ws.connector = message.connector);
     ws.sent.push(message);
     if (!answer) return;
     const value = message.op === "eval" ? { drawn: message.arg } : true;
     setImmediate(() => ws.emit("message", zlib.gzipSync(JSON.stringify({ type: "result", id: message.id, ok: true, value })), true));
   };
-  ws.hello = (computer = null) => ws.emit("message", Buffer.from(JSON.stringify({ type: "state", gpu, visible, active: true, computer })), false);
+  // What the page says about itself: the work it has open, and whether it draws ("gpu"), chose the server or cannot.
+  ws.hello = ({ work = null, mode = "gpu" } = {}) =>
+    ws.emit("message", Buffer.from(JSON.stringify({ type: "state", mode, gpu, work, visible, active: true })), false);
   return ws;
 }
 
-// A socket's sign-in comes with its request (`login`, "me" when not given); the repository "mine"
-// is linked to one computer, whose extension gives its pages the key "my-key".
+// A socket's sign-in comes with its request (`login`, "me" when not given).
 const services = () => ({
   sockets: new Map(),
   auth: { identify: (req) => ({ kind: "session", login: req.login ?? "me" }), issueInternal: () => "token" },
   events: { subscribe: () => {} },
-  bridges: { linked: (repo) => new Set(repo === "mine" ? ["my-computer"] : []), computerOf: (key) => (key === "my-key" ? "my-computer" : null) },
 });
 
 describe("drawing on the user's GPU", () => {
@@ -40,7 +38,6 @@ describe("drawing on the user's GPU", () => {
     hidden.hello();
     shown.hello();
     const on = await gpus.pick({ login: "me" });
-    expect(shown.connector).toMatch(/^[a-p]{32}$/);
     expect(on.gpu).toBe("NVIDIA GeForce RTX 3060");
     const page = await (await on.newContext()).newPage();
     await page.goto("http://127.0.0.1:4310/preview/render.html?module=x");
@@ -78,19 +75,40 @@ describe("drawing on the user's GPU", () => {
     expect(friends.sent).toEqual([]);
   });
 
-  it("draws on the computer the work's repository is linked to, whoever writes and with no conversation", async () => {
+  it("draws where the work is open, the writer's page before others', with or without a conversation", async () => {
     const gpus = new GpuBrowsers(services());
-    const linked = fakePage({ gpu: "Linked GPU", visible: false });
-    const writer = fakePage({ gpu: "Writer's GPU" });
-    gpus.accept(linked, { login: "someone" });
-    gpus.accept(writer, { login: "me" });
-    linked.hello("my-key");
-    writer.hello("a key FRAME never gave");
-    expect((await gpus.pick({ login: "me", repo: "mine" })).gpu).toBe("Linked GPU");
-    expect((await gpus.pick({ repo: "mine" })).gpu).toBe("Linked GPU");
-    // A repository linked nowhere: the browser writing in the conversation.
-    expect((await gpus.pick({ login: "me", repo: "other" })).gpu).toBe("Writer's GPU");
-    expect(await gpus.pick({ repo: "other" })).toBe(null);
+    const mine = fakePage({ gpu: "My GPU", visible: false });
+    const friends = fakePage({ gpu: "Friend's GPU" });
+    const elsewhere = fakePage({ gpu: "Friend's other tab" });
+    gpus.accept(mine, { login: "me" });
+    gpus.accept(friends, { login: "friend" });
+    gpus.accept(elsewhere, { login: "friend" });
+    mine.hello({ work: "local/w1" });
+    friends.hello({ work: "local/w1" }); // in view, used last
+    elsewhere.hello({ work: "local/w2" });
+    expect((await gpus.pick({ login: "me", repo: "local", work: "w1" })).gpu).toBe("My GPU");
+    expect((await gpus.pick({ repo: "local", work: "w1" })).gpu).toBe("Friend's GPU");
+    expect((await gpus.pick({ repo: "local", work: "w2" })).gpu).toBe("Friend's other tab");
+    // Not open anywhere: the writer's own page, else the server.
+    expect((await gpus.pick({ login: "me", repo: "local", work: "w9" })).gpu).toBe("My GPU");
+    expect(await gpus.pick({ repo: "local", work: "w9" })).toBe(null);
+  });
+
+  it("draws on the server for someone who chose it, and lets a phone's conversation draw where the work is open", async () => {
+    const gpus = new GpuBrowsers(services());
+    const mine = fakePage({ gpu: "My GPU" });
+    const friends = fakePage({ gpu: "Friend's GPU", visible: false });
+    const phone = fakePage({ gpu: null });
+    gpus.accept(mine, { login: "me" });
+    gpus.accept(friends, { login: "friend" });
+    gpus.accept(phone, { login: "phone" });
+    mine.hello({ work: "local/w1", mode: "server" });
+    friends.hello({ work: "local/w1" });
+    phone.hello({ work: "local/w1", mode: "none" });
+    expect(await gpus.pick({ login: "me", repo: "local", work: "w1" })).toBe(null);
+    expect((await gpus.pick({ repo: "local", work: "w1" })).gpu).toBe("Friend's GPU");
+    expect((await gpus.pick({ login: "phone", repo: "local", work: "w1" })).gpu).toBe("Friend's GPU");
+    expect(mine.sent.filter((message) => message.op)).toEqual([]);
   });
 
   it("refuses sockets that are not a person's studio page", () => {

@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "FRAME 连接器",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAmE1zxt0vFXdENmTZpZ+XioUGYCtpq6G2WdxLWeiiv+/99cCNF3tAjs24kTzLDAXO5k5Wklh7zoAiCrIUhvnu7EIH2DHxtuJos4zyUKTjyD4A+hXBK5xmmlJfpVO+r9Ut9jjKf2+XSEWbrJR0gnoRUkWwVK1V4UesSpzrIH37+vHJyhvHX0o/maM3EMIcgnns9gnwXJEHVhBAURLKnwKaCvcin/JOQ0H5waP1ztYoWO+8WFZHeICG/IcqJMvdSUSq0YS200YOORWwNlTfhEFEjBIJFLfcsWnKsrDzdKkLkupKbjt0PBqB+ueJ3Nb0hwah7fyYOBCfAkEddHMIWlS8ZwIDAQAB",
-  "description": "让 FRAME Studio 的 AI 用这个浏览器里你已经登录的网站（只在它自己开的标签页和你交给它的标签页里浏览和下载），并用这台电脑的显卡画它要看的画面。",
+  "description": "让 FRAME Studio 的 AI 用这个浏览器里你已经登录的网站：只在它自己开的标签页和你交给它的标签页里浏览和下载。",
   "minimum_chrome_version": "116",
   "permissions": [
     "debugger",

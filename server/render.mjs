@@ -241,7 +241,7 @@ export class Renderer {
 
   /**
    * Draw on a studio page open on the user's computer when there is one (`who`: the work's
-   * `repo`, drawn on a computer linked to it, and `login`, who writes in the AI's conversation;
+   * `repo` and `work`, drawn where it is open, and `login`, who writes in the AI's conversation;
    * see GpuBrowsers.pick): its GPU draws a 3D frame in milliseconds, the server's software
    * renderer in seconds. `run(on)` gets that page, or null to draw here; when the page goes
    * away halfway (closed, asleep), it runs again here.
@@ -270,7 +270,7 @@ export class Renderer {
       } finally {
         lease.release();
       }
-    }, { login, repo: work.repo });
+    }, { login, repo: work.repo, work: work.id });
   }
 
   /**
@@ -389,7 +389,7 @@ export class Renderer {
   /** `login`: who writes in the AI's conversation (see `anywhere`). */
   async frames(work, { login, ...options }) {
     this.lastUse = Date.now();
-    return this.anywhere((on) => this.framesWith(work, options, on), { login, repo: work.repo });
+    return this.anywhere((on) => this.framesWith(work, options, on), { login, repo: work.repo, work: work.id });
   }
   async framesWith(work, { times, width, subtitles = true, scene, crop }, on) {
     let lease;

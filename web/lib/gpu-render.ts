@@ -10,21 +10,29 @@ import { useEffect, useState } from "react";
 
 const CHOICE = "frame:gpu-render";
 
-/** Whether this device draws for the AI: the user's choice, else yes unless it has no mouse (a phone, a tablet). */
-export function gpuRenderWanted() {
+/**
+ * Where the AI's frames are drawn for this person, chosen per browser: "auto" — on a computer
+ * that has the work open (this one when it can draw), or "server" — never on this device, and
+ * the conversations written here draw on the server too.
+ */
+export function renderChoice(): "auto" | "server" {
   try {
-    const choice = localStorage.getItem(CHOICE);
-    if (choice === "on" || choice === "off") return choice === "on";
+    if (localStorage.getItem(CHOICE) === "off") return "server";
   } catch {}
-  return matchMedia("(any-pointer: fine)").matches;
+  return "auto";
 }
 
-export function setGpuRenderWanted(wanted: boolean) {
+export function setRenderChoice(choice: "auto" | "server") {
   try {
-    localStorage.setItem(CHOICE, wanted ? "on" : "off");
+    localStorage.setItem(CHOICE, choice === "server" ? "off" : "on");
   } catch {}
-  if (wanted) start();
-  else stop();
+  void report();
+}
+
+/** What this page tells the server: draws ("gpu"), chose the server, or cannot draw (a phone or tablet, no GPU). */
+export function renderMode(): "gpu" | "server" | "none" {
+  if (renderChoice() === "server") return "server";
+  return graphicsCard() && matchMedia("(any-pointer: fine)").matches ? "gpu" : "none";
 }
 
 let card: string | null | undefined;
@@ -59,92 +67,57 @@ let working = 0;
 const listeners = new Set<(busy: boolean) => void>();
 let lingering = 0;
 
-/** Start drawing for the AI when this device should (called once a studio page is signed in). */
+/** Tell the server about this page once it is signed in (what it has open, whether it draws). */
 export function initGpuRender() {
-  if (gpuRenderWanted()) start();
-}
-
-function start() {
-  if (started || !graphicsCard()) return;
+  if (started) return;
   started = true;
   connect();
   document.addEventListener("visibilitychange", report);
-  // Now and then too: an extension linked or restarted since the last report is noticed.
-  reporting = window.setInterval(() => void report(), 60000);
+  // The workbench changes the address when another work opens.
+  window.addEventListener("popstate", () => void report());
+  window.setInterval(() => void report(), 60000);
   for (const type of ["pointerdown", "keydown", "focus"]) window.addEventListener(type, active, { capture: true, passive: true });
   window.addEventListener("message", relay);
-}
-
-function stop() {
-  if (!started) return;
-  started = false;
-  document.removeEventListener("visibilitychange", report);
-  window.clearInterval(reporting);
-  for (const type of ["pointerdown", "keydown", "focus"]) window.removeEventListener(type, active, { capture: true });
-  window.removeEventListener("message", relay);
-  const open = socket;
-  socket = null;
-  open?.close();
-  closeAll();
 }
 
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/render/gpu`);
   socket = ws;
-  ws.onmessage = (message) => {
-    const data = JSON.parse(message.data);
-    // First the id of the FRAME 连接器 extension, to ask it which computer this page is on.
-    if (data.type === "hello") {
-      connector = typeof data.connector === "string" ? data.connector : null;
-      return void report(true);
-    }
-    void handle(ws, data);
-  };
+  ws.onopen = () => report(true);
+  ws.onmessage = (message) => void handle(ws, JSON.parse(message.data));
   ws.onclose = () => {
     if (socket !== ws) return;
     socket = null;
     closeAll();
-    window.setTimeout(() => started && !socket && connect(), 3000);
+    window.setTimeout(() => !socket && connect(), 3000);
   };
 }
 
 /**
- * Which page draws (server/render-gpu.mjs pick): one on a computer the work's repository is
- * linked to, else one of the sign-in writing in the AI's conversation; then one in view, then
- * the one used last. The computer is the key FRAME gave the extension in this browser.
+ * Which page draws (server/render-gpu.mjs pick): one with the work open, of the sign-in writing
+ * in the AI's conversation first, then another page of that sign-in; then one in view, then the
+ * one used last.
  */
-async function report(active: unknown = false) {
+function report(active: unknown = false) {
   if (socket?.readyState !== WebSocket.OPEN) return;
-  const computer = await computerKey();
-  socket?.send(JSON.stringify({ type: "state", gpu: graphicsCard(), visible: document.visibilityState === "visible", active: active === true, computer }));
-}
-
-let connector: string | null = null;
-let reporting = 0;
-/** The FRAME 连接器 extension's key for this computer: null without it (or an older one), or when it is not linked now. */
-type Runtime = { sendMessage?: (id: string, message: unknown, reply: (answer?: { key?: unknown } | null) => void) => void; lastError?: unknown };
-function computerKey() {
-  const runtime = (window as { chrome?: { runtime?: Runtime } }).chrome?.runtime;
-  const send = runtime?.sendMessage;
-  if (!connector || !send) return Promise.resolve(null);
-  const id = connector;
-  return new Promise<string | null>((resolve) => {
-    window.setTimeout(() => resolve(null), 2000);
-    try {
-      send.call(runtime, id, { type: "frame-computer" }, (answer) => {
-        void runtime?.lastError; // no such extension: read, so Chrome does not log it
-        resolve(typeof answer?.key === "string" ? answer.key : null);
-      });
-    } catch {
-      resolve(null);
-    }
-  });
+  const mode = renderMode();
+  const work = /^\/work\/([^/]+)\/([^/]+)/.exec(location.pathname);
+  socket.send(
+    JSON.stringify({
+      type: "state",
+      mode,
+      gpu: mode === "gpu" ? graphicsCard() : null,
+      work: work ? `${decodeURIComponent(work[1])}/${decodeURIComponent(work[2])}` : null,
+      visible: document.visibilityState === "visible",
+      active: active === true,
+    }),
+  );
 }
 let lastActive = 0;
 function active() {
   if (Date.now() - lastActive < 10000) return;
   lastActive = Date.now();
-  void report(true);
+  report(true);
 }
 
 async function handle(ws: WebSocket, message: { id: number; op: string; page?: string; [key: string]: unknown }) {

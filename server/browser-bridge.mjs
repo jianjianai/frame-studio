@@ -37,8 +37,6 @@ export class Bridges {
     this.sessionTabs = new Map();
     /** tab key → { repo, host, reason, session } */
     this.logins = new Map();
-    /** bridge id → the key its FRAME pages show (computerOf); kept while the studio runs, so a reconnect keeps it */
-    this.pageKeys = new Map();
   }
 
   list() {
@@ -87,26 +85,10 @@ export class Bridges {
     for (const bridge of this.list()) if (bridge.repos.includes(repo)) this.unlink(bridge.id, repo);
   }
 
-  /** The browsers (bridge ids) linked to a repository. */
-  linked(repo) {
-    return new Set(this.list().filter((bridge) => bridge.repos.includes(repo)).map((bridge) => bridge.id));
-  }
-
   /** The connected browser the AI of a repository uses: of several, the one used last. */
   connection(repo) {
-    const linked = this.linked(repo);
+    const linked = new Set(this.list().filter((bridge) => bridge.repos.includes(repo)).map((bridge) => bridge.id));
     return [...this.connections.values()].filter((item) => linked.has(item.bridge.id)).sort((a, b) => b.active - a.active)[0] ?? null;
-  }
-
-  /**
-   * Which linked browser a FRAME page is in: the page asks the extension next to it for the key
-   * this connection was given (render-gpu.mjs), so that computer's GPU draws for the AI of the
-   * repositories linked to it. Null for a key no open connection has.
-   */
-  computerOf(key) {
-    if (typeof key !== "string" || !key) return null;
-    for (const connection of this.connections.values()) if (connection.pageKey === key) return connection.bridge.id;
-    return null;
   }
   connected(repo) {
     return Boolean(this.connection(repo));
@@ -273,9 +255,6 @@ class Connection {
     this.next = 1;
     this.active = Date.now();
     this.seen = Date.now();
-    /** Handed to FRAME pages in this browser (through the extension) to tell which computer they are on. */
-    if (!bridges.pageKeys.has(bridge.id)) bridges.pageKeys.set(bridge.id, randomBytes(18).toString("base64url"));
-    this.pageKey = bridges.pageKeys.get(bridge.id);
     this.ping = setInterval(() => {
       // The extension answers pings; silence means it is gone (its service worker was stopped).
       if (Date.now() - this.seen > 70000) return this.close();
@@ -297,7 +276,7 @@ class Connection {
       } catch {}
       return { id, title };
     });
-    this.send({ type: "welcome", bridge: bridge.id, name: bridge.name, repos, pageKey: this.pageKey, ...(token ? { token } : {}) });
+    this.send({ type: "welcome", bridge: bridge.id, name: bridge.name, repos, ...(token ? { token } : {}) });
   }
 
   refuse(message, code) {
