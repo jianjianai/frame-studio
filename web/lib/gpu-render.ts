@@ -81,6 +81,32 @@ export function initGpuRender() {
   window.setInterval(() => void report(), 60000);
   for (const type of ["pointerdown", "keydown", "focus"]) window.addEventListener(type, active, { capture: true, passive: true });
   window.addEventListener("message", relay);
+  (window as { __FRAME_AI_YIELD__?: () => Promise<void> }).__FRAME_AI_YIELD__ = makeWay;
+}
+
+let playing = () => false;
+/** Whether something plays in this page (the workbench's players). */
+export function setPlaybackCheck(check: () => boolean) {
+  playing = check;
+}
+
+/**
+ * A frame drawn for the AI calls this before each of its frames (src/preview/render.ts). The
+ * preview draws in the same thread: while something plays, wait until the page has drawn, so a
+ * batch of the AI's frames costs playback a frame at a time instead of freezing it throughout.
+ */
+function makeWay() {
+  if (document.hidden || !playing()) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    // Resumed after this animation frame's callbacks (the preview's among them) and its paint.
+    const go = () => {
+      cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      window.setTimeout(resolve, 0);
+    };
+    const frame = requestAnimationFrame(go);
+    const timer = window.setTimeout(go, 100);
+  });
 }
 
 function connect() {

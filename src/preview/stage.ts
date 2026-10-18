@@ -156,7 +156,6 @@ async function load(timestamp?: number) {
   }
 }
 
-let updating: Promise<void> = Promise.resolve();
 /** When the library code copies (.materials/) last changed: modules named by documents are imported anew. */
 let materialStamp: number | undefined;
 /**
@@ -179,37 +178,59 @@ async function dropCachedAssets(files: string[]) {
   await done;
 }
 
-async function hotUpdate(timestamp: number, files: string[]) {
-  const run = async () => {
-    setStatus({ updating: true });
+/**
+ * Edits that come while one is being swapped in are taken together (all their files, the newest
+ * timestamp), as the server merges edits close together: only the newest version is built.
+ */
+let queued: { timestamp: number; files: Set<string> } | null = null;
+let draining = false;
+function hotUpdate(timestamp: number, files: string[]) {
+  if (queued) {
+    queued.timestamp = Math.max(queued.timestamp, timestamp);
+    for (const file of files) queued.files.add(file);
+  } else queued = { timestamp, files: new Set(files) };
+  if (draining) return;
+  draining = true;
+  void (async () => {
     try {
-      await dropCachedAssets(files);
-      if (files.some((file) => file.includes("/.materials/"))) materialStamp = timestamp;
-      const next = await importWork(source, timestamp, materialStamp);
-      // Scene code may compute beat times when it is imported: a new grid needs fresh modules.
-      if (JSON.stringify(next.tempo) !== JSON.stringify(project?.tempo) && project) return location.reload();
-      const kinds = changeKinds(files);
-      if (!session || state.status === "error" || next.renderer !== project?.renderer) start(next, lastSnapshot);
-      else {
-        // A sample that plays the work's sound from elsewhere hears another part of it.
-        const audioChanged = kinds.audio || JSON.stringify(next.sample) !== JSON.stringify(project?.sample);
-        await session.updateProject(next, { visualChanged: kinds.visual, audioChanged, quality });
-        project = next;
+      while (queued) {
+        const next = queued;
+        queued = null;
+        await applyUpdate(next.timestamp, [...next.files]);
       }
-      setStatus({
-        updating: false,
-        error: undefined,
-        status: state.status === "error" ? "loading" : state.status,
-        revision: state.revision + 1,
-        project: summary(next),
-      });
-      post({ type: "updated", files, revision: state.revision });
-    } catch (error) {
-      setStatus({ updating: false, error: "修改未能生效，仍显示上一个可用版本：" + messageOf(error) });
+    } finally {
+      draining = false;
     }
-  };
-  updating = updating.then(run, run);
-  return updating;
+  })();
+}
+
+async function applyUpdate(timestamp: number, files: string[]) {
+  setStatus({ updating: true });
+  try {
+    await dropCachedAssets(files);
+    if (files.some((file) => file.includes("/.materials/"))) materialStamp = timestamp;
+    const next = await importWork(source, timestamp, materialStamp);
+    // Scene code may compute beat times when it is imported: a new grid needs fresh modules.
+    if (JSON.stringify(next.tempo) !== JSON.stringify(project?.tempo) && project) return location.reload();
+    const kinds = changeKinds(files);
+    if (!session || state.status === "error" || next.renderer !== project?.renderer) start(next, lastSnapshot);
+    else {
+      // A sample that plays the work's sound from elsewhere hears another part of it.
+      const audioChanged = kinds.audio || JSON.stringify(next.sample) !== JSON.stringify(project?.sample);
+      await session.updateProject(next, { visualChanged: kinds.visual, audioChanged, quality });
+      project = next;
+    }
+    setStatus({
+      updating: false,
+      error: undefined,
+      status: state.status === "error" ? "loading" : state.status,
+      revision: state.revision + 1,
+      project: summary(next),
+    });
+    post({ type: "updated", files, revision: state.revision });
+  } catch (error) {
+    setStatus({ updating: false, error: "修改未能生效，仍显示上一个可用版本：" + messageOf(error) });
+  }
 }
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error));

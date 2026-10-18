@@ -15,6 +15,15 @@ addEventListener("unhandledrejection", (event) => errors.push(describe(event.rea
 reportToStudio();
 try {
   await installOffline(await importWork(workSourceFromQuery()));
+  // Drawn for the AI in a studio page (web/lib/gpu-render.ts): each frame first lets what plays there draw.
+  const studio = window.__FRAME_STUDIO__;
+  if (window.name === "frame-ai-render" && studio) {
+    const frame = studio.frame;
+    studio.frame = async (time, subtitles) => {
+      await (parent as { __FRAME_AI_YIELD__?: () => Promise<void> }).__FRAME_AI_YIELD__?.();
+      return frame(time, subtitles);
+    };
+  }
 } catch (error) {
   errors.push(describe(error));
   if (!document.querySelector('[role="alert"]')) {
