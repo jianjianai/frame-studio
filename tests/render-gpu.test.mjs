@@ -92,6 +92,9 @@ describe("drawing on the user's GPU", () => {
     // Not open anywhere: the writer's own page, else the server.
     expect((await gpus.pick({ login: "me", repo: "local", work: "w9" })).gpu).toBe("My GPU");
     expect(await gpus.pick({ repo: "local", work: "w9" })).toBe(null);
+    // Files of the work (asset_view): only a page with the work open keeps them.
+    expect((await gpus.pick({ login: "me", repo: "local", work: "w1", opened: true })).gpu).toBe("My GPU");
+    expect(await gpus.pick({ login: "me", repo: "local", work: "w9", opened: true })).toBe(null);
   });
 
   it("draws on the server for someone who chose it, and lets a phone's conversation draw where the work is open", async () => {

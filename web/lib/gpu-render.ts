@@ -2,10 +2,10 @@ import { useEffect, useState } from "react";
 
 /**
  * This browser draws for the AI's render tools (preview_frames, work_check timing,
- * preview_motion) on its GPU: the server has none, and its software renderer takes seconds for
+ * preview_motion, and asset_view for files of the work it keeps) on its GPU: the server has none, and its software renderer takes seconds for
  * a 3D frame. The server drives this page the way it drives its headless browser — open a page,
  * wait for it, evaluate a function in it (server/render-gpu.mjs) — and this page does that in
- * hidden frames of /preview/render.html, the page the headless browser loads.
+ * hidden frames of /preview/render.html or asset.html, the pages the headless browser loads.
  */
 
 const CHOICE = "frame:gpu-render";
@@ -153,11 +153,14 @@ async function run(message: { op: string; page?: string; [key: string]: unknown 
 
 /** A hidden frame, laid out the way local exports keep theirs: the page draws on its own canvas. */
 function open(id: string, url: string, timeout: number) {
-  if (!url.startsWith("/preview/render.html?")) throw new Error("Not a render page");
+  // The pages the server's headless browser draws with: a work's frames, and media files of it (models…).
+  if (!/^\/preview\/(render|asset)\.html\?/.test(url)) throw new Error("Not a render page");
   let page = pages.get(id);
   if (!page) {
     const frame = document.createElement("iframe");
     frame.title = "AI 渲染";
+    // The page reports its errors to this one only in a frame of this name (src/preview/report.ts).
+    frame.name = "frame-ai-render";
     frame.tabIndex = -1;
     frame.setAttribute("aria-hidden", "true");
     frame.style.cssText = "position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none";

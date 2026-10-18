@@ -46,16 +46,17 @@ export class GpuBrowsers {
   /**
    * The page to draw on for work `repo`/`work` in a conversation `login` writes in (none for
    * other callers): first a page with the work open — of that sign-in before others' — then
-   * another page of that sign-in; among them the one in view, then the one used last. One that
-   * does not answer at once (a sleeping laptop, a frozen tab) is passed over. Null: draw on the
-   * server, also when the one writing chose the server.
+   * another page of that sign-in (not with `opened`: only a page with the work open keeps its
+   * files); among them the one in view, then the one used last. One that does not answer at
+   * once (a sleeping laptop, a frozen tab) is passed over. Null: draw on the server, also when
+   * the one writing chose the server.
    */
-  async pick({ login, repo, work } = {}) {
+  async pick({ login, repo, work, opened = false } = {}) {
     const pages = [...this.browsers.values()].filter((browser) => !browser.closed);
     if (login && pages.some((browser) => browser.login === login && browser.mode === "server")) return null;
     const open = repo && work ? `${repo}/${work}` : null;
     const rank = (browser) => (open && browser.work === open ? 2 : 0) + (login && browser.login === login ? 1 : 0);
-    const ready = pages.filter((browser) => browser.mode === "gpu" && browser.gpu && rank(browser));
+    const ready = pages.filter((browser) => browser.mode === "gpu" && browser.gpu && rank(browser) >= (opened ? 2 : 1));
     ready.sort((a, b) => rank(b) - rank(a) || Number(b.visible) - Number(a.visible) || b.activeAt - a.activeAt);
     for (const browser of ready) {
       const answers = await browser

@@ -1,6 +1,7 @@
 import type * as THREE from "three";
 import type { Scene } from "../engine/types";
 import { validateLottie } from "../engine/lottie-document.mjs";
+import { reportToStudio } from "./report";
 
 /**
  * A media file that the browser cannot show by itself — a 3D model, a Lottie animation, an
@@ -352,6 +353,7 @@ const api: AssetPageApi = {
   },
 };
 window.__FRAME_ASSET__ = api;
+reportToStudio();
 addEventListener("error", (event) => say("运行错误：" + event.message));
 addEventListener("unhandledrejection", (event) => say("运行错误：" + messageOf(event.reason)));
 const first = query.get("src");

@@ -961,10 +961,11 @@ export class Renderer {
   /**
    * The page that draws media files the browser cannot show by itself (src/preview/asset.ts):
    * 3D models, Lottie, HDR/EXR panoramas, fonts. One warm page per asset base (a work, or a
-   * repository's libraries as they are now); `open` switches the file it shows.
+   * repository's libraries as they are now) — and per studio page in the user's browser (`on`)
+   * drawing it there; `open` switches the file it shows.
    */
-  async assetPage(assetBase) {
-    const key = `asset:${assetBase}`;
+  async assetPage(assetBase, on) {
+    const key = `asset:${assetBase}` + (on ? `|gpu:${on.id}` : "");
     const existing = this.pages.get(key);
     if (existing && !existing.stale) {
       existing.usedAt = Date.now();
@@ -975,20 +976,22 @@ export class Renderer {
       this.retire(existing);
     }
     const entry = { usedAt: Date.now(), stale: false };
-    entry.handle = this.openAssetPage(`${this.services.baseUrl}/preview/asset.html?${new URLSearchParams({ assetBase })}`);
+    entry.handle = this.openAssetPage(`${this.services.baseUrl}/preview/asset.html?${new URLSearchParams({ assetBase })}`, 60000, on);
     this.pages.set(key, entry);
     entry.handle.catch(() => this.pages.get(key) === entry && this.pages.delete(key));
     return entry.handle;
   }
-  async openAssetPage(url, timeoutMs = 60000) {
-    const browser = await this.browser();
-    this.openPages++;
+  async openAssetPage(url, timeoutMs = 60000, on) {
+    const browser = on ?? (await this.browser());
+    // Only pages here keep the headless browser from closing.
+    const here = on ? 0 : 1;
+    this.openPages += here;
     let closed = false;
     let context;
     const close = () => {
       if (!closed) {
         closed = true;
-        this.openPages--;
+        this.openPages -= here;
         this.lastUse = Date.now();
       }
       return context?.close().catch(() => {});
@@ -1018,36 +1021,40 @@ export class Renderer {
       return { page, errors, logs, close };
     } catch (error) {
       await close();
+      if (isGone(error)) throw error;
       throw problem(422, "素材预览页无法加载：" + error.message, "ASSET_PAGE_FAILED");
     }
   }
 
   /**
    * Pictures of one media file (`src` an asset address under `assetBase`): PNG buffers
-   * `width` pixels wide, one per view (`time`, `animation`, `azimuth`, `elevation`), and what
-   * the file holds.
+   * `width` pixels wide, one per view (`time`, `animation`, `azimuth`, `elevation`), what the
+   * file holds, and the GPU that drew them (`gpu`, null: here). `who`: a browser keeping the
+   * file may draw it (see `anywhere`; asset_view passes it only for files a work keeps there).
    */
-  assetFrames({ assetBase, src, kind, views = [{}], width = 640 }) {
+  assetFrames({ assetBase, src, kind, views = [{}], width = 640, who }) {
     // Opening one file and drawing it is one step: another request would switch the file between.
     // A reload in between loses the opened file: open and draw it again, once.
-    return this.assetQueue.run(assetBase, async () => {
-      const draw = () => this.assetFramesNow({ assetBase, src, kind, views, width });
-      try {
-        return await draw();
-      } catch (error) {
-        if (!reloaded(error)) throw error;
-        const handle = await this.assetPage(assetBase);
-        await handle.page.waitForLoadState("load", { timeout: 60000 });
-        await handle.page.waitForFunction(READY.asset, null, { timeout: 60000, polling: 50 });
-        return draw();
-      }
-    });
+    const run = (on) =>
+      this.assetQueue.run(assetBase + (on ? `|gpu:${on.id}` : ""), async () => {
+        const draw = () => this.assetFramesNow({ assetBase, src, kind, views, width, on });
+        try {
+          return await draw();
+        } catch (error) {
+          if (!reloaded(error)) throw error;
+          const handle = await this.assetPage(assetBase, on);
+          await handle.page.waitForLoadState("load", { timeout: 60000 });
+          await handle.page.waitForFunction(READY.asset, null, { timeout: 60000, polling: 50 });
+          return draw();
+        }
+      });
+    return who ? this.anywhere(run, who) : run(null);
   }
-  async assetFramesNow({ assetBase, src, kind, views, width }) {
+  async assetFramesNow({ assetBase, src, kind, views, width, on }) {
     this.lastUse = Date.now();
-    const handle = await this.assetPage(assetBase);
+    const handle = await this.assetPage(assetBase, on);
     const before = handle.errors.length;
-    const fail = (error) => problem(422, [String(error.message).replace(/^page\.evaluate: (Error: )?/, ""), ...handle.errors.slice(before)].join("\n"), "RENDER_FAILED");
+    const fail = (error) => (isGone(error) ? error : problem(422, [String(error.message).replace(/^page\.evaluate: (Error: )?/, ""), ...handle.errors.slice(before)].join("\n"), "RENDER_FAILED"));
     let info;
     try {
       info = await handle.page.evaluate(({ src, kind }) => window.__FRAME_ASSET__.open(src, kind), { src, kind });
@@ -1062,7 +1069,7 @@ export class Renderer {
       } catch (error) {
         throw fail(error);
       }
-    return { frames, info };
+    return { frames, info, gpu: on?.gpu ?? null };
   }
 
   async close() {

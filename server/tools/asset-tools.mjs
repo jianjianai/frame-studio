@@ -244,15 +244,28 @@ export function registerAssetTools(registry) {
       const shapes = visual.filter((item) => item.info.width && item.info.height && item.info.kind !== "environment").map((item) => item.info.width / item.info.height).sort((a, b) => a - b);
       const shape = Math.min(2, Math.max(0.5, shapes[Math.floor(shapes.length / 2)] ?? 4 / 3));
       const h = single ? 1024 : Math.round(w / shape);
-      // Models, Lottie, panoramas and fonts are drawn by the studio's asset page, all views of a file at once.
+      // Models, Lottie, panoramas and fonts are drawn by the studio's asset page, all views of a file at once:
+      // on the user's GPU when a browser with the work open keeps the file (its playback files, see
+      // precache.mjs), so nothing is downloaded for it; else here.
       const drawn = new Map();
       const drawnFacts = new Map();
+      const gpus = new Set();
+      let played = null;
+      const kept = async (src) => {
+        if (!work.dir) return false;
+        if (src.startsWith(`films/${work.slug}/`)) return true;
+        played ??= new Set(((await services.materials?.playback(work).catch(() => [])) ?? []).map((file) => `materials/${file.ref}`));
+        return played.has(src);
+      };
+      const login = services.ai?.loginOf(ctx.scope.session);
       for (const item of visual.filter((entry) => DRAWN.has(entry.info.kind))) {
         const views = cells.filter((cell) => cell.item === item).map((cell) => cell.view);
         if (!views.length) continue;
         try {
           const src = item.src.startsWith("public/") ? `films/${work.slug}/${item.src.slice(7)}` : item.src;
-          const { frames, info } = await services.renderer.assetFrames({ assetBase: work.dir ? `/files/${work.repo}/${work.id}/` : `/files/${work.repo}/-/`, src, kind: item.info.kind, views, width: Math.min(1024, w * 2) });
+          const who = (await kept(src)) ? { login, repo: work.repo, work: work.id, opened: true } : null;
+          const { frames, info, gpu } = await services.renderer.assetFrames({ assetBase: work.dir ? `/files/${work.repo}/${work.id}/` : `/files/${work.repo}/-/`, src, kind: item.info.kind, views, width: Math.min(1024, w * 2), who });
+          if (gpu) gpus.add(gpu);
           drawn.set(item, frames.map((frame) => frame.png));
           drawnFacts.set(item, info);
         } catch (error) {
@@ -290,6 +303,7 @@ export function registerAssetTools(registry) {
         single ? describe(items[0]) : `${numbered.join("\n")}\n\n${visual.map(describe).join("\n")}`,
         others.length ? `没有画面的文件：\n${others.map(describe).join("\n")}` : "",
         trimmed ? `文件较多，每个文件只取了前 ${each} 个时间点（少看几个文件可以看全）` : "",
+        gpus.size ? `模型等在用户电脑上用显卡画（${[...gpus].join("、")}）。` : "",
         skipped.length ? `超过 ${SHEET_CELLS} 格，没有显示：${skipped.join("、")}（用 files 分批查看）` : "",
         problems.length ? `出错：\n${problems.join("\n")}` : "",
       ]
