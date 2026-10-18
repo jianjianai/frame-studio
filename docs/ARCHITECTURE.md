@@ -63,7 +63,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `tools/` | 工具注册表（zod 参数），MCP、CLI、内置 AI 共用 |
 | `mcp.mjs` | `/mcp`（Streamable HTTP）与 `/api/tools` |
 | `ai/` | ACP 客户端：代理进程池、会话、权限、登录、自定义 API |
-| `speech/` | 配音引擎、语音输入与模型下载。语音输入（`listen.mjs`）：聊天输入框把麦克风的 16 位 PCM 通过 `/api/speech/listen` 发来，Silero VAD 在停顿处分句，SenseVoice（sherpa-onnx，离线）识别每一句；正在说的那句隔一会儿重新识别一次，边说边出字。也可以改用 OpenAI 兼容的 `/v1/audio/transcriptions`（每句说完后出字）。识别在服务端排队，一次一句 |
+| `speech/` | 配音引擎、语音输入与模型下载。语音输入（`listen.mjs`）：聊天输入框把麦克风的 16 位 PCM 通过 `/api/speech/listen` 发来，Silero VAD 在停顿处分句，SenseVoice（sherpa-onnx，离线）识别每一句；正在说的那句隔一会儿重新识别一次，边说边出字。也可以改用 OpenAI 兼容的 `/v1/audio/transcriptions`（每句说完后出字）。识别在服务端排队，一次一句，说完的句子先于正在说的。每次语音输入在服务日志里记一行（时长、收到的音频和音量、说话多久、几句、浏览器那边的情况，不含说了什么），用来查"为什么没出字" |
 | `audio-analysis.mjs` `beat-this/` | AI 的“听”：ffmpeg 解码后算响度；节拍和小节交给 [Beat This!](https://github.com/CPJKU/beat_this)（MIT）模型，由 `beat-this/analyze.py` 在独立的 Python 进程中运行（`FRAME_BEAT_PYTHON`），一次只跑一个 |
 | `asset-previews.mjs` `thumbnails.mjs` | 模型、Lottie、全景图、字体的缩略图：作品 `public/` 里的按大小和修改时间、素材库的按 Git blob 缓存在 `cache/assets/`；`thumbnails.mjs` 是资源和素材共用的后台队列（一次一个，最新的请求先画，画不出来的记住几分钟），画好后广播 `asset-thumb` / `resource-thumb` |
 | `resources.mjs` | 素材库代码里声明的资源（`defineResources` 的角色、场景、效果……，`defineSounds` 的音效）和导出的函数：不运行代码，用 Babel 静态读出字面量字段、zod 参数和注释，按 Git blob 缓存；`resources_search` / `resource_view` 工具、工作台的资源列表、缩略图（无界面浏览器在后台逐个渲染，最新的请求先画；没画好时接口返回 202，画好后广播 `resource-thumb`；按代码版本缓存在 `cache/resources/`，画不出来的按版本记住几分钟）；素材库概况（资源和音效数量、常用画布、README 第一段）给 `work_context` 和会话说明。预览和缩略图运行素材库现在的代码（`tmp/library/<库>/`，素材地址 `/files/<库>/-/`），不混用作品锁定的旧文件 |

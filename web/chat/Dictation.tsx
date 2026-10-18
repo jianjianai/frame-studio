@@ -6,18 +6,26 @@ import { joinSpoken, placeSpoken } from "./spoken";
 
 export type DictationState = "idle" | "starting" | "listening" | "finishing";
 
-// Hands the microphone's samples to the page in 0.1 s blocks of 16-bit PCM, with their loudness.
+// Hands the microphone's samples to the page in 0.1 s blocks of 16-bit PCM, with their loudness;
+// any message asks for the samples of the block begun so far (the last one, when stopping).
 const WORKLET = `
 class FrameDictation extends AudioWorkletProcessor {
   constructor() {
     super();
     this.size = Math.round(sampleRate / 10);
     this.reset();
+    this.port.onmessage = () => {
+      this.post(this.block.buffer.slice(0, this.length * 2), true);
+      this.reset();
+    };
   }
   reset() {
     this.block = new Int16Array(this.size);
     this.length = 0;
     this.energy = 0;
+  }
+  post(pcm, last) {
+    this.port.postMessage({ pcm, level: Math.sqrt(this.energy / Math.max(1, this.length)), last }, [pcm]);
   }
   process(inputs) {
     const channel = inputs[0] && inputs[0][0];
@@ -27,7 +35,7 @@ class FrameDictation extends AudioWorkletProcessor {
         this.block[this.length++] = value * 32767;
         this.energy += value * value;
         if (this.length === this.size) {
-          this.port.postMessage({ pcm: this.block.buffer, level: Math.sqrt(this.energy / this.size) }, [this.block.buffer]);
+          this.post(this.block.buffer, false);
           this.reset();
         }
       }
@@ -36,6 +44,12 @@ class FrameDictation extends AudioWorkletProcessor {
 }
 registerProcessor("frame-dictation", FrameDictation);
 `;
+
+// Loudest block (RMS) of a voice input that heard no speech below this: a muted or wrong
+// microphone rather than someone who said too little. While listening only digital silence
+// counts (MUTED): noise suppression makes a quiet room very quiet.
+const SILENT = 0.002;
+const MUTED = 0.0005;
 
 interface Run {
   ws: WebSocket;
@@ -48,9 +62,20 @@ interface Run {
   /** Sends now, or once the socket is open. */
   send: (data: ArrayBuffer | string) => void;
   context?: AudioContext;
+  node?: AudioWorkletNode;
   stream?: MediaStream;
+  /** Audio blocks the microphone delivered, and the loudest: whether it works at all. */
+  blocks: number;
+  peak: number;
+  /** The audio graph was rebuilt at the device's own rate: the first one delivered nothing. */
+  rebuilt: boolean;
+  /** The server was told the rate (with the first block, from the graph that delivers). */
+  started: boolean;
   listening: boolean;
   stopping: boolean;
+  stopSent: boolean;
+  /** When the server last said something: a silent server is given up on. */
+  heardFrom: number;
   done: boolean;
 }
 
@@ -66,6 +91,16 @@ export interface Dictation {
   cancel(): void;
   /** Called with the microphone's loudness (0–1) ten times a second. */
   meter: RefObject<((level: number) => void) | null>;
+}
+
+const later = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Why nothing came of a voice input, in words the user can act on. */
+function nothingHeard(current: Run, heard?: { speech?: number } | null) {
+  if (!current.blocks) return "没有收到麦克风的声音：浏览器的音频没有启动，再点一次麦克风试试";
+  if (current.peak < SILENT) return "麦克风几乎没有声音：检查麦克风是否静音，或浏览器用的是不是这个麦克风";
+  if (!heard?.speech) return "没有听到说话：声音太小或太短，离麦克风近一点再说一次";
+  return "没有识别出文字，再说一次试试";
 }
 
 /**
@@ -113,6 +148,7 @@ export function useDictation({
     void current.context?.close().catch(() => {});
     current.stream = undefined;
     current.context = undefined;
+    current.node = undefined;
     meter.current?.(0);
   };
   const finish = (current: Run, problem?: string) => {
@@ -131,6 +167,67 @@ export function useDictation({
     if (problem) toast(problem, "error");
     input.current?.focus();
   };
+  /** Tells the server the user is done (with what the browser saw, for its log). */
+  const sendStop = (current: Run) => {
+    if (current.stopSent || current.done) return;
+    current.stopSent = true;
+    const { context, blocks, peak, rebuilt } = current;
+    current.send(
+      JSON.stringify({
+        type: "stop",
+        client: { rate: context?.sampleRate, state: context?.state, blocks, peak: Math.round(peak * 1000) / 1000, rebuilt },
+      }),
+    );
+    releaseAudio(current);
+    // The last sentences can take a while on a busy server; one that says nothing for long is given up on.
+    current.heardFrom = Date.now();
+    const check = () => {
+      if (current.done) return;
+      if (Date.now() - current.heardFrom > 30000) finish(current, "语音识别没有响应，已保留识别到的文字");
+      else setTimeout(check, 2000);
+    };
+    setTimeout(check, 2000);
+  };
+
+  /** Microphone → worklet → socket, in `context`; a context that cannot take the microphone is replaced. */
+  const attach = async (current: Run, context: AudioContext, stream: MediaStream) => {
+    let source: MediaStreamAudioSourceNode;
+    try {
+      source = context.createMediaStreamSource(stream);
+    } catch {
+      // Firefox takes a microphone only at its own rate: record at that rate, the server converts it.
+      void context.close();
+      context = new AudioContext();
+      source = context.createMediaStreamSource(stream);
+    }
+    current.context = context;
+    const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
+    try {
+      await context.audioWorklet.addModule(url);
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    if (current.done || current.context !== context) return;
+    const node = new AudioWorkletNode(context, "frame-dictation");
+    node.port.onmessage = ({ data }) => {
+      if (current.stopSent || current.done || current.context !== context) return;
+      if (!current.started) {
+        current.started = true;
+        current.send(JSON.stringify({ type: "start", rate: context.sampleRate }));
+      }
+      current.blocks++;
+      current.peak = Math.max(current.peak, data.level);
+      current.send(data.pcm);
+      meter.current?.(data.level);
+      if (data.last) sendStop(current);
+    };
+    source.connect(node);
+    node.connect(context.destination); // silent; keeps the node running in every browser
+    current.node = node;
+    // Suspended, or "interrupted" on iOS when the microphone opened: ask it to run, without waiting
+    // on it (outside a click some browsers never answer).
+    if (context.state !== "running") void context.resume().catch(() => {});
+  };
 
   const offerModel = async (model: { id: string; name: string; size: number }) => {
     const ok = await confirm(
@@ -144,6 +241,29 @@ export function useDictation({
     } catch (error) {
       toast((error as Error).message, "error");
     }
+  };
+
+  /** The microphone delivers nothing, or only silence: try to get it going, else say so. */
+  const watch = async (current: Run, stream: MediaStream) => {
+    // Blocks come ten times a second: none after 0.6 s means the audio graph is not running.
+    await later(600);
+    if (current.done || current.stopping) return;
+    if (!current.blocks) void current.context?.resume().catch(() => {});
+    await later(600);
+    if (current.done || current.stopping) return;
+    if (!current.blocks && !current.rebuilt) {
+      // The graph at 16 kHz never ran: the device's own rate, as Firefox needs anyway.
+      current.rebuilt = true;
+      void current.context?.close().catch(() => {});
+      await attach(current, new AudioContext(), stream).catch(() => {});
+    }
+    await later(2500);
+    if (current.done || current.stopping) return;
+    if (!current.blocks) {
+      sendStop(current);
+      return finish(current, nothingHeard(current));
+    }
+    if (current.peak < MUTED) toast("麦克风没有声音：检查麦克风是否静音，或浏览器用的是不是这个麦克风", "error");
   };
 
   const start = async () => {
@@ -175,13 +295,20 @@ export function useDictation({
       partial: null,
       send,
       context,
+      blocks: 0,
+      peak: 0,
+      rebuilt: false,
+      started: false,
       listening: false,
       stopping: false,
+      stopSent: false,
+      heardFrom: 0,
       done: false,
     };
     run.current = current;
     setState("starting");
     ws.onmessage = (event) => {
+      current.heardFrom = Date.now();
       const message = JSON.parse(String(event.data));
       if (message.type === "partial" && !current.finals.has(message.sentence)) {
         current.partial = message;
@@ -190,51 +317,29 @@ export function useDictation({
         current.finals.set(message.sentence, message.text);
         if (current.partial && current.partial.sentence <= message.sentence) current.partial = null;
         show(current);
-      } else if (message.type === "done") finish(current);
+      } else if (message.type === "done") finish(current, current.finals.size || current.partial ? undefined : nothingHeard(current, message.heard));
       else if (message.type === "error") {
         finish(current, message.code === "NO_RECOGNIZER" ? undefined : message.message);
         if (message.code === "NO_RECOGNIZER") void offerModel(message.model);
       }
     };
     ws.onclose = () => finish(current, "语音识别的连接断开了");
+    // The browser's question about the microphone is easy to miss.
+    setTimeout(() => !current.done && !current.listening && toast("请在浏览器弹出的提示里允许使用麦克风"), 4000);
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
       current.stream = stream;
       // Cancelled, or the server refused, while the user was asked.
       if (current.done) return releaseAudio(current);
-      let source: MediaStreamAudioSourceNode;
-      try {
-        source = context.createMediaStreamSource(stream);
-      } catch {
-        // Firefox takes a microphone only at its own rate: record at that rate, the server converts it.
-        void context.close();
-        context = current.context = new AudioContext();
-        source = context.createMediaStreamSource(stream);
-      }
-      const url = URL.createObjectURL(new Blob([WORKLET], { type: "text/javascript" }));
-      try {
-        await context.audioWorklet.addModule(url);
-      } finally {
-        URL.revokeObjectURL(url);
-      }
+      await attach(current, context, stream);
       if (current.done) return releaseAudio(current);
-      send(JSON.stringify({ type: "start", rate: context.sampleRate }));
-      const node = new AudioWorkletNode(context, "frame-dictation");
-      node.port.onmessage = ({ data }) => {
-        if (current.stopping || current.done) return;
-        send(data.pcm);
-        meter.current?.(data.level);
-      };
-      source.connect(node);
-      node.connect(context.destination); // silent; keeps the node running in every browser
-      if (context.state === "suspended") await context.resume();
-      if (current.done) return;
       current.listening = true;
       setStartedAt(Date.now());
       setState("listening");
       // After the render that makes the input read-only: no on-screen keyboard.
       setTimeout(() => input.current?.focus(), 0);
+      void watch(current, stream);
     } catch (error) {
       finish(current, current.done ? undefined : "无法使用麦克风：" + (error as Error).message);
     }
@@ -246,11 +351,13 @@ export function useDictation({
     // The microphone is not on yet: nothing to keep.
     if (!current.listening) return cancel();
     current.stopping = true;
-    releaseAudio(current);
-    current.send(JSON.stringify({ type: "stop" }));
     setState("finishing");
-    // A server that never answers must not keep the input locked.
-    setTimeout(() => finish(current, current.done ? undefined : "语音识别没有响应，已保留识别到的文字"), 20000);
+    // The last word is often still being said at the click: 0.3 s more, then what the worklet
+    // holds (its answer sends the stop; without one, the stop goes anyway).
+    setTimeout(() => {
+      current.node?.port.postMessage("flush");
+      setTimeout(() => sendStop(current), 300);
+    }, 300);
   };
   const cancel = () => {
     const current = run.current;

@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 
 export const RATE = 16000;
 const WINDOW = 512; // Silero VAD frame at 16 kHz
-const LOOKBACK = 10; // windows kept before speech starts: the VAD notices it a little late
+const LOOKBACK = 16; // windows (0.5 s) kept before speech starts: the VAD notices it late, quiet speech later still
 const PARTIAL_MIN = RATE / 2;
 const PARTIAL_GAP = 300;
 const MAX_SECONDS = 600;
@@ -65,6 +65,16 @@ export class Listening {
     this.partialAt = 0;
     this.closed = false;
     this.failed = false;
+    this.finalsPending = 0;
+    this.partialGap = PARTIAL_GAP;
+    // What was heard, for the user when nothing came of it and for the log.
+    this.heard = { samples: 0, peak: 0, speech: 0, sentences: 0, partials: 0, error: null };
+  }
+
+  summary() {
+    const { samples, peak, speech, sentences, partials, error } = this.heard;
+    const seconds = (count) => Math.round((count / RATE) * 10) / 10;
+    return { seconds: seconds(samples), peak: Math.round(peak * 1000) / 1000, speech: seconds(speech), sentences, partials, error };
   }
 
   /** Little-endian Int16 samples, as the browser sends them. */
@@ -87,7 +97,10 @@ export class Listening {
 
   frame(samples) {
     this.vad.acceptWaveform(samples);
+    this.heard.samples += samples.length;
+    for (const value of samples) if (Math.abs(value) > this.heard.peak) this.heard.peak = Math.abs(value);
     if (this.vad.isDetected()) {
+      this.heard.speech += samples.length;
       if (!this.speechLength) (this.speech = [...this.recent]), (this.speechLength = this.recent.reduce((sum, part) => sum + part.length, 0));
       this.speech.push(samples);
       this.speechLength += samples.length;
@@ -109,35 +122,42 @@ export class Listening {
       this.speech = [];
       this.speechLength = 0;
       const result = this.recognize(samples);
+      this.finalsPending++;
       this.finals = this.finals.then(() =>
-        result.then(
-          (text) => text && this.send({ type: "final", sentence, text }),
-          (error) => this.fail(error),
-        ),
+        result
+          .then(
+            (text) => text && (this.heard.sentences++, this.send({ type: "final", sentence, text })),
+            (error) => this.fail(error),
+          )
+          .finally(() => this.finalsPending--),
       );
     }
   }
 
+  /** Finished sentences go first; on a busy server partials come less often (as often as they take). */
   maybePartial() {
-    if (!this.partials || this.partialBusy || this.closed || this.failed) return;
-    if (this.speechLength < PARTIAL_MIN || Date.now() - this.partialAt < PARTIAL_GAP) return;
+    if (!this.partials || this.partialBusy || this.finalsPending || this.closed || this.failed) return;
+    if (this.speechLength < PARTIAL_MIN || Date.now() - this.partialAt < this.partialGap) return;
     const sentence = this.sentence;
+    const began = Date.now();
     this.partialBusy = true;
     this.recognize(concat(this.speech))
       .then(
-        (text) => text && sentence === this.sentence && !this.closed && this.send({ type: "partial", sentence, text }),
+        (text) => text && sentence === this.sentence && !this.closed && (this.heard.partials++, this.send({ type: "partial", sentence, text })),
         () => {}, // the sentence's final result reports what went wrong
       )
       .finally(() => {
         this.partialBusy = false;
         this.partialAt = Date.now();
+        this.partialGap = Math.max(PARTIAL_GAP, this.partialAt - began);
       });
   }
 
   fail(error) {
     if (this.failed) return;
     this.failed = true;
-    this.send({ type: "error", message: error?.message ?? String(error) });
+    this.heard.error = error?.message ?? String(error);
+    this.send({ type: "error", message: this.heard.error });
   }
 
   /** The user stopped: what was said last becomes a sentence too; resolves once every sentence is sent. */
@@ -166,7 +186,8 @@ export class Listening {
  * is still being asked for the microphone, so a missing engine shows up right away.
  */
 export function listenSocket(speech) {
-  return (ws) => {
+  return (ws, req) => {
+    const opened = Date.now();
     const send = (message) => ws.readyState === ws.OPEN && ws.send(JSON.stringify(message));
     const end = (message) => {
       send(message);
@@ -198,14 +219,18 @@ export function listenSocket(speech) {
     let session = null;
     let starting = null;
     let stopping = false;
+    let rate = null;
+    let ended = "取消"; // what the user did: 停止 (kept the text) unless the socket just closed
+    let client = null; // what the browser saw: audio blocks, loudness, its audio graph
     const limit = setTimeout(() => void stop(), MAX_SECONDS * 1000);
 
-    async function begin(rate) {
+    async function begin() {
       const { Vad, LinearResampler } = require("sherpa-onnx-node");
       const vad = new Vad(
         {
-          // Pauses shorter than this stay inside a sentence; long monologues are cut at 20 s.
-          sileroVad: { model: await vadModel, threshold: 0.5, minSilenceDuration: 0.6, minSpeechDuration: 0.25, windowSize: WINDOW, maxSpeechDuration: 20 },
+          // Pauses shorter than 0.6 s stay inside a sentence; long monologues are cut at 20 s. A low
+          // threshold: quiet speech counts too, while fans, typing and hiss stay below it.
+          sileroVad: { model: await vadModel, threshold: 0.3, minSilenceDuration: 0.6, minSpeechDuration: 0.15, windowSize: WINDOW, maxSpeechDuration: 20 },
           sampleRate: RATE,
           numThreads: 1,
           debug: 0,
@@ -230,7 +255,7 @@ export function listenSocket(speech) {
       clearTimeout(limit);
       await starting;
       await session?.finish();
-      end({ type: "done" });
+      end({ type: "done", heard: session?.summary() ?? null });
     }
 
     ws.on("message", (data, binary) => {
@@ -245,15 +270,47 @@ export function listenSocket(speech) {
         return;
       }
       if (message.type === "start" && !starting) {
-        const rate = Math.min(192000, Math.max(8000, Math.round(Number(message.rate)) || RATE));
-        starting = begin(rate).catch((error) => end({ type: "error", message: error?.message ?? String(error) }));
+        rate = Math.min(192000, Math.max(8000, Math.round(Number(message.rate)) || RATE));
+        starting = begin().catch((error) => end({ type: "error", message: error?.message ?? String(error) }));
       }
-      if (message.type === "stop") void stop();
+      if (message.type === "stop") {
+        ended = "停止";
+        client = message.client ?? null;
+        void stop();
+      }
     });
     ws.on("close", () => {
       clearTimeout(limit);
       stopping = true;
       session?.close();
+      console.log(voiceLog({ ended, seconds: (Date.now() - opened) / 1000, rate, heard: session?.summary(), client, agent: req?.headers["user-agent"] }));
     });
   };
 }
+
+/** One log line per voice input, without what was said: enough to tell why nothing came out. */
+export function voiceLog({ ended, seconds, rate, heard, client, agent }) {
+  const parts = [`语音输入${ended} ${seconds.toFixed(1)} 秒`];
+  if (!heard) parts.push(rate ? "没有开始识别" : "麦克风没有打开");
+  else
+    parts.push(
+      `收到 ${heard.seconds} 秒音频（${rate} Hz，最大 ${heard.peak}），说话 ${heard.speech} 秒，${heard.sentences} 句，${heard.partials} 次中间结果` +
+        (heard.error ? `，出错：${heard.error}` : ""),
+    );
+  if (client) parts.push(`浏览器：${JSON.stringify(client)}`);
+  parts.push(browserName(agent));
+  return parts.join("；");
+}
+
+const BROWSERS = [
+  ["Edge", /Edg(?:e|A|iOS)?\/(\d+)/],
+  ["Opera", /OPR\/(\d+)/],
+  ["Firefox", /(?:Firefox|FxiOS)\/(\d+)/],
+  ["Chrome", /(?:Chrome|CriOS)\/(\d+)/],
+  ["Safari", /Version\/(\d+).*Safari/],
+];
+const browserName = (agent = "") => {
+  const [name, version] = BROWSERS.map(([name, pattern]) => [name, pattern.exec(agent)?.[1]]).find(([, version]) => version) ?? ["未知浏览器", ""];
+  const system = ["iPhone", "iPad", "Android", "Mac OS X", "Windows", "Linux"].find((name) => agent.includes(name)) ?? "未知系统";
+  return `${name} ${version} / ${system}${/MicroMessenger/.test(agent) ? "（微信）" : ""}`.replace("  ", " ");
+};

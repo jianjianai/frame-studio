@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { Listening, lowpass, RATE } from "../server/speech/listen.mjs";
+import { Listening, lowpass, RATE, voiceLog } from "../server/speech/listen.mjs";
 
 const tone = (seconds, amplitude) => Float32Array.from({ length: Math.round(seconds * RATE) }, (_, index) => amplitude * Math.sin(index / 3));
 const silence = (seconds) => new Float32Array(Math.round(seconds * RATE));
@@ -100,6 +100,23 @@ describe("voice input sessions", () => {
     expect(sent).toEqual([{ type: "final", sentence: 0, text: "Hello world." }]);
   });
 
+  it("lets finished sentences go before the one being spoken, and counts what it heard", async () => {
+    const sent = [];
+    let calls = 0;
+    const { recognize } = recognizer(40);
+    const session = new Listening({ vad: new FakeVad(), recognize: (samples) => (calls++, recognize(samples)), send: (message) => sent.push(message) });
+    session.feed(concat(tone(1, 0.3), silence(0.2)));
+    session.feed(tone(1, 0.6)); // the first sentence is still being recognized: no partial yet
+    expect(calls).toBe(1);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    session.feed(silence(0.03));
+    expect(calls).toBe(2);
+    await session.finish();
+    expect(sent.filter((message) => message.type === "final").map((message) => message.text)).toEqual(["你好。", "Hello world."]);
+    expect(session.summary()).toMatchObject({ seconds: 2.2, peak: expect.closeTo(0.6, 2), sentences: 2, error: null });
+    expect(session.summary().speech).toBeGreaterThan(1.9);
+  });
+
   it("reports a failed recognition once", async () => {
     const sent = [];
     const session = new Listening({ vad: new FakeVad(), recognize: async () => Promise.reject(new Error("模型坏了")), send: (message) => sent.push(message), partials: false });
@@ -121,5 +138,19 @@ describe("downsampling filter", () => {
   it("passes speech and removes what would fold back below 8 kHz", () => {
     expect(gain(1000)).toBeCloseTo(1, 1);
     expect(gain(14000)).toBeLessThan(0.05);
+  });
+});
+
+describe("voice input log", () => {
+  it("says how far a voice input got and on which browser, without what was said", () => {
+    const edge = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36 Edg/141.0.0.0";
+    const heard = { seconds: 4.9, peak: 0.42, speech: 3.1, sentences: 1, partials: 3, error: null };
+    expect(voiceLog({ ended: "停止", seconds: 5.23, rate: 16000, heard, client: { blocks: 49 }, agent: edge })).toBe(
+      '语音输入停止 5.2 秒；收到 4.9 秒音频（16000 Hz，最大 0.42），说话 3.1 秒，1 句，3 次中间结果；浏览器：{"blocks":49}；Edge 141 / Windows',
+    );
+    const iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1";
+    expect(voiceLog({ ended: "取消", seconds: 2, rate: null, agent: iphone })).toBe("语音输入取消 2.0 秒；麦克风没有打开；Safari 18 / iPhone");
+    const wechat = "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/141.0 Mobile Safari/537.36 MicroMessenger/8.0";
+    expect(voiceLog({ ended: "停止", seconds: 1, rate: 48000, agent: wechat })).toMatch(/没有开始识别；Chrome 141 \/ Android（微信）$/);
   });
 });
