@@ -76,6 +76,15 @@ export function ffmpegExecutable() {
  * Headless Chromium that loads works through the same Vite server as the
  * studio. Pages are kept warm per work and dropped when the work changes.
  */
+/**
+ * A clock for drawing on a page in the user's browser that stands still while the page waits
+ * for the preview playing there to pause (render-gpu.mjs hold): budgets count drawing only.
+ */
+function drawClock(on) {
+  const base = on?.waitedMs?.() ?? 0;
+  return () => Date.now() - ((on?.waitedMs?.() ?? 0) - base);
+}
+
 export class Renderer {
   constructor(services) {
     this.services = services;
@@ -248,12 +257,17 @@ export class Renderer {
    */
   async anywhere(run, who) {
     const on = await this.gpu.pick(who);
-    if (on)
+    if (on) {
+      const before = on.waitedMs?.() ?? 0;
       try {
-        return await run(on);
+        const result = await run(on);
+        // How long the page waited for the preview playing there to pause (not drawing time): `paused`.
+        if (result && typeof result === "object" && !Array.isArray(result)) result.paused = (on.waitedMs?.() ?? 0) - before;
+        return result;
       } catch (error) {
         if (!isGone(error)) throw error;
       }
+    }
     return run(null);
   }
 
@@ -510,7 +524,8 @@ export class Renderer {
    */
   async motionFrames(work, { times, width, thumbs = [], budgetMs = 45000, consume, on }) {
     this.lastUse = Date.now();
-    const began = Date.now();
+    const now = drawClock(on);
+    const began = now();
     let lease;
     try {
       lease = await this.lease(work, { width, on });
@@ -520,7 +535,7 @@ export class Renderer {
     }
     try {
       return await lease.exclusive(width, async (handle) => {
-        const started = Date.now();
+        const started = now();
         const errorsBefore = handle.errors.length;
         const wanted = new Set(thumbs);
         const batches = [];
@@ -553,7 +568,7 @@ export class Renderer {
         for (let index = 0; index < batches.length; index++) {
           const batch = await pending;
           const failed = batch.find((item) => item.error);
-          const over = Date.now() - began > budgetMs;
+          const over = now() - began > budgetMs;
           // The page draws the next batch while this one is analysed.
           pending = index + 1 < batches.length && !over && !failed ? draw(batches[index + 1]) : null;
           pending?.catch(() => {});
@@ -569,8 +584,8 @@ export class Renderer {
         }
         if (drawn) handle.fresh = false;
         const errors = mergeTimedErrors([...new Set([...(failure ? [failure] : []), ...handle.errors.slice(errorsBefore)].map((text) => this.clean(work, text)))]);
-        const drawing = Date.now() - started;
-        return { drawn, cut: drawn < times.length && !failure, ms: Date.now() - began, loadMs: started - began, perFrame: drawn ? drawing / drawn : null, width: handle.size.width, height: handle.size.height, errors, gpu: handle.on?.gpu ?? null };
+        const drawing = now() - started;
+        return { drawn, cut: drawn < times.length && !failure, ms: now() - began, loadMs: started - began, perFrame: drawn ? drawing / drawn : null, width: handle.size.width, height: handle.size.height, errors, gpu: handle.on?.gpu ?? null };
       });
     } finally {
       lease.release();
@@ -587,7 +602,8 @@ export class Renderer {
    */
   async timing(work, { step, budgetMs = 45000, on } = {}) {
     this.lastUse = Date.now();
-    const began = Date.now();
+    const now = drawClock(on);
+    const began = now();
     const meta = this.services.works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
     const project = meta.meta;
@@ -596,7 +612,7 @@ export class Renderer {
     try {
       this.freshen(work);
       handle = await this.openPage(this.sourceOf(work), { width: size.width, project, quality: "standard", timeoutMs: 60000, on });
-      const started = Date.now();
+      const started = now();
       const draw = (batch) =>
         again(handle.page, READY.work, () =>
           handle.page.evaluate(async (batch) => {
@@ -614,19 +630,19 @@ export class Renderer {
       const samples = [];
       let time = 0,
         used = step;
-      while (time < project.duration - 1e-3 && Date.now() < passEnd) {
+      while (time < project.duration - 1e-3 && now() < passEnd) {
         const batch = [];
         // Small batches here: a slow work (seconds a frame) learns that after one frame, not eight.
         // In the user's browser frames take milliseconds and each batch a round trip: more at once.
         for (; batch.length < (on ? 8 : 2) && time < project.duration - 1e-3; time += used) batch.push(Math.round(time * 1000) / 1000);
         samples.push(...(await draw(batch)));
-        const each = (Date.now() - started) / samples.length;
-        const room = Math.floor((passEnd - Date.now()) / each);
+        const each = (now() - started) / samples.length;
+        const room = Math.floor((passEnd - now()) / each);
         if (room > 0 && (project.duration - time) / used > room) used = Math.ceil(((project.duration - time) / room) * 10) / 10;
       }
       const slowest = [...samples].sort((a, b) => b.ms - a.ms).slice(0, 8);
       for (const sample of slowest) {
-        if (Date.now() > began + budgetMs) break;
+        if (now() > began + budgetMs) break;
         const [repeat] = await draw([sample.time]);
         sample.again = repeat.ms;
       }
@@ -639,7 +655,7 @@ export class Renderer {
         lastStep: used,
         complete: time >= project.duration - 1e-3,
         samples: samples.map((sample) => ({ time: sample.time, ms: Math.round(sample.ms * 10) / 10, ...(sample.again !== undefined ? { again: Math.round(sample.again * 10) / 10 } : {}) })),
-        ms: Date.now() - began,
+        ms: now() - began,
         loadMs: started - began,
         errors: mergeTimedErrors([...new Set(handle.errors.map((text) => this.clean(work, text)))]),
         layers,
@@ -701,7 +717,7 @@ export class Renderer {
   /** One labelled contact sheet; much cheaper for AI context than many images. */
   /** `cell`: the width of each picture in the sheet when the frames come bigger (crops). */
   async storyboard(work, { times, columns, width = 480, subtitles = true, format = "jpeg", scene, crop, cell, login }) {
-    const { frames, width: w, height: h, errors, gpu } = await this.frames(work, { times, width, subtitles, scene, crop, login, format });
+    const { frames, width: w, height: h, errors, gpu, paused } = await this.frames(work, { times, width, subtitles, scene, crop, login, format });
     let cells = frames,
       cw = w,
       ch = h;
@@ -718,6 +734,7 @@ export class Renderer {
       ms: frames.map((frame) => frame.ms),
       loading: frames.map((frame) => Boolean(frame.loading)),
       gpu,
+      paused,
     };
   }
 
@@ -757,20 +774,24 @@ export class Renderer {
 
   /** Load the work in a fresh page and render a few times; report every error. */
   /** `frames`: also return the moments it renders as one contact sheet (`sheet`), for the AI to look at. */
-  async check(work, { frames = false } = {}) {
-    const result = await this.checkOnce(work, { frames });
-    // A late dependency re-optimization reloads the page mid-check; the second run finds it optimized.
-    if (result.errors.some((error) => /Execution context was destroyed/.test(error))) return this.checkOnce(work, { frames });
-    return result;
+  /** `who`: load it in the user's browser (see `anywhere`): seconds there, half a minute or more here for a 3D work. */
+  async check(work, { frames = false, who } = {}) {
+    const run = async (on) => {
+      const result = await this.checkOnce(work, { frames, on });
+      // A late dependency re-optimization reloads the page mid-check; the second run finds it optimized.
+      if (result.errors.some((error) => /Execution context was destroyed/.test(error))) return this.checkOnce(work, { frames, on });
+      return result;
+    };
+    return who ? this.anywhere(run, who) : run(null);
   }
 
-  async checkOnce(work, { frames = false } = {}) {
+  async checkOnce(work, { frames = false, on = null } = {}) {
     const meta = this.services.works.meta(work);
     if (!meta.ok) return { ok: false, errors: ["project.ts：" + meta.error], console: [] };
     let handle;
     try {
       this.freshen(work);
-      handle = await this.openPage(this.sourceOf(work), { width: 640, project: meta.meta, timeoutMs: 60000 });
+      handle = await this.openPage(this.sourceOf(work), { width: 640, project: meta.meta, timeoutMs: 60000, on });
       const duration = meta.meta.duration;
       const times = [0, duration * 0.25, duration * 0.5, duration * 0.75, Math.max(0, duration - 0.05)];
       const shots = [];
@@ -785,12 +806,15 @@ export class Renderer {
           );
           if (data) shots.push({ time, png: Buffer.from(data, "base64") });
         } catch (error) {
+          // The user's page went away: the check runs again here, not reported as the work's fault.
+          if (isGone(error)) throw error;
           handle.errors.push(`${formatTime(time)} 渲染失败：${error.message}`);
         }
       }
       try {
         await handle.page.evaluate((t) => window.__FRAME_STUDIO__.audioChunk(t, 0.5), Math.min(1, duration / 2));
       } catch (error) {
+        if (isGone(error)) throw error;
         handle.errors.push("音频生成失败：" + error.message);
       }
       const errors = mergeTimedErrors([...new Set(handle.errors.map((text) => this.clean(work, text)))]);
@@ -799,8 +823,9 @@ export class Renderer {
       const h = Math.round((handle.size.height / handle.size.width) * w);
       const small = await Promise.all(shots.map(async (shot) => ({ time: shot.time, png: await sharp(shot.png).resize(w, h).png().toBuffer() })));
       const sheet = small.length ? await contactSheet(small, w, h, 3) : null;
-      return { ok: !errors.length, errors, console: handle.logs, checkedTimes: times, sheet };
+      return { ok: !errors.length, errors, console: handle.logs, checkedTimes: times, sheet, gpu: on?.gpu ?? null };
     } catch (error) {
+      if (isGone(error)) throw error;
       return { ok: false, errors: [this.clean(work, error.message)], console: error.details?.console || [] };
     } finally {
       await handle?.close();

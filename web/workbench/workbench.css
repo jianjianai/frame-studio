@@ -2641,3 +2641,13 @@ a.btn.disabled {
   gap: 6px;
   justify-items: start;
 }
+
+/* What 缓冲中 waits for: long layer names are cut, the rest of the row stays. */
+.transport-row .stall {
+  min-width: 0;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: inline-block;
+  line-height: 18px;
+}

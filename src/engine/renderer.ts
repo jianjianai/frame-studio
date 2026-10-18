@@ -228,6 +228,8 @@ export class FrameRenderer {
   diagnostics() {
     return {
       ready: Boolean(this.scene) && !this.destroyed, preparing: this.preparing, actualTime: this.lastTime,
+      // The picture holds playback (a layer loading, a slow frame); else a wait is the sound's.
+      waiting: this.sceneBuffering || this.slowFrames.size > 0,
       renderMs: this.renderMs, renderCount: this.renderCount, sceneEpoch: this.sceneEpoch,
       cleanupErrors: [...this.cleanupErrors], scene: this.scene?.debug?.diagnostics?.() ?? null,
     };

@@ -170,14 +170,31 @@ export function createCompositionScene(
   let disposed = false;
   watchLongTasks();
   /** Each layer's creation: when, and how long it took (its main-thread holds are read with the diagnostics). */
-  const loads: { id: string; name?: string; at: number; began: number; ended: number }[] = [];
+  const loads: { id: string; name?: string; at: number; began: number; ended: number; holds?: { longest: number; held: number } }[] = [];
+  /** Layers being created now (the workbench tells what 缓冲中 waits for). */
+  const opening = new Set<{ id: string; name?: string; began: number }>();
   const open = (clip: Clip, signal: AbortSignal) => {
     const began = performance.now();
-    return source(clip, options, loaders, signal).then((current) => {
-      loads.push({ id: clip.id, name: clip.name, at: clip.start, began, ended: performance.now() });
-      return current;
-    });
+    const pending = { id: clip.id, name: clip.name, began };
+    opening.add(pending);
+    return source(clip, options, loaders, signal)
+      .then((current) => {
+        loads.push({ id: clip.id, name: clip.name, at: clip.start, began, ended: performance.now() });
+        if (loads.length > 300) loads.shift();
+        return current;
+      })
+      .finally(() => opening.delete(pending));
   };
+  /** The main thread's longest hold and total holds during a creation (settled a second after it ended: long tasks are reported late). */
+  const holdsOf = (load: (typeof loads)[number]) => {
+    if (load.holds) return load.holds;
+    const holds = longTasks.filter((task) => task.end > load.began && task.start < load.ended).map((task) => Math.min(task.end, load.ended) - Math.max(task.start, load.began));
+    const found = { longest: Math.round(Math.max(0, ...holds)), held: Math.round(holds.reduce((a, b) => a + b, 0)) };
+    if (performance.now() - load.ended > 1000) load.holds = found;
+    return found;
+  };
+  /** Wall-clock time of a moment of this page (the workbench compares it with its own). */
+  const wall = (at: number) => Math.round(performance.timeOrigin + at);
   /** Layers loading ahead of their start (live playback, `options.lookahead`): clip id → its load. */
   const preloads = new Map<string, { abort: AbortController; done: Promise<void> }>();
   const lookahead = Math.max(0, options.lookahead ?? 0);
@@ -408,10 +425,8 @@ export function createCompositionScene(
       diagnostics: () => ({
         activeSources: sources.size,
         // Each layer created so far: how long it took and how long it held the main thread at once.
-        layerLoads: loads.map((load) => {
-          const holds = longTasks.filter((task) => task.end > load.began && task.start < load.ended).map((task) => Math.min(task.end, load.ended) - Math.max(task.start, load.began));
-          return { id: load.id, name: load.name, at: load.at, ms: Math.round(load.ended - load.began), longest: Math.round(Math.max(0, ...holds)), held: Math.round(holds.reduce((a, b) => a + b, 0)) };
-        }),
+        layerLoads: loads.map((load) => ({ id: load.id, name: load.name, at: load.at, ms: Math.round(load.ended - load.began), ...holdsOf(load), start: wall(load.began), end: wall(load.ended) })),
+        loading: [...opening].map((load) => ({ id: load.id, name: load.name, ms: Math.round(performance.now() - load.began), start: wall(load.began) })),
         clips: doc.clips.length,
         colorSpace: "srgb",
         budgetBytes: 512 * 1024 * 1024,

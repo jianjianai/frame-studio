@@ -86,14 +86,16 @@ export function StatusBar({ status, version, onOpenVersions }: { status: WorkSta
  */
 function RenderStatus() {
   const { openSettings } = useWorkbench();
-  const { mode, card, drawing } = useRenderStatus();
+  const { mode, card, drawing, waiting } = useRenderStatus();
   const name = (card ?? "").replace(/\((R|TM)\)/g, "").replace(/\s+/g, " ").trim();
   const view =
     mode === "gpu"
       ? {
           icon: <Gpu size={13} className={drawing ? "accent-text" : ""} />,
-          text: drawing ? "AI 在用本机显卡画" : `显卡：${name}`,
-          title: `AI 查看画面、测速、看模型时，用这台电脑的显卡画（${card}）。点击可改用服务器`,
+          text: waiting ? "AI 等你暂停后再画" : drawing ? "AI 在用本机显卡画" : `显卡：${name}`,
+          title: waiting
+            ? "AI 要在这台电脑上画画面，但它和预览共用同一个线程：等你暂停播放再画，免得预览卡住（一直播放超过 2 分钟就边播边画）"
+            : `AI 查看画面、测速、看模型时，用这台电脑的显卡画（${card}）。点击可改用服务器`,
         }
       : {
           icon: <Server size={13} />,

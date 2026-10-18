@@ -68,6 +68,7 @@ let working = 0;
 const listeners = new Set<() => void>();
 let lingering = 0;
 let drawing = false;
+let waiting = false;
 const changed = () => listeners.forEach((listener) => listener());
 
 /** Tell the server about this page once it is signed in (what it has open, whether it draws). */
@@ -81,7 +82,10 @@ export function initGpuRender() {
   window.setInterval(() => void report(), 60000);
   for (const type of ["pointerdown", "keydown", "focus"]) window.addEventListener(type, active, { capture: true, passive: true });
   window.addEventListener("message", relay);
-  (window as { __FRAME_AI_YIELD__?: () => Promise<void> }).__FRAME_AI_YIELD__ = makeWay;
+  (window as { __FRAME_AI_YIELD__?: () => Promise<void> }).__FRAME_AI_YIELD__ = async () => {
+    await standBy();
+    await makeWay();
+  };
 }
 
 let playing = () => false;
@@ -90,10 +94,54 @@ export function setPlaybackCheck(check: () => boolean) {
   playing = check;
 }
 
+/** How long the AI's drawing waits for one stretch of playback; then it draws between the preview's frames. */
+const PATIENCE = 120000;
+let holding: Promise<void> | null = null;
+/** When the AI began waiting for the playback going on now (0: nothing plays). */
+let waitingFrom = 0;
+
+function mustWait() {
+  if (document.hidden || !playing()) {
+    waitingFrom = 0;
+    return false;
+  }
+  waitingFrom ||= Date.now();
+  return Date.now() - waitingFrom < PATIENCE;
+}
+
 /**
- * A frame drawn for the AI calls this before each of its frames (src/preview/render.ts). The
- * preview draws in the same thread: while something plays, wait until the page has drawn, so a
- * batch of the AI's frames costs playback a frame at a time instead of freezing it throughout.
+ * The AI's next step here (opening a work, taking an edit, drawing a frame) waits while something
+ * plays in this page: it runs in the preview's thread, and loading a 3D work holds that thread
+ * for seconds, which the preview shows as 缓冲中. The server stops the step's clock meanwhile
+ * (server/render-gpu.mjs hold). Played on for longer than PATIENCE, the AI goes on, a frame at
+ * a time between the preview's (makeWay).
+ */
+function standBy(): Promise<void> {
+  if (!mustWait()) return Promise.resolve();
+  holding ??= new Promise<void>((resolve) => {
+    setWaiting(true);
+    const timer = window.setInterval(() => {
+      if (mustWait()) return;
+      window.clearInterval(timer);
+      holding = null;
+      setWaiting(false);
+      resolve();
+    }, 200);
+  });
+  return holding;
+}
+
+function setWaiting(value: boolean) {
+  waiting = value;
+  track();
+  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "waiting", waiting: value }));
+  changed();
+}
+
+/**
+ * A frame drawn for the AI calls this before each of its frames (src/preview/render.ts), after
+ * standBy. The preview draws in the same thread: while something plays, wait until the page has
+ * drawn, so a batch of the AI's frames costs playback a frame at a time instead of freezing it throughout.
  */
 function makeWay() {
   if (document.hidden || !playing()) return Promise.resolve();
@@ -154,6 +202,8 @@ async function handle(ws: WebSocket, message: { id: number; op: string; page?: s
   const drawing = message.op !== "ping" && message.op !== "close";
   if (drawing) busy(1);
   try {
+    // What starts work in the frame (loading, drawing) waits for the preview to pause first.
+    if (message.op === "goto" || message.op === "eval") await standBy();
     reply = { type: "result", id: message.id, ok: true, value: await run(message) };
   } catch (error) {
     reply = { type: "result", id: message.id, ok: false, error: describe(error), timeout: (error as Error)?.name === "TimeoutError" };
@@ -302,8 +352,26 @@ function describe(error: unknown) {
   return text.replace(/^Error: /, "");
 }
 
+/** When this page drew for the AI (wall-clock ms, its waits for playback left out): the workbench names it as a cause of 缓冲中. */
+const busySpans: { start: number; end: number }[] = [];
+let busyFrom = 0;
+function track() {
+  const active = working > 0 && !waiting;
+  if (active && !busyFrom) busyFrom = Date.now();
+  else if (!active && busyFrom) {
+    busySpans.push({ start: busyFrom, end: Date.now() });
+    if (busySpans.length > 20) busySpans.shift();
+    busyFrom = 0;
+  }
+}
+/** Whether the AI drew in this page between two moments (wall-clock ms). */
+export function aiBusyBetween(start: number, end: number) {
+  return (busyFrom > 0 && busyFrom < end) || busySpans.some((span) => span.start < end && span.end > start);
+}
+
 function busy(change: number) {
   working += change;
+  track();
   window.clearTimeout(lingering);
   // Quiet for a moment before saying it stopped: drawing comes in many short calls.
   const now = () => {
@@ -314,7 +382,10 @@ function busy(change: number) {
   else lingering = window.setTimeout(now, 1500);
 }
 
-/** Where the AI's frames are drawn from this device (`mode`, see renderMode), and whether it is drawing right now. */
+/**
+ * Where the AI's frames are drawn from this device (`mode`, see renderMode), whether it is drawing
+ * right now, and whether it waits for the preview playing here to pause (standBy).
+ */
 export function useRenderStatus() {
   const [, update] = useState(0);
   useEffect(() => {
@@ -322,5 +393,5 @@ export function useRenderStatus() {
     listeners.add(listener);
     return () => void listeners.delete(listener);
   }, []);
-  return { mode: renderMode(), card: graphicsCard(), drawing };
+  return { mode: renderMode(), card: graphicsCard(), drawing, waiting };
 }

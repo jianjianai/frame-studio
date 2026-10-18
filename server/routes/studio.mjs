@@ -17,7 +17,12 @@ export function studioRoutes(services) {
   const open = (params) => services.openWork(params.id, params.repo);
 
   // ---- checks -------------------------------------------------------------
-  router.post("/api/works/:repo/:id/check", async ({ params, req }) => checkWork(services, await open(params), await readJson(req)));
+  // Checked from the workbench: loaded in this person's browser (one that has the work open first).
+  router.post("/api/works/:repo/:id/check", async ({ params, req, principal }) => {
+    const { runtime, frames } = (await readJson(req)) ?? {};
+    const { gpu, paused, ...result } = await checkWork(services, await open(params), { runtime, frames, who: { login: principal?.login, repo: params.repo, work: params.id } });
+    return result;
+  });
   router.get("/api/works/:repo/:id/check", async ({ params }) => services.checks.get(`${params.repo}/${params.id}`) || null);
 
   // ---- assets -------------------------------------------------------------

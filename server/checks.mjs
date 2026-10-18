@@ -142,8 +142,9 @@ export function mixingRules(document) {
 /**
  * Full check: metadata, types, asset references and a real browser load that
  * renders a few frames and a little audio. Results are kept for the UI and AI.
+ * `who`: the load happens in the user's browser (Renderer.check), `gpu` in the result says so.
  */
-export async function checkWork(services, work, { runtime = true, frames = false } = {}) {
+export async function checkWork(services, work, { runtime = true, frames = false, who } = {}) {
   const started = Date.now();
   const problems = [];
   const meta = services.works.meta(work);
@@ -161,7 +162,7 @@ export async function checkWork(services, work, { runtime = true, frames = false
   problems.push(...types, ...assets, ...materials);
   let runtimeResult = null;
   if (runtime && meta.ok && !problems.some((problem) => problem.source === "project")) {
-    runtimeResult = await services.renderer.check(work, { frames });
+    runtimeResult = await services.renderer.check(work, { frames, who });
     for (const error of runtimeResult.errors) problems.push({ severity: "error", source: "runtime", message: error });
   }
   const head = await services.works.status(work).then(
@@ -180,6 +181,7 @@ export async function checkWork(services, work, { runtime = true, frames = false
   };
   services.checks.set(`${work.repo}/${work.id}`, result);
   services.events.emit({ type: "work-check", work: work.id, repo: work.repo, result });
-  // The rendered moments go to the caller only (an AI looking), not into the kept result.
-  return runtimeResult?.sheet ? { ...result, sheet: runtimeResult.sheet, sheetTimes: runtimeResult.checkedTimes } : result;
+  // Where it loaded and the rendered moments go to the caller only (an AI looking), not into the kept result.
+  const drawn = runtimeResult ? { gpu: runtimeResult.gpu ?? null, paused: runtimeResult.paused ?? 0 } : {};
+  return runtimeResult?.sheet ? { ...result, ...drawn, sheet: runtimeResult.sheet, sheetTimes: runtimeResult.checkedTimes } : { ...result, ...drawn };
 }

@@ -50,7 +50,10 @@ export function regionPlan(project, region, scale) {
 }
 
 /** Where frames were drawn, for reading their milliseconds. */
-export const drawnOn = (gpu) => (gpu ? `在用户电脑上用显卡画（${gpu}）` : "在服务器上软件渲染（没有显卡），毫秒数比用户电脑慢得多");
+export const drawnOn = (gpu, paused = 0) =>
+  gpu ? `在用户电脑上用显卡画（${gpu}）${pausedText(paused, "；")}` : "在服务器上软件渲染（没有显卡），毫秒数比用户电脑慢得多";
+/** The user's browser waits for the preview playing there to pause before it loads or draws (web/lib/gpu-render.ts). */
+export const pausedText = (paused, joint = "，") => (paused >= 1000 ? `${joint}其中等用户暂停预览 ${Math.round(paused / 1000)} 秒` : "");
 
 const timeOf = (frame, digest) => `${formatTime(frame.time)}（${digest}，${frame.ms} ms${frame.loading ? "，含加载" : ""}）`;
 
@@ -224,7 +227,7 @@ export function registerPreviewTools(registry) {
       if (sheet ?? times.length > 4) {
         const cells = columns ?? Math.min(4, Math.ceil(Math.sqrt(times.length)));
         const cell = cells > 4 ? 320 : 480;
-        const { image, times: rendered, errors, digests, ms, loading, gpu } = await services.renderer.storyboard(work, {
+        const { image, times: rendered, errors, digests, ms, loading, gpu, paused } = await services.renderer.storyboard(work, {
           times,
           columns: cells,
           width: zoom ? zoom.width : cell,
@@ -237,7 +240,7 @@ export function registerPreviewTools(registry) {
         });
         return {
           data: { times: rendered, errors, digests, ms },
-          text: `${label}总览 ${rendered.length} 张：${rendered.map((time, index) => `#${index + 1} ${timeOf({ time, ms: ms[index], loading: loading[index] }, digests[index])}`).join("，")}。${drawnOn(gpu)}。${errors.length ? "\n错误：\n" + errors.join("\n") : ""}`,
+          text: `${label}总览 ${rendered.length} 张：${rendered.map((time, index) => `#${index + 1} ${timeOf({ time, ms: ms[index], loading: loading[index] }, digests[index])}`).join("，")}。${drawnOn(gpu, paused)}。${errors.length ? "\n错误：\n" + errors.join("\n") : ""}`,
           images: [{ data: image, mimeType: `image/${format}` }],
         };
       }
@@ -251,7 +254,7 @@ export function registerPreviewTools(registry) {
         })),
       );
       const digests = result.frames.map((frame) => digest(frame.png));
-      const notes = [`${label}${result.width}×${result.height}，时间：${result.frames.map((frame, index) => timeOf(frame, digests[index])).join("、")}。${drawnOn(result.gpu)}。`];
+      const notes = [`${label}${result.width}×${result.height}，时间：${result.frames.map((frame, index) => timeOf(frame, digests[index])).join("、")}。${drawnOn(result.gpu, result.paused)}。`];
       if (result.errors.length) notes.push("渲染时出现错误：\n" + result.errors.join("\n"));
       return {
         data: { times: result.frames.map((frame) => frame.time), width: result.width, height: result.height, errors: result.errors, digests, ms: result.frames.map((frame) => frame.ms) },
@@ -298,7 +301,7 @@ export function registerPreviewTools(registry) {
       const design = compositionSize(project);
       const thumbs = [...new Set(Array.from({ length: 6 }, (_, index) => Math.round(((total - 1) * index) / 5)))];
       let track, pictures;
-      const { waited, result: drawn } = await services.renderer.heavy((on) => {
+      const { waited, paused, result: drawn } = await services.renderer.heavy((on) => {
         // From the start each time: a page in the user's browser that went away halfway is drawn again here.
         track = new MotionTrack({ width: size.width, height: size.height, design, fps: rate });
         pictures = [];
@@ -319,7 +322,7 @@ export function registerPreviewTools(registry) {
       const last = track.frames[track.frames.length - 1].time;
       const spent = Math.round(drawn.ms / 100) / 10;
       const lines = [
-        `运动检查 ${formatTime(start)}–${formatTime(last)}：${rate} fps，${track.frames.length} 帧（按 ${size.width}×${size.height} 画来分析，${drawn.gpu ? "在用户电脑上画" : "在服务器上画"}，用时 ${spent} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}）。`,
+        `运动检查 ${formatTime(start)}–${formatTime(last)}：${rate} fps，${track.frames.length} 帧（按 ${size.width}×${size.height} 画来分析，${drawn.gpu ? "在用户电脑上画" : "在服务器上画"}，用时 ${spent} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}${pausedText(paused, "，另外")}）。`,
         ...motionText(analysis, { design }),
       ];
       if (drawn.cut) {

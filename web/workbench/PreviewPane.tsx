@@ -24,6 +24,7 @@ import type { WorkInfo } from "../lib/types";
 import { usePersistent, useToast } from "../lib/ui";
 import { useObservable, useWorkbench, type StageController } from "./store";
 import { RecordButton } from "./RecordButton";
+import { useStall } from "./stall";
 
 /** The stage address of a module of the work played on its own (a sample). */
 export function sampleStageSrc(work: WorkInfo, file: string) {
@@ -225,6 +226,7 @@ function Transport({
   const { playback, time, drag } = useScrub(stage);
   const status = useObservable(stage.status);
   const zoomed = useObservable(stage.zoom).scale > 1;
+  const stall = useStall(stage);
   const duration = status.project?.duration ?? 0;
   const ready = status.status === "ready";
   return (
@@ -246,7 +248,17 @@ function Transport({
         <span className="time mono">
           {formatTime(time)} <span className="faint">/ {formatTime(duration)}</span>
         </span>
-        {playback.buffering && <span className="badge warn">缓冲中</span>}
+        {playback.buffering ? (
+          <span className="badge warn stall" title={stall ? `预览在等：${stall.reason}` : undefined}>
+            缓冲中{stall ? ` · ${stall.reason}` : ""}
+          </span>
+        ) : (
+          stall?.ms && (
+            <span className="badge stall" title="预览刚才停下来等了这么久，以及在等什么">
+              卡了 {(stall.ms / 1000).toFixed(1)} 秒 · {stall.reason}
+            </span>
+          )
+        )}
         <span className="grow" />
         {record && <RecordButton />}
         <button className="icon-btn" title="把当前画面发给 AI" disabled={!ready} onClick={onCapture}>
