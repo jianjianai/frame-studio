@@ -10,7 +10,8 @@ export interface WorkSummary {
   width: number;
   height: number;
   accent: string;
-  status: string;
+  /** 草稿 or 废案, set by the user; "" is 编辑中 (or 已发布, see publishedAt). */
+  status: "" | "draft" | "abandoned";
   tags?: string[];
   /** Version of the cached cover image ("" while there is none); see lib/covers.ts. */
   cover?: string;
@@ -86,6 +87,8 @@ export interface WorkInfo {
     materials?: string[];
     /** When the work was published; a published work is view-only. */
     publishedAt?: string;
+    /** 草稿 or 废案, set by the user; without it the work is 编辑中. */
+    status?: "draft" | "abandoned";
     /** Cover image of the work; without it the cover is the frame at posterTime (or one picked automatically). */
     poster?: string;
     posterTime?: number;

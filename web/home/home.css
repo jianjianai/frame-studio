@@ -378,6 +378,12 @@
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--accent);
 }
+/* 废案 stay listed, but step back. */
+.work-card.abandoned .work-thumb-frame,
+.work-row.abandoned .work-thumb-frame {
+  opacity: 0.45;
+  filter: grayscale(1);
+}
 .work-thumb {
   position: relative;
   height: 128px;

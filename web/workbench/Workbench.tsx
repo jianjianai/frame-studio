@@ -17,6 +17,8 @@ import {
   BookOpen,
   BookMarked,
   Lock,
+  NotebookPen,
+  Archive,
   Send,
   Copy,
   BarChart3,
@@ -325,6 +327,11 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
             {readOnly && (
               <span className="badge accent" title={`发布于 ${new Date(work.meta!.publishedAt!).toLocaleString()}`}>
                 <Lock size={10} /> 已发布
+              </span>
+            )}
+            {!readOnly && work.meta?.status && (
+              <span className="badge" title="作品状态（在「属性」里修改）">
+                {work.meta.status === "draft" ? <NotebookPen size={10} /> : <Archive size={10} />} {work.meta.status === "draft" ? "草稿" : "废案"}
               </span>
             )}
             <span className="faint ellipsis">

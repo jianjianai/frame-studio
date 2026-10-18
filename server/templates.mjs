@@ -41,7 +41,6 @@ export function createWorkFiles({ slug, title, width, height, duration, fps, des
     fps,
     accent: "#7aa2f7",
     tags: [],
-    status: "draft",
     beats: [],
     subtitles: [],
     credits: [],

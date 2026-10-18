@@ -262,6 +262,9 @@ export function workRoutes(services) {
   // Published works are view-only; the mark is saved as a version.
   router.post("/api/works/:repo/:id/publish", async ({ params }) => ({ commit: await works.setPublished(await open(params), true) }));
   router.post("/api/works/:repo/:id/unpublish", async ({ params }) => ({ commit: await works.setPublished(await open(params), false) }));
+  router.post("/api/works/:repo/:id/status", async ({ params, req }) => ({
+    commit: await works.setStatus(await open(params), String((await readJson(req)).status ?? "")),
+  }));
   router.post("/api/works/:repo/:id/duplicate", async ({ params, req }) => {
     const copy = await works.duplicate(await open(params), await readJson(req));
     return { id: copy.id, repo: copy.repo };

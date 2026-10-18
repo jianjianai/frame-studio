@@ -90,6 +90,50 @@ describe("published works and copies", () => {
     expect((await call(route, { method: "PATCH", body: { title: "改名" } })).status).toBe(200);
   });
 
+  it("marks a work 草稿 or 废案 as a version of its own, leaving other unsaved changes unsaved", async () => {
+    const work = await works.create({ title: "状态" });
+    const route = `/api/works/local/${work.id}`;
+    const listed = async () => (await call("/api/works")).body.find((item) => item.id === work.id);
+    const project = path.join(work.dir, "project.ts");
+    expect(fs.readFileSync(project, "utf8")).not.toContain("status");
+    expect((await listed()).status).toBe("");
+    // Unsaved changes: another file, and the title in project.ts itself.
+    fs.writeFileSync(path.join(work.dir, "notes.md"), "未保存");
+    fs.writeFileSync(project, setProjectFields(fs.readFileSync(project, "utf8"), { title: "未保存的标题" }));
+    const versions = (await works.history(work)).length;
+
+    expect((await call(`${route}/status`, { method: "POST", body: { status: "draft" } })).body.commit).toMatch(/^[0-9a-f]{40}$/);
+    expect((await listed()).status).toBe("draft");
+    expect((await git(work.root, ["log", "-1", "--format=%s"])).trim()).toBe("标为草稿");
+    expect(readProjectSource(await git(work.root, ["show", `HEAD:projects/${work.slug}/project.ts`])).meta).toMatchObject({ title: "状态", status: "draft" });
+    expect(readProjectSource(fs.readFileSync(project, "utf8")).meta).toMatchObject({ title: "未保存的标题", status: "draft" });
+    expect((await works.status(work)).files.map((file) => file.path).sort()).toEqual([`projects/${work.slug}/notes.md`, `projects/${work.slug}/project.ts`]);
+    expect(await git(work.root, ["diff", "HEAD", "--", `projects/${work.slug}/project.ts`])).not.toContain("status");
+
+    // Again the same: nothing to save. Then 废案, and back to 编辑中.
+    expect((await call(`${route}/status`, { method: "POST", body: { status: "draft" } })).body.commit).toBeNull();
+    await call(`${route}/status`, { method: "POST", body: { status: "abandoned" } });
+    expect((await listed()).status).toBe("abandoned");
+    await call(`${route}/status`, { method: "POST", body: { status: "" } });
+    expect((await listed()).status).toBe("");
+    expect(fs.readFileSync(project, "utf8")).not.toContain("status");
+    expect((await works.history(work)).length).toBe(versions + 3);
+    expect((await call(`${route}/status`, { method: "POST", body: { status: "film" } })).status).toBe(400);
+    expect((await call(route, { method: "PATCH", body: { status: "draft" } })).status).toBe(200);
+    expect(fs.readFileSync(project, "utf8")).not.toContain("status");
+
+    // Publishing ends 草稿/废案; a published work keeps its state until it is taken back (编辑中).
+    await call(`${route}/status`, { method: "POST", body: { status: "abandoned" } });
+    expect((await call(`${route}/publish`, { method: "POST" })).status).toBe(200);
+    expect(fs.readFileSync(project, "utf8")).not.toContain("status");
+    expect((await call(`${route}/status`, { method: "POST", body: { status: "draft" } })).status).toBe(423);
+    expect((await call(`${route}/unpublish`, { method: "POST" })).status).toBe(200);
+    expect((await listed()).status).toBe("");
+    // A copy starts 编辑中.
+    await call(`${route}/status`, { method: "POST", body: { status: "draft" } });
+    expect(works.meta(await works.duplicate(work)).meta.status).toBeUndefined();
+  });
+
   it("copies a work with its current files into a new, unpublished work", async () => {
     const source = await works.create({ title: "原作品" });
     fs.mkdirSync(path.join(source.dir, "public"), { recursive: true });

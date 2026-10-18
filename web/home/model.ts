@@ -19,11 +19,21 @@ export function parseScope(key: string, repos: Repo[]): Scope {
   return key === "recent" || key === "attention" ? { kind: key } : { kind: "all" };
 }
 
-export type Filter = "all" | "editing" | "published" | "cloud";
+/** Where a work is in its life: the user marks 草稿, 编辑中 and 废案; publishing makes it 已发布. */
+export type WorkState = "draft" | "editing" | "published" | "abandoned";
+export const STATE_LABELS: Record<WorkState, string> = { draft: "草稿", editing: "编辑中", published: "已发布", abandoned: "废案" };
+export const stateOf = (work: Pick<WorkSummary, "publishedAt" | "status">): WorkState => (work.publishedAt ? "published" : work.status || "editing");
+/** The value the server takes for a state the user can mark. */
+export const STATUS_VALUES: Record<Exclude<WorkState, "published">, WorkSummary["status"]> = { draft: "draft", editing: "", abandoned: "abandoned" };
+
+export type Filter = "all" | WorkState | "cloud";
 export const FILTERS: { id: Filter; label: string; test: (work: WorkSummary) => boolean }[] = [
   { id: "all", label: "全部", test: () => true },
-  { id: "editing", label: "编辑中", test: (work) => !work.publishedAt },
-  { id: "published", label: "已发布", test: (work) => Boolean(work.publishedAt) },
+  ...(["draft", "editing", "published", "abandoned"] as const).map((state) => ({
+    id: state,
+    label: STATE_LABELS[state],
+    test: (work: WorkSummary) => stateOf(work) === state,
+  })),
   { id: "cloud", label: "仅 GitHub", test: (work) => work.location === "remote" },
 ];
 

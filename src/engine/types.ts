@@ -54,7 +54,8 @@ export const projectSchema = z
     poster: z.string().optional(),
     posterTime: z.number().nonnegative().optional(),
     tags: z.array(z.string()),
-    status: z.enum(["demo", "draft", "film"]).default("demo"),
+    /** 草稿 or 废案, set by the user in FRAME Studio; without it the work is 编辑中 (or 已发布, below). */
+    status: z.enum(["draft", "abandoned"]).optional(),
     /** Set by FRAME Studio when the work is published: it is then view-only. */
     publishedAt: z.string().optional(),
     /** The experience libraries the work follows (names), managed by FRAME Studio. */

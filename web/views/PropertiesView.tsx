@@ -33,7 +33,7 @@ const BLENDS = [
  * and is one step of the timeline's undo history.
  */
 export function PropertiesView() {
-  const { work, selection, history, stage, addToChat, openTool, readOnly } = useWorkbench();
+  const { work, selection, history, stage, addToChat, openTool, readOnly, reload } = useWorkbench();
   const [run] = useAction();
   const meta = work.meta;
   const base = workPath(work.repo, work.id);
@@ -443,6 +443,22 @@ export function PropertiesView() {
         <Section title="作品">
           <Prop label="标题">
             <TextField value={meta.title} onCommit={(title) => title && projectPatch("修改标题", { title })} />
+          </Prop>
+          <Prop label="状态">
+            {readOnly ? (
+              <span className="prop-static">已发布</span>
+            ) : (
+              // Saved as a version of its own at once (not a step of the undo history).
+              <Select
+                value={meta.status ?? ""}
+                options={[
+                  { value: "draft", label: "草稿" },
+                  { value: "", label: "编辑中" },
+                  { value: "abandoned", label: "废案" },
+                ]}
+                onChange={(status) => run(() => api(`${base}/status`, { body: { status } }).then(reload))}
+              />
+            )}
           </Prop>
           <Prop label="说明">
             <TextField multiline value={meta.description} onCommit={(description) => projectPatch("修改说明", { description })} />

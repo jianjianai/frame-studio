@@ -18,7 +18,6 @@ const project: AnimationProject = {
   accent: "#f5a524",
   posterTime: 6.5,                 // 封面用这一秒的画面（可选）
   tags: [],
-  status: "draft",
   tempo: { bpm: 118.12, firstBeat: 0.035, beatsPerBar: 4 },   // 配乐的节拍（可选）
   beats: [{ at: 0, title: "开场", detail: "标题从下方升起" }],
   subtitles: [{ start: 1, end: 3.5, text: "夏天，就该这样过" }],
@@ -41,4 +40,5 @@ export default project;
 - `materials` 是作品关联的素材库 id 列表（id 是素材库分支名的最后一段，不会变；素材库改名只改显示名称），用户要求时用 `materials_link` 修改；用到的素材文件版本记录在 `materials.lock.json`（不要手改，见 `assets`）。
 - 封面：默认是作品自己的一帧画面，FRAME 在作品变化后重新截取（`posterTime` 指定用哪一秒，不写时自动挑一个画面饱满的时刻）。`poster: "films/<名称>/poster.webp"` 指定一张 `public/` 里的图片作为封面，有它时不再截取。用户在预览栏「设为封面」或在属性中上传图片时，FRAME 会写入这两个字段。
 - `publishedAt` 由 FRAME Studio 在用户发布作品时写入。有这个字段的作品已发布、只能查看，工具会拒绝修改；不要自己添加或删除它。
+- `status` 是用户在 FRAME Studio 里给作品标的状态：`"draft"` 草稿、`"abandoned"` 废案，不写就是编辑中（发布后是已发布）。`work_context` 的 `work.state` 会说明当前状态。它由 FRAME Studio 写入并单独保存为一个版本，不要自己添加或修改。
 - 改变 `duration` 后检查 `visual.json` 和 `audio.json` 中超出时长的片段（`work_check` 会报错）。

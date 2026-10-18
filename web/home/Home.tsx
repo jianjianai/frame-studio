@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import {
+  Archive,
   Clock,
   Copy,
   ExternalLink,
@@ -9,6 +10,8 @@ import {
   ImageUp,
   KeyRound,
   LayoutGrid,
+  NotebookPen,
+  PencilLine,
   Plus,
   RefreshCw,
   Search,
@@ -37,6 +40,8 @@ import { PageHead } from "./PageHead";
 import { AccountDialog, UnlinkDialog, type Account } from "./RepoDialogs";
 import {
   FILTERS,
+  STATE_LABELS,
+  STATUS_VALUES,
   conflicted,
   githubPage,
   matches,
@@ -45,6 +50,7 @@ import {
   repoName,
   scopeKey,
   sortWorks,
+  stateOf,
   workKey,
   type Filter,
   type Scope,
@@ -59,6 +65,12 @@ const menuPoint = (event: React.MouseEvent) => {
   const rect = event.currentTarget.getBoundingClientRect();
   return { clientX: rect.left, clientY: rect.bottom + 4, preventDefault: () => event.preventDefault() };
 };
+
+/** The states the user marks (publishing is its own action). */
+const MARKS = ["draft", "editing", "abandoned"] as const;
+type Mark = (typeof MARKS)[number];
+const MARK_ICONS: Record<Mark, ReactNode> = { draft: <NotebookPen size={14} />, editing: <PencilLine size={14} />, abandoned: <Archive size={14} /> };
+const mark = (work: WorkSummary, state: Mark) => api(`/api/works/${work.repo}/${work.id}/status`, { body: { status: STATUS_VALUES[state] } });
 
 type DialogState =
   | null
@@ -300,6 +312,14 @@ export function Home({ version, local }: { version: string; local: boolean }) {
         },
       },
       ...(movable(work) ? [{ label: "迁移到作品库…", icon: <FolderOutput size={14} />, onClick: () => moveWorks([work]) }] : []),
+      // A published work is taken back (编辑中) before it is marked otherwise.
+      ...(work.publishedAt
+        ? []
+        : MARKS.filter((state) => state !== stateOf(work)).map((state) => ({
+            label: `标为${STATE_LABELS[state]}`,
+            icon: MARK_ICONS[state],
+            onClick: () => run(() => mark(work, state).then(load), `已把「${work.title}」标为${STATE_LABELS[state]}`),
+          }))),
       work.publishedAt
         ? {
             label: "取消发布",
@@ -412,6 +432,16 @@ export function Home({ version, local }: { version: string; local: boolean }) {
     });
     if (failed.length) toast(`释放了 ${formatBytes(total)}；${failed.length} 个没有成功：\n${failed.join("\n")}`, "error");
     else toast(`已释放 ${formatBytes(total)}，这些作品保留在 GitHub 上`, "ok");
+  };
+
+  const markChosen = async (state: Mark) => {
+    const list = chosen.filter((work) => !work.publishedAt && stateOf(work) !== state);
+    const published = chosen.filter((work) => work.publishedAt).length;
+    const failed = await each(list, `标为${STATE_LABELS[state]}`, (work) => mark(work, state));
+    const skipped = published ? `；${published} 个已发布的跳过了（先取消发布）` : "";
+    if (failed.length)
+      toast(`${list.length - failed.length} 个已标为${STATE_LABELS[state]}，${failed.length} 个没有成功${skipped}：\n${failed.join("\n")}`, "error");
+    else toast(`已把 ${list.length} 个作品标为${STATE_LABELS[state]}${skipped}`, published ? "info" : "ok");
   };
 
   // ---- actions on repositories --------------------------------------------------------
@@ -606,6 +636,12 @@ export function Home({ version, local }: { version: string; local: boolean }) {
             onAll={() => setSelected(new Set(visible.map(workKey)))}
             onFree={freeChosen}
             onMove={() => moveWorks(moving)}
+            onMark={(event) =>
+              openMenu(
+                menuPoint(event),
+                MARKS.map((state) => ({ label: STATE_LABELS[state], icon: MARK_ICONS[state], onClick: () => void markChosen(state) })),
+              )
+            }
             onTrash={trashChosen}
             onClear={() => setSelected(new Set())}
           />

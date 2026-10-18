@@ -1,9 +1,9 @@
 import { useState } from "react";
-import { Check, Cloud, Lock, MoreHorizontal } from "lucide-react";
+import { Archive, Check, Cloud, Lock, MoreHorizontal, NotebookPen } from "lucide-react";
 import { timeAgo } from "../lib/api";
 import { coverUrl } from "../lib/covers";
 import type { WorkSummary } from "../lib/types";
-import { conflicted, formatDuration, ratioLabel } from "./model";
+import { conflicted, formatDuration, ratioLabel, stateOf } from "./model";
 
 export interface ItemProps {
   work: WorkSummary;
@@ -42,6 +42,16 @@ export function WorkBadges({ work, remote, repoLabel }: { work: WorkSummary; rem
     work.publishedAt && (
       <span key="published" className="badge accent" title={`发布于 ${new Date(work.publishedAt).toLocaleString()}，只能查看`}>
         <Lock size={9} /> 已发布
+      </span>
+    ),
+    stateOf(work) === "draft" && (
+      <span key="draft" className="badge" title="草稿：还在构思，没有正式开始做">
+        <NotebookPen size={9} /> 草稿
+      </span>
+    ),
+    stateOf(work) === "abandoned" && (
+      <span key="abandoned" className="badge" title="废案：不再做了（随时可以改回编辑中）">
+        <Archive size={9} /> 废案
       </span>
     ),
     work.deleteRequest && (
@@ -121,7 +131,7 @@ export function WorkCard({ work, repoLabel, remote, opened, selected, onActivate
   const meta = [formatDuration(work.duration), ratioLabel(work.width, work.height), when(work, opened)].filter(Boolean).join(" · ");
   return (
     <div
-      className={`work-card ${selected ? "selected" : ""}`}
+      className={`work-card ${selected ? "selected" : ""} ${stateOf(work) === "abandoned" ? "abandoned" : ""}`}
       role="button"
       tabIndex={0}
       onClick={onActivate}
@@ -167,7 +177,7 @@ export function WorkListHead({ repo, opened }: { repo: boolean; opened?: boolean
 export function WorkRow({ work, repoLabel, showRepo, remote, opened, selected, onActivate, onToggle, onMenu }: ItemProps & { showRepo: boolean }) {
   return (
     <div
-      className={`work-row ${selected ? "selected" : ""}`}
+      className={`work-row ${selected ? "selected" : ""} ${stateOf(work) === "abandoned" ? "abandoned" : ""}`}
       role="button"
       tabIndex={0}
       onClick={onActivate}

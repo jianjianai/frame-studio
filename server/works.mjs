@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { git, gitOk, parseStatus, addOrphanWorktree } from "./git.mjs";
+import { git, gitOk, parseStatus, addOrphanWorktree, commitEdit } from "./git.mjs";
 import { readProjectSource, readProjectDir, setProjectFields, removeProjectProperty, validSlug } from "./project-meta.mjs";
 import { appRoot } from "./config.mjs";
 import { problem, notFound, conflict, Locks, shortId, writeFileAtomic, diskUsage } from "./util.mjs";
@@ -349,7 +349,7 @@ export class Works {
   async update(work, changes) {
     this.assertEditable(work);
     const file = path.join(work.dir, "project.ts");
-    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "status", "subtitles", "subtitleStyle", "beats", "tempo", "experiences", "materials", "composition"];
+    const allowed = ["title", "subtitle", "description", "duration", "fps", "accent", "tags", "subtitles", "subtitleStyle", "beats", "tempo", "experiences", "materials", "composition"];
     if ("materials" in changes && !(Array.isArray(changes.materials) && changes.materials.every((name) => typeof name === "string")))
       throw problem(400, "materials 必须是素材库名称的列表");
     if ("experiences" in changes && !(Array.isArray(changes.experiences) && changes.experiences.every((name) => typeof name === "string")))
@@ -381,7 +381,13 @@ export class Works {
       if (Boolean(this.published(work)) === published) return null;
       if (!published) lockFiles(work.root, false);
       const code = fs.readFileSync(file, "utf8");
-      writeFileAtomic(file, published ? setProjectFields(code, { publishedAt: new Date().toISOString() }) : removeProjectProperty(code, "publishedAt"));
+      // Published is a state of its own: 草稿 and 废案 go, and taking it back leaves the work 编辑中.
+      writeFileAtomic(
+        file,
+        published
+          ? removeProjectProperty(setProjectFields(code, { publishedAt: new Date().toISOString() }), "status")
+          : removeProjectProperty(code, "publishedAt"),
+      );
       const title = readProjectSource(fs.readFileSync(file, "utf8")).meta.title;
       const commit = await this.commitAll(work.root, published ? `发布：${title}` : "取消发布");
       // Read-only on disk: whatever tool an AI uses, it can read the work but not change it.
@@ -394,9 +400,31 @@ export class Works {
   }
 
   /**
+   * Mark a work 草稿 ("draft") or 废案 ("abandoned"), or back to 编辑中 (""). The mark lives in
+   * project.ts and is saved as a version of its own: other unsaved changes stay unsaved.
+   */
+  async setStatus(work, status) {
+    if (!(status in STATUS_MESSAGES)) throw problem(400, "状态应为 draft（草稿）、abandoned（废案）或空（编辑中）");
+    this.assertEditable(work);
+    return this.locks.run(`${work.repo}/${work.id}`, async () => {
+      const edit = (code) => (status ? setProjectFields(code, { status }) : removeProjectProperty(code, "status"));
+      const file = path.join(work.dir, "project.ts");
+      const commit = await commitEdit(work.root, path.relative(work.root, file).split(path.sep).join("/"), edit, STATUS_MESSAGES[status]);
+      const code = fs.readFileSync(file, "utf8");
+      if (edit(code) !== code) writeFileAtomic(file, edit(code));
+      this.events.emit({ type: "works", repo: work.repo });
+      if (commit) {
+        this.events.emit({ type: "work-versions", work: work.id });
+        this.saved(work);
+      }
+      return commit;
+    });
+  }
+
+  /**
    * A new work with the same files as this one has now (unsaved changes included) and a
-   * history of its own. The copy is not published, and keeps the folder name, so asset
-   * paths in the code stay valid.
+   * history of its own. The copy is 编辑中 (not published, 草稿 or 废案), and keeps the folder
+   * name, so asset paths in the code stay valid.
    */
   async duplicate(source, { title } = {}) {
     const meta = readProjectSource(fs.readFileSync(path.join(source.dir, "project.ts"), "utf8")).meta;
@@ -416,7 +444,8 @@ export class Works {
         });
         lockFiles(root, false); // copied from a published (read-only) work
         const project = path.join(root, "projects", source.slug, "project.ts");
-        writeFileAtomic(project, removeProjectProperty(setProjectFields(fs.readFileSync(project, "utf8"), { title: name }), "publishedAt"));
+        const code = setProjectFields(fs.readFileSync(project, "utf8"), { title: name });
+        writeFileAtomic(project, removeProjectProperty(removeProjectProperty(code, "publishedAt"), "status"));
         this.linkRuntime(root);
         await git(root, ["add", "-A", "--", "."]);
         await git(root, ["commit", "-q", "-m", `复制自「${meta.title || source.slug}」`]);
@@ -930,6 +959,9 @@ function assertCommit(commit) {
   if (commit && !/^(?:[0-9a-f]{4,64}|HEAD(?:[~^]\d*)*)$/i.test(String(commit))) throw problem(400, `无效的版本：${commit}（用 versions_list 查看版本）`);
 }
 
+/** A work's state set by the user (project.ts `status`), with the version message that saves it. */
+const STATUS_MESSAGES = { "": "标为编辑中", draft: "标为草稿", abandoned: "标为废案" };
+
 function metaSummary(slug, meta) {
   const composition = meta.composition || { width: 1920, height: 1080 };
   return {
@@ -942,7 +974,7 @@ function metaSummary(slug, meta) {
     width: composition.width,
     height: composition.height,
     accent: meta.accent || "",
-    status: meta.status || "draft",
+    status: meta.status === "draft" || meta.status === "abandoned" ? meta.status : "",
     publishedAt: meta.publishedAt || "",
     tags: Array.isArray(meta.tags) ? meta.tags.filter((tag) => typeof tag === "string") : [],
     experiences: Array.isArray(meta.experiences) ? meta.experiences.filter((name) => typeof name === "string") : [],

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import { spawn } from "node:child_process";
 
 export class GitError extends Error {
@@ -71,6 +72,35 @@ export const gitOk = (cwd, args) =>
     () => true,
     () => false,
   );
+
+/**
+ * Save one edit of one file as a version of its own: `edit` turns the file as the last version
+ * has it into the new one, so whatever else is changed or staged in the worktree stays unsaved.
+ * The file on disk is the caller's to edit. Returns the commit, or null when nothing changed.
+ */
+export async function commitEdit(root, file, edit, message) {
+  const head = (await git(root, ["rev-parse", "HEAD"])).trim();
+  const [mode, , before] = (await git(root, ["ls-tree", "HEAD", "--", file])).split(/\s+/);
+  const text = await git(root, ["show", `${head}:${file}`]);
+  const next = edit(text);
+  if (next === text) return null;
+  const blob = (await git(root, ["hash-object", "-w", "--stdin"], { input: next })).trim();
+  // A scratch index built from the last version: the real one may hold staged changes.
+  const env = { GIT_INDEX_FILE: path.join((await git(root, ["rev-parse", "--absolute-git-dir"])).trim(), `frame-index-${process.pid}-${Date.now()}`) };
+  let commit;
+  try {
+    await git(root, ["read-tree", head], { env });
+    await git(root, ["update-index", "--cacheinfo", `${mode},${blob},${file}`], { env });
+    const tree = (await git(root, ["write-tree"], { env })).trim();
+    commit = (await git(root, ["commit-tree", tree, "-p", head, "-m", message])).trim();
+  } finally {
+    fs.rmSync(env.GIT_INDEX_FILE, { force: true });
+  }
+  await git(root, ["update-ref", "-m", `commit: ${message}`, "HEAD", commit, head]);
+  // The real index had the last version of the file (as it does between saves): it gets the new one.
+  if ((await git(root, ["ls-files", "-s", "--", file])).split(/\s+/)[1] === before) await git(root, ["update-index", "--cacheinfo", `${mode},${blob},${file}`]);
+  return commit;
+}
 
 /**
  * Add a worktree on a new branch with no history. Equivalent to

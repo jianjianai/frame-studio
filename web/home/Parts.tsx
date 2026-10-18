@@ -13,6 +13,7 @@ import {
   Search,
   Settings as SettingsIcon,
   SquareCheck,
+  Tag,
   Trash2,
   TriangleAlert,
   X,
@@ -155,6 +156,7 @@ export function SelectionBar({
   onAll,
   onFree,
   onMove,
+  onMark,
   onTrash,
   onClear,
 }: {
@@ -167,6 +169,8 @@ export function SelectionBar({
   onAll: () => void;
   onFree: () => void;
   onMove: () => void;
+  /** 草稿, 编辑中 or 废案 for all of them (a menu under the button). */
+  onMark: (event: React.MouseEvent) => void;
   onTrash: () => void;
   onClear: () => void;
 }) {
@@ -200,6 +204,9 @@ export function SelectionBar({
               <FolderOutput size={13} /> 迁移到…
             </button>
           )}
+          <button className="btn small" title="把选中的作品标为草稿、编辑中或废案（已发布的跳过）" onClick={onMark}>
+            <Tag size={13} /> 标为…
+          </button>
           <button className="btn small danger" onClick={onTrash}>
             <Trash2 size={13} /> 移到回收站
           </button>

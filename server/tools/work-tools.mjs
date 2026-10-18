@@ -122,6 +122,9 @@ export async function listAssets(work) {
   return items;
 }
 
+/** The state the user gave the work (project.ts `status`, set in the studio). */
+const stateOf = (meta, publishedAt) => (publishedAt ? "已发布" : ({ draft: "草稿", abandoned: "废案" }[meta.ok && meta.meta.status] ?? "编辑中"));
+
 function summarizeMeta(meta) {
   const size = meta.composition || { width: 1920, height: 1080 };
   return {
@@ -135,7 +138,6 @@ function summarizeMeta(meta) {
     fps: meta.fps,
     beats: meta.beats,
     subtitles: meta.subtitles?.length ? meta.subtitles : [],
-    status: meta.status,
   };
 }
 
@@ -281,7 +283,16 @@ export function registerWorkTools(registry) {
       const result = {
         ...(warnings.length ? { warnings } : {}),
         // The folder only helps an AI on the studio's own computer (a server's path leads an outside AI astray).
-        work: { id: work.id, repo: work.repo, slug: work.slug, ...(services.auth.required && !ctx.scope.session ? {} : { dir: work.dir }), branch: work.branch, published: Boolean(publishedAt), github: github && github.state },
+        work: {
+          id: work.id,
+          repo: work.repo,
+          slug: work.slug,
+          ...(services.auth.required && !ctx.scope.session ? {} : { dir: work.dir }),
+          branch: work.branch,
+          published: Boolean(publishedAt),
+          state: stateOf(meta, publishedAt),
+          github: github && github.state,
+        },
         meta: meta.ok ? summarizeMeta(meta.meta) : { error: meta.error },
         entry: meta.ok ? meta.loads : null,
         layers:
