@@ -27,6 +27,7 @@ export function setRenderChoice(choice: "auto" | "server") {
     localStorage.setItem(CHOICE, choice === "server" ? "off" : "on");
   } catch {}
   void report();
+  changed();
 }
 
 /** What this page tells the server: draws ("gpu"), chose the server, or cannot draw (a phone or tablet, no GPU). */
@@ -64,8 +65,10 @@ const pages = new Map<string, Page>();
 let socket: WebSocket | null = null;
 let started = false;
 let working = 0;
-const listeners = new Set<(busy: boolean) => void>();
+const listeners = new Set<() => void>();
 let lingering = 0;
+let drawing = false;
+const changed = () => listeners.forEach((listener) => listener());
 
 /** Tell the server about this page once it is signed in (what it has open, whether it draws). */
 export function initGpuRender() {
@@ -277,16 +280,21 @@ function busy(change: number) {
   working += change;
   window.clearTimeout(lingering);
   // Quiet for a moment before saying it stopped: drawing comes in many short calls.
-  if (working) listeners.forEach((listener) => listener(true));
-  else lingering = window.setTimeout(() => listeners.forEach((listener) => listener(false)), 1500);
+  const now = () => {
+    drawing = working > 0;
+    changed();
+  };
+  if (working) now();
+  else lingering = window.setTimeout(now, 1500);
 }
 
-/** Whether the AI is drawing on this device right now. */
-export function useGpuRendering() {
-  const [value, setValue] = useState(working > 0);
+/** Where the AI's frames are drawn from this device (`mode`, see renderMode), and whether it is drawing right now. */
+export function useRenderStatus() {
+  const [, update] = useState(0);
   useEffect(() => {
-    listeners.add(setValue);
-    return () => void listeners.delete(setValue);
+    const listener = () => update((count) => count + 1);
+    listeners.add(listener);
+    return () => void listeners.delete(listener);
   }, []);
-  return value;
+  return { mode: renderMode(), card: graphicsCard(), drawing };
 }

@@ -1,16 +1,15 @@
 import { useEffect, useState } from "react";
-import { GitBranch, ArrowUp, ArrowDown, CircleDot, CheckCircle2, AlertCircle, Loader2, Wifi, WifiOff, Sparkles, Cloud, CloudOff, CloudDownload, AlertTriangle, Gpu } from "lucide-react";
+import { GitBranch, ArrowUp, ArrowDown, CircleDot, CheckCircle2, AlertCircle, Loader2, Wifi, WifiOff, Sparkles, Cloud, CloudOff, CloudDownload, AlertTriangle, Gpu, Server } from "lucide-react";
 import { formatTime, onConnection, useServerEvent, workPath } from "../lib/api";
 import { useRemoteState, type RemoteState } from "./RemoteBar";
 import type { WorkStatus } from "../lib/types";
 import { useObservable, useWorkbench } from "./store";
 import { ExportStatus } from "../components/ExportDock";
-import { graphicsCard, useGpuRendering } from "../lib/gpu-render";
+import { useRenderStatus } from "../lib/gpu-render";
 
 export function StatusBar({ status, version, onOpenVersions }: { status: WorkStatus | null; version: string; onOpenVersions: () => void }) {
   const { stage, check, showPanel, work } = useWorkbench();
   const playback = useObservable(stage.playback);
-  const gpuRendering = useGpuRendering();
   const stageStatus = useObservable(stage.status);
   const fps = useObservable(stage.fps);
   const [online, setOnline] = useState(true);
@@ -63,11 +62,7 @@ export function StatusBar({ status, version, onOpenVersions }: { status: WorkSta
           <Sparkles size={13} /> AI 工作中
         </span>
       )}
-      {gpuRendering && (
-        <span title={`AI 查看画面、测速时用这台设备的显卡画（${graphicsCard()}）`}>
-          <Gpu size={13} /> AI 在用本机显卡画
-        </span>
-      )}
+      <RenderStatus />
       <span className="grow" />
       {project && (
         <span className="mono">
@@ -82,6 +77,39 @@ export function StatusBar({ status, version, onOpenVersions }: { status: WorkSta
       <span title={online ? "已连接" : "连接已断开，正在重连"}>{online ? <Wifi size={13} /> : <WifiOff size={13} className="danger-text" />}</span>
       <span className="faint">FRAME {version}</span>
     </footer>
+  );
+}
+
+/**
+ * Where the AI's frames are drawn from this browser: this computer's graphics card (lit while
+ * the AI draws on it) or the server. A click opens the choice in the settings.
+ */
+function RenderStatus() {
+  const { openSettings } = useWorkbench();
+  const { mode, card, drawing } = useRenderStatus();
+  const name = (card ?? "").replace(/\((R|TM)\)/g, "").replace(/\s+/g, " ").trim();
+  const view =
+    mode === "gpu"
+      ? {
+          icon: <Gpu size={13} className={drawing ? "accent-text" : ""} />,
+          text: drawing ? "AI 在用本机显卡画" : `显卡：${name}`,
+          title: `AI 查看画面、测速、看模型时，用这台电脑的显卡画（${card}）。点击可改用服务器`,
+        }
+      : {
+          icon: <Server size={13} />,
+          text: "服务器渲染",
+          title:
+            mode === "server"
+              ? "你在设置里选了服务器 CPU：AI 的画面在服务器上画（较慢）。点击修改"
+              : card
+                ? "这台设备是手机或平板，不用它画：AI 的画面由开着这个作品的电脑或服务器画"
+                : "这个浏览器没有显卡加速，不用它画：AI 的画面由开着这个作品的电脑或服务器画",
+        };
+  return (
+    <button className={drawing ? "accent-text" : ""} title={view.title} onClick={() => openSettings("ai")} style={{ maxWidth: 240 }}>
+      {view.icon}
+      <span className="ellipsis">{view.text}</span>
+    </button>
   );
 }
 
