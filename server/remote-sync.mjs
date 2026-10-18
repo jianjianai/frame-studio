@@ -174,8 +174,9 @@ export class RemoteSync {
   async sweep() {
     const { repos } = this.services;
     for (const { id } of repos.list().filter((item) => item.ready && item.remote)) {
-      const repo = repos.get(id);
       try {
+        // Inside: a repository removed while the sweep runs is skipped, not an unhandled rejection.
+        const repo = repos.get(id);
         await repos.fetch(id);
         const heads = (await git(repo.dir, ["for-each-ref", "--format=%(refname:short)", ...["works", ...SHARED_BRANCHES].map((kind) => `refs/heads/${kind}/`)]))
           .split("\n")
