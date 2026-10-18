@@ -69,6 +69,8 @@ function start() {
   started = true;
   connect();
   document.addEventListener("visibilitychange", report);
+  // Now and then too: an extension linked or restarted since the last report is noticed.
+  reporting = window.setInterval(() => void report(), 60000);
   for (const type of ["pointerdown", "keydown", "focus"]) window.addEventListener(type, active, { capture: true, passive: true });
   window.addEventListener("message", relay);
 }
@@ -77,6 +79,7 @@ function stop() {
   if (!started) return;
   started = false;
   document.removeEventListener("visibilitychange", report);
+  window.clearInterval(reporting);
   for (const type of ["pointerdown", "keydown", "focus"]) window.removeEventListener(type, active, { capture: true });
   window.removeEventListener("message", relay);
   const open = socket;
@@ -88,8 +91,15 @@ function stop() {
 function connect() {
   const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/render/gpu`);
   socket = ws;
-  ws.onopen = () => report(true);
-  ws.onmessage = (message) => void handle(ws, JSON.parse(message.data));
+  ws.onmessage = (message) => {
+    const data = JSON.parse(message.data);
+    // First the id of the FRAME 连接器 extension, to ask it which computer this page is on.
+    if (data.type === "hello") {
+      connector = typeof data.connector === "string" ? data.connector : null;
+      return void report(true);
+    }
+    void handle(ws, data);
+  };
   ws.onclose = () => {
     if (socket !== ws) return;
     socket = null;
@@ -98,16 +108,43 @@ function connect() {
   };
 }
 
-/** Which page draws: one in view, then the one used last (server/render-gpu.mjs pick). */
-function report(active: unknown = false) {
+/**
+ * Which page draws (server/render-gpu.mjs pick): one on a computer the work's repository is
+ * linked to, else one of the sign-in writing in the AI's conversation; then one in view, then
+ * the one used last. The computer is the key FRAME gave the extension in this browser.
+ */
+async function report(active: unknown = false) {
   if (socket?.readyState !== WebSocket.OPEN) return;
-  socket.send(JSON.stringify({ type: "state", gpu: graphicsCard(), visible: document.visibilityState === "visible", active: active === true }));
+  const computer = await computerKey();
+  socket?.send(JSON.stringify({ type: "state", gpu: graphicsCard(), visible: document.visibilityState === "visible", active: active === true, computer }));
+}
+
+let connector: string | null = null;
+let reporting = 0;
+/** The FRAME 连接器 extension's key for this computer: null without it (or an older one), or when it is not linked now. */
+type Runtime = { sendMessage?: (id: string, message: unknown, reply: (answer?: { key?: unknown } | null) => void) => void; lastError?: unknown };
+function computerKey() {
+  const runtime = (window as { chrome?: { runtime?: Runtime } }).chrome?.runtime;
+  const send = runtime?.sendMessage;
+  if (!connector || !send) return Promise.resolve(null);
+  const id = connector;
+  return new Promise<string | null>((resolve) => {
+    window.setTimeout(() => resolve(null), 2000);
+    try {
+      send.call(runtime, id, { type: "frame-computer" }, (answer) => {
+        void runtime?.lastError; // no such extension: read, so Chrome does not log it
+        resolve(typeof answer?.key === "string" ? answer.key : null);
+      });
+    } catch {
+      resolve(null);
+    }
+  });
 }
 let lastActive = 0;
 function active() {
   if (Date.now() - lastActive < 10000) return;
   lastActive = Date.now();
-  report(true);
+  void report(true);
 }
 
 async function handle(ws: WebSocket, message: { id: number; op: string; page?: string; [key: string]: unknown }) {

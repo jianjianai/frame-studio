@@ -165,7 +165,7 @@ export function registerPreviewTools(registry) {
     },
     async run({ times, count, start, end, sheet, columns, width, subtitles, format, compare, region, scale, scene }, ctx) {
       const work = await ctx.work();
-      // Whose browser may draw: the one writing in this AI conversation (none for other callers).
+      // Who writes in this AI conversation (none for other callers): with the work's repository, whose computer may draw.
       const login = services.ai?.loginOf(ctx.scope.session);
       if (times && (count !== undefined || start !== undefined || end !== undefined)) throw problem(400, "times 和 count/start/end 二选一");
       if (compare && (region || scene)) throw problem(400, "compare 不和 region、scene 一起用");
@@ -313,7 +313,7 @@ export function registerPreviewTools(registry) {
             if (frame.png) pictures.push({ time: frame.time, png: frame.png });
           },
         });
-      }, services.ai?.loginOf(ctx.scope.session));
+      }, { login: services.ai?.loginOf(ctx.scope.session), repo: work.repo });
       if (track.frames.length < 2) throw problem(422, drawn.errors.join("\n") || "没有画出画面", "RENDER_FAILED");
       const analysis = analyzeMotion(track);
       const last = track.frames[track.frames.length - 1].time;

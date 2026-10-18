@@ -10,20 +10,24 @@ function fakePage({ gpu = "Test GPU", visible = true, answer = true } = {}) {
   const ws = Object.assign(new EventEmitter(), { OPEN: 1, readyState: 1, sent: [], ping() {}, terminate() {}, close() {} });
   ws.send = (text) => {
     const message = JSON.parse(text);
+    // The server's first word: which extension to ask for the computer.
+    if (message.type === "hello") return void (ws.connector = message.connector);
     ws.sent.push(message);
     if (!answer) return;
     const value = message.op === "eval" ? { drawn: message.arg } : true;
     setImmediate(() => ws.emit("message", zlib.gzipSync(JSON.stringify({ type: "result", id: message.id, ok: true, value })), true));
   };
-  ws.hello = () => ws.emit("message", Buffer.from(JSON.stringify({ type: "state", gpu, visible, active: true })), false);
+  ws.hello = (computer = null) => ws.emit("message", Buffer.from(JSON.stringify({ type: "state", gpu, visible, active: true, computer })), false);
   return ws;
 }
 
-// A socket's sign-in comes with its request (`login`, "me" when not given).
+// A socket's sign-in comes with its request (`login`, "me" when not given); the repository "mine"
+// is linked to one computer, whose extension gives its pages the key "my-key".
 const services = () => ({
   sockets: new Map(),
   auth: { identify: (req) => ({ kind: "session", login: req.login ?? "me" }), issueInternal: () => "token" },
   events: { subscribe: () => {} },
+  bridges: { linked: (repo) => new Set(repo === "mine" ? ["my-computer"] : []), computerOf: (key) => (key === "my-key" ? "my-computer" : null) },
 });
 
 describe("drawing on the user's GPU", () => {
@@ -35,7 +39,8 @@ describe("drawing on the user's GPU", () => {
     gpus.accept(shown, {});
     hidden.hello();
     shown.hello();
-    const on = await gpus.pick("me");
+    const on = await gpus.pick({ login: "me" });
+    expect(shown.connector).toMatch(/^[a-p]{32}$/);
     expect(on.gpu).toBe("NVIDIA GeForce RTX 3060");
     const page = await (await on.newContext()).newPage();
     await page.goto("http://127.0.0.1:4310/preview/render.html?module=x");
@@ -54,7 +59,7 @@ describe("drawing on the user's GPU", () => {
     gpus.accept(software, {});
     silent.hello();
     software.hello();
-    expect(await gpus.pick("me")).toBe(null);
+    expect(await gpus.pick({ login: "me" })).toBe(null);
     expect(silent.sent.map((message) => message.op)).toEqual(["ping"]);
     expect(software.sent).toEqual([]);
   }, 10000);
@@ -67,10 +72,25 @@ describe("drawing on the user's GPU", () => {
     gpus.accept(friends, { login: "friend" });
     friends.hello(); // in view and used last
     mine.hello();
-    expect((await gpus.pick("me")).gpu).toBe("Test GPU");
-    expect(await gpus.pick(null)).toBe(null);
-    expect(await gpus.pick("someone else")).toBe(null);
+    expect((await gpus.pick({ login: "me" })).gpu).toBe("Test GPU");
+    expect(await gpus.pick({})).toBe(null);
+    expect(await gpus.pick({ login: "someone else" })).toBe(null);
     expect(friends.sent).toEqual([]);
+  });
+
+  it("draws on the computer the work's repository is linked to, whoever writes and with no conversation", async () => {
+    const gpus = new GpuBrowsers(services());
+    const linked = fakePage({ gpu: "Linked GPU", visible: false });
+    const writer = fakePage({ gpu: "Writer's GPU" });
+    gpus.accept(linked, { login: "someone" });
+    gpus.accept(writer, { login: "me" });
+    linked.hello("my-key");
+    writer.hello("a key FRAME never gave");
+    expect((await gpus.pick({ login: "me", repo: "mine" })).gpu).toBe("Linked GPU");
+    expect((await gpus.pick({ repo: "mine" })).gpu).toBe("Linked GPU");
+    // A repository linked nowhere: the browser writing in the conversation.
+    expect((await gpus.pick({ login: "me", repo: "other" })).gpu).toBe("Writer's GPU");
+    expect(await gpus.pick({ repo: "other" })).toBe(null);
   });
 
   it("refuses sockets that are not a person's studio page", () => {
@@ -111,13 +131,16 @@ describe("drawing on the user's GPU", () => {
     const renderer = new Renderer(services());
     clearInterval(renderer.sweeper);
     const on = { id: "page" };
-    renderer.gpu = { pick: async (login) => (login === "me" ? on : null) };
+    renderer.gpu = { pick: async (who) => (who?.login === "me" ? on : null) };
     const tried = [];
-    const result = await renderer.anywhere(async (where) => {
-      tried.push(where);
-      if (where) throw Object.assign(new Error("gone"), { code: "GPU_PAGE_GONE" });
-      return "drawn here";
-    }, "me");
+    const result = await renderer.anywhere(
+      async (where) => {
+        tried.push(where);
+        if (where) throw Object.assign(new Error("gone"), { code: "GPU_PAGE_GONE" });
+        return "drawn here";
+      },
+      { login: "me" },
+    );
     expect(result).toBe("drawn here");
     expect(tried).toEqual([on, null]);
     // Other failures are the work's: not drawn again.

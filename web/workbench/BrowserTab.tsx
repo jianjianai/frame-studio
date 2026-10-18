@@ -622,6 +622,7 @@ function ComputersDialog({ repo, onClose }: { repo: string; onClose: () => void 
       <div className="computers">
         <p className="muted small-text">
           装上 FRAME 连接器扩展后，作品库「{name}」的 AI 可以用你在那个浏览器里已经登录的网站：只在它自己开的标签页（单独的窗口和「FRAME AI」标签组）和你在扩展里交给它的页面里浏览和下载，你的登录信息不会传到服务器。
+          这个浏览器开着 FRAME 时，作品库「{name}」的 AI 查看画面、测速也用这台电脑的显卡画（扩展 1.2 以上）。
         </p>
         {computers.map((item) => (
           <div key={item.id} className="computer-row">

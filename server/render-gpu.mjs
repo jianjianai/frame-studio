@@ -1,6 +1,7 @@
 import zlib from "node:zlib";
 import { promisify } from "node:util";
 import { problem, shortId } from "./util.mjs";
+import { extensionInfo } from "./browser-extension.mjs";
 
 const gunzip = promisify(zlib.gunzip);
 
@@ -16,9 +17,11 @@ export const isGone = (error) => error?.code === "GPU_PAGE_GONE";
 
 /**
  * Studio pages open in the user's browsers that draw for the AI's render tools on their GPU:
- * the server has no GPU, and its software renderer takes seconds for a 3D frame. Only pages of
- * the sign-in that writes in the AI's conversation draw for it (several people may share the
- * studio's password; one's AI must not use another's computer). Each page
+ * the server has no GPU, and its software renderer takes seconds for a 3D frame. Several people
+ * may share the studio's password, and one's AI must not use another's computer, so only these
+ * pages draw for a work: those on a computer its repository is linked to (the FRAME 连接器
+ * extension next to the page says which, see Bridges.computerOf), else those of the sign-in
+ * writing in the AI's conversation. Each page
  * acts as a Playwright browser for `Renderer.openPage` (new context, page, goto, evaluate,
  * waitForFunction, page events), so the renderer's drawing code runs unchanged; the page does
  * it in a hidden frame of /preview/render.html, the page the headless browser loads.
@@ -35,20 +38,28 @@ export class GpuBrowsers {
     const principal = this.services.auth.identify(req);
     // A person's studio page only: drawn frames are what the AI is shown.
     if (!["session", "local"].includes(principal?.kind) || !principal.login) return ws.close(4003, "forbidden");
-    const browser = new RemoteBrowser(ws, principal.login);
+    const browser = new RemoteBrowser(ws, principal.login, (key) => this.services.bridges?.computerOf(key) ?? null);
     this.browsers.set(browser.id, browser);
     ws.on("close", () => this.browsers.delete(browser.id));
+    // The extension the page asks which computer it is on.
+    let connector = null;
+    try {
+      connector = extensionInfo().id;
+    } catch {}
+    ws.send(JSON.stringify({ type: "hello", connector }));
   }
 
   /**
-   * The page to draw on for `login` (the sign-in writing in the AI's conversation; none: no
-   * page): shown first, then the most recently used; one that does not answer at once (a
+   * The page to draw on for a work of `repo` in a conversation `login` writes in (neither: no
+   * page): first a page on a computer the repository is linked to, then a page of that sign-in;
+   * among them the one in view, then the one used last. One that does not answer at once (a
    * sleeping laptop, a frozen tab) is passed over. Null: draw on the server.
    */
-  async pick(login) {
-    if (!login) return null;
-    const ready = [...this.browsers.values()].filter((browser) => browser.login === login && browser.gpu && !browser.closed);
-    ready.sort((a, b) => Number(b.visible) - Number(a.visible) || b.activeAt - a.activeAt);
+  async pick({ login, repo } = {}) {
+    const linked = repo ? (this.services.bridges?.linked(repo) ?? new Set()) : new Set();
+    const rank = (browser) => (linked.has(browser.computer) ? 2 : 0) + (login && browser.login === login ? 1 : 0);
+    const ready = [...this.browsers.values()].filter((browser) => browser.gpu && !browser.closed && rank(browser));
+    ready.sort((a, b) => Math.min(rank(b), 2) - Math.min(rank(a), 2) || rank(b) - rank(a) || Number(b.visible) - Number(a.visible) || b.activeAt - a.activeAt);
     for (const browser of ready) {
       const answers = await browser
         .call({ op: "ping" }, PROBE_MS)
@@ -61,10 +72,12 @@ export class GpuBrowsers {
 }
 
 class RemoteBrowser {
-  constructor(ws, login) {
+  constructor(ws, login, computerOf) {
     this.id = shortId();
     this.ws = ws;
     this.login = login;
+    this.computerOf = computerOf;
+    this.computer = null; // the linked browser (bridge id) the page is in, as its extension says
     this.calls = new Map();
     this.pages = new Map();
     this.next = 0;
@@ -94,6 +107,7 @@ class RemoteBrowser {
     const message = JSON.parse(binary ? await gunzip(raw) : raw);
     if (message.type === "state") {
       if (message.gpu) this.gpu = String(message.gpu).slice(0, 200);
+      this.computer = this.computerOf(message.computer);
       this.visible = Boolean(message.visible);
       if (message.active) this.activeAt = Date.now();
     } else if (message.type === "event") this.pages.get(message.page)?.emit(message);

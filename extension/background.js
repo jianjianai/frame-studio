@@ -87,7 +87,7 @@ const send = (message) => socket?.readyState === 1 && socket.send(JSON.stringify
 async function receive(message) {
   if (message.type === "welcome") {
     if (message.token) await chrome.storage.local.set({ token: message.token });
-    setStatus("online", "", { repos: message.repos ?? [], name: message.name });
+    setStatus("online", "", { repos: message.repos ?? [], name: message.name, pageKey: message.pageKey ?? null });
     await pushTabs();
   } else if (message.type === "ping") send({ type: "pong" });
   else if (message.type === "error") {
@@ -105,6 +105,21 @@ async function receive(message) {
   }
 }
 
+// FRAME's own pages in this browser ask which linked computer they are on: the key FRAME gave
+// this connection. With it, this computer's GPU draws the frames the AI of the repositories
+// linked here looks at (instead of the studio's server, which has no GPU).
+chrome.runtime.onMessageExternal.addListener((message, sender, reply) => {
+  if (message?.type !== "frame-computer") return;
+  void settings().then(({ server }) => {
+    let origin = null;
+    try {
+      origin = new URL(server).origin;
+    } catch {}
+    reply(sender.origin === origin && status.state === "online" && status.pageKey ? { key: status.pageKey } : null);
+  });
+  return true;
+});
+
 // ---- tabs the AI may use ---------------------------------------------------------------------
 
 let tabsTimer = null;
@@ -117,7 +132,8 @@ async function pushTabs() {
   const list = [];
   for (const [id, entry] of Object.entries(tabs)) {
     const tab = await chrome.tabs.get(Number(id)).catch(() => null);
-    if (tab) list.push({ id: tab.id, title: tab.title ?? "", url: tab.url ?? tab.pendingUrl ?? "", loading: tab.status === "loading", active: tab.active, ...entry });
+    if (tab)
+      list.push({ id: tab.id, title: tab.title ?? "", url: tab.url ?? tab.pendingUrl ?? "", loading: tab.status === "loading", active: tab.active, ...entry });
   }
   send({ type: "tabs", tabs: list });
   return list;
@@ -165,7 +181,11 @@ async function aiWindow() {
 async function group(tab) {
   try {
     const { aiGroup } = await chrome.storage.session.get("aiGroup");
-    const groupId = await chrome.tabs.group(aiGroup && (await chrome.tabGroups.get(aiGroup).catch(() => null)) ? { tabIds: tab.id, groupId: aiGroup } : { tabIds: tab.id, createProperties: { windowId: tab.windowId } });
+    const groupId = await chrome.tabs.group(
+      aiGroup && (await chrome.tabGroups.get(aiGroup).catch(() => null))
+        ? { tabIds: tab.id, groupId: aiGroup }
+        : { tabIds: tab.id, createProperties: { windowId: tab.windowId } },
+    );
     await chrome.tabGroups.update(groupId, { title: "FRAME AI", color: "purple" });
     await chrome.storage.session.set({ aiGroup: groupId });
   } catch {}
@@ -228,14 +248,37 @@ async function evaluate(tabId, expression) {
   return result.result?.value;
 }
 
-const KEYS = { Enter: [13, "\r"], Tab: [9], Escape: [27], Backspace: [8], Delete: [46], ArrowUp: [38], ArrowDown: [40], ArrowLeft: [37], ArrowRight: [39], PageUp: [33], PageDown: [34], Home: [36], End: [35], Space: [32, " "], " ": [32, " "] };
+const KEYS = {
+  Enter: [13, "\r"],
+  Tab: [9],
+  Escape: [27],
+  Backspace: [8],
+  Delete: [46],
+  ArrowUp: [38],
+  ArrowDown: [40],
+  ArrowLeft: [37],
+  ArrowRight: [39],
+  PageUp: [33],
+  PageDown: [34],
+  Home: [36],
+  End: [35],
+  Space: [32, " "],
+  " ": [32, " "],
+};
 const MODIFIERS = { Alt: 1, Control: 2, Meta: 4, Shift: 8 };
 
 async function dispatch(tabId, event) {
   if (event.type === "mouse") {
     const type = { move: "mouseMoved", down: "mousePressed", up: "mouseReleased" }[event.action];
     const button = event.action === "move" ? "none" : event.button || "left";
-    await cdp(tabId, "Input.dispatchMouseEvent", { type, x: event.x, y: event.y, button, buttons: event.action === "down" ? 1 : 0, clickCount: event.clicks || (event.action === "move" ? 0 : 1) });
+    await cdp(tabId, "Input.dispatchMouseEvent", {
+      type,
+      x: event.x,
+      y: event.y,
+      button,
+      buttons: event.action === "down" ? 1 : 0,
+      clickCount: event.clicks || (event.action === "move" ? 0 : 1),
+    });
   } else if (event.type === "wheel") {
     await cdp(tabId, "Input.dispatchMouseEvent", { type: "mouseWheel", x: event.x, y: event.y, deltaX: event.dx || 0, deltaY: event.dy || 0 });
   } else if (event.type === "text") {
@@ -247,7 +290,13 @@ async function dispatch(tabId, event) {
     const known = KEYS[key];
     const code = known?.[0] ?? (key.length === 1 ? key.toUpperCase().charCodeAt(0) : 0);
     const text = modifiers & ~MODIFIERS.Shift ? undefined : (known?.[1] ?? (key.length === 1 ? key : undefined));
-    await cdp(tabId, "Input.dispatchKeyEvent", { type: text ? "keyDown" : "rawKeyDown", key, windowsVirtualKeyCode: code, modifiers, ...(text ? { text } : {}) });
+    await cdp(tabId, "Input.dispatchKeyEvent", {
+      type: text ? "keyDown" : "rawKeyDown",
+      key,
+      windowsVirtualKeyCode: code,
+      modifiers,
+      ...(text ? { text } : {}),
+    });
     await cdp(tabId, "Input.dispatchKeyEvent", { type: "keyUp", key, windowsVirtualKeyCode: code, modifiers });
   }
 }
@@ -353,7 +402,11 @@ const OPS = {
     }
     const includeCredentials = sites.has(siteOf(new URL(target).hostname));
     const { frameTree } = await cdp(tab.id, "Page.getFrameTree");
-    const { resource } = await cdp(tab.id, "Network.loadNetworkResource", { frameId: frameTree.frame.id, url: target, options: { disableCache: false, includeCredentials } });
+    const { resource } = await cdp(tab.id, "Network.loadNetworkResource", {
+      frameId: frameTree.frame.id,
+      url: target,
+      options: { disableCache: false, includeCredentials },
+    });
     const code = resource.httpStatusCode;
     if (!resource.success || !resource.stream || code >= 400)
       throw fail(`下载失败：${code ? `HTTP ${code}` : resource.netErrorName || "连不上"}${code === 401 || code === 403 ? "（可能要先登录）" : ""}`, 502);

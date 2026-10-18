@@ -18,8 +18,8 @@ export function extensionInfo() {
 
 /**
  * The FRAME 连接器 extension (extension/) as a zip to load unpacked, made for this studio: its
- * address to fill in, and its pages (only) allowed to see that the extension is there and to
- * open the one-click pairing page. The files sit at the top of the zip: Windows' 全部解压缩
+ * address to fill in, and its pages (only) allowed to see that the extension is there, to
+ * open the one-click pairing page and to ask which computer they are on. The files sit at the top of the zip: Windows' 全部解压缩
  * already puts them in a folder named after the zip, and one more folder inside left
  * manifest.json a level too deep.
  */
@@ -36,6 +36,8 @@ export function extensionZip(server) {
   const url = new URL(server);
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "manifest.json"), "utf8"));
   manifest.web_accessible_resources = [{ resources: ["icons/16.png", "pair.html"], matches: [`${url.protocol}//${url.hostname}/*`] }];
+  // This studio's pages ask the extension which linked computer they are on (render-gpu.mjs).
+  manifest.externally_connectable = { matches: [`${url.protocol}//${url.hostname}/*`] };
   files["manifest.json"] = Buffer.from(JSON.stringify(manifest, null, 2) + "\n");
   files["defaults.json"] = Buffer.from(JSON.stringify({ server: url.origin }) + "\n");
   return Buffer.from(zipSync(files, { level: 6 }));

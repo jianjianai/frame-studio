@@ -240,13 +240,14 @@ export class Renderer {
   }
 
   /**
-   * Draw on a studio page open in the browser of `login` (who writes in the AI's conversation)
-   * when there is one: its GPU draws a 3D frame in milliseconds, the server's software renderer
-   * in seconds. `run(on)` gets that page, or null to draw here; when the page goes away halfway
-   * (closed, asleep), it runs again here.
+   * Draw on a studio page open on the user's computer when there is one (`who`: the work's
+   * `repo`, drawn on a computer linked to it, and `login`, who writes in the AI's conversation;
+   * see GpuBrowsers.pick): its GPU draws a 3D frame in milliseconds, the server's software
+   * renderer in seconds. `run(on)` gets that page, or null to draw here; when the page goes
+   * away halfway (closed, asleep), it runs again here.
    */
-  async anywhere(run, login) {
-    const on = await this.gpu.pick(login);
+  async anywhere(run, who) {
+    const on = await this.gpu.pick(who);
     if (on)
       try {
         return await run(on);
@@ -269,7 +270,7 @@ export class Renderer {
       } finally {
         lease.release();
       }
-    }, login);
+    }, { login, repo: work.repo });
   }
 
   /**
@@ -385,10 +386,10 @@ export class Renderer {
    * draws a module of the work instead of the film; `crop` ({x, y, width, height} in pixels of
    * the `width`-wide frame) returns only that part.
    */
-  /** `login`: whose browser may draw them (see `anywhere`). */
+  /** `login`: who writes in the AI's conversation (see `anywhere`). */
   async frames(work, { login, ...options }) {
     this.lastUse = Date.now();
-    return this.anywhere((on) => this.framesWith(work, options, on), login);
+    return this.anywhere((on) => this.framesWith(work, options, on), { login, repo: work.repo });
   }
   async framesWith(work, { times, width, subtitles = true, scene, crop }, on) {
     let lease;
@@ -443,14 +444,14 @@ export class Renderer {
   /**
    * One heavy job (motion analysis, timing a whole film) at a time where it is drawn: they draw
    * hundreds of frames, and several at once would slow every studio page and export down.
-   * `task(on)` draws on that page in the browser of `login` (null: here, see `anywhere`);
+   * `task(on)` draws on that page on the user's computer (`who`, null: here, see `anywhere`);
    * resolves with the task's result and how long it waited for its turn.
    */
-  async heavy(task, login) {
+  async heavy(task, who) {
     return this.anywhere((on) => {
       const queued = Date.now();
       return this.analysis.run(on ? `heavy:${on.id}` : "heavy", async () => ({ waited: Date.now() - queued, result: await task(on) }));
-    }, login);
+    }, who);
   }
 
   /**

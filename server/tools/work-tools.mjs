@@ -54,7 +54,7 @@ export function timingReport(measured, project, { waited = 0 } = {}) {
     `渲染耗时（按工作台预览的样子：${measured.width}×${measured.height}，标准画质，含字幕；每 ${measured.step} 秒取一帧${spread}；共 ${samples.length} 帧，用时 ${seconds(measured.ms)} 秒，其中加载作品 ${seconds(measured.loadMs)} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}）：中位 ${ms(middle)}，九成在 ${ms(at(0.9))} 以内，最慢 ${ms(sorted[sorted.length - 1])}。`,
     measured.gpu
       ? `实时播放 ${fps} fps 每帧要在 ${Math.round(1000 / fps)} ms 内画完；这是在用户电脑上用显卡测的（${measured.gpu}），接近用户预览时的速度${measured.background ? "（测的时候页面在后台，数值可能偏大）" : ""}。`
-      : `实时播放 ${fps} fps 每帧要在 ${Math.round(1000 / fps)} ms 内画完；这是在服务器上测的（给这个对话发消息的浏览器没有开着能用显卡画的 FRAME 页面），服务器没有 GPU，数值比一般电脑慢，用来比较哪里最慢、改完有没有变快。`,
+      : `实时播放 ${fps} fps 每帧要在 ${Math.round(1000 / fps)} ms 内画完；这是在服务器上测的（作品库连着的电脑、给这个对话发消息的浏览器都没有开着能用显卡画的 FRAME 页面），服务器没有 GPU，数值比一般电脑慢，用来比较哪里最慢、改完有没有变快。`,
   ];
   if (!measured.complete) lines.push(`只测到 ${formatTime(samples[samples.length - 1].time)}：用满了 ${Math.round(TIMING_BUDGET_MS / 1000)} 秒，后面没测。`);
   const clips = project.visual?.clips ?? [];
@@ -390,7 +390,7 @@ export function registerWorkTools(registry) {
           const step = Math.max(0.5, Math.ceil((meta.meta.duration / TIMING_SAMPLES) * 10) / 10);
           const { waited, result: timed } = await services.renderer.heavy(
             (on) => services.renderer.timing(work, { step, budgetMs: TIMING_BUDGET_MS, on }),
-            services.ai?.loginOf(ctx.scope.session),
+            { login: services.ai?.loginOf(ctx.scope.session), repo: work.repo },
           );
           measured = timed;
           text += "\n\n" + timingReport(timed, meta.meta, { waited }).join("\n");
