@@ -204,10 +204,10 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     runCheck,
     openFile: (path, options) => editor.current?.openFile(path, options),
     openSample: (path, options) => editor.current?.openSample(path, options),
-    openExperience: (path, options) => editor.current?.openExperience(path, options),
-    openMaterial: (ref, options) => editor.current?.openMaterial(ref, options),
+    openExperience: (path) => editor.current?.openExperience(path),
+    openMaterial: (ref) => editor.current?.openMaterial(ref),
     openResource: (id, options) => editor.current?.openResource(id, options),
-    openReview: (path, options) => editor.current?.openReview(path, options),
+    openReview: (path) => editor.current?.openReview(path),
     openSkill: (path, options) => editor.current?.openSkill(path, options),
     openDiff: (title, query, options) => editor.current?.openDiff(title, query, options),
     openTool: (tool) => {

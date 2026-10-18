@@ -171,8 +171,7 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
                             draggable={!readOnly}
                             onDragStart={(event) => assetDrag.start(event, soundAsset(item))}
                             onDragEnd={() => assetDrag.end()}
-                            onClick={() => openResource(item.id, { preview: true, title: item.title })}
-                            onDoubleClick={() => openResource(item.id, { title: item.title })}
+                            onClick={() => openResource(item.id, { title: item.title })}
                             onContextMenu={(event) => menuOf(event, item)}
                             title={`${item.id}${item.description ? "\n" + item.description : ""}\n${readOnly ? "单击试听和看波形" : linked.has(item.library) ? "单击试听和看波形，拖到音轨使用" : "单击试听和看波形；拖到音轨使用时，作品会引用这个素材库"}`}
                           >
@@ -189,8 +188,7 @@ export function ResourcesPanel({ onPlaceSound }: { onPlaceSound: (item: Resource
                           <div
                             key={item.id}
                             className="asset-card"
-                            onClick={() => openResource(item.id, { preview: true, title: item.title })}
-                            onDoubleClick={() => openResource(item.id, { title: item.title })}
+                            onClick={() => openResource(item.id, { title: item.title })}
                             onContextMenu={(event) => menuOf(event, item)}
                             title={`${item.title}\n${item.id}${item.description ? "\n" + item.description : ""}\n单击预览（可调参数），右键更多操作`}
                           >

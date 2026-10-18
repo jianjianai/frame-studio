@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  activate,
   closeEditor,
   dropZone,
   evenSplit,
@@ -18,17 +19,18 @@ import {
 const tabs = (state: EditorState, group: string) => state.groups[group].editors.map((editor) => editor.key);
 
 describe("editor groups", () => {
-  it("opens documents as tabs, a preview replacing the previous preview", () => {
+  it("opens every document in a tab of its own after the active one, activating one already open", () => {
     let state = initialState("g1", { id: "p", key: "preview" });
-    state = openEditor(state, "g1", { id: "a", key: "a.ts", preview: true });
-    state = openEditor(state, "g1", { id: "b", key: "b.ts", preview: true });
-    expect(tabs(state, "g1")).toEqual(["preview", "b.ts"]);
+    state = openEditor(state, "g1", { id: "a", key: "a.ts" });
+    state = openEditor(state, "g1", { id: "b", key: "b.svg" });
+    expect(tabs(state, "g1")).toEqual(["preview", "a.ts", "b.svg"]);
+    state = activate(state, "g1", "a");
     state = openEditor(state, "g1", { id: "c", key: "c.ts" });
-    // Opening one that is open activates it, and keeps it unless asked as a preview.
-    state = openEditor(state, "g1", { id: "x", key: "b.ts" });
+    expect(tabs(state, "g1")).toEqual(["preview", "a.ts", "c.ts", "b.svg"]);
+    state = openEditor(state, "g1", { id: "x", key: "b.svg", line: 3 });
     expect(state.groups.g1).toMatchObject({ active: "b" });
-    expect(state.groups.g1.editors.find((editor) => editor.id === "b")?.preview).toBe(false);
-    expect(tabs(state, "g1")).toEqual(["preview", "b.ts", "c.ts"]);
+    expect(state.groups.g1.editors.find((editor) => editor.id === "b")?.line).toBe(3);
+    expect(tabs(state, "g1")).toEqual(["preview", "a.ts", "c.ts", "b.svg"]);
   });
 
   it("splits by dragging a tab to a side, merges splits of the same direction, and closes empty groups", () => {

@@ -484,8 +484,7 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
                                 key={entry.path}
                                 className="library-doc-row"
                                 title={[entry.path, entry.title, entry.summary].filter(Boolean).join("\n")}
-                                onClick={() => openExperience(entry.path, { preview: true })}
-                                onDoubleClick={() => openExperience(entry.path)}
+                                onClick={() => openExperience(entry.path)}
                               >
                                 <FileText size={14} />
                                 <span className="ellipsis grow">{entry.path.slice(library.id.length + 1)}</span>
@@ -526,13 +525,7 @@ export function LibrariesTab({ kind }: { kind: LibraryKind }) {
                 </h3>
                 <div className="library-docs">
                   {found.documents.map((doc) => (
-                    <div
-                      key={doc.path}
-                      className="library-doc-row"
-                      title={doc.path}
-                      onClick={() => openExperience(doc.path, { preview: true })}
-                      onDoubleClick={() => openExperience(doc.path)}
-                    >
+                    <div key={doc.path} className="library-doc-row" title={doc.path} onClick={() => openExperience(doc.path)}>
                       <FileText size={14} />
                       <span className="ellipsis grow">
                         <Marked text={doc.title || doc.path.split("/").pop()!} query={query} />

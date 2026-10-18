@@ -310,8 +310,7 @@ function LibraryRow({ kind, library, selected, onSelect }: { kind: LibraryKind; 
 
 /**
  * Saving versions, unsaved changes, history and GitHub sync of the work, one library (its own
- * branch) or the repository's reviews (same API on another branch). Changes open as diff tabs:
- * a click previews, a double-click keeps the tab.
+ * branch) or the repository's reviews (same API on another branch). Changes open as diff tabs.
  */
 export function VersionsPanel({ source, library, title, refresh = 0 }: { source: VersionSource; library?: string; title?: string; refresh?: number }) {
   const { work, reload: reloadWork, openDiff, readOnly } = useWorkbench();
@@ -356,7 +355,7 @@ export function VersionsPanel({ source, library, title, refresh = 0 }: { source:
     if (source === "materials" && event.type === "materials" && event.repo === work.repo) void load();
     if ((source === "reviews" || source === "skills") && event.type === source && event.repo === work.repo) void load();
   });
-  const diff = (tab: string, query: string, preview: boolean) => openDiff(tab, query, { preview, source, library });
+  const diff = (tab: string, query: string) => openDiff(tab, query, { source, library });
 
   const commit = () =>
     run(async () => {
@@ -524,9 +523,8 @@ export function VersionsPanel({ source, library, title, refresh = 0 }: { source:
             <div
               key={file.path}
               className="change-row"
-              title={`${short(file.path)}：单击查看改动，双击保持打开`}
-              onClick={() => diff(`${fileName(file.path)}（未保存）`, `file=${encodeURIComponent(file.path)}`, true)}
-              onDoubleClick={() => diff(`${fileName(file.path)}（未保存）`, `file=${encodeURIComponent(file.path)}`, false)}
+              title={`${short(file.path)}：单击查看改动`}
+              onClick={() => diff(`${fileName(file.path)}（未保存）`, `file=${encodeURIComponent(file.path)}`)}
             >
               <span className={`change-status s-${file.status === "?" ? "A" : file.status}`}>{file.status === "?" ? "A" : file.status}</span>
               <span className="ellipsis grow" title={statusLabel[file.status] || file.status}>
@@ -566,7 +564,7 @@ export function VersionsPanel({ source, library, title, refresh = 0 }: { source:
                     {
                       label: "查看这个版本的全部改动",
                       icon: <FileDiff size={14} />,
-                      onClick: () => diff(`${version.short} ${version.message}`, `commit=${version.commit}`, false),
+                      onClick: () => diff(`${version.short} ${version.message}`, `commit=${version.commit}`),
                     },
                     { label: "恢复到这个版本", icon: <RotateCcw size={14} />, onClick: () => revert(version), disabled: index === 0 || locked },
                   ])
@@ -611,9 +609,8 @@ export function VersionsPanel({ source, library, title, refresh = 0 }: { source:
                       <div
                         key={file.path}
                         className="version-file"
-                        title={`${short(file.path)}：单击查看这个版本对它的改动，双击保持打开`}
-                        onClick={() => diff(title, query, true)}
-                        onDoubleClick={() => diff(title, query, false)}
+                        title={`${short(file.path)}：单击查看这个版本对它的改动`}
+                        onClick={() => diff(title, query)}
                       >
                         <span className={`change-status s-${file.status}`}>{file.status}</span>
                         <span className="ellipsis grow" title={statusLabel[file.status] || file.status}>

@@ -167,22 +167,22 @@ export interface WorkbenchContextValue {
   currentStage: () => { stage: StageController; scene?: string };
   check: CheckResult | null;
   runCheck: () => Promise<void>;
-  /** `preview`: a VS Code preview tab, replaced by the next preview until it is kept (double-click or edit). */
-  openFile: (path: string, options?: { line?: number; preview?: boolean; split?: "left" | "right" | "up" | "down" }) => void;
+  /** Every document opens in a tab of its own (one already open is shown), never in place of another. */
+  openFile: (path: string, options?: { line?: number; split?: "left" | "right" | "up" | "down" }) => void;
   /** Play a module of the work on its own (a sample, a sheet) in its tab. */
-  openSample: (path: string, options?: { preview?: boolean; split?: "left" | "right" | "up" | "down" }) => void;
+  openSample: (path: string, options?: { split?: "left" | "right" | "up" | "down" }) => void;
   /** Open a document of the repository's experience libraries (path relative to the experience branch). */
-  openExperience: (path: string, options?: { preview?: boolean }) => void;
+  openExperience: (path: string) => void;
   /** Open a file of the material libraries (`<library>/<path>`) in a viewer tab. */
-  openMaterial: (ref: string, options?: { preview?: boolean }) => void;
+  openMaterial: (ref: string) => void;
   /** Preview a resource or sound of the material libraries (`<library>/<file>#<name>`) in a tab. */
-  openResource: (id: string, options?: { preview?: boolean; title?: string }) => void;
+  openResource: (id: string, options?: { title?: string }) => void;
   /** Open a file of a work's review (`<work id>/<path>`): documents to edit, original files to view. */
-  openReview: (path: string, options?: { preview?: boolean }) => void;
+  openReview: (path: string) => void;
   /** Open a file of the repository's skills (`<skill>/<path>`); `edit`: a document in the editor, not rendered. */
-  openSkill: (path: string, options?: { preview?: boolean; edit?: boolean }) => void;
+  openSkill: (path: string, options?: { edit?: boolean }) => void;
   /** Open changes as a diff tab (like VS Code); `query` is the /diff query: file=…, commit=… or empty. `library`: whose (experience, materials). */
-  openDiff: (title: string, query: string, options?: { preview?: boolean; source?: VersionSource; library?: string }) => void;
+  openDiff: (title: string, query: string, options?: { source?: VersionSource; library?: string }) => void;
   /** Open (or show) a tool's tab: export, reviews, resources, library management. */
   openTool: (tool: Tool) => void;
   /** The branch the 版本与同步 view shows (for libraries, which one of each kind); `showVersions` opens that view on a branch. */

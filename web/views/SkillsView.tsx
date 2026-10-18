@@ -183,8 +183,7 @@ export function SkillsView() {
             className="tree-row"
             style={{ paddingLeft: 8 + depth * 12, cursor: node.type === "dir" || text ? "pointer" : "default" }}
             title={text || node.type === "dir" ? key : `${key}（不能在这里打开，下载技能后查看）`}
-            onClick={() => (node.type === "dir" ? flip(key) : text && openSkill(key, { preview: true }))}
-            onDoubleClick={() => text && openSkill(key)}
+            onClick={() => (node.type === "dir" ? flip(key) : text && openSkill(key))}
             onContextMenu={(event) => fileMenu(event, skill, node)}
           >
             {node.type === "dir" ? (

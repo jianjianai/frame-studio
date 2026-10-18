@@ -547,8 +547,7 @@ export function ReviewView() {
                     key={file.path}
                     className="review-row"
                     title={`${file.path}（${formatBytes(file.size)}）`}
-                    onClick={() => openReview(`${work.id}/${file.path}`, { preview: true })}
-                    onDoubleClick={() => openReview(`${work.id}/${file.path}`)}
+                    onClick={() => openReview(`${work.id}/${file.path}`)}
                     onContextMenu={(event) =>
                       openMenu(event, [
                         { label: "打开", icon: <FileText size={14} />, onClick: () => openReview(`${work.id}/${file.path}`) },
@@ -592,8 +591,7 @@ export function ReviewView() {
               key={doc.path}
               className="review-row"
               title={doc.path}
-              onClick={() => openReview(`${work.id}/${doc.path}`, { preview: true })}
-              onDoubleClick={() => openReview(`${work.id}/${doc.path}`)}
+              onClick={() => openReview(`${work.id}/${doc.path}`)}
               onContextMenu={(event) =>
                 openMenu(event, [
                   { label: "打开", icon: <FileText size={14} />, onClick: () => openReview(`${work.id}/${doc.path}`) },

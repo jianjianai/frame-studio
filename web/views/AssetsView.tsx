@@ -139,9 +139,7 @@ export function AssetsView() {
               onDragStart={(event) => assetDrag.start(event, asset)}
               onDragEnd={() => assetDrag.end()}
               onContextMenu={(event) => assetMenu(event, asset)}
-              // Like VS Code: a click opens a preview tab, a double-click keeps it open.
-              onClick={() => openFile(asset.path, { preview: true })}
-              onDoubleClick={() => openFile(asset.path)}
+              onClick={() => openFile(asset.path)}
               title={`${asset.path}\n${[KIND_NAMES[asset.kind], formatBytes(asset.size), asset.width ? `${asset.width}×${asset.height}` : "", asset.duration ? formatTime(asset.duration, false) : "", asset.animations?.length ? `动画：${asset.animations.map((item) => item.name).join("、")}` : ""].filter(Boolean).join(" · ")}${asset.problem ? `\n注意：${asset.problem}` : ""}\n单击查看，拖到时间轴使用，右键或长按更多操作`}
             >
               {isDrawn(asset.kind) ? (

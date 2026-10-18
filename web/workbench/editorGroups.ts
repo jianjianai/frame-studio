@@ -8,8 +8,6 @@ export interface Editor {
   id: string;
   /** The document it shows ("preview" is the film's preview). */
   key: string;
-  /** A preview tab (italic): the next preview opened in its group replaces it. */
-  preview?: boolean;
   /** Markdown, an HTML page or a Lottie animation shown rendered instead of as source. */
   rendered?: boolean;
   line?: number;
@@ -54,31 +52,21 @@ export function visibleEditors(state: EditorState) {
 const withGroup = (state: EditorState, group: Group): EditorState => ({ ...state, groups: { ...state.groups, [group.id]: group } });
 
 /**
- * Open a document in a group: an editor of it there is activated (and kept, unless asked as a
- * preview), else a new one is added after the active tab, replacing the group's preview tab when
- * this is a preview too. The group gets the focus.
+ * Open a document in a group: an editor of it there is activated, else a new one is added after
+ * the active tab (never in place of another). The group gets the focus.
  */
 export function openEditor(state: EditorState, groupId: string, editor: Editor, options: { index?: number } = {}): EditorState {
   const group = state.groups[groupId];
   const existing = group.editors.find((item) => item.key === editor.key);
   if (existing) {
-    const kept = { ...existing, preview: editor.preview ? existing.preview : false, line: editor.line ?? existing.line };
+    const kept = { ...existing, line: editor.line ?? existing.line };
     return {
       ...withGroup(state, { ...group, editors: group.editors.map((item) => (item.id === existing.id ? kept : item)), active: existing.id }),
       focus: groupId,
     };
   }
-  let editors = group.editors;
-  let at = options.index ?? editors.findIndex((item) => item.id === group.active) + 1;
-  if (editor.preview) {
-    const replaced = editors.findIndex((item) => item.preview);
-    if (replaced >= 0 && options.index === undefined) {
-      editors = editors.map((item, index) => (index === replaced ? editor : item));
-      return { ...withGroup(state, { ...group, editors, active: editor.id }), focus: groupId };
-    }
-  }
-  at = Math.max(0, Math.min(at, editors.length));
-  editors = [...editors.slice(0, at), editor, ...editors.slice(at)];
+  const at = Math.max(0, Math.min(options.index ?? group.editors.findIndex((item) => item.id === group.active) + 1, group.editors.length));
+  const editors = [...group.editors.slice(0, at), editor, ...group.editors.slice(at)];
   return { ...withGroup(state, { ...group, editors, active: editor.id }), focus: groupId };
 }
 
@@ -124,7 +112,7 @@ export function moveEditor(state: EditorState, from: string, editorId: string, t
     const at = Math.max(0, Math.min(old < options.index ? options.index - 1 : options.index, without.length));
     return { ...withGroup(state, { ...group, editors: [...without.slice(0, at), editor, ...without.slice(at)], active: editorId }), focus: to };
   }
-  const moved: Editor = { ...editor, id: options.copy ?? editor.id, preview: false };
+  const moved: Editor = { ...editor, id: options.copy ?? editor.id };
   const target = state.groups[to];
   const twin = target.editors.find((item) => item.key === editor.key);
   let next = options.copy ? state : detach(state, from, editorId, to);

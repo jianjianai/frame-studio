@@ -229,13 +229,10 @@ export function ExplorerView() {
                   else next.add(node.path);
                   return next;
                 })
-              : // Like VS Code: a click previews the file, a double-click (or an edit) keeps the tab. A sample opens playing.
+              : // A sample opens playing.
                 node.scene === "sample"
-                ? openSample(node.path, { preview: true })
-                : openFile(node.path, { preview: true }))
-          }
-          onDoubleClick={(event) =>
-            node.type === "file" && !event.shiftKey && !event.ctrlKey && !event.metaKey && (node.scene === "sample" ? openSample(node.path) : openFile(node.path))
+                ? openSample(node.path)
+                : openFile(node.path))
           }
           onContextMenu={(event) => menuFor(event, node)}
           // Files drag into the editor area: onto a group, its tab bar, or a side of it (a split).

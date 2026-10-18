@@ -413,9 +413,6 @@
 .editor-tab > svg {
   flex: none;
 }
-.editor-tab.is-preview .ellipsis {
-  font-style: italic;
-}
 .editor-tab.active {
   background: var(--bg);
   color: var(--fg);

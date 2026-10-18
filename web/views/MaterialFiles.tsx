@@ -56,9 +56,9 @@ export const asAsset = (file: MaterialFile): Asset => ({
 });
 
 /**
- * Library files as cards: a click opens a preview tab (a double-click keeps it), a drag puts the
- * file on the timeline, the menu (right click, long press, ⋯) places it at the playhead, updates
- * the work's locked version, copies its address, moves or deletes it in the library.
+ * Library files as cards: a click opens the file in a tab, a drag puts it on the timeline, the
+ * menu (right click, long press, ⋯) places it at the playhead, updates the work's locked version,
+ * copies its address, moves or deletes it in the library.
  */
 export function MaterialFileGrid({
   files,
@@ -154,8 +154,7 @@ export function MaterialFileGrid({
             onDragStart={(event) => assetDrag.start(event, asAsset(file))}
             onDragEnd={() => assetDrag.end()}
             onContextMenu={(event) => fileMenu(event, file)}
-            onClick={() => openMaterial(file.ref, { preview: true })}
-            onDoubleClick={() => openMaterial(file.ref)}
+            onClick={() => openMaterial(file.ref)}
             title={`${file.url}\n${facts.join(" · ")}${file.problem ? `\n注意：${file.problem}` : ""}${used?.locked ? (used.outdated ? "\n作品锁定的是旧版本，素材库里有新版本" : "\n作品已锁定这个版本") : ""}${readOnly ? "\n单击查看" : linked.has(library) ? "\n单击查看，拖到时间轴使用，右键或长按更多操作" : `\n单击查看；用到作品里时，作品会引用素材库「${titleOf(library)}」`}`}
           >
             {isDrawn(file.kind) ? (

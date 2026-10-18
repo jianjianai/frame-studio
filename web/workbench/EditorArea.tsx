@@ -30,7 +30,6 @@ import {
   PanelTop,
   PanelBottom,
   ArrowRightLeft,
-  Pin,
   PenTool,
   Code2,
   Save,
@@ -87,21 +86,21 @@ export interface OpenAt {
   split?: Side;
 }
 export interface EditorHandle {
-  openFile(path: string, options?: { line?: number; preview?: boolean } & OpenAt): void;
+  openFile(path: string, options?: { line?: number } & OpenAt): void;
   /** A module of the work played on its own (a sample, a sheet). */
-  openSample(path: string, options?: { preview?: boolean } & OpenAt): void;
+  openSample(path: string, options?: OpenAt): void;
   /** A document of the work's experience libraries (path relative to the experience branch). */
-  openExperience(path: string, options?: { preview?: boolean }): void;
+  openExperience(path: string): void;
   /** A file of the repository's material libraries (`<library>/<path>`): viewed, not edited here. */
-  openMaterial(ref: string, options?: { preview?: boolean }): void;
+  openMaterial(ref: string): void;
   /** A resource or sound of the material libraries (`<library>/<file>#<name>`), previewed. */
-  openResource(id: string, options?: { preview?: boolean; title?: string }): void;
+  openResource(id: string, options?: { title?: string }): void;
   /** A file of a work's review (`<work id>/<path>`): documents are edited, original files viewed. */
-  openReview(path: string, options?: { preview?: boolean }): void;
+  openReview(path: string): void;
   /** A file of the repository's skills (`<skill>/<path>`), edited like a work file. */
-  openSkill(path: string, options?: { preview?: boolean; edit?: boolean }): void;
+  openSkill(path: string, options?: { edit?: boolean }): void;
   /** Show changes in a diff tab; `query` is the /diff query (file=…, commit=… or empty). */
-  openDiff(title: string, query: string, options?: { preview?: boolean; source?: VersionSource; library?: string }): void;
+  openDiff(title: string, query: string, options?: { source?: VersionSource; library?: string }): void;
   /** A tool in its own tab (export, reviews, resources, library management). */
   openTool(tool: Tool): void;
   /** Split the focused group's tab off to a side (Ctrl+\). */
@@ -229,28 +228,26 @@ const documentLabel = (doc: Doc) =>
                   ? `素材库文件 materials/${doc.file}`
                   : doc.file;
 
-const tooltipOf = (doc: Doc, editor: Editor) =>
-  `${
-    doc.kind === "preview"
-      ? "作品预览"
-      : doc.kind === "sample"
-        ? `样片：${doc.file}`
-        : doc.kind === "tool"
-          ? (doc.title ?? "")
-          : doc.kind === "diff"
-            ? `改动：${doc.title}`
-            : doc.kind === "resource"
-              ? `资源：${doc.file}`
-              : doc.source === "experience"
-                ? `经验库：${doc.file}`
-                : doc.source === "reviews"
-                  ? `复盘：${doc.file}`
-                  : doc.source === "skills"
-                    ? `技能：${doc.file}`
-                    : doc.source === "materials"
+const tooltipOf = (doc: Doc) =>
+  doc.kind === "preview"
+    ? "作品预览"
+    : doc.kind === "sample"
+      ? `样片：${doc.file}`
+      : doc.kind === "tool"
+        ? (doc.title ?? "")
+        : doc.kind === "diff"
+          ? `改动：${doc.title}`
+          : doc.kind === "resource"
+            ? `资源：${doc.file}`
+            : doc.source === "experience"
+              ? `经验库：${doc.file}`
+              : doc.source === "reviews"
+                ? `复盘：${doc.file}`
+                : doc.source === "skills"
+                  ? `技能：${doc.file}`
+                  : doc.source === "materials"
                     ? `素材库：materials/${doc.file}`
-                    : doc.file
-  }${editor.preview ? "（预览，双击保持打开）" : ""}`;
+                    : doc.file;
 
 /** The id a document's player is known by: stages by document, media files by editor (one element each). */
 const playerIdOf = (doc: Doc | undefined, editor: Editor) =>
@@ -435,13 +432,13 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
    * Open a document: in the focused group (or `at`), activating its tab there if it has one. One
    * shown by a single editor (a stage, a tool) is shown where it is instead.
    */
-  const open = useCallback((doc: Doc, options: { line?: number; preview?: boolean; rendered?: boolean } & OpenAt = {}) => {
+  const open = useCallback((doc: Doc, options: { line?: number; rendered?: boolean } & OpenAt = {}) => {
     if (!docsRef.current[doc.key]) setDocs((all) => (all[doc.key] ? all : { ...all, [doc.key]: doc }));
     setState((current) => {
       const where = single(doc) ? groupsWith(current, doc.key)[0] : undefined;
       if (where && !options.split && !options.group) {
         const editor = current.groups[where].editors.find((item) => item.key === doc.key)!;
-        return activate(options.preview ? current : updateEditor(current, where, editor.id, { preview: false }), where, editor.id);
+        return activate(current, where, editor.id);
       }
       let next = current;
       let target = options.group && next.groups[options.group] ? options.group : next.focus;
@@ -454,12 +451,12 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         const editor = next.groups[where].editors.find((item) => item.key === doc.key)!;
         return moveEditor(next, where, editor.id, target);
       }
-      const editor: Editor = { id: newId("e"), key: doc.key, preview: Boolean(options.preview), rendered: options.rendered, line: options.line };
+      const editor: Editor = { id: newId("e"), key: doc.key, rendered: options.rendered, line: options.line };
       return openEditor(next, target, editor);
     });
   }, []);
   const openFile = useCallback(
-    (path: string, options: { line?: number; preview?: boolean } & OpenAt = {}) =>
+    (path: string, options: { line?: number } & OpenAt = {}) =>
       // An HTML file opens as the page it is, an SVG in the SVG editor.
       open(
         { key: path, file: path, source: "work", kind: isSvg(path) ? "text" : kindOf(path) },
@@ -468,48 +465,44 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     [open],
   );
   const openSample = useCallback(
-    (path: string, options: { preview?: boolean } & OpenAt = {}) =>
-      open({ key: `sample:${path}`, file: path, source: "work", kind: "sample", title: sampleName(path) }, options),
+    (path: string, options: OpenAt = {}) => open({ key: `sample:${path}`, file: path, source: "work", kind: "sample", title: sampleName(path) }, options),
     [open],
   );
   const openExperience = useCallback(
     // Experience documents open rendered: they are read more often than edited.
-    (path: string, options: { preview?: boolean } = {}) =>
-      open({ key: `exp:${path}`, file: path, source: "experience", kind: kindOf(path) }, { ...options, rendered: /\.md$/i.test(path) }),
+    (path: string) => open({ key: `exp:${path}`, file: path, source: "experience", kind: kindOf(path) }, { rendered: /\.md$/i.test(path) }),
     [open],
   );
   const openMaterial = useCallback(
-    (ref: string, options: { preview?: boolean } = {}) =>
-      open({ key: `mat:${ref}`, file: ref, source: "materials", kind: isSvg(ref) ? "text" : kindOf(ref) }, { ...options, rendered: isSvg(ref) }),
+    (ref: string) => open({ key: `mat:${ref}`, file: ref, source: "materials", kind: isSvg(ref) ? "text" : kindOf(ref) }, { rendered: isSvg(ref) }),
     [open],
   );
   const openResource = useCallback(
-    (id: string, options: { preview?: boolean; title?: string } = {}) =>
-      open({ key: `res:${id}`, file: id, source: "resource", kind: "resource", title: options.title }, { preview: options.preview }),
+    (id: string, options: { title?: string } = {}) => open({ key: `res:${id}`, file: id, source: "resource", kind: "resource", title: options.title }),
     [open],
   );
   const openReview = useCallback(
-    (path: string, options: { preview?: boolean } = {}) => {
+    (path: string) => {
       // Review documents open rendered like experience documents; original files in their viewer.
       const document = /\.(md|txt)$/i.test(path) && !/^[^/]+\/raw\//.test(path);
-      open({ key: `rev:${path}`, file: path, source: "reviews", kind: document ? "text" : "raw" }, { ...options, rendered: /\.md$/i.test(path) });
+      open({ key: `rev:${path}`, file: path, source: "reviews", kind: document ? "text" : "raw" }, { rendered: /\.md$/i.test(path) });
     },
     [open],
   );
   const openSkill = useCallback(
-    (path: string, { edit, ...options }: { preview?: boolean; edit?: boolean } = {}) => {
+    (path: string, { edit }: { edit?: boolean } = {}) => {
       // Skills hold instructions and scripts (.py, .sh…), opened as text; pictures, sound and video are shown.
       const media = kindOf(path);
       const kind = media === "image" || media === "audio" || media === "video" ? media : "text";
-      open({ key: `skill:${path}`, file: path, source: "skills", kind }, { ...options, rendered: !edit && /\.md$/i.test(path) });
+      open({ key: `skill:${path}`, file: path, source: "skills", kind }, { rendered: !edit && /\.md$/i.test(path) });
     },
     [open],
   );
   const openDiff = useCallback(
-    (title: string, query: string, options: { preview?: boolean; source?: VersionSource; library?: string } = {}) => {
+    (title: string, query: string, options: { source?: VersionSource; library?: string } = {}) => {
       const source = options.source ?? "work";
       const library = options.library;
-      open({ key: `diff:${source}:${library ?? ""}:${query}`, file: library ?? "", source, kind: "diff", title, diff: query }, { preview: options.preview ?? true });
+      open({ key: `diff:${source}:${library ?? ""}:${query}`, file: library ?? "", source, kind: "diff", title, diff: query });
     },
     [open],
   );
@@ -870,12 +863,6 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
             })),
           ] as MenuItem[])
         : []),
-      ...(editor.preview
-        ? ([
-            "separator",
-            { label: "保持打开", icon: <Pin size={14} />, onClick: () => setState((current) => updateEditor(current, groupId, editor.id, { preview: false })) },
-          ] as MenuItem[])
-        : []),
     ]);
   };
 
@@ -896,7 +883,6 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
         bodyRef={bodyRef(groupId)}
         onFocus={() => focusGroup(groupId)}
         onActivate={(editorId) => setState((current) => activate(current, groupId, editorId))}
-        onKeep={(editorId) => setState((current) => updateEditor(current, groupId, editorId, { preview: false }))}
         onClose={(editorId) => void closeEditors(groupId, [editorId])}
         onMenu={(event, editor) => tabMenu(event, groupId, editor)}
         onDrop={(target, index, copy) => drop(target, groupId, "center", { index, copy })}
@@ -1068,7 +1054,6 @@ function GroupView({
   bodyRef,
   onFocus,
   onActivate,
-  onKeep,
   onClose,
   onMenu,
   onDrop,
@@ -1085,7 +1070,6 @@ function GroupView({
   bodyRef: (element: HTMLElement | null) => void;
   onFocus: () => void;
   onActivate: (editorId: string) => void;
-  onKeep: (editorId: string) => void;
   onClose: (editorId: string) => void;
   onMenu: (event: React.MouseEvent, editor: Editor) => void;
   onDrop: (target: EditorDrag, index: number, copy: boolean) => void;
@@ -1192,10 +1176,10 @@ function GroupView({
                 data-editor={editor.id}
                 role="tab"
                 aria-selected={editor.id === group.active}
-                className={`editor-tab ${editor.id === group.active ? "active" : ""} ${editor.preview ? "is-preview" : ""} ${isPreview ? "stage" : ""} ${
+                className={`editor-tab ${editor.id === group.active ? "active" : ""} ${isPreview ? "stage" : ""} ${
                   dropIndex === index ? "drop-before" : ""
                 } ${drag?.type === "editor" && drag.editor === editor.id ? "dragging" : ""}`}
-                title={tooltipOf(doc, editor)}
+                title={tooltipOf(doc)}
                 draggable={draggable}
                 onDragStart={(event) => {
                   event.dataTransfer.effectAllowed = "copyMove";
@@ -1204,7 +1188,6 @@ function GroupView({
                 }}
                 onDragEnd={() => editorDrag.set(null)}
                 onClick={() => onActivate(editor.id)}
-                onDoubleClick={() => onKeep(editor.id)}
                 onMouseDown={(event) => event.button === 1 && !isPreview && (event.preventDefault(), onClose(editor.id))}
                 onContextMenu={(event) => onMenu(event, editor)}
               >
@@ -1361,10 +1344,7 @@ function EditorContent({
           <SvgEditor
             key={doc.key}
             value={doc.content}
-            onChange={(content) => {
-              onDoc({ content });
-              if (editor.preview) onEditor({ preview: false });
-            }}
+            onChange={(content) => onDoc({ content })}
             onSave={onSave}
             onSelection={(selection) => onDoc({ selection })}
           />
@@ -1387,17 +1367,7 @@ function EditorContent({
             <Markdown text={frontmatterAsCode(doc.content)} />
           </div>
         ) : (
-          <CodeEditor
-            path={doc.file}
-            value={doc.content}
-            line={editor.line}
-            onChange={(content) => {
-              onDoc({ content });
-              if (editor.preview) onEditor({ preview: false });
-            }}
-            onSave={onSave}
-            readOnly={locked}
-          />
+          <CodeEditor path={doc.file} value={doc.content} line={editor.line} onChange={(content) => onDoc({ content })} onSave={onSave} readOnly={locked} />
         )
       ) : (
         <MediaViewer path={doc.file} kind={doc.kind} playerId={editor.id} />

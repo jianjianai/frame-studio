@@ -152,8 +152,7 @@ export function SkillFiles() {
             ]
               .filter(Boolean)
               .join("\n")}
-            onClick={() => (node.type === "dir" ? flip("+" + path) : openable && openSkill(path, { preview: true }))}
-            onDoubleClick={() => node.type === "file" && openable && openSkill(path)}
+            onClick={() => (node.type === "dir" ? flip("+" + path) : openable && openSkill(path))}
             onContextMenu={(event) => nodeMenu(event, skill, node)}
           >
             {node.type === "dir" ? (

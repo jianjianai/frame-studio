@@ -1299,14 +1299,14 @@ function AttachmentChip({ attachment, onRemove }: { attachment: ChatAttachment; 
         if (attachment.type === "frame" && attachment.scene) openSample(attachment.scene);
         else if (attachment.type === "frame") void stage.seek(attachment.time);
         else if (attachment.type === "range") void stage.seek(attachment.start);
-        else if (attachment.type === "resource") openResource(attachment.id, { preview: true, title: attachment.title });
+        else if (attachment.type === "resource") openResource(attachment.id, { title: attachment.title });
         // (a folder has nothing to open)
-        else if (attachment.type === "skill" && /\.[^/]+$/.test(attachment.path)) openSkill(attachment.path, { preview: true });
+        else if (attachment.type === "skill" && /\.[^/]+$/.test(attachment.path)) openSkill(attachment.path);
         else if (attachment.type === "asset") {
           // A material library file, or one of the work's own (films/<slug>/x is public/x).
           const material = /^materials\/(.+)$/.exec(attachment.url)?.[1];
-          if (material) openMaterial(material, { preview: true });
-          else openFile(attachment.path ?? attachment.url.replace(/^films\/[^/]+\//, "public/"), { preview: true });
+          if (material) openMaterial(material);
+          else openFile(attachment.path ?? attachment.url.replace(/^films\/[^/]+\//, "public/"));
         }
       }}
       title={attachment.type === "asset" ? `${attachment.url}（点击查看）` : undefined}

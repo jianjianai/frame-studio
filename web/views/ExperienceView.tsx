@@ -187,8 +187,7 @@ export function ExperienceView() {
           className="tree-row"
           style={{ paddingLeft: 8 + depth * 12 }}
           title={[node.path, documents.get(node.path)?.title, documents.get(node.path)?.summary].filter(Boolean).join("\n")}
-          onClick={() => (node.type === "dir" ? flip("+" + node.path) : openExperience(node.path, { preview: true }))}
-          onDoubleClick={() => node.type === "file" && openExperience(node.path)}
+          onClick={() => (node.type === "dir" ? flip("+" + node.path) : openExperience(node.path))}
           onContextMenu={(event) => menuFor(event, node, depth)}
         >
           {node.type === "dir" ? (
