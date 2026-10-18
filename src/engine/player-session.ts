@@ -77,6 +77,9 @@ export function createPlayerSession({
     frames = 0,
     fpsAt = performance.now();
   const output = new FrameRenderer(canvas, project);
+  // Layers starting in the next seconds load while the current ones play: reaching a new model
+  // (seconds to load and compile) then finds it ready instead of stopping playback for it.
+  output.lookahead = 3;
   const lifetime = new AbortController();
   let updateEpoch = 0, updating: AbortController | undefined, renderFailed = false;
   const hotUpdate = { revision: 0, updates: 0, lastError: "" };

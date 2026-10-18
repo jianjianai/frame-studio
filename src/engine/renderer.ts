@@ -32,6 +32,8 @@ export class FrameRenderer {
   private preparing = false;
   private cleanupErrors: string[] = [];
   private sceneBuffering = false;
+  /** Seconds ahead a composition prepares its next layers (the live preview sets it; exports draw in order anyway). */
+  lookahead = 0;
   private slowFrames = new Set<number>();
   private publishBuffering() { this.onBuffering?.(this.sceneBuffering || this.slowFrames.size > 0); }
   constructor(
@@ -83,7 +85,7 @@ export class FrameRenderer {
       const mod = await project.load();
       signal.throwIfAborted();
       scene = await mod.createScene({
-        width: options.width, height: options.height, quality: options.quality,
+        width: options.width, height: options.height, quality: options.quality, lookahead: this.lookahead,
         onBuffering: waiting => { if (this.scene === scene && !this.destroyed) { this.sceneBuffering = waiting; this.publishBuffering(); } },
       });
       signal.throwIfAborted();

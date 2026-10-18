@@ -103,6 +103,8 @@ export type ProjectMeta = z.infer<typeof projectSchema>;
 export type Quality = "draft" | "standard" | "high";
 export interface SceneOptions {
   onBuffering?: (waiting: boolean) => void;
+  /** Live playback (the studio preview): seconds ahead whose new layers a composition prepares meanwhile. */
+  lookahead?: number;
   width: number;
   height: number;
   quality: Quality;

@@ -64,3 +64,60 @@ export const createScene = (options: SceneOptions) => createCompositionScene(opt
     120000,
   );
 });
+
+/** A layer that takes a while to load (like a model), noting where playback was when it began. */
+const slowScene = `import type { SceneOptions } from "@frame/engine/types";
+export async function createScene({ width, height }: SceneOptions) {
+  const stage = (globalThis as { __FRAME_STAGE__?: { player(): { getState(): { time: number } } | undefined } }).__FRAME_STAGE__;
+  (globalThis as { __slowAt?: number }).__slowAt = stage?.player()?.getState().time ?? -1;
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return { canvas, render() {} };
+}
+`;
+
+describe("layers ahead of playback", () => {
+  let app, base, work;
+  beforeAll(async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-ahead-"));
+    app = await createApp({ env: { FRAME_HOME: home, FRAME_PORT: "0" }, plugins });
+    base = await app.listen();
+    work = await app.services.works.create({ title: "提前载入", width: 320, height: 180, duration: 4 });
+    fs.writeFileSync(path.join(work.dir, "scenes", "slow.ts"), slowScene);
+    fs.writeFileSync(
+      path.join(work.dir, "scene.ts"),
+      `import type { SceneOptions } from "@frame/engine/types";
+import { createCompositionScene } from "@frame/engine/compositor";
+import visual from "./visual.json";
+export const createScene = (options: SceneOptions) => createCompositionScene(options, visual, { title: () => import("./scenes/title"), slow: () => import("./scenes/slow") });
+`,
+    );
+    const layer = (id, start, duration) => ({ id, source: { kind: "scene", module: id, engine: "canvas" }, start, duration });
+    fs.writeFileSync(path.join(work.dir, "visual.json"), JSON.stringify({ schemaVersion: 1, background: "#000000", clips: [layer("title", 0, 4), layer("slow", 2, 2)] }));
+  });
+  afterAll(() => app.close());
+
+  // A new layer (a model: seconds to load and compile) used to start loading when playback
+  // reached it, and playback stopped for it (缓冲中).
+  it.skipIf(!browserExecutable())(
+    "start loading while playback is still before them",
+    async () => {
+      const { chromium } = await import("playwright-core");
+      const browser = await chromium.launch({ executablePath: browserExecutable(), headless: true, args: ["--autoplay-policy=no-user-gesture-required"] });
+      try {
+        const page = await browser.newPage();
+        const query = new URLSearchParams({ module: app.services.preview.moduleUrl(path.join(work.dir, "project.ts")), assetBase: `/files/${work.repo}/${work.id}/`, live: "0" });
+        await page.goto(`${base}/preview/stage.html?${query}`);
+        await page.waitForFunction(() => window.__FRAME_STAGE__?.player()?.ready, null, { timeout: 60000 });
+        await page.evaluate(() => window.__FRAME_STAGE__.player().play());
+        await page.waitForFunction(() => globalThis.__slowAt !== undefined, null, { timeout: 10000 });
+        expect(await page.evaluate(() => globalThis.__slowAt)).toBeLessThan(2);
+      } finally {
+        await browser.close();
+      }
+    },
+    120000,
+  );
+});

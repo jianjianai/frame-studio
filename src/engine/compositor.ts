@@ -153,21 +153,84 @@ export function createCompositionScene(
   let mask: HTMLCanvasElement | undefined;
   const sources = new Map<string, Source>();
   let disposed = false;
+  /** Layers loading ahead of their start (live playback, `options.lookahead`): clip id → its load. */
+  const preloads = new Map<string, { abort: AbortController; done: Promise<void> }>();
+  const lookahead = Math.max(0, options.lookahead ?? 0);
   const release = () => {
     for (const s of sources.values()) s.dispose();
     sources.clear();
+    for (const entry of preloads.values()) entry.abort.abort();
+    preloads.clear();
   };
+  const isGl = (clip: Clip) => clip.source.kind === "model" || (clip.source.kind === "scene" && clip.source.engine === "three");
+  /** The pixels a layer covers at its own time `t` (a model is rendered at that size). */
+  const boxOf = (clip: Clip, t: number) => {
+    const p = clip.transform ?? {};
+    const zoom = Math.max(0, sampleValue(p.scale, t, 1));
+    return { width: Math.max(0, sampleValue(p.width, t, 1)) * canvas.width * zoom, height: Math.max(0, sampleValue(p.height, t, 1)) * canvas.height * zoom };
+  };
+  /** Layers starting within `lookahead` seconds, as many as fit next to the active ones (same limits as drawing). */
+  const upcoming = (active: Clip[], time: number) => {
+    let count = active.length,
+      contexts = active.filter(isGl).length;
+    const out: Clip[] = [];
+    const next = doc.clips.filter((c) => c.source.kind !== "color" && !c.hidden && c.start > time && c.start - time <= lookahead).sort((a, b) => a.start - b.start);
+    for (const clip of next) {
+      if (count + 1 > 32 || options.width * options.height * 4 * (count + 4) > 512 * 1024 * 1024 || (isGl(clip) && contexts + 1 > 12)) break;
+      count++;
+      if (isGl(clip)) contexts++;
+      out.push(clip);
+    }
+    return out;
+  };
+  /** Load a layer before its start, and draw its first frame (a model compiles its shaders, a video decodes) off screen. */
+  const preload = (clip: Clip) => {
+    const abort = new AbortController();
+    const entry = { abort, done: Promise.resolve() };
+    entry.done = (async () => {
+      const current = await source(clip, options, loaders, abort.signal);
+      const t = clipTime(clip, clip.start);
+      if (t !== null) await current.frame(t, abort.signal, boxOf(clip, t)).catch(() => {});
+      return current;
+    })().then(
+      (current) => {
+        if (preloads.get(clip.id) !== entry || abort.signal.aborted || disposed || sources.has(clip.id)) return current.dispose();
+        preloads.delete(clip.id);
+        sources.set(clip.id, current);
+      },
+      // A layer that fails to load says so when it is drawn: it loads again then.
+      () => {
+        if (preloads.get(clip.id) === entry) preloads.delete(clip.id);
+      },
+    );
+    preloads.set(clip.id, entry);
+  };
+  /** Wait for a promise, or stop with the frame when a newer request replaces it. */
+  const until = (promise: Promise<void>, signal: AbortSignal) =>
+    new Promise<void>((resolve, reject) => {
+      const stop = () => reject(signal.reason);
+      if (signal.aborted) return stop();
+      signal.addEventListener("abort", stop, { once: true });
+      void promise.then(resolve, resolve).finally(() => signal.removeEventListener("abort", stop));
+    });
   return {
     canvas,
     async prepareFrame(time, { signal }) {
       signal.throwIfAborted();
       if (disposed) throw new Error("Composition disposed");
       const active = doc.clips.filter((c) => clipTime(c, time) !== null);
-      // Inactive engine instances and decoders never accumulate across the film.
+      const next = lookahead ? upcoming(active, time) : [];
+      const wanted = new Set([...active, ...next].map((c) => c.id));
+      // Inactive engine instances and decoders never accumulate across the film (those about to start excepted).
       for (const [id, s] of sources)
-        if (!active.some((c) => c.id === id)) {
+        if (!wanted.has(id)) {
           s.dispose();
           sources.delete(id);
+        }
+      for (const [id, entry] of preloads)
+        if (!wanted.has(id)) {
+          entry.abort.abort();
+          preloads.delete(id);
         }
       const pixels = options.width * options.height;
       if (
@@ -182,12 +245,17 @@ export function createCompositionScene(
         throw new Error(
           `同一时刻有 ${contexts.length} 个三维图层（three 场景和模型图层，${contexts.map((c) => c.id).join("、")}），每个占一个 WebGL 上下文，浏览器最多同时保留约 16 个：同一时刻请不超过 12 个，把几个物体放进同一个 three 场景`,
         );
+      for (const clip of next) if (!sources.has(clip.id) && !preloads.has(clip.id)) preload(clip);
       // New layers load together (modules, fonts, media): one after another, each would wait
       // for the network in turn. Drawing below stays in layer order.
       const opened = await Promise.allSettled(
         active
           .filter((clip) => clip.source.kind !== "color" && !sources.has(clip.id))
           .map(async (clip) => {
+            // Loading ahead already: its end, rather than a second load.
+            const pending = preloads.get(clip.id);
+            if (pending) await until(pending.done, signal);
+            if (sources.has(clip.id)) return;
             const current = await source(clip, options, loaders, signal);
             if (disposed || signal.aborted || sources.has(clip.id)) current.dispose();
             else sources.set(clip.id, current);
