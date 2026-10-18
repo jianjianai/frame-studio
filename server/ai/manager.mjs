@@ -64,6 +64,11 @@ class AgentProcess {
   async start() {
     const env = agentEnv(this.manager.services.config, this.manager.profiles.env(this.profile, this.model));
     if (this.agent === "claude") env.CLAUDE_CODE_EXECUTABLE = AGENTS.claude.cli().command;
+    // Claude gives an HTTP MCP tool call 60 s by default ("The operation timed out."). FRAME
+    // answers once the work is done: loading a work in the user's browser, calls queued on one
+    // page or a busy server can take longer, and a call given up on still runs, so the next
+    // ones queued behind it timed out too. Ten minutes; FRAME's own tools keep their budgets.
+    if (this.agent === "claude") env.MCP_TOOL_TIMEOUT ??= String(10 * 60 * 1000);
     if (this.agent === "codex") env.INITIAL_AGENT_MODE = "agent";
     const logDir = path.join(this.manager.dir, "logs");
     fs.mkdirSync(logDir, { recursive: true });
