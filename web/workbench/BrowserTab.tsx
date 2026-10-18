@@ -622,10 +622,10 @@ function ComputersDialog({ repo, onClose }: { repo: string; onClose: () => void 
             <a className="btn small" href="/api/browser-extension.zip" download>
               <Download size={12} /> frame-connector.zip
             </a>
-            ，解压出 frame-connector 文件夹。
+            ，解压到一个文件夹（例如「全部解压缩」得到的 frame-connector），里面直接就是 manifest.json。
           </li>
           <li>
-            Edge 打开 <code>edge://extensions</code>（Chrome 是 <code>chrome://extensions</code>），打开「开发人员模式」，点「加载解压缩的扩展」，选 frame-connector 文件夹。建议给 AI 单独建一个浏览器用户资料，只在那里登录要给它用的网站。
+            Edge 打开 <code>edge://extensions</code>（Chrome 是 <code>chrome://extensions</code>），打开「开发人员模式」，点「加载解压缩的扩展」，选直接包含 manifest.json 的那个文件夹。建议给 AI 单独建一个浏览器用户资料，只在那里登录要给它用的网站。
           </li>
           <li>
             点工具栏上的 FRAME 连接器图标，填 FRAME 地址和配对码：

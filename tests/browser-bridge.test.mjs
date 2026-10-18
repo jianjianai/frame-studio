@@ -167,6 +167,18 @@ describe("the user's own browser through the FRAME 连接器 extension", () => {
     site?.close();
   });
 
+  it("hands out the extension with manifest.json at the top of the zip and this studio's address", async () => {
+    const { unzipSync } = await import("fflate");
+    const files = unzipSync(new Uint8Array(await (await fetch(`${base}/api/browser-extension.zip`)).arrayBuffer()));
+    // Windows' 全部解压缩 makes the folder: a folder inside would leave the manifest a level too deep.
+    expect(Object.keys(files)).toEqual(expect.arrayContaining(["manifest.json", "background.js", "popup.html", "popup.js", "icons/128.png", "defaults.json"]));
+    expect(Object.keys(files).every((name) => !name.startsWith("frame-connector/"))).toBe(true);
+    const manifest = JSON.parse(Buffer.from(files["manifest.json"]).toString("utf8"));
+    expect(manifest).toMatchObject({ manifest_version: 3, background: { service_worker: "background.js" } });
+    for (const icon of Object.values(manifest.icons)) expect(files[icon]).toBeTruthy();
+    expect(JSON.parse(Buffer.from(files["defaults.json"]).toString())).toEqual({ server: new URL(base).origin });
+  });
+
   it("pairs with a code made in a repository, and comes back with its token", async () => {
     await expect(new FakeExtension(base, null).connect({ type: "pair", code: "WRONGONE" })).resolves.toMatchObject({ type: "error", code: "BAD_CODE" });
     const { code } = await api(`/api/browser/${work.repo}/pair`, { method: "POST" });
