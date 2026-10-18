@@ -8,7 +8,13 @@ import WebSocket from "ws";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
 import { startGuardProxy } from "../server/browser-proxy.mjs";
-import { WebBrowser, netscapeCookies, normalizeAddress, siteOf } from "../server/browser.mjs";
+import { Browsers, netscapeCookies, normalizeAddress, siteOf } from "../server/browser.mjs";
+
+/** Repository browsers outside an app: `required` is a studio with a password (the guard proxy on). */
+const hub = (required) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-browsers-"));
+  return new Browsers({ auth: { required }, repos: { get: () => ({}) }, config: { home, dirs: { tmp: path.join(home, "tmp") } }, events: { emit() {} } });
+};
 
 /** A plain server on loopback answering every request with its path. */
 async function echoServer() {
@@ -58,13 +64,13 @@ describe("the logged-in browser's guard proxy", () => {
 
   it("keeps a studio on the network out of its own network", async () => {
     const { server, port } = await echoServer();
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-guard-"));
-    const browser = new WebBrowser({ auth: { required: true }, config: { home, dirs: { tmp: path.join(home, "tmp") } }, events: { emit() {} } });
+    const browsers = hub(true);
     try {
+      const browser = browsers.of("local");
       const tab = await browser.newTab({ owner: "ai", session: "s" });
       for (const url of [`http://127.0.0.1:${port}/`, `http://localhost:${port}/`]) await expect(browser.goto(tab, url)).rejects.toThrow(/内网地址/);
     } finally {
-      await browser.shutdown();
+      await browsers.shutdown();
       server.close();
     }
   });
@@ -101,6 +107,7 @@ describe("the logged-in browser for the AI", () => {
   let app, base, site, siteUrl, work;
   const seen = [];
   const call = (name, args) => app.services.tools.call(name, args, { session: "s1", work: work.id, repo: work.repo, agent: true });
+  const browser = () => app.services.browsers.of(work.repo);
 
   beforeAll(async () => {
     const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==", "base64");
@@ -141,8 +148,8 @@ describe("the logged-in browser for the AI", () => {
     await expect(call("browser_download", { url: `${siteUrl}/secret.png` })).rejects.toThrow(/403/);
     const login = await call("browser_login", { url: `${siteUrl}/login`, reason: "下载模型需要登录" });
     expect(login.text).toContain("登录好了");
-    expect(app.services.browser.list().find((tab) => tab.id === login.data.tab).login.reason).toBe("下载模型需要登录");
-    await app.services.browser.loginDone(login.data.tab);
+    expect(browser().list().find((tab) => tab.id === login.data.tab).login.reason).toBe("下载模型需要登录");
+    await browser().loginDone(login.data.tab);
 
     const media = await call("browser_read", { what: "media" });
     expect(media.text).toContain(`${siteUrl}/secret.png`);
@@ -164,15 +171,32 @@ describe("the logged-in browser for the AI", () => {
     expect(fs.statSync(cookies.data.file).mode & 0o077).toBe(0);
   });
 
+  it("keeps each repository's logins to itself", async () => {
+    const browsers = hub(false);
+    try {
+      const mine = browsers.of("a");
+      const theirs = browsers.of("b");
+      await mine.goto(await mine.newTab({ owner: "user" }), `${siteUrl}/login`);
+      expect((await mine.cookieFile([siteUrl])).total).toBe(1);
+      expect((await theirs.cookieFile([siteUrl])).total).toBe(0);
+      const tab = await theirs.newTab({ owner: "ai", session: "s" });
+      await expect(theirs.goto(tab, `${siteUrl}/secret.png`)).rejects.toThrow(/要先登录/);
+      // A tab of one repository is not there for the other.
+      expect(() => theirs.get([...mine.tabs.keys()][0])).toThrow(/没有标签页/);
+    } finally {
+      await browsers.shutdown();
+    }
+  });
+
   it("is hidden from read-only grants", async () => {
     await expect(app.services.tools.call("browser_read", {}, { readOnly: true })).rejects.toThrow(/只读/);
   });
 
   it("streams the tab to the user's view and takes their clicks", async () => {
-    const tabs = app.services.browser.list();
+    const tabs = browser().list();
     const target = tabs.find((tab) => tab.owner === "ai");
-    await app.services.browser.goto(app.services.browser.get(target.id), siteUrl);
-    const ws = new WebSocket(`${base.replace("http", "ws")}/api/browser/view?tab=${target.id}&width=800&height=600&dpr=1`);
+    await browser().goto(browser().get(target.id), siteUrl);
+    const ws = new WebSocket(`${base.replace("http", "ws")}/api/browser/view?repo=${work.repo}&tab=${target.id}&width=800&height=600&dpr=1`);
     const messages = [];
     const frame = new Promise((resolve, reject) => {
       ws.on("message", (data, binary) => (binary ? resolve(data) : messages.push(JSON.parse(data))));
@@ -184,12 +208,12 @@ describe("the logged-in browser for the AI", () => {
     expect(messages.find((item) => item.type === "view").tab).toBe(target.id);
     // The viewer's size is the page's.
     await new Promise((resolve) => setTimeout(resolve, 200));
-    expect(app.services.browser.get(target.id).page.viewportSize()).toEqual({ width: 800, height: 600 });
+    expect(browser().get(target.id).page.viewportSize()).toEqual({ width: 800, height: 600 });
     ws.send(JSON.stringify({ type: "mouse", action: "down", x: 50, y: 50, button: "left", clicks: 1 }));
     ws.send(JSON.stringify({ type: "mouse", action: "up", x: 50, y: 50, button: "left", clicks: 1 }));
-    await expect.poll(() => app.services.browser.get(target.id).page.title(), { timeout: 5000 }).toBe("点到了");
+    await expect.poll(() => browser().get(target.id).page.title(), { timeout: 5000 }).toBe("点到了");
     ws.close();
     // Nobody watching: back to the AI's size.
-    await expect.poll(() => app.services.browser.get(target.id).page.viewportSize()?.width, { timeout: 5000 }).toBe(1280);
+    await expect.poll(() => browser().get(target.id).page.viewportSize()?.width, { timeout: 5000 }).toBe(1280);
   });
 });

@@ -107,7 +107,8 @@ async function settle(page) {
 
 export function registerBrowserTools(registry) {
   const { services } = registry;
-  const browser = () => services.browser;
+  /** The browser of the work's repository: each repository has its own logins, tabs and downloads. */
+  const browserFor = async (ctx) => services.browsers.of((await ctx.work()).repo);
   const sessionOf = (ctx) => ctx.scope.session ?? "external";
   const common = { signedIn: true };
 
@@ -117,8 +118,9 @@ export function registerBrowserTools(registry) {
     ...common,
     readOnly: true,
     description:
-      "在 FRAME 浏览器里打开网页。这是服务器上一个带登录状态的浏览器：用户在工作台的「浏览器」标签页里登录过的网站（Sketchfab、YouTube、B 站、抖音……）这里也是登录的，用户也能在标签页里看到你在做什么。普通的公开网页用你自己的联网工具更快；要登录才能看或下载、或者你自己的请求被网站拦下时用这个。每个对话有自己的标签页（newTab 再开一个）；结果是页面结构（[ref=…] 给 browser_act），screenshot 要截图。要登录时用 browser_login 请用户登录，不要自己填账号密码。只浏览和下载：不发帖、评论、私信、点赞、关注、购买，不改账号设置。",
+      "在 FRAME 浏览器里打开网页。这是服务器上一个带登录状态的浏览器，每个作品库一个：用户在这个作品库的「浏览器」标签页里登录过的网站（Sketchfab、YouTube、B 站、抖音……）这里也是登录的，用户也能在标签页里看到你在做什么。普通的公开网页用你自己的联网工具更快；要登录才能看或下载、或者你自己的请求被网站拦下时用这个。每个对话有自己的标签页（newTab 再开一个）；结果是页面结构（[ref=…] 给 browser_act），screenshot 要截图。要登录时用 browser_login 请用户登录，不要自己填账号密码。只浏览和下载：不发帖、评论、私信、点赞、关注、购买，不改账号设置。",
     input: {
+      work: workArg,
       url: z.string().min(1).max(4000).describe("网址"),
       tab: tabArg,
       newTab: z.boolean().default(false).describe("在新标签页打开（同时看几个网页时）"),
@@ -127,10 +129,11 @@ export function registerBrowserTools(registry) {
       screenshot: z.boolean().default(false).describe("同时截图"),
     },
     async run({ url, tab: tabId, newTab, query, max, screenshot }, ctx) {
+      const browser = await browserFor(ctx);
       const session = sessionOf(ctx);
-      const tab = newTab ? await browser().newTab({ owner: "ai", session }) : await browser().tabFor(session, { tab: tabId, create: true });
-      if (newTab) await browser().tabFor(session, { tab: tab.id });
-      const response = await browser().goto(tab, url);
+      const tab = newTab ? await browser.newTab({ owner: "ai", session }) : await browser.tabFor(session, { tab: tabId, create: true });
+      if (newTab) await browser.tabFor(session, { tab: tab.id });
+      const response = await browser.goto(tab, url);
       const status = response?.status();
       return report(tab, { query, max, screenshot, notes: status && status >= 400 ? [`HTTP ${status}`] : [] });
     },
@@ -144,6 +147,7 @@ export function registerBrowserTools(registry) {
     description:
       "读 FRAME 浏览器标签页里的网页：snapshot 页面结构（默认，带 [ref=…]）；text 正文文字（offset 翻页）；links 链接（文字 → 地址）；media 图片、视频、音频的地址和尺寸（下载用 browser_download 的 url）。query 只看含某些字的部分；screenshot 截图（看登录状态、验证、布局时用）。不写 tab 就是这个对话自己的标签页；用户说“这个网页”时，[FRAME] 里写着用户正在看的标签页。",
     input: {
+      work: workArg,
       tab: tabArg,
       what: z.enum(["snapshot", "text", "links", "media"]).default("snapshot"),
       query: z.string().max(200).optional().describe("只看含这些字的部分（不分大小写）"),
@@ -152,7 +156,8 @@ export function registerBrowserTools(registry) {
       screenshot: z.boolean().default(false),
     },
     async run({ tab: tabId, what, query, offset, max, screenshot }, ctx) {
-      const tab = await browser().tabFor(sessionOf(ctx), { tab: tabId });
+      const browser = await browserFor(ctx);
+      const tab = await browser.tabFor(sessionOf(ctx), { tab: tabId });
       const { page } = tab;
       if (what === "snapshot") return report(tab, { query, max, screenshot });
       let body;
@@ -227,6 +232,7 @@ export function registerBrowserTools(registry) {
     description:
       "在 FRAME 浏览器的标签页里操作：click 点击、type 在输入框（搜索框等）里输入（submit 再按回车）、press 按键（Enter、Escape、ArrowDown、PageDown…）、select 选下拉选项、hover、scroll 滚动（up/down，或滚到 ref）、back/forward/reload、close 关掉标签页、wait 等一会儿。元素用最新页面结构里的 ref。结果是操作后的页面结构（screenshot 要截图）。只为了浏览和下载而操作：不要点发布、评论、私信、点赞、关注、购买、修改设置这类会以用户身份产生影响的按钮；密码框、登录表单和评论框不能填，登录交给 browser_login。",
     input: {
+      work: workArg,
       tab: tabArg,
       action: z.enum(["click", "type", "press", "select", "hover", "scroll", "back", "forward", "reload", "close", "wait"]),
       ref: refArg,
@@ -241,11 +247,12 @@ export function registerBrowserTools(registry) {
       screenshot: z.boolean().default(false),
     },
     async run({ tab: tabId, action, ref, text, submit, key, direction, amount, ms, query, max, screenshot }, ctx) {
+      const browser = await browserFor(ctx);
       const session = sessionOf(ctx);
-      const tab = await browser().tabFor(session, { tab: tabId });
+      const tab = await browser.tabFor(session, { tab: tabId });
       const { page } = tab;
       const notes = [];
-      const before = new Set(browser().tabs.keys());
+      const before = new Set(browser.tabs.keys());
       const started = Date.now();
       try {
         switch (action) {
@@ -292,7 +299,7 @@ export function registerBrowserTools(registry) {
             break;
           case "close": {
             await page.close();
-            const next = browser().tabs.get(browser().sessionTabs.get(session));
+            const next = browser.tabs.get(browser.sessionTabs.get(session));
             return { data: { closed: tab.id, tab: next?.id ?? null }, text: `已关掉标签页 ${tab.id}${next ? `，这个对话现在用标签页 ${next.id}（${next.title || next.url}）` : ""}` };
           }
           case "wait":
@@ -304,8 +311,8 @@ export function registerBrowserTools(registry) {
       }
       await settle(page);
       // What the action set off: a new tab (a site's popup), a download.
-      const opened = [...browser().tabs.values()].find((item) => !before.has(item.id) && item.opener === tab.id);
-      const downloads = browser()
+      const opened = [...browser.tabs.values()].find((item) => !before.has(item.id) && item.opener === tab.id);
+      const downloads = browser
         .listDownloads()
         .filter((item) => item.tab === tab.id && item.at >= started);
       for (const item of downloads)
@@ -346,34 +353,35 @@ export function registerBrowserTools(registry) {
     async run({ tab: tabId, url, ref, download, name, folder, license }, ctx) {
       if ([url, ref, download].filter(Boolean).length !== 1) throw problem(400, "url、ref、download 必须且只能写一个");
       const work = await ctx.work();
+      const browser = services.browsers.of(work.repo);
       const session = sessionOf(ctx);
       let result;
       if (url) {
         if (/^(blob|data):/.test(url)) throw problem(400, "blob:/data: 地址是网页里的数据，不能下载：用 ref 点下载按钮，或者用 yt-dlp 加 browser_cookies");
         // Without a tab of its own the conversation still has the browser's cookies.
-        const tab = tabId || browser().sessionTabs.has(session) ? await browser().tabFor(session, { tab: tabId }) : null;
+        const tab = tabId || browser.sessionTabs.has(session) ? await browser.tabFor(session, { tab: tabId }) : null;
         const relative = await importFromUrl(work, url, {
           name,
           folder,
           publicOnly: services.auth.required,
           headers: async (address) => {
-            if (tab) return browser().headersFor(tab, address);
-            const cookies = await (await browser().context()).cookies(address.href);
+            if (tab) return browser.headersFor(tab, address);
+            const cookies = await (await browser.context()).cookies(address.href);
             return cookies.length ? { Cookie: cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ") } : {};
           },
         });
         result = await importedAsset(work, relative, license ?? `下载自 ${url}`);
         services.events.emit({ type: "assets", work: work.id, repo: work.repo });
       } else if (ref) {
-        const tab = await browser().tabFor(session, { tab: tabId });
+        const tab = await browser.tabFor(session, { tab: tabId });
         const page = tab.page;
-        const item = await browser()
+        const item = await browser
           .expectDownload(tab, () => element(page, ref).click({ timeout: 10000 }))
           .catch((error) => {
             throw staleRef(error, ref);
           });
-        result = await browser().importDownload(work, item.id, { folder, name, license: license ?? `下载自 ${page.url()}` });
-      } else result = await browser().importDownload(work, download, { folder, name, license });
+        result = await browser.importDownload(work, item.id, { folder, name, license: license ?? `下载自 ${page.url()}` });
+      } else result = await browser.importDownload(work, download, { folder, name, license });
       const size = result.size ? `，${bytes(result.size)}` : "";
       return { data: result, text: `已下载到 ${result.path}${size}，引用地址 ${result.url}${license ? "" : "（来源记在了 production/licenses.md，许可写清楚了再补上）"}` };
     },
@@ -387,18 +395,20 @@ export function registerBrowserTools(registry) {
     description:
       "网页要登录（下载要账号、内容要登录才看得到、网站要求“确认你不是机器人”）时，请用户自己在 FRAME 浏览器里登录或通过验证：在这个对话的标签页打开 url（登录页或网站），聊天里出现请用户登录的卡片。用户登录好后点「登录好了」，你会收到一条消息。不要让用户把密码、验证码、Token 或 Cookie 发到聊天里，也不要自己填。",
     input: {
+      work: workArg,
       url: z.string().min(1).max(4000).describe("登录页，或者要登录的网站"),
       reason: z.string().min(2).max(200).describe("为什么要登录，给用户看，例如：下载这 5 个 CC BY 模型需要 Sketchfab 账号"),
       tab: tabArg,
     },
     async run({ url, reason, tab: tabId }, ctx) {
+      const browser = await browserFor(ctx);
       const session = ctx.scope.session ?? null;
-      const tab = await browser().tabFor(sessionOf(ctx), { tab: tabId, create: true });
-      await browser().goto(tab, url);
-      const host = browser().requestLogin(tab, { reason, session });
+      const tab = await browser.tabFor(sessionOf(ctx), { tab: tabId, create: true });
+      await browser.goto(tab, url);
+      const host = browser.requestLogin(tab, { reason, session });
       const text = session
         ? `已在标签页 ${tab.id} 打开 ${tab.page.url()}，聊天里出现了请用户登录 ${host} 的卡片：用户点「打开浏览器」登录，登录好后点「登录好了」，你会收到一条消息。现在先做不需要登录的部分，做完就结束这一轮，在回复里说清楚要登录哪个网站、为什么。用户说登录好了以后用 browser_read 确认已经登录。`
-        : `已在 FRAME 浏览器的标签页 ${tab.id} 打开 ${tab.page.url()}。请用户在 FRAME 工作台打开「浏览器」（「素材」视图顶部的地球按钮）登录 ${host}，登录好后告诉你。`;
+        : `已在 FRAME 浏览器的标签页 ${tab.id} 打开 ${tab.page.url()}。请用户在 FRAME 工作台打开这个作品库里任一作品的「浏览器」（「素材」视图顶部的地球按钮）登录 ${host}，登录好后告诉你。`;
       return { data: { tab: tab.id, host, url: tab.page.url() }, text };
     },
   });
@@ -411,10 +421,12 @@ export function registerBrowserTools(registry) {
     description:
       "把 FRAME 浏览器里某些网站的登录信息（cookie）写成 cookies.txt，给你运行的下载程序用，例如 yt-dlp --cookies <文件> <网址>（YouTube 说“Sign in to confirm you’re not a bot”、B 站要登录才有高清时）。文件只有服务器上能读，一小时后自动删除。还没登录的网站先 browser_login。",
     input: {
+      work: workArg,
       sites: z.array(z.string().min(3).max(200)).min(1).max(10).describe("网站，例如 youtube.com、bilibili.com"),
     },
-    async run({ sites }) {
-      const { file, counts, total } = await browser().cookieFile(sites);
+    async run({ sites }, ctx) {
+      const browser = await browserFor(ctx);
+      const { file, counts, total } = await browser.cookieFile(sites);
       const summary = Object.entries(counts)
         .map(([site, count]) => `${site} ${count} 个`)
         .join("、");

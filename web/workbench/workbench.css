@@ -2587,3 +2587,9 @@ a.btn.disabled {
 .accent-text {
   color: var(--accent);
 }
+.browser-repo {
+  flex: none;
+  padding: 0 6px 4px;
+  font-size: 11px;
+  white-space: nowrap;
+}

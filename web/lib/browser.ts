@@ -25,40 +25,47 @@ export interface BrowserDownload {
 }
 
 /**
- * The browser's tabs and downloads as the server announces them (its events reach every page):
- * one copy for the page, loaded when the first component asks.
+ * A repository's browser: its tabs and downloads as the server announces them (its events reach
+ * every page). One copy per repository for the page, loaded when the first component asks.
  */
-let state: { tabs: BrowserTabInfo[]; downloads: BrowserDownload[] } = { tabs: [], downloads: [] };
+type BrowserState = { tabs: BrowserTabInfo[]; downloads: BrowserDownload[] };
+const EMPTY: BrowserState = { tabs: [], downloads: [] };
+const states = new Map<string, BrowserState>();
 const watchers = new Set<() => void>();
-let started = false;
-function start() {
-  if (started) return;
-  started = true;
-  const set = (change: Partial<typeof state>) => {
-    state = { ...state, ...change };
-    watchers.forEach((watcher) => watcher());
-  };
-  subscribe((event) => {
-    if (event.type === "browser-tabs") set({ tabs: event.tabs as BrowserTabInfo[] });
-    if (event.type === "browser-downloads") set({ downloads: event.downloads as BrowserDownload[] });
-  });
-  const load = () =>
-    api<typeof state>("/api/browser").then(
-      (loaded) => set({ tabs: loaded.tabs, downloads: loaded.downloads }),
-      () => {},
-    );
-  void load();
-  // The studio restarted (the browser with it): what it has now.
-  onConnection((connected) => connected && void load());
+const loaded = new Set<string>();
+let listening = false;
+const set = (repo: string, change: Partial<BrowserState>) => {
+  states.set(repo, { ...(states.get(repo) ?? EMPTY), ...change });
+  watchers.forEach((watcher) => watcher());
+};
+const load = (repo: string) =>
+  api<BrowserState>(`/api/browser/${encodeURIComponent(repo)}`).then(
+    (state) => set(repo, { tabs: state.tabs, downloads: state.downloads }),
+    () => {},
+  );
+function start(repo: string) {
+  if (!listening) {
+    listening = true;
+    subscribe((event) => {
+      const repo = event.repo as string;
+      if (event.type === "browser-tabs") set(repo, { tabs: event.tabs as BrowserTabInfo[] });
+      if (event.type === "browser-downloads") set(repo, { downloads: event.downloads as BrowserDownload[] });
+    });
+    // The studio restarted (the browsers with it): what they have now.
+    onConnection((connected) => connected && loaded.forEach((repo) => void load(repo)));
+  }
+  if (loaded.has(repo)) return;
+  loaded.add(repo);
+  void load(repo);
 }
-export function useBrowserState() {
+export function useBrowserState(repo: string) {
   return useSyncExternalStore(
     (watcher) => {
-      start();
+      start(repo);
       watchers.add(watcher);
       return () => void watchers.delete(watcher);
     },
-    () => state,
+    () => states.get(repo) ?? EMPTY,
   );
 }
 
@@ -82,5 +89,7 @@ export function onWantedTab(listener: (tab: string) => void) {
   return () => void wanters.delete(listener);
 }
 
+/** API base of a repository's browser. */
+export const browserPath = (repo: string) => `/api/browser/${encodeURIComponent(repo)}`;
 /** Tell the AI that asked that the user logged in (a message in its conversation). */
-export const loginDone = (tab: string) => api<{ ok: true; notified: boolean }>(`/api/browser/tabs/${encodeURIComponent(tab)}/login-done`, { method: "POST" });
+export const loginDone = (repo: string, tab: string) => api<{ ok: true; notified: boolean }>(`${browserPath(repo)}/tabs/${encodeURIComponent(tab)}/login-done`, { method: "POST" });

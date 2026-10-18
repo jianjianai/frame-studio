@@ -51,6 +51,8 @@ export function navigationError(error, url) {
   })();
   if (/ERR_TUNNEL_CONNECTION_FAILED|ERR_PROXY/.test(message)) return problem(400, `打不开 ${host}：服务器上的浏览器不能访问内网地址，或者找不到这个网址的服务器`, "PRIVATE_ADDRESS");
   if (/ERR_NAME_NOT_RESOLVED/.test(message)) return problem(400, `找不到这个网址的服务器：${host}`);
+  // An error status with an empty page (a bare 403/404): Chrome has nothing to show.
+  if (/ERR_HTTP_RESPONSE_CODE_FAILURE/.test(message)) return problem(502, `${host} 拒绝了这个请求（403、404 这类错误，没有页面内容）：可能要先登录，或者地址不对`, "HTTP_ERROR");
   if (/Timeout/i.test(message)) return problem(504, `${host} 30 秒内没有打开（网页还在载入时可以用 browser_read 看看已经出来的内容）`, "TIMEOUT");
   return problem(502, `打开 ${host} 失败：${message.split("\n")[0]}`);
 }
@@ -82,24 +84,28 @@ export function netscapeCookies(cookies) {
 }
 
 /**
- * One logged-in browser for the whole studio: a Chromium with a persistent profile in the data
- * folder (`browser/profile`), so a site the user logged in to stays logged in. The user sees and
- * works it in the 浏览器 editor tab (a screencast with the input sent back); the AI uses it
- * through the browser_* tools, each AI conversation in a tab of its own. On a studio reachable
- * from the network everything it loads goes through the guard proxy (public addresses only).
+ * The logged-in browser of one repository (作品库): a Chromium with a persistent profile in the
+ * data folder (`browser/<repo>/profile`), so a site the user logged in to stays logged in for
+ * that repository's works, and only for them: an AI or a grant bound to another repository
+ * never reaches these logins. The user sees and works it in the 浏览器 editor tab (a screencast
+ * with the input sent back); the AI uses it through the browser_* tools, each AI conversation in
+ * a tab of its own. On a studio reachable from the network everything it loads goes through the
+ * guard proxy (public addresses only).
  */
 export class WebBrowser {
-  constructor(services) {
+  constructor(services, { repo, hub }) {
     this.services = services;
+    this.repo = repo;
+    this.hub = hub;
     const { config } = services;
-    this.dir = path.join(config.home, "browser");
+    this.dir = path.join(config.home, "browser", repo);
     this.profile = path.join(this.dir, "profile");
     this.sessionCookies = path.join(this.dir, "session-cookies.json");
-    this.downloadsDir = path.join(config.dirs.tmp, "browser-downloads");
+    const scratch = path.join(config.dirs.tmp, "browser", repo);
+    this.downloadsDir = path.join(scratch, "downloads");
     this.keptDir = path.join(this.downloadsDir, "kept");
-    this.cookieDir = path.join(config.dirs.tmp, "browser-cookies");
+    this.cookieDir = path.join(scratch, "cookies");
     this.contextPromise = null;
-    this.proxy = null;
     /** id → { id, page, owner: "ai" | "user", session, title, url, loading, aiAt, login, viewport, cast } */
     this.tabs = new Map();
     /** AI conversation (or "external") → its tab id. */
@@ -108,10 +114,6 @@ export class WebBrowser {
     /** id → { id, name, url, tab, state: "downloading" | "done" | "failed", size, file, error, at } */
     this.downloads = new Map();
     this.lastUse = 0;
-    this.sweeper = setInterval(() => this.sweep(), 60 * 1000);
-    this.sweeper.unref?.();
-    // Files for other programs from an earlier run.
-    for (const dir of [this.cookieDir, this.downloadsDir]) fs.rmSync(dir, { recursive: true, force: true });
   }
 
   get running() {
@@ -134,9 +136,9 @@ export class WebBrowser {
     fs.mkdirSync(this.keptDir, { recursive: true });
     const args = ["--lang=zh-CN", "--disable-renderer-backgrounding", "--autoplay-policy=user-gesture-required"];
     if (this.services.auth.required) {
-      this.proxy ??= await startGuardProxy();
+      const proxy = await this.hub.guardProxy();
       // Loopback too goes through the proxy (Chrome sends it direct by default), and WebRTC may not go around it.
-      args.push(`--proxy-server=${this.proxy.url}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+      args.push(`--proxy-server=${proxy.url}`, "--proxy-bypass-list=<-loopback>", "--force-webrtc-ip-handling-policy=disable_non_proxied_udp");
     }
     const { chromium } = require("playwright-core");
     const context = await chromium.launchPersistentContext(this.profile, {
@@ -250,7 +252,7 @@ export class WebBrowser {
 
   emitTabs() {
     clearTimeout(this.tabsTimer);
-    this.tabsTimer = setTimeout(() => this.services.events.emit({ type: "browser-tabs", tabs: this.list() }), 80);
+    this.tabsTimer = setTimeout(() => this.services.events.emit({ type: "browser-tabs", repo: this.repo, tabs: this.list() }), 80);
   }
 
   /** A new tab (the browser's first, empty page when it has just started). */
@@ -328,7 +330,7 @@ export class WebBrowser {
     })();
     tab.login = { host, reason, session, at: Date.now() };
     this.emitTabs();
-    this.services.events.emit({ type: "browser-login", tab: tab.id, host, reason, session });
+    this.services.events.emit({ type: "browser-login", repo: this.repo, tab: tab.id, host, reason, session });
     return host;
   }
 
@@ -386,7 +388,8 @@ export class WebBrowser {
    */
   async cookieFile(sites) {
     const context = await this.context();
-    const wanted = sites.map((site) => siteOf(String(site).replace(/^https?:\/\//, "").split("/")[0]));
+    // A site may come as a name, a host with a port or a whole address.
+    const wanted = sites.map((site) => siteOf(String(site).replace(/^[a-z]+:\/\//i, "").split("/")[0].replace(/:\d+$/, "")));
     const cookies = (await context.cookies()).filter((cookie) => wanted.some((site) => cookieFor(cookie, site)));
     fs.mkdirSync(this.cookieDir, { recursive: true, mode: 0o700 });
     const file = path.join(this.cookieDir, `cookies-${randomBytes(6).toString("hex")}.txt`);
@@ -464,7 +467,7 @@ export class WebBrowser {
   }
 
   emitDownloads() {
-    this.services.events.emit({ type: "browser-downloads", downloads: this.listDownloads() });
+    this.services.events.emit({ type: "browser-downloads", repo: this.repo, downloads: this.listDownloads() });
   }
 
   download(downloadId) {
@@ -475,6 +478,7 @@ export class WebBrowser {
 
   /** A finished download into a work's public/ (with its source noted). */
   async importDownload(work, downloadId, { folder = "public/imports", name, license } = {}) {
+    if (work.repo !== this.repo) throw problem(403, `这是作品库 ${this.repo} 的下载，只能放进这个作品库的作品`, "FORBIDDEN");
     const item = this.download(downloadId);
     if (item.state === "downloading") throw problem(409, `${item.name} 还在下载`, "BUSY");
     if (item.state !== "done") throw problem(400, `${item.name} 没有下载成功：${item.error}`);
@@ -725,10 +729,72 @@ export class WebBrowser {
     await context.close().catch(() => {});
   }
 
+}
+
+/**
+ * The repositories' browsers: one each, made when first asked for (none runs until used), and
+ * what they share: the guard proxy and the sweep that closes idle ones.
+ */
+export class Browsers {
+  constructor(services) {
+    this.services = services;
+    this.byRepo = new Map();
+    this.proxy = null;
+    // Downloads and cookie files of an earlier run.
+    fs.rmSync(path.join(services.config.dirs.tmp, "browser"), { recursive: true, force: true });
+    this.sweeper = setInterval(() => {
+      for (const browser of this.byRepo.values()) browser.sweep();
+    }, 60 * 1000);
+    this.sweeper.unref?.();
+  }
+
+  /** A repository's browser (its logins, tabs and downloads). */
+  of(repo) {
+    if (!repo) throw problem(400, "需要指定作品库：每个作品库有自己的浏览器和登录", "REPO_REQUIRED");
+    this.services.repos.get(repo);
+    let browser = this.byRepo.get(repo);
+    if (!browser) this.byRepo.set(repo, (browser = new WebBrowser(this.services, { repo, hub: this })));
+    return browser;
+  }
+
+  /** The tabs someone looks at in a repository's browser (none when it never started). */
+  watched(repo) {
+    return this.byRepo.get(repo)?.watched() ?? [];
+  }
+
+  guardProxy() {
+    this.proxy ??= startGuardProxy().catch((error) => {
+      this.proxy = null;
+      throw error;
+    });
+    return this.proxy;
+  }
+
+  /** A 浏览器 editor tab connects to the browser of the repository it is in (`?repo=`). */
+  view(ws, req) {
+    let browser;
+    try {
+      browser = this.of(new URL(req.url, "http://local").searchParams.get("repo"));
+    } catch {
+      return ws.close(4004, "unknown repository");
+    }
+    browser.view(ws, req);
+  }
+
+  /** A repository leaves this machine: its browser closes and its logins are deleted. */
+  async forget(repo) {
+    const browser = this.byRepo.get(repo);
+    this.byRepo.delete(repo);
+    await browser?.close({ keepSession: false });
+    fs.rmSync(path.join(this.services.config.home, "browser", repo), { recursive: true, force: true });
+    fs.rmSync(path.join(this.services.config.dirs.tmp, "browser", repo), { recursive: true, force: true });
+  }
+
   async shutdown() {
     clearInterval(this.sweeper);
-    await this.close();
-    await this.proxy?.close();
+    for (const browser of this.byRepo.values()) await browser.close();
+    const proxy = await this.proxy?.catch(() => null);
+    await proxy?.close();
     this.proxy = null;
   }
 }
@@ -773,24 +839,29 @@ async function editableFocus(page) {
 
 export function browserPlugin(services) {
   const { router } = services;
-  const browser = (services.browser = new WebBrowser(services));
-  services.closers.push(() => browser.shutdown());
-  services.sockets.set("/api/browser/view", (ws, req) => browser.view(ws, req));
+  const browsers = (services.browsers = new Browsers(services));
+  services.closers.push(() => browsers.shutdown());
+  services.repos.beforeRemove.push((repo) => browsers.forget(repo));
+  services.sockets.set("/api/browser/view", (ws, req) => browsers.view(ws, req));
 
-  router.get("/api/browser", async () => ({ running: browser.running, tabs: browser.list(), downloads: browser.listDownloads(), sites: await browser.sites() }));
-  router.post("/api/browser/tabs/:tab/login-done", ({ params }) => browser.loginDone(params.tab));
-  router.post("/api/browser/tabs/:tab/sign-out", ({ params }) => browser.signOut(params.tab));
-  router.post("/api/browser/clear", () => browser.clearAll());
-  router.get("/api/browser/downloads/:id", ({ req, res, params }) => {
-    const item = browser.download(params.id);
+  const base = "/api/browser/:repo";
+  router.get(base, async ({ params }) => {
+    const browser = browsers.of(params.repo);
+    return { running: browser.running, tabs: browser.list(), downloads: browser.listDownloads(), sites: await browser.sites() };
+  });
+  router.post(`${base}/tabs/:tab/login-done`, ({ params }) => browsers.of(params.repo).loginDone(params.tab));
+  router.post(`${base}/tabs/:tab/sign-out`, ({ params }) => browsers.of(params.repo).signOut(params.tab));
+  router.post(`${base}/clear`, ({ params }) => browsers.of(params.repo).clearAll());
+  router.get(`${base}/downloads/:id`, ({ req, res, params }) => {
+    const item = browsers.of(params.repo).download(params.id);
     if (item.state !== "done") throw problem(409, "还没有下载完", "BUSY");
     res.setHeader("Content-Disposition", `attachment; filename*=UTF-8''${encodeURIComponent(item.name || "download")}`);
     sendFile(req, res, item.file, { type: "application/octet-stream" });
   });
-  router.post("/api/browser/downloads/:id/import", async ({ req, params }) => {
-    const { repo, work: workId } = await readJson(req);
-    const work = await services.openEditable(workId, repo);
-    return browser.importDownload(work, params.id);
+  router.post(`${base}/downloads/:id/import`, async ({ req, params }) => {
+    const { work: workId } = await readJson(req);
+    const work = await services.openEditable(workId, params.repo);
+    return browsers.of(params.repo).importDownload(work, params.id);
   });
 
   registerBrowserTools(services.tools);

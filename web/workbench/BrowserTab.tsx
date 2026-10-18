@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowLeft, ArrowRight, Download, FolderInput, Globe, Keyboard, KeyRound, Loader2, LogOut, MoreVertical, Plus, RotateCw, Sparkles, Trash2, X } from "lucide-react";
 import { api } from "../lib/api";
-import { loginDone, onWantedTab, takeWantedTab, useBrowserState, type BrowserTabInfo } from "../lib/browser";
+import { browserPath, loginDone, onWantedTab, takeWantedTab, useBrowserState, type BrowserTabInfo } from "../lib/browser";
 import { coarsePointer } from "../lib/touch";
 import { useConfirm, useContextMenu, useToast } from "../lib/ui";
 import { useTabVisible, useWorkbench } from "./store";
@@ -37,7 +37,9 @@ export function BrowserTab() {
   const toast = useToast();
   const confirm = useConfirm();
   const [openMenu, menu] = useContextMenu();
-  const { tabs, downloads } = useBrowserState();
+  // Each repository has its own browser: its logins are for its works only.
+  const repo = work.repo;
+  const { tabs, downloads } = useBrowserState(repo);
   const [current, setCurrent] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport | null>(null);
   const [connected, setConnected] = useState(false);
@@ -95,7 +97,7 @@ export function BrowserTab() {
     const open = () => {
       const { width, height } = measured.current!;
       const tab = takeWantedTab() ?? currentRef.current;
-      const query = new URLSearchParams({ width: String(width), height: String(height), dpr: String(devicePixelRatio || 1), ...(tab ? { tab } : {}), ...(visibleRef.current ? {} : { paused: "1" }) });
+      const query = new URLSearchParams({ repo, width: String(width), height: String(height), dpr: String(devicePixelRatio || 1), ...(tab ? { tab } : {}), ...(visibleRef.current ? {} : { paused: "1" }) });
       const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/browser/view?${query}`);
       ws.binaryType = "blob";
       socket.current = ws;
@@ -129,7 +131,7 @@ export function BrowserTab() {
       socket.current?.close();
       socket.current = null;
     };
-  }, [ready, draw, toast, touch]);
+  }, [ready, draw, toast, touch, repo]);
 
   // The stage's size is the page's (sent a moment after it settles).
   useLayoutEffect(() => {
@@ -297,18 +299,18 @@ export function BrowserTab() {
   const signOut = async () => {
     if (!tab) return;
     const host = hostOf(tab.url);
-    if (!(await confirm(`退出 ${host}：清除这个网站在 FRAME 浏览器里的登录信息（cookie 和网站存的数据）。之后 AI 也不能再以你的身份访问它。`, { confirm: "退出", danger: true }))) return;
+    if (!(await confirm(`退出 ${host}：清除这个网站在这个作品库的浏览器里的登录信息（cookie 和网站存的数据）。之后这个作品库的 AI 也不能再以你的身份访问它。`, { confirm: "退出", danger: true }))) return;
     try {
-      const result = await api<{ site: string }>(`/api/browser/tabs/${encodeURIComponent(tab.id)}/sign-out`, { method: "POST" });
+      const result = await api<{ site: string }>(`${browserPath(repo)}/tabs/${encodeURIComponent(tab.id)}/sign-out`, { method: "POST" });
       toast(`已退出 ${result.site}`, "ok");
     } catch (error) {
       toast((error as Error).message, "error");
     }
   };
   const clearAll = async () => {
-    if (!(await confirm("清除 FRAME 浏览器里所有网站的登录信息、浏览记录和缓存，并关掉所有标签页（包括 AI 正在用的）。不能撤销。", { confirm: "全部清除", danger: true }))) return;
+    if (!(await confirm(`清除这个作品库（${repo === "local" ? "本地" : repo}）的浏览器里所有网站的登录信息、浏览记录和缓存，并关掉所有标签页（包括 AI 正在用的）。其他作品库的不受影响。不能撤销。`, { confirm: "全部清除", danger: true }))) return;
     try {
-      await api("/api/browser/clear", { method: "POST" });
+      await api(`${browserPath(repo)}/clear`, { method: "POST" });
       toast("已清除全部登录信息", "ok");
     } catch (error) {
       toast((error as Error).message, "error");
@@ -316,7 +318,7 @@ export function BrowserTab() {
   };
   const importDownload = async (id: string) => {
     try {
-      const result = await api<{ path: string }>(`/api/browser/downloads/${id}/import`, { body: { repo: work.repo, work: work.id } });
+      const result = await api<{ path: string }>(`${browserPath(repo)}/downloads/${id}/import`, { body: { work: work.id } });
       toast(`已放进作品：${result.path}`, "ok");
     } catch (error) {
       toast((error as Error).message, "error");
@@ -354,6 +356,10 @@ export function BrowserTab() {
         <button className="icon-btn" title="新标签页" onClick={() => send({ type: "new" })}>
           <Plus size={14} />
         </button>
+        <span className="grow" />
+        <span className="browser-repo faint" title="每个作品库有自己的浏览器：这里登录的网站只有这个作品库的作品和 AI 能用">
+          {repo === "local" ? "本地" : repo} 的浏览器
+        </span>
       </div>
       <div className="browser-bar">
         <button className="icon-btn" title="后退" disabled={!tab} onClick={() => send({ type: "back" })}>
@@ -407,7 +413,7 @@ export function BrowserTab() {
           <button
             className="btn small primary"
             onClick={() =>
-              loginDone(tab.id).then(
+              loginDone(repo, tab.id).then(
                 (result) => toast(result.notified ? "已告诉 AI" : "好的", "ok"),
                 (error) => toast((error as Error).message, "error"),
               )
@@ -474,7 +480,7 @@ export function BrowserTab() {
               </span>
               {item.state === "done" && (
                 <>
-                  <a className="btn small" href={`/api/browser/downloads/${item.id}`} download={item.name}>
+                  <a className="btn small" href={`${browserPath(repo)}/downloads/${item.id}`} download={item.name}>
                     <Download size={12} /> 存到本机
                   </a>
                   <button className="btn small" onClick={() => importDownload(item.id)} title="放进这个作品的 public/imports/">

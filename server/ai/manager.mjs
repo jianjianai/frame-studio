@@ -1193,7 +1193,7 @@ export class AiManager {
         );
     }
     // "This page" in the user's words is the one they look at in the logged-in browser.
-    for (const tab of services.browser?.watched() ?? []) lines.push(`用户在 FRAME 浏览器里看着标签页 ${tab.id}：${tab.title || "（无标题）"}（${tab.url}）`);
+    for (const tab of services.browsers?.watched(work.repo) ?? []) lines.push(`用户在 FRAME 浏览器里看着标签页 ${tab.id}：${tab.title || "（无标题）"}（${tab.url}）`);
     if (!steering) {
       const files = snapshotFiles(work.dir);
       const changedFiles = filesNotice(session.files, files);

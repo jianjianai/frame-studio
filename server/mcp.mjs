@@ -57,9 +57,10 @@ export function createMcpServer(registry, scope = {}, { confirm } = {}) {
     if (scope.agent && AGENT_HIDDEN.has(tool.name)) continue;
     // A session bound to one work changes only that work: its tools do not name a work (the
     // parameter is hidden, and ignored if a client sends it anyway). The studio's own AI keeps
-    // it on reading tools, to look at the other works of the same repository.
+    // it on reading tools, to look at the other works of the same repository (not on the logged-in
+    // browser's: the works of a repository share its browser).
     const shape = tool.publicSchema.shape ?? {};
-    const bound = scope.work && (!scope.agent || !tool.readOnly);
+    const bound = scope.work && (!scope.agent || !tool.readOnly || tool.signedIn);
     const inputSchema = bound && "work" in shape ? z.looseObject(Object.fromEntries(Object.entries(shape).filter(([key]) => key !== "work"))) : tool.publicSchema;
     server.registerTool(
       tool.name,

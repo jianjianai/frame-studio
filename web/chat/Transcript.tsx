@@ -377,8 +377,8 @@ function Permission({ block, onRespond }: { block: Extract<Block, { kind: "permi
  * it is done (the AI gets a message). Only while that tab still waits for the login.
  */
 function LoginRequest({ tool }: { tool: ToolBlock }) {
-  const { openTool } = useWorkbench();
-  const { tabs } = useBrowserState();
+  const { openTool, work } = useWorkbench();
+  const { tabs } = useBrowserState(work.repo);
   const input = (tool.rawInput ?? {}) as { url?: string; reason?: string };
   const text = toolResults(tool)
     .map((item) => (item.content?.type === "text" ? item.content.text : ""))
@@ -404,7 +404,7 @@ function LoginRequest({ tool }: { tool: ToolBlock }) {
         >
           <Globe size={13} /> 打开浏览器
         </button>
-        <button className="btn small" onClick={() => void loginDone(tabId).catch(() => {})}>
+        <button className="btn small" onClick={() => void loginDone(work.repo, tabId).catch(() => {})}>
           登录好了
         </button>
       </div>
