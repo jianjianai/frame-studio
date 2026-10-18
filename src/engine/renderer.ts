@@ -199,16 +199,18 @@ export class FrameRenderer {
   dataURL(): string {
     return this.canvas.toDataURL("image/png");
   }
-  async capture(region?: { x: number; y: number; width: number; height: number }): Promise<string> {
+  /** `encoding`: another image type than PNG (a JPEG travels from the user's browser in a tenth of the bytes). */
+  async capture(region?: { x: number; y: number; width: number; height: number }, encoding?: { type: string; quality?: number }): Promise<string> {
     if (this.destroyed) throw new Error("Renderer disposed");
     await this.settled();
-    if (!region) return this.canvas.toDataURL("image/png");
+    const type = encoding?.type ?? "image/png";
+    if (!region) return this.canvas.toDataURL(type, encoding?.quality);
     // Only the part asked for leaves the page: a 2x frame as PNG is many megabytes.
     const crop = document.createElement("canvas");
     crop.width = region.width;
     crop.height = region.height;
     crop.getContext("2d")!.drawImage(this.canvas, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
-    return crop.toDataURL("image/png");
+    return crop.toDataURL(type, encoding?.quality);
   }
   /** The frame as 8-bit luma (BT.601 weights), row by row. */
   async luma(): Promise<Uint8Array> {

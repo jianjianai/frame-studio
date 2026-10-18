@@ -1,4 +1,4 @@
-import type { Sample } from "./types";
+import type { AnimationProject, Sample } from "./types";
 export interface StudioApi {
   ready: boolean;
   projectId: string;
@@ -19,12 +19,16 @@ export interface StudioApi {
     height: number;
   };
   dataURL(): string;
-  /** The frame as a PNG data URL; `region` (output pixels) cuts a part of it out. */
-  capture?(region?: CaptureRegion): Promise<string>;
+  /** The frame as a PNG data URL (or `encoding`, e.g. JPEG); `region` (output pixels) cuts a part of it out. */
+  capture?(region?: CaptureRegion, encoding?: { type: string; quality?: number }): Promise<string>;
   /** The frame as 8-bit luma, row by row, base64 (motion analysis). */
   luma?(): Promise<string>;
   /** Render at another width (and quality) from now on, without reloading the work. */
   resize?(width: number, quality?: "draft" | "standard" | "high"): Promise<{ width: number; height: number }>;
+  /** Render page: draw this project (the work imported again after an edit) from now on, without reloading the page. */
+  replace?(project: AnimationProject): Promise<{ width: number; height: number }>;
+  /** Render page: import the work again (`timestamp` busts the module cache; `materials`, library code changed too) and draw it. */
+  update?(timestamp: number, materials?: number): Promise<{ width: number; height: number }>;
   audioChunk?(
     start: number,
     duration: number,

@@ -53,7 +53,7 @@ export async function installOffline(project: AnimationProject) {
       height,
     }),
     dataURL: () => renderer.dataURL(),
-    capture: (region) => renderer.capture(region),
+    capture: (region, encoding) => renderer.capture(region, encoding),
     luma: async () => base64(await renderer.luma()),
     async resize(nextWidth, nextQuality = quality) {
       const size = frameDimensions(project, nextWidth);
@@ -63,6 +63,22 @@ export async function installOffline(project: AnimationProject) {
       if (!prepared.commit()) throw new Error("Resize superseded");
       ({ width, height } = size);
       quality = nextQuality;
+      return size;
+    },
+    async replace(next) {
+      const resolved = await resolveProject(next);
+      const size = frameDimensions(resolved, width);
+      const prepared = await renderer.prepareProject(resolved, { ...size, quality, time: () => Math.min(time, resolved.duration), subtitles: () => false });
+      if (!prepared.commit()) throw new Error("Update superseded");
+      project = resolved;
+      ({ width, height } = size);
+      time = Math.min(time, project.duration);
+      api.projectId = project.id;
+      api.duration = project.duration;
+      api.sample = project.sample ?? null;
+      // Its sound is made from the project: the next audioChunk builds it anew.
+      for (const item of audio.values()) item.dispose();
+      audio.clear();
       return size;
     },
     async waitUntilReady(options = {}) {

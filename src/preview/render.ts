@@ -13,8 +13,10 @@ const describe = (error: unknown) => (error instanceof Error ? error.stack || er
 addEventListener("error", (event) => errors.push(event.error ? describe(event.error) : event.message));
 addEventListener("unhandledrejection", (event) => errors.push(describe(event.reason)));
 reportToStudio();
+const source = workSourceFromQuery();
+let materials: number | undefined;
 try {
-  await installOffline(await importWork(workSourceFromQuery()));
+  await installOffline(await importWork(source));
   // Drawn for the AI in a studio page (web/lib/gpu-render.ts): each frame first lets what plays there draw.
   const studio = window.__FRAME_STUDIO__;
   if (window.name === "frame-ai-render" && studio) {
@@ -24,6 +26,13 @@ try {
       return frame(time, subtitles);
     };
   }
+  // After an edit the server has the page take the work again in place, as the stage does: a new
+  // page loads everything again (over the network, for a page in the user's browser).
+  if (studio)
+    studio.update = async (timestamp, changed) => {
+      if (changed) materials = changed;
+      return studio.replace!(await importWork(source, timestamp, materials));
+    };
 } catch (error) {
   errors.push(describe(error));
   if (!document.querySelector('[role="alert"]')) {

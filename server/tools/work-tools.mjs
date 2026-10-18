@@ -49,7 +49,7 @@ export function timingReport(measured, project, { waited = 0 } = {}) {
   const ms = (value) => `${Math.round(value)} ms`;
   const fps = project.fps;
   const seconds = (value) => Math.round(value / 100) / 10;
-  const spread = measured.lastStep > measured.step ? `，画得慢，后面放宽到每 ${measured.lastStep} 秒一帧才能测完` : "";
+  const spread = measured.lastStep > measured.step ? `，${measured.gpu ? "来回传输占了时间" : "画得慢"}，后面放宽到每 ${measured.lastStep} 秒一帧才能测完` : "";
   const lines = [
     `渲染耗时（按工作台预览的样子：${measured.width}×${measured.height}，标准画质，含字幕；每 ${measured.step} 秒取一帧${spread}；共 ${samples.length} 帧，用时 ${seconds(measured.ms)} 秒，其中加载作品 ${seconds(measured.loadMs)} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}）：中位 ${ms(middle)}，九成在 ${ms(at(0.9))} 以内，最慢 ${ms(sorted[sorted.length - 1])}。`,
     measured.gpu

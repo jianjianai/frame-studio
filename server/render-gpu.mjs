@@ -8,6 +8,8 @@ const gunzip = promisify(zlib.gunzip);
 export const GPU_SOCKET_PAYLOAD = 64 * 1024 * 1024;
 /** A page that does not answer a quick question this soon is asleep or frozen: draw elsewhere. */
 const PROBE_MS = 3000;
+/** A page heard from this recently is awake: no question first (a round trip saved). */
+const HEARD_MS = 5000;
 /** No answer to one drawing call for this long: the page is gone for this purpose. */
 const CALL_MS = 120000;
 
@@ -59,6 +61,7 @@ export class GpuBrowsers {
     const ready = pages.filter((browser) => browser.mode === "gpu" && browser.gpu && rank(browser) >= (opened ? 2 : 1));
     ready.sort((a, b) => rank(b) - rank(a) || Number(b.visible) - Number(a.visible) || b.activeAt - a.activeAt);
     for (const browser of ready) {
+      if (Date.now() - browser.heardAt < HEARD_MS) return browser;
       const answers = await browser
         .call({ op: "ping" }, PROBE_MS)
         .then(() => true)
@@ -82,6 +85,7 @@ class RemoteBrowser {
     this.gpu = null; // the graphics card the page reported; null until it says hello
     this.visible = false;
     this.activeAt = 0;
+    this.heardAt = 0;
     this.closed = false;
     let alive = true;
     ws.on("pong", () => (alive = true));
@@ -101,6 +105,7 @@ class RemoteBrowser {
   }
 
   async receive(raw, binary) {
+    this.heardAt = Date.now();
     // Results come compressed (frames are large); the page's own news as plain JSON.
     const message = JSON.parse(binary ? await gunzip(raw) : raw);
     if (message.type === "state") {

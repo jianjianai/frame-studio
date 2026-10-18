@@ -242,7 +242,7 @@ export function registerPreviewTools(registry) {
         };
       }
       if (times.length > SEPARATE_MAX) throw problem(400, `分开返回最多 ${SEPARATE_MAX} 张；更多时用 sheet: true 拼成一张`);
-      const result = await services.renderer.frames(work, { times, width: zoom ? zoom.width : (width ?? 960), subtitles, scene, crop: zoom?.crop, login });
+      const result = await services.renderer.frames(work, { times, width: zoom ? zoom.width : (width ?? 960), subtitles, scene, crop: zoom?.crop, login, format });
       const images = await Promise.all(
         result.frames.map(async (frame) => ({
           data: format === "png" ? frame.png : await sharp(frame.png).jpeg({ quality: 82 }).toBuffer(),

@@ -42,7 +42,8 @@ describe("drawing on the user's GPU", () => {
     const page = await (await on.newContext()).newPage();
     await page.goto("http://127.0.0.1:4310/preview/render.html?module=x");
     expect(await page.evaluate((arg) => arg, 7)).toEqual({ drawn: 7 });
-    const [goto, evaluate] = shown.sent.slice(1);
+    // Heard from just now (its state): used without asking whether it is awake.
+    const [goto, evaluate] = shown.sent;
     expect(goto).toMatchObject({ op: "goto", url: "/preview/render.html?module=x" });
     expect(evaluate).toMatchObject({ op: "eval", code: "(arg) => arg", arg: 7 });
     expect(hidden.sent).toEqual([]);
@@ -56,6 +57,8 @@ describe("drawing on the user's GPU", () => {
     gpus.accept(software, {});
     silent.hello();
     software.hello();
+    // Not heard from for a while: asked first, and passed over when it does not answer.
+    for (const page of gpus.browsers.values()) page.heardAt = 0;
     expect(await gpus.pick({ login: "me" })).toBe(null);
     expect(silent.sent.map((message) => message.op)).toEqual(["ping"]);
     expect(software.sent).toEqual([]);

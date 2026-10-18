@@ -89,7 +89,7 @@ export class Renderer {
     this.analysis = new Locks();
     this.gpu = new GpuBrowsers(services);
     services.events.subscribe((event) => {
-      if (event.type === "preview-update") this.invalidate(`${event.repo}/${event.work}`);
+      if (event.type === "preview-update") this.invalidate(`${event.repo}/${event.work}`, event.files?.some((file) => String(file).includes("/.materials/")));
       if (event.type === "materials" && event.repo) this.invalidateResources(event.repo);
     });
     this.sweeper = setInterval(() => this.sweep(), 30000);
@@ -281,18 +281,30 @@ export class Renderer {
    * would take each other's frames), at the width it asks for — the page changes size in
    * place instead of loading the work again. Call `release()` when done.
    */
-  async lease(work, { width, scene, on } = {}) {
+  async lease(work, { width, scene, on } = {}, retried = false) {
     const meta = this.services.works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
     const key = `${work.repo}/${work.id}` + (scene ? `|scene:${scene}` : "") + (on ? `|gpu:${on.id}` : "");
     const stamp = this.freshen(work);
-    const existing = this.pages.get(key);
-    let entry = existing;
-    if (!(existing && !existing.stale && existing.stamp === stamp)) {
-      if (existing) {
-        this.pages.delete(key);
-        this.retire(existing);
-      }
+    let entry = this.pages.get(key);
+    if (entry && (entry.stale || entry.stamp !== stamp)) {
+      // The work changed: the page takes it again in place, as the stage does, instead of a new
+      // page loading everything again (seconds here, more over the network for a page in the
+      // user's browser). Drawing on it waits for that.
+      const page = entry;
+      const materials = page.materials;
+      Object.assign(page, { stale: false, materials: false, stamp });
+      page.updated = page.tail.then(async () => {
+        const handle = await page.handle;
+        const timestamp = Date.now();
+        const update = ({ timestamp, materials }) => window.__FRAME_STUDIO__.update(timestamp, materials);
+        handle.size = await handle.page.evaluate(update, { timestamp, materials: materials ? timestamp : undefined });
+        handle.fresh = true;
+        if (scene) Object.assign(handle, await handle.page.evaluate(() => ({ duration: window.__FRAME_STUDIO__.duration, sample: window.__FRAME_STUDIO__.sample ?? null })));
+      });
+      page.tail = page.updated.catch(() => {});
+    }
+    if (!entry) {
       const first = width || fitComposition(meta.meta, 1280).width;
       entry = { usedAt: Date.now(), stale: false, stamp, users: 0, tail: Promise.resolve() };
       entry.handle = this.openPage(this.sourceOf(work, scene), { width: first, project: meta.meta, on });
@@ -307,6 +319,7 @@ export class Renderer {
     };
     try {
       const handle = await entry.handle;
+      await entry.updated;
       // A module on its own is as long as its page says (its sample's duration, else the work's).
       handle.project = scene && handle.duration ? { ...meta.meta, duration: handle.duration } : meta.meta;
       const exclusive = (size, task) => {
@@ -320,6 +333,13 @@ export class Renderer {
       return { handle, release, exclusive };
     } catch (error) {
       release();
+      // A page that could not take the change in place (an older page, a reload meanwhile, the
+      // new code failing) is replaced by a new one, which says what is wrong if anything is.
+      if (entry.updated && !retried && !isGone(error)) {
+        if (this.pages.get(key) === entry) this.pages.delete(key);
+        this.retire(entry);
+        return this.lease(work, { width, scene, on }, true);
+      }
       throw error;
     }
   }
@@ -359,13 +379,19 @@ export class Renderer {
   }
 
   /** The work changed: its pages (the film and modules drawn on their own) load it again. */
-  invalidate(key) {
-    for (const [name, entry] of this.pages) if (name === key || name.startsWith(key + "|")) entry.stale = true;
+  invalidate(key, materials = false) {
+    for (const [name, entry] of this.pages)
+      if (name === key || name.startsWith(key + "|")) {
+        entry.stale = true;
+        // Library code copies changed: the page imports them again too.
+        if (materials) entry.materials = true;
+      }
   }
 
   sweep() {
     for (const [key, entry] of this.pages)
-      if (Date.now() - entry.usedAt > 120000 && !entry.users) {
+      // A page in the user's browser costs a load over the network: kept while the AI is likely to come back.
+      if (Date.now() - entry.usedAt > (key.includes("|gpu:") ? 600000 : 120000) && !entry.users) {
         this.pages.delete(key);
         this.retire(entry);
       }
@@ -391,7 +417,7 @@ export class Renderer {
     this.lastUse = Date.now();
     return this.anywhere((on) => this.framesWith(work, options, on), { login, repo: work.repo, work: work.id });
   }
-  async framesWith(work, { times, width, subtitles = true, scene, crop }, on) {
+  async framesWith(work, { times, width, subtitles = true, scene, crop, format }, on) {
     let lease;
     try {
       lease = await this.lease(work, { width, scene, on });
@@ -400,7 +426,7 @@ export class Renderer {
       throw error;
     }
     try {
-      return await lease.exclusive(width, (handle) => this.framesOn(work, handle, { times, subtitles: subtitles && !scene, crop }));
+      return await lease.exclusive(width, (handle) => this.framesOn(work, handle, { times, subtitles: subtitles && !scene, crop, format }));
     } catch (error) {
       error.message = this.clean(work, error.message);
       throw error;
@@ -408,31 +434,53 @@ export class Renderer {
       lease.release();
     }
   }
-  async framesOn(work, handle, { times, subtitles, crop }) {
+  /**
+   * `format`: the answer's image type. Drawn in the user's browser, a few frames travel in one
+   * round trip, as JPEG when the answer is JPEG (a PNG is ten times the bytes on the user's
+   * upload); then `png` holds a JPEG.
+   */
+  async framesOn(work, handle, { times, subtitles, crop, format }) {
     const duration = handle.project.duration;
     const errorsBefore = handle.errors.length;
     const result = [];
     const failed = [];
-    for (const raw of times) {
-      const time = Math.max(0, Math.min(duration - 1e-3, Number(raw)));
+    const each = handle.on ? 4 : 1;
+    const encoding = handle.on && format !== "png" ? { type: "image/jpeg", quality: 0.92 } : null;
+    const clamped = times.map((raw) => Math.max(0, Math.min(duration - 1e-3, Number(raw))));
+    for (let index = 0; index < clamped.length; index += each) {
+      const batch = clamped.slice(index, index + each);
+      let drawn;
       try {
-        const { data, ms } = await again(handle.page, READY.work, () =>
+        drawn = await again(handle.page, READY.work, () =>
           handle.page.evaluate(
-            async ({ time, subtitles, crop }) => {
+            async ({ batch, subtitles, crop, encoding }) => {
               const studio = window.__FRAME_STUDIO__;
-              await studio.frame(time, subtitles);
-              const ms = studio.getDiagnostics().renderMs;
-              return { data: (await studio.capture(crop ?? undefined)).split(",")[1], ms };
+              const out = [];
+              for (const time of batch)
+                try {
+                  await studio.frame(time, subtitles);
+                  const ms = studio.getDiagnostics().renderMs;
+                  out.push({ time, ms, data: (await studio.capture(crop ?? undefined, encoding ?? undefined)).split(",")[1] });
+                } catch (error) {
+                  out.push({ time, error: String(error?.stack || error?.message || error).replace(/^Error: /, "") });
+                }
+              return out;
             },
-            { time, subtitles, crop: crop ?? null },
+            { batch, subtitles, crop: crop ?? null, encoding },
           ),
         );
-        result.push({ time, png: Buffer.from(data, "base64"), ms: Math.round(ms), ...(handle.fresh ? { loading: true } : {}) });
-        handle.fresh = false;
       } catch (error) {
         if (isGone(error)) throw error;
+        drawn = batch.map((time) => ({ time, error: error.message }));
+      }
+      for (const item of drawn) {
         // Keep the frames that did render; one broken moment should not hide the rest.
-        failed.push(`${formatTime(time)} 渲染失败：${error.message}`);
+        if (item.error) {
+          failed.push(`${formatTime(item.time)} 渲染失败：${item.error}`);
+          continue;
+        }
+        result.push({ time: item.time, png: Buffer.from(item.data, "base64"), ms: Math.round(item.ms), ...(handle.fresh ? { loading: true } : {}) });
+        handle.fresh = false;
       }
     }
     const errors = mergeTimedErrors([...new Set([...failed, ...handle.errors.slice(errorsBefore)].map((text) => this.clean(work, text)))]);
@@ -477,22 +525,27 @@ export class Renderer {
         const wanted = new Set(thumbs);
         const batches = [];
         for (let index = 0; index < times.length; index += 6) batches.push(times.slice(index, index + 6).map((time, offset) => ({ time, thumb: wanted.has(index + offset) })));
+        // Pictures from the user's browser travel as JPEG (the chart they go into is one).
+        const encoding = handle.on ? { type: "image/jpeg", quality: 0.92 } : null;
         const draw = (batch) =>
           again(handle.page, READY.work, () =>
-            handle.page.evaluate(async (batch) => {
-              const studio = window.__FRAME_STUDIO__;
-              const out = [];
-              for (const { time, thumb } of batch) {
-                try {
-                  await studio.frame(time, false);
-                } catch (error) {
-                  out.push({ time, error: String(error?.message ?? error) });
-                  break;
+            handle.page.evaluate(
+              async ({ batch, encoding }) => {
+                const studio = window.__FRAME_STUDIO__;
+                const out = [];
+                for (const { time, thumb } of batch) {
+                  try {
+                    await studio.frame(time, false);
+                  } catch (error) {
+                    out.push({ time, error: String(error?.message ?? error) });
+                    break;
+                  }
+                  out.push({ time, ms: studio.getDiagnostics().renderMs, luma: await studio.luma(), png: thumb ? (await studio.capture(undefined, encoding ?? undefined)).split(",")[1] : null });
                 }
-                out.push({ time, ms: studio.getDiagnostics().renderMs, luma: await studio.luma(), png: thumb ? (await studio.capture()).split(",")[1] : null });
-              }
-              return out;
-            }, batch),
+                return out;
+              },
+              { batch, encoding },
+            ),
           );
         let drawn = 0;
         let failure = null;
@@ -563,8 +616,9 @@ export class Renderer {
         used = step;
       while (time < project.duration - 1e-3 && Date.now() < passEnd) {
         const batch = [];
-        // Small batches: a slow work (seconds a frame) learns that after one frame, not eight.
-        for (; batch.length < 2 && time < project.duration - 1e-3; time += used) batch.push(Math.round(time * 1000) / 1000);
+        // Small batches here: a slow work (seconds a frame) learns that after one frame, not eight.
+        // In the user's browser frames take milliseconds and each batch a round trip: more at once.
+        for (; batch.length < (on ? 8 : 2) && time < project.duration - 1e-3; time += used) batch.push(Math.round(time * 1000) / 1000);
         samples.push(...(await draw(batch)));
         const each = (Date.now() - started) / samples.length;
         const room = Math.floor((passEnd - Date.now()) / each);
@@ -644,7 +698,7 @@ export class Renderer {
   /** One labelled contact sheet; much cheaper for AI context than many images. */
   /** `cell`: the width of each picture in the sheet when the frames come bigger (crops). */
   async storyboard(work, { times, columns, width = 480, subtitles = true, format = "jpeg", scene, crop, cell, login }) {
-    const { frames, width: w, height: h, errors, gpu } = await this.frames(work, { times, width, subtitles, scene, crop, login });
+    const { frames, width: w, height: h, errors, gpu } = await this.frames(work, { times, width, subtitles, scene, crop, login, format });
     let cells = frames,
       cw = w,
       ch = h;
