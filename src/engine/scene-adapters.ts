@@ -1,7 +1,7 @@
 import type { Scene, SceneOptions } from "./types";
 import type * as THREE from "three";
 import type { Application } from "pixi.js";
-import { disposeObject } from "./three-assets";
+import { disposeObject, prewarmScene } from "./three-assets";
 /** Lazy, transparent, manually driven Three adapter. Build owns no independent clock. */
 export async function createThreeScene(
   options: SceneOptions,
@@ -31,6 +31,7 @@ export async function createThreeScene(
   renderer.setClearColor(0, 0);
   try {
     const { scene, camera, update } = await build(renderer);
+    await prewarmScene(renderer, scene, camera);
     return {
       canvas: renderer.domElement,
       async render(time) {

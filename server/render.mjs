@@ -630,6 +630,8 @@ export class Renderer {
         const [repeat] = await draw([sample.time]);
         sample.again = repeat.ms;
       }
+      // How long creating each layer took and held the main thread (playback stops for that, GPU or not).
+      const layers = await handle.page.evaluate(() => window.__FRAME_STUDIO__.getDiagnostics().scene?.layerLoads ?? []).catch(() => []);
       return {
         width: size.width,
         height: size.height,
@@ -640,6 +642,7 @@ export class Renderer {
         ms: Date.now() - began,
         loadMs: started - began,
         errors: mergeTimedErrors([...new Set(handle.errors.map((text) => this.clean(work, text)))]),
+        layers,
         gpu: on?.gpu ?? null,
         // A tab in the background may be given less time to draw.
         background: Boolean(on && !on.visible),

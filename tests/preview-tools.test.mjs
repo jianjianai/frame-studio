@@ -148,6 +148,19 @@ describe("pictures for the AI: modules on their own, close looks, timing, motion
     expect(text).toContain("0:03.00 首次 400 ms → 再画 25 ms");
   });
 
+  it("names the layers whose creation holds the page, and not the quick ones", () => {
+    const layers = [
+      { id: "body", name: "岛上", at: 8.785, ms: 2700, longest: 2600, held: 2650 },
+      { id: "paper", at: 14.5, ms: 1100, longest: 1100, held: 1100 },
+      { id: "title", at: 0, ms: 40, longest: 0, held: 0 },
+    ];
+    const text = timingReport({ samples: [{ time: 0, ms: 5 }], layers, width: 1280, height: 720, step: 0.5, lastStep: 0.5, complete: true, ms: 900, loadMs: 300 }, { fps: 30 }).join("\n");
+    expect(text).toContain("- 「岛上」（0:08.79 出现）创建用了 2.7 秒，最长一次连续卡住 2.6 秒");
+    expect(text).toContain("- 「paper」（0:14.50 出现）创建用了 1.1 秒，最长一次连续卡住 1.1 秒");
+    expect(text).not.toContain("title");
+    expect(text).toContain("显卡帮不上");
+  });
+
   it.skipIf(!browserExecutable())(
     "draws a module of the work on its own and leaves the film alone",
     async () => {

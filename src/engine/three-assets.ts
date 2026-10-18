@@ -12,6 +12,27 @@ import { assetUrl } from "./types";
 
 /** Model files loadModel reads. */
 export const MODEL_FILE = /\.(glb|gltf|fbx|obj)$/i;
+
+/**
+ * Compile the shaders of everything in the scene (hidden objects too) and upload its textures
+ * now, while it is being created: otherwise the first frame an object shows in does it, a
+ * hitch of 100–300 ms that stops playback. Call after building the scene, before drawing.
+ */
+export async function prewarmScene(renderer: THREE.WebGLRenderer, scene: THREE.Object3D, camera: THREE.Camera) {
+  try {
+    await renderer.compileAsync(scene, camera);
+    const textures = new Set<THREE.Texture>();
+    const add = (value: unknown) => value instanceof THREE.Texture && textures.add(value);
+    if (scene instanceof THREE.Scene) [scene.background, scene.environment].forEach(add);
+    scene.traverse((object) => {
+      const material = (object as THREE.Mesh).material;
+      for (const item of Array.isArray(material) ? material : material ? [material] : []) for (const value of Object.values(item)) add(value);
+    });
+    for (const texture of textures) renderer.initTexture(texture);
+  } catch {
+    // Only a head start: drawing compiles and uploads whatever is left.
+  }
+}
 /** Panoramas loadEnvironment reads. */
 export const ENVIRONMENT_FILE = /\.(hdr|exr|jpe?g|png|webp)$/i;
 

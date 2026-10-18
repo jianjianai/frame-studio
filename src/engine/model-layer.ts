@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { disposeObject, frameObject, loadEnvironment, loadModel, studioEnvironment } from "./three-assets";
+import { disposeObject, frameObject, loadEnvironment, loadModel, studioEnvironment, prewarmScene } from "./three-assets";
 
 /** visual.json `source` of a model layer. */
 export interface ModelSource {
@@ -48,6 +48,7 @@ export async function createModelLayer(source: ModelSource, signal: AbortSignal)
     const mixer = clip ? new THREE.AnimationMixer(model.scene) : null;
     mixer?.clipAction(clip!).play();
     const camera = new THREE.PerspectiveCamera(30, 1, 0.01, 1000);
+    await prewarmScene(renderer, scene, camera);
     let framed = "";
     return {
       /** The picture at layer time `time`, `width` × `height` pixels (the layer's box on screen). */

@@ -20,6 +20,11 @@ const random = seeded(42);           // 固定种子随机数：每次 createSce
 - 预览实时播放：每帧绘制预算约 16 ms。大量对象用 Pixi/Three；Canvas 2D 中缓存不变的内容（离屏 canvas）。
 - 哪里画得慢：`work_check` 的 `timing: true` 按工作台预览的尺寸和画质测全片，列出明显慢的地方和那里的图层、镜头（用户电脑上开着 FRAME 时在那里用显卡测，接近实际速度；否则在服务器上软件渲染，数值比一般电脑慢，只用来比较）；`preview_frames` 也给出每张画了多少毫秒。
 - 不要在 `render` 里创建大对象、加载图片或编译着色器；在 `createScene` 中准备。
+- `createScene` 也不能长时间占住页面：作品的代码都在浏览器的一个主线程上运行，它在算东西（生成地形、解析模型、量带骨骼模型的尺寸、在画布上画大贴图）时，画面和声音都停，预览显示「缓冲中」，显卡再好也没用。图层在出现前约 3 秒提前创建，这时同样会卡住正在播放的画面。`work_check` 的 `timing` 列出创建时卡住页面的图层和卡了多久。改法：
+  - 每次都一样的结果只算一次：放在模块级的变量里，几个场景共用（地形、程序生成的几何体、离屏画好的贴图）。
+  - 模型用 GLB（FBX 解压、解析慢得多）；带骨骼的模型量尺寸不要用 `Box3.setFromObject`（逐个顶点算骨骼变形），用各 `geometry.boundingBox` 合并，或者量一次记下来。
+  - 剩下的重计算拆成小段，段与段之间 `await nextTask()`（`@frame/engine/scheduling`），让播放插进来；纯计算（噪声、网格数据）可以放进 Web Worker，用上电脑的其他 CPU 核心。
+  - 物体第一次出现在画面里时才编译着色器、上传贴图，会卡 0.1–0.3 秒：自己建渲染器的场景，建好后调用 `await prewarmScene(renderer, scene, camera)`（`@frame/engine/three-assets`）；`createThreeScene` 和模型图层已经自动这样做。
 - `quality === "draft"` 时可以减少粒子、关闭阴影。
 - 长作品分成多个 scene 图层，只在需要的时间段活跃（不活跃的图层会被释放）。
 

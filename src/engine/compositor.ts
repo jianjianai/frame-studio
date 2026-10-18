@@ -13,6 +13,21 @@ import {
   type MediaFrame,
 } from "./media-source";
 export type VisualDocument = z.infer<typeof visualDocumentSchema>;
+
+/**
+ * The page's long tasks (over 50 ms on the main thread), kept a while: a layer's creation that
+ * holds the thread stops playback for that long, whatever the GPU (work_check timing says so).
+ */
+const longTasks: { start: number; end: number }[] = [];
+let watching = false;
+function watchLongTasks() {
+  if (watching || typeof PerformanceObserver === "undefined" || !PerformanceObserver.supportedEntryTypes?.includes("longtask")) return;
+  watching = true;
+  new PerformanceObserver((list) => {
+    for (const entry of list.getEntries()) longTasks.push({ start: entry.startTime, end: entry.startTime + entry.duration });
+    if (longTasks.length > 2000) longTasks.splice(0, longTasks.length - 2000);
+  }).observe({ type: "longtask" });
+}
 export type SceneLoaders = Record<string, () => Promise<SceneModule>>;
 type Clip = VisualDocument["clips"][number];
 interface Source {
@@ -153,6 +168,16 @@ export function createCompositionScene(
   let mask: HTMLCanvasElement | undefined;
   const sources = new Map<string, Source>();
   let disposed = false;
+  watchLongTasks();
+  /** Each layer's creation: when, and how long it took (its main-thread holds are read with the diagnostics). */
+  const loads: { id: string; name?: string; at: number; began: number; ended: number }[] = [];
+  const open = (clip: Clip, signal: AbortSignal) => {
+    const began = performance.now();
+    return source(clip, options, loaders, signal).then((current) => {
+      loads.push({ id: clip.id, name: clip.name, at: clip.start, began, ended: performance.now() });
+      return current;
+    });
+  };
   /** Layers loading ahead of their start (live playback, `options.lookahead`): clip id → its load. */
   const preloads = new Map<string, { abort: AbortController; done: Promise<void> }>();
   const lookahead = Math.max(0, options.lookahead ?? 0);
@@ -188,7 +213,7 @@ export function createCompositionScene(
     const abort = new AbortController();
     const entry = { abort, done: Promise.resolve() };
     entry.done = (async () => {
-      const current = await source(clip, options, loaders, abort.signal);
+      const current = await open(clip, abort.signal);
       const t = clipTime(clip, clip.start);
       if (t !== null) await current.frame(t, abort.signal, boxOf(clip, t)).catch(() => {});
       return current;
@@ -256,7 +281,7 @@ export function createCompositionScene(
             const pending = preloads.get(clip.id);
             if (pending) await until(pending.done, signal);
             if (sources.has(clip.id)) return;
-            const current = await source(clip, options, loaders, signal);
+            const current = await open(clip, signal);
             if (disposed || signal.aborted || sources.has(clip.id)) current.dispose();
             else sources.set(clip.id, current);
           }),
@@ -283,7 +308,7 @@ export function createCompositionScene(
           if (clip.source.kind !== "color") {
             let current = sources.get(clip.id);
             if (!current) {
-              current = await source(clip, options, loaders, signal);
+              current = await open(clip, signal);
               if (disposed || signal.aborted) {
                 current.dispose();
                 signal.throwIfAborted();
@@ -382,6 +407,11 @@ export function createCompositionScene(
       setParameters() {},
       diagnostics: () => ({
         activeSources: sources.size,
+        // Each layer created so far: how long it took and how long it held the main thread at once.
+        layerLoads: loads.map((load) => {
+          const holds = longTasks.filter((task) => task.end > load.began && task.start < load.ended).map((task) => Math.min(task.end, load.ended) - Math.max(task.start, load.began));
+          return { id: load.id, name: load.name, at: load.at, ms: Math.round(load.ended - load.began), longest: Math.round(Math.max(0, ...holds)), held: Math.round(holds.reduce((a, b) => a + b, 0)) };
+        }),
         clips: doc.clips.length,
         colorSpace: "srgb",
         budgetBytes: 512 * 1024 * 1024,

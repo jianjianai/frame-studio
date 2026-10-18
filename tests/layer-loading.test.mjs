@@ -74,7 +74,7 @@ export async function createScene({ width, height }: SceneOptions) {
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  return { canvas, render() {} };
+  return { canvas, render() {}, dispose() {} };
 }
 `;
 
@@ -119,5 +119,53 @@ export const createScene = (options: SceneOptions) => createCompositionScene(opt
       }
     },
     120000,
+  );
+});
+
+describe("layers that hold the page", () => {
+  let app, base, work;
+  beforeAll(async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-hold-"));
+    app = await createApp({ env: { FRAME_HOME: home, FRAME_PORT: "0" }, plugins });
+    base = await app.listen();
+    work = await app.services.works.create({ title: "卡住页面", width: 320, height: 180, duration: 2 });
+    // Creating this layer computes for 400 ms at once, as building terrain or parsing a model does.
+    fs.writeFileSync(
+      path.join(work.dir, "scenes", "heavy.ts"),
+      `import type { SceneOptions } from "@frame/engine/types";
+export function createScene({ width, height }: SceneOptions) {
+  const end = performance.now() + 400;
+  while (performance.now() < end);
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  return { canvas, render() {}, dispose() {} };
+}
+`,
+    );
+    fs.writeFileSync(
+      path.join(work.dir, "scene.ts"),
+      `import type { SceneOptions } from "@frame/engine/types";
+import { createCompositionScene } from "@frame/engine/compositor";
+import visual from "./visual.json";
+export const createScene = (options: SceneOptions) => createCompositionScene(options, visual, { title: () => import("./scenes/title"), heavy: () => import("./scenes/heavy") });
+`,
+    );
+    const layer = (id, name, start, duration) => ({ id, name, source: { kind: "scene", module: id, engine: "canvas" }, start, duration });
+    fs.writeFileSync(path.join(work.dir, "visual.json"), JSON.stringify({ schemaVersion: 1, background: "#000000", clips: [layer("title", "标题", 0, 2), layer("heavy", "重的", 1, 1)] }));
+  });
+  afterAll(() => app.close());
+
+  it.skipIf(!browserExecutable())(
+    "are named by timing, with how long they held it",
+    async () => {
+      const response = await fetch(`${base}/api/tools/work_check`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ work: work.id, timing: true }) });
+      const body = await response.json();
+      expect(body.error?.message ?? "").toBe("");
+      expect(response.status).toBe(200);
+      expect(body.text).toMatch(/「重的」（0:01\.00 出现）创建用了 0\.[4-9] 秒，最长一次连续卡住 0\.[3-9] 秒/);
+      expect(body.text).not.toMatch(/「标题」（/);
+    },
+    180000,
   );
 });

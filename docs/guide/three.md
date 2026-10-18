@@ -51,6 +51,7 @@ export function createScene(options: SceneOptions) {
 | `setAnimationTime(mixer, t)` | 动画按绝对时间求值，可以倒退、跳转 |
 | `createPostPipeline(renderer, scene, camera, bloom)` | 辉光后期（见下） |
 | `disposeObject(root)` | 释放几何体、材质、贴图（场景的 environment/background 也一起） |
+| `prewarmScene(renderer, scene, camera)` | 提前编译场景里所有物体（包括暂时隐藏的）的着色器、上传贴图，免得物体第一次出现时卡一下；`createThreeScene` 已自动调用，自己建 `WebGLRenderer` 时在场景建好后 `await` 它 |
 
 - 模型的地址和其他素材一样：作品自己的 `films/<名称>/…`，或素材库的 `materials/<库>/…`（代码里写这个地址，保存版本时锁定）。glTF/OBJ 引用的外部文件（.bin、贴图、.mtl）要放在同一个文件夹里；能用 GLB 就用 GLB。
 - 不知道模型长什么样、有哪些动画：先用 `asset_view` 看（多个方向的渲染、动画名、三角形数、尺寸）。

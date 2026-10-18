@@ -97,6 +97,15 @@ export function timingReport(measured, project, { waited = 0 } = {}) {
   const loads = samples.filter((sample) => sample.again !== undefined && sample.again < 0.5 * sample.ms && sample.ms >= slow);
   if (loads.length)
     lines.push(`第一次画慢、再画一次就快的（多半是第一次用到时加载图片、字体或图层；播放到这里可能卡一下）：${loads.map((sample) => `${formatTime(sample.time)} 首次 ${ms(sample.ms)} → 再画 ${ms(sample.again)}`).join("、")}`);
+  // Creating a layer runs on the page's one main thread: while it computes (terrain, parsing a
+  // model, measuring a skinned mesh), nothing draws or schedules sound, so playback stops there.
+  const holding = (measured.layers ?? []).filter((layer) => layer.longest >= 200).sort((a, b) => b.longest - a.longest);
+  if (holding.length) {
+    lines.push(`创建时卡住页面的图层（这些计算在浏览器的主线程上进行，显卡帮不上；卡住期间画面和声音都停，预览显示「缓冲中」）：`);
+    for (const layer of holding.slice(0, 6))
+      lines.push(`- 「${layer.name || layer.id}」（${formatTime(layer.at)} 出现）创建用了 ${(layer.ms / 1000).toFixed(1)} 秒，最长一次连续卡住 ${(layer.longest / 1000).toFixed(1)} 秒`);
+    lines.push(`改法（frame_guide tips 的「性能」）：createScene 里每次都一样的计算算一次存起来、几个场景共用；带骨骼的模型量尺寸不要用 Box3.setFromObject；FBX 换成 GLB；剩下的重计算拆成小段，段间 await nextTask()（@frame/engine/scheduling），或放进 Web Worker。`);
+  }
   if (measured.errors?.length) lines.push("测的时候出现错误：\n" + measured.errors.join("\n"));
   return lines;
 }
