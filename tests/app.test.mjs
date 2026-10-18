@@ -80,6 +80,47 @@ describe("studio API (local mode)", () => {
     expect((await manifest())[films + "sub/声音.wav"].version).not.toBe(first[films + "sub/声音.wav"].version);
   });
 
+  it("lists the files playback does not name as lazy", async () => {
+    const created = await server.call("/api/works", { method: "POST", body: { title: "按需缓存" } });
+    const dir = (await server.app.services.works.open(created.body.id, "local")).dir;
+    const films = `films/${created.body.slug}/`;
+    const names = {
+      "bgm.mp3": false,
+      "voice/a.mp3": false, // `voice/${id}.mp3`
+      "voice/b.mp3": false,
+      "tmr/oak/oak.fbx": false, // a folder named like a file
+      "models/tree.fbx": false,
+      "models/bark.png": false, // in the folder of a model
+      "piano.sf2": false,
+      "piano.sf2.parts/index.json": false, // the bank's split parts
+      "loose.fbx": false,
+      "loose.png": true, // a model at the top does not take every file with it
+      "uploads/raw.mp4": true, // only the notes name it
+      "uploads/draft.png": true,
+    };
+    for (const name of Object.keys(names)) {
+      fs.mkdirSync(path.dirname(path.join(dir, "public", name)), { recursive: true });
+      fs.writeFileSync(path.join(dir, "public", name), name);
+    }
+    fs.writeFileSync(
+      path.join(dir, "scenes", "按需.ts"),
+      [
+        `export const music = "${films}bgm.mp3";`,
+        `export const voice = (id: string) => \`${films}voice/\${id}.mp3\`;`,
+        `const DIR = "${films}tmr";`,
+        "export const oak = `${DIR}/oak/oak.fbx`;",
+        `export const models = ["${films}models/tree.fbx", "${films}loose.fbx"];`,
+        `export const bank = "${films}piano.sf2";`,
+      ].join("\n"),
+    );
+    fs.mkdirSync(path.join(dir, "production"), { recursive: true });
+    fs.writeFileSync(path.join(dir, "production", "notes.json"), JSON.stringify({ raw: `${films}uploads/raw.mp4` }));
+    const response = await server.call(`/api/works/local/${created.body.id}/precache`);
+    const files = Object.fromEntries(response.body.files.map((item) => [item.path, item]));
+    for (const [name, lazy] of Object.entries(names)) expect([name, Boolean(files[films + name]?.lazy)]).toEqual([name, lazy]);
+    expect(files[films + "uploads/raw.mp4"]).toMatchObject({ size: 15, version: expect.stringMatching(/^[0-9a-f]{32}$/) });
+  });
+
   it("bundles small files in one framed response", async () => {
     const created = await server.call("/api/works", { method: "POST", body: { title: "打包" } });
     const dir = (await server.app.services.works.open(created.body.id, "local")).dir;

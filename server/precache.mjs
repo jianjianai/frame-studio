@@ -1,15 +1,42 @@
 import fs from "node:fs";
 import path from "node:path";
 import { contentVersion } from "./files.mjs";
+import { ownAddresses, playedFiles } from "./playback.mjs";
 import { problem, confined, mimeType } from "./util.mjs";
 
 /**
- * What the browser keeps of a work for playback (public/frame-sw.js): the files of its
- * public/ folder and the library files it plays, under the work's asset base
- * (`films/<slug>/…`, `materials/<library>/…`), each with a content version. `at` orders
- * lists from different requests: the browser keeps the newest.
+ * What the browser keeps of a work (public/frame-sw.js): the files of its public/ folder and
+ * the library files it plays, under the work's asset base (`films/<slug>/…`,
+ * `materials/<library>/…`), each with a content version. Files its playback does not name
+ * (playback.mjs) are `lazy`: kept the first time they are asked for, not when the work opens.
+ * `at` orders lists from different requests: the browser keeps the newest.
  */
 export async function precacheManifest(services, work) {
+  const at = Date.now();
+  const { root, found, played } = ownFiles(work);
+  const files = [];
+  for (let index = 0; index < found.length; index += 4)
+    files.push(
+      ...(await Promise.all(
+        found.slice(index, index + 4).map(async (relative) => {
+          const full = path.join(root, relative);
+          const stat = fs.statSync(full);
+          return {
+            path: `films/${work.slug}/${relative}`,
+            size: stat.size,
+            version: await contentVersion(full, stat),
+            ...(played.has(relative) ? {} : { lazy: true }),
+          };
+        }),
+      )),
+    );
+  for (const item of (await services.materials?.playback(work).catch(() => [])) ?? [])
+    files.push({ path: `materials/${item.ref}`, size: item.size, version: item.version, ...(item.lazy ? { lazy: true } : {}) });
+  return { key: `${work.repo}/${work.id}`, base: `/files/${work.repo}/${work.id}/`, at, files };
+}
+
+/** The work's public/ files (paths under it) and those its playback names. */
+function ownFiles(work) {
   const root = path.join(work.dir, "public");
   const found = [];
   const walk = (dir) => {
@@ -17,28 +44,12 @@ export async function precacheManifest(services, work) {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       const full = path.join(dir, entry.name);
       if (entry.isDirectory()) walk(full);
-      else if (entry.isFile()) found.push(full);
+      else if (entry.isFile()) found.push(path.relative(root, full).split(path.sep).join("/"));
     }
   };
-  const at = Date.now();
   walk(root);
-  const files = [];
-  for (let index = 0; index < found.length; index += 4)
-    files.push(
-      ...(await Promise.all(
-        found.slice(index, index + 4).map(async (full) => {
-          const stat = fs.statSync(full);
-          return {
-            path: `films/${work.slug}/${path.relative(root, full).split(path.sep).join("/")}`,
-            size: stat.size,
-            version: await contentVersion(full, stat),
-          };
-        }),
-      )),
-    );
-  for (const item of (await services.materials?.playback(work).catch(() => [])) ?? [])
-    files.push({ path: `materials/${item.ref}`, size: item.size, version: item.version });
-  return { key: `${work.repo}/${work.id}`, base: `/files/${work.repo}/${work.id}/`, at, files };
+  const { exact, prefixes } = ownAddresses(work);
+  return { root, found, played: playedFiles(found, exact, prefixes) };
 }
 
 /** A path of the manifest: the file served for it and its version. */

@@ -245,8 +245,8 @@ export function registerAssetTools(registry) {
       const shape = Math.min(2, Math.max(0.5, shapes[Math.floor(shapes.length / 2)] ?? 4 / 3));
       const h = single ? 1024 : Math.round(w / shape);
       // Models, Lottie, panoramas and fonts are drawn by the studio's asset page, all views of a file at once:
-      // on the user's GPU when a browser with the work open keeps the file (its playback files, see
-      // precache.mjs), so nothing is downloaded for it; else here.
+      // on the user's GPU when a browser with the work open keeps the file (its listed files, see
+      // precache.mjs: the playback files are there already, a lazy one is downloaded there once); else here.
       const drawn = new Map();
       const drawnFacts = new Map();
       const gpus = new Set();

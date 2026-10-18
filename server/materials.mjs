@@ -14,6 +14,7 @@ import { editList, applyEdits } from "./tools/file-ops.mjs";
 import { probe } from "./media.mjs";
 import { appRoot } from "./config.mjs";
 import { findLibrary, unknownLibraries, closestLibraries, searchLibraries, searchWords, offerOrder, readmeLead, trashed } from "./libraries.mjs";
+import { sourceFiles, prefixOf, playedFiles } from "./playback.mjs";
 
 /**
  * Material libraries: media shared by the works of a content repository (images, video,
@@ -45,8 +46,6 @@ const IMPORTABLE = /\.(m?[jt]sx?|cjs|json|glsl|frag|vert|wgsl|css|txt|svg)$/i;
 const SCRIPT = /\.(m?[jt]sx?|cjs)$/i;
 /** Library files material_read returns as text: code, data, notes, subtitles and lyrics. */
 const TEXT = /\.(m?[jt]sx?|cjs|json|glsl|frag|vert|wgsl|css|txt|svg|md|markdown|csv|tsv|ya?ml|toml|html?|xml|srt|vtt|lrc)$/i;
-/** An address built at run time (`materials/lib/fonts/${name}.ttf`, "materials/lib/fonts/" + name): the part known in advance; null for a plain address. */
-const prefixOf = (ref) => (ref.includes("${") ? ref.slice(0, ref.indexOf("${")) : ref.endsWith("/") ? ref : null);
 const IMPORT_SPEC = /(?:\bfrom\s*|\bimport\s*\(\s*|\bimport\s+)["'`]([^"'`\n]+)["'`]/g;
 const SPEC_ENDINGS = ["", ".ts", ".tsx", ".js", ".mjs", ".jsx", ".json", "/index.ts", "/index.tsx", "/index.js"];
 /** Module specifiers in code (static, side-effect and dynamic imports, re-exports). */
@@ -444,24 +443,10 @@ export class Materials {
     // Same addresses, other content: the preview reloads the media.
     this.services.preview?.assetsChanged?.(work, [file]);
   }
-  /** The work's own source files (not its media, exports or notes). */
-  sourceFiles(work) {
-    const files = [];
-    const walk = (dir) => {
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (entry.name.startsWith(".") || ["node_modules", "exports", "public", "production"].includes(entry.name)) continue;
-        const full = path.join(dir, entry.name);
-        if (entry.isDirectory()) walk(full);
-        else if (/\.(ts|tsx|js|mjs|json)$/.test(entry.name) && entry.name !== LOCK_FILE) files.push(full);
-      }
-    };
-    walk(work.dir);
-    return files;
-  }
   /** `@materials/…` imports in a work's code. */
   imports(work) {
     const imports = [];
-    for (const file of this.sourceFiles(work))
+    for (const file of sourceFiles(work))
       if (/\.(ts|tsx|js|mjs)$/.test(file))
         for (const spec of importSpecs(fs.readFileSync(file, "utf8")))
           if (spec.startsWith("@materials/")) imports.push({ spec: spec.slice(11), from: path.relative(work.dir, file).split(path.sep).join("/") });
@@ -479,7 +464,7 @@ export class Materials {
     const prefixes = new Set();
     // Library code named by a document (a sound module in audio.json) runs like an import.
     const named = [];
-    for (const file of this.sourceFiles(work))
+    for (const file of sourceFiles(work))
       for (const match of fs.readFileSync(file, "utf8").matchAll(MATERIAL_REF)) {
         const prefix = prefixOf(match[1]);
         if (prefix !== null) prefixes.add(prefix);
@@ -500,10 +485,11 @@ export class Materials {
   }
 
   /**
-   * The library files a work plays (code runs from .materials, so not code): what it uses or
-   * has locked, and for addresses built at run time every file under the known part. With
-   * their size and a version for the browser's asset precache: the locked blob, else the
-   * content of the file as it is now. Nothing is extracted or downloaded here.
+   * The library files a work plays (code runs from .materials, so not code): what it uses
+   * (playback.mjs: with every file under an address built at run time and the files that go
+   * with those) and, `lazy`, what it has locked but no longer names. With their size and a
+   * version for the browser's asset precache: the locked blob, else the content of the file
+   * as it is now. Nothing is extracted or downloaded here.
    */
   async playback(work) {
     const head = await this.headOf(work.repo).catch(() => null);
@@ -511,19 +497,19 @@ export class Materials {
     const dir = await this.dir(work.repo);
     const locks = this.readLocks(work.dir);
     const { refs, prefixes } = await this.usage(work);
-    const wanted = new Set([...Object.keys(locks), ...refs]);
-    for (const prefix of prefixes) for (const ref of [...Object.keys(locks), ...head.keys()]) if (ref.startsWith(prefix)) wanted.add(ref);
+    const played = playedFiles([...new Set([...Object.keys(locks), ...head.keys(), ...refs])], refs, prefixes, 1);
     const files = [];
-    for (const ref of [...wanted].sort()) {
+    for (const ref of [...new Set([...Object.keys(locks), ...played])].sort()) {
       if (!validRef(ref) || SCRIPT.test(ref) || ref.startsWith(".") || ref.endsWith("/README.md")) continue;
+      const lazy = played.has(ref) ? {} : { lazy: true };
       if (locks[ref]) {
         const size = await this.blobSize(work.repo, locks[ref]);
-        if (size !== null) files.push({ ref, size, version: "git-" + locks[ref] });
+        if (size !== null) files.push({ ref, size, version: "git-" + locks[ref], ...lazy });
         continue;
       }
       const file = path.join(dir, ref);
       const stat = inside(dir, file) ? fs.statSync(file, { throwIfNoEntry: false }) : null;
-      if (stat?.isFile()) files.push({ ref, size: stat.size, version: await contentVersion(file, stat) });
+      if (stat?.isFile()) files.push({ ref, size: stat.size, version: await contentVersion(file, stat), ...lazy });
     }
     return files;
   }

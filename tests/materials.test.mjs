@@ -198,6 +198,12 @@ describe("material libraries", () => {
     const pointer = (await git(app.services.repos.dir("local"), ["hash-object", "-w", "--stdin"], { input: text })).trim();
     expect(await materials.blobSize("local", pointer)).toBe(12345678);
     expect(await materials.blobSize("local", "0".repeat(40))).toBeNull();
+
+    // Locked but no longer placed (until the next version drops the lock): kept when asked for, not as the work opens.
+    await call(`${route}/layers`, { method: "POST", body: { operations: [{ op: "remove", id: "logo" }] } });
+    files = await listed();
+    expect(files["materials/缓存/logo.svg"]).toMatchObject({ lazy: true, version: "git-" + locks()["缓存/logo.svg"] });
+    expect(files["materials/缓存/fonts/a.ttf"].lazy).toBeUndefined();
     await call(`${lib}/libraries/${encodeURIComponent("缓存")}`, { method: "DELETE" });
   });
 

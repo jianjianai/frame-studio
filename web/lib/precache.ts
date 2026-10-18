@@ -2,11 +2,11 @@ import { useSyncExternalStore } from "react";
 import { api, workPath } from "./api";
 
 /**
- * Asset precache: a service worker (public/frame-sw.js) keeps the playback files
- * of the open work (its public/ folder and the library files it plays) in Cache
- * Storage so preview playback never waits on the network. Needs a secure context
- * (https or localhost); elsewhere it is skipped. The editors open kept files from
- * there too (`useKeptFile`, `keptText`).
+ * Asset precache: a service worker (public/frame-sw.js) keeps the open work's files (its
+ * public/ folder and the library files it plays) in Cache Storage: those its playback uses as
+ * soon as the work opens, so preview playback never waits on the network, the others the
+ * first time they are asked for. Needs a secure context (https or localhost); elsewhere it
+ * is skipped. The editors open listed files from there too (`useKeptFile`, `keptText`).
  */
 export interface PrecacheProgress {
   key: string;
@@ -23,7 +23,8 @@ interface Manifest {
   base: string;
   /** When the server made the list: the worker keeps the newest. */
   at: number;
-  files: { path: string; size: number; version: string }[];
+  /** `lazy`: not used by playback, kept the first time it is asked for. */
+  files: { path: string; size: number; version: string; lazy?: true }[];
 }
 
 export interface KeptFile {
@@ -68,7 +69,7 @@ const indexes = new WeakMap<Manifest, Map<string, Manifest["files"][number]>>();
 
 /**
  * Fetch the work's current file list (after `delay`; requests made meanwhile are merged) and
- * send it to the worker, which downloads only missing or changed files.
+ * send it to the worker, which downloads only missing or changed playback files.
  */
 export function requestPrecache(repo: string, id: string, delay = 0) {
   const key = `${repo}/${id}`;
@@ -127,9 +128,9 @@ const subscribe = (listener: () => void) => {
 };
 
 /**
- * A playback file of the work (`films/<slug>/…` or `materials/<ref>`) as the browser keeps
- * it; the address changes with the file. Undefined until the work's list is known, null for
- * files that are not kept.
+ * A listed file of the work (`films/<slug>/…` or `materials/<ref>`) as the browser keeps it
+ * (a lazy one from the first time it is asked for); the address changes with the file.
+ * Undefined until the work's list is known, null for files that are not kept.
  */
 export function useKeptFile(repo: string, id: string, address: string | null): KeptFile | null | undefined {
   const list = useSyncExternalStore(subscribe, () => snapshot(`${repo}/${id}`));
