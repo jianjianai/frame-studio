@@ -186,7 +186,7 @@ export class AiManager {
   publicMeta(session) {
     // What the AI has seen (for per-message changes) is the server's business; queued
     // messages are shown by their text (their pictures stay here until sent).
-    const { context: _context, queue, ...meta } = session.meta;
+    const { context: _context, login: _login, queue, ...meta } = session.meta;
     return { ...meta, queue: queue?.map(({ id, text }) => ({ id, text })) };
   }
   /**
@@ -372,6 +372,20 @@ export class AiManager {
     const session = this.sessions.get(id);
     if (!session) throw notFound("对话不存在");
     return session;
+  }
+  /**
+   * The sign-in (browser) that last wrote in a conversation: the AI draws on the GPU of that
+   * browser's open pages only (render-gpu.mjs), never on someone else's. Messages FRAME sends
+   * itself (resuming after a restart, a login done) leave it as it is.
+   */
+  noteLogin(id, login) {
+    const session = this.sessions.get(id);
+    if (!session || !login || session.meta.login === login) return;
+    session.meta.login = login;
+    this.saveMeta(session);
+  }
+  loginOf(id) {
+    return (id && this.sessions.get(id)?.meta.login) || null;
   }
   /** The options (model, mode, effort) a profile offered last, for the pickers of a new conversation. */
   optionsOf(profileId) {

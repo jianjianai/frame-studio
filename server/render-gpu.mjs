@@ -16,7 +16,9 @@ export const isGone = (error) => error?.code === "GPU_PAGE_GONE";
 
 /**
  * Studio pages open in the user's browsers that draw for the AI's render tools on their GPU:
- * the server has no GPU, and its software renderer takes seconds for a 3D frame. Each page
+ * the server has no GPU, and its software renderer takes seconds for a 3D frame. Only pages of
+ * the sign-in that writes in the AI's conversation draw for it (several people may share the
+ * studio's password; one's AI must not use another's computer). Each page
  * acts as a Playwright browser for `Renderer.openPage` (new context, page, goto, evaluate,
  * waitForFunction, page events), so the renderer's drawing code runs unchanged; the page does
  * it in a hidden frame of /preview/render.html, the page the headless browser loads.
@@ -32,18 +34,20 @@ export class GpuBrowsers {
   accept(ws, req) {
     const principal = this.services.auth.identify(req);
     // A person's studio page only: drawn frames are what the AI is shown.
-    if (!["session", "local"].includes(principal?.kind)) return ws.close(4003, "forbidden");
-    const browser = new RemoteBrowser(ws);
+    if (!["session", "local"].includes(principal?.kind) || !principal.login) return ws.close(4003, "forbidden");
+    const browser = new RemoteBrowser(ws, principal.login);
     this.browsers.set(browser.id, browser);
     ws.on("close", () => this.browsers.delete(browser.id));
   }
 
   /**
-   * The page to draw on: shown first, then the most recently used; one that does not answer
-   * at once (a sleeping laptop, a frozen tab) is passed over. Null: draw on the server.
+   * The page to draw on for `login` (the sign-in writing in the AI's conversation; none: no
+   * page): shown first, then the most recently used; one that does not answer at once (a
+   * sleeping laptop, a frozen tab) is passed over. Null: draw on the server.
    */
-  async pick() {
-    const ready = [...this.browsers.values()].filter((browser) => browser.gpu && !browser.closed);
+  async pick(login) {
+    if (!login) return null;
+    const ready = [...this.browsers.values()].filter((browser) => browser.login === login && browser.gpu && !browser.closed);
     ready.sort((a, b) => Number(b.visible) - Number(a.visible) || b.activeAt - a.activeAt);
     for (const browser of ready) {
       const answers = await browser
@@ -54,16 +58,13 @@ export class GpuBrowsers {
     }
     return null;
   }
-
-  get count() {
-    return [...this.browsers.values()].filter((browser) => browser.gpu && !browser.closed).length;
-  }
 }
 
 class RemoteBrowser {
-  constructor(ws) {
+  constructor(ws, login) {
     this.id = shortId();
     this.ws = ws;
+    this.login = login;
     this.calls = new Map();
     this.pages = new Map();
     this.next = 0;

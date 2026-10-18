@@ -157,7 +157,11 @@ export class Auth {
       b = Buffer.from(sha256(this.config.password));
     return this.required && timingSafeEqual(a, b);
   }
-  /** Returns the principal for a request, or null. */
+  /**
+   * Returns the principal for a request, or null. A person's browser carries `login`: which
+   * sign-in it is (a hash of its session cookie; "local" without a password). FRAME has one
+   * password and no accounts, so this is what tells one person's browser from another's.
+   */
   identify(req) {
     const header = req.headers.authorization || "";
     // `access_token` (not `token`, which Vite's HMR socket uses) lets clients without headers authenticate.
@@ -174,7 +178,7 @@ export class Auth {
       }
       return null;
     }
-    if (!this.required) return { kind: "local" };
+    if (!this.required) return { kind: "local", login: "local" };
     const cookie = /(?:^|;\s*)frame_session=([^;]+)/.exec(req.headers.cookie || "")?.[1];
     if (cookie) {
       const parts = cookie.split(".");
@@ -182,7 +186,7 @@ export class Auth {
       const signature = parts[2] || "";
       const expected = this.sign(value);
       if (signature.length === expected.length && timingSafeEqual(Buffer.from(signature), Buffer.from(expected)) && Number(parts[0]) > Date.now())
-        return { kind: "session" };
+        return { kind: "session", login: sha256(value).slice(0, 16) };
     }
     return null;
   }

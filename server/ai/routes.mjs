@@ -84,7 +84,12 @@ export function aiPlugin(services) {
     for (const session of ai.list({ repo })) await ai.remove(session.id);
   });
   router.get("/api/ai/sessions", ({ query }) => ai.list({ work: query.work, repo: query.repo }));
-  router.post("/api/ai/sessions", async ({ req }) => ai.create(await readJson(req)));
+  // Who writes in a conversation (their browser draws for it, see noteLogin).
+  router.post("/api/ai/sessions", async ({ req, principal }) => {
+    const meta = await ai.create(await readJson(req));
+    ai.noteLogin(meta.id, principal?.login);
+    return meta;
+  });
   // The latest turns of a conversation (`turns`), or those before turn `before` when the chat
   // scrolls back: long conversations open without loading everything said in them.
   router.get("/api/ai/sessions/:id", ({ params, query }) => {
@@ -117,12 +122,22 @@ export function aiPlugin(services) {
   router.get("/api/ai/sessions/:id/images/:name", ({ params, req, res }) =>
     sendFile(req, res, ai.imageFile(params.id, params.name), { cache: "private, max-age=31536000, immutable" }),
   );
-  router.post("/api/ai/sessions/:id/prompt", async ({ params, req }) => ai.prompt(params.id, await readJson(req)));
+  router.post("/api/ai/sessions/:id/prompt", async ({ params, req, principal }) => {
+    ai.noteLogin(params.id, principal?.login);
+    return ai.prompt(params.id, await readJson(req));
+  });
   router.post("/api/ai/sessions/:id/cancel", ({ params }) => ai.cancel(params.id));
   router.post("/api/ai/sessions/:id/compact", ({ params }) => ai.compact(params.id));
   /** Goal mode: { action: "set" | "clear" | "pause" | "resume" | "continue", objective }. */
-  router.post("/api/ai/sessions/:id/goal", async ({ params, req }) => ai.goal(params.id, await readJson(req)));
-  router.post("/api/ai/sessions/:id/fork", async ({ params, req }) => ai.fork(params.id, await readJson(req)));
+  router.post("/api/ai/sessions/:id/goal", async ({ params, req, principal }) => {
+    ai.noteLogin(params.id, principal?.login);
+    return ai.goal(params.id, await readJson(req));
+  });
+  router.post("/api/ai/sessions/:id/fork", async ({ params, req, principal }) => {
+    const meta = await ai.fork(params.id, await readJson(req));
+    ai.noteLogin(meta.id, principal?.login);
+    return meta;
+  });
   router.post("/api/ai/sessions/:id/queue/:message/steer", ({ params }) => ai.steer(params.id, params.message));
   router.delete("/api/ai/sessions/:id/queue/:message", ({ params }) => ai.removeQueued(params.id, params.message));
   router.post("/api/ai/permissions/:id", async ({ params, req }) => {

@@ -165,6 +165,8 @@ export function registerPreviewTools(registry) {
     },
     async run({ times, count, start, end, sheet, columns, width, subtitles, format, compare, region, scale, scene }, ctx) {
       const work = await ctx.work();
+      // Whose browser may draw: the one writing in this AI conversation (none for other callers).
+      const login = services.ai?.loginOf(ctx.scope.session);
       if (times && (count !== undefined || start !== undefined || end !== undefined)) throw problem(400, "times 和 count/start/end 二选一");
       if (compare && (region || scene)) throw problem(400, "compare 不和 region、scene 一起用");
       if (scale !== undefined && !region) throw problem(400, "scale 是 region 的放大倍数，要和 region 一起用；整张画面的大小用 width");
@@ -175,7 +177,7 @@ export function registerPreviewTools(registry) {
       if (region && !zoom) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
       if (!times) {
         // A sample is sampled over its own length; a module without one (a sheet) shows 0 s.
-        const info = scene ? await services.renderer.sceneInfo(work, scene) : null;
+        const info = scene ? await services.renderer.sceneInfo(work, scene, login) : null;
         const duration = info ? info.duration : meta.ok ? meta.meta.duration : 10;
         if (scene && !info.sample?.duration && count === undefined && start === undefined && end === undefined) times = [0];
         else {
@@ -198,7 +200,7 @@ export function registerPreviewTools(registry) {
           const { width: w, height: h } = (meta.ok && meta.meta.composition) || { width: 1920, height: 1080 };
           return w >= h ? cell : Math.max(2, Math.round((cell * w) / h / 2) * 2);
         };
-        const [mine, theirs] = await Promise.all([work, other].map((item) => services.renderer.frames(item, { times, width: widthFor(item), subtitles })));
+        const [mine, theirs] = await Promise.all([work, other].map((item) => services.renderer.frames(item, { times, width: widthFor(item), subtitles, login })));
         const fit = (png) => sharp(png).resize(cell, cell, { fit: "contain", background: "#16191d" }).png().toBuffer();
         const cells = [];
         for (const [index, time] of times.entries()) {
@@ -231,6 +233,7 @@ export function registerPreviewTools(registry) {
           scene,
           crop: zoom?.crop,
           cell,
+          login,
         });
         return {
           data: { times: rendered, errors, digests, ms },
@@ -239,7 +242,7 @@ export function registerPreviewTools(registry) {
         };
       }
       if (times.length > SEPARATE_MAX) throw problem(400, `分开返回最多 ${SEPARATE_MAX} 张；更多时用 sheet: true 拼成一张`);
-      const result = await services.renderer.frames(work, { times, width: zoom ? zoom.width : (width ?? 960), subtitles, scene, crop: zoom?.crop });
+      const result = await services.renderer.frames(work, { times, width: zoom ? zoom.width : (width ?? 960), subtitles, scene, crop: zoom?.crop, login });
       const images = await Promise.all(
         result.frames.map(async (frame) => ({
           data: format === "png" ? frame.png : await sharp(frame.png).jpeg({ quality: 82 }).toBuffer(),
@@ -310,7 +313,7 @@ export function registerPreviewTools(registry) {
             if (frame.png) pictures.push({ time: frame.time, png: frame.png });
           },
         });
-      });
+      }, services.ai?.loginOf(ctx.scope.session));
       if (track.frames.length < 2) throw problem(422, drawn.errors.join("\n") || "没有画出画面", "RENDER_FAILED");
       const analysis = analyzeMotion(track);
       const last = track.frames[track.frames.length - 1].time;

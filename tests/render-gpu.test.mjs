@@ -3,6 +3,7 @@ import zlib from "node:zlib";
 import { describe, expect, it } from "vitest";
 import { GpuBrowsers } from "../server/render-gpu.mjs";
 import { Renderer } from "../server/render.mjs";
+import { Auth } from "../server/http.mjs";
 
 /** A studio page's socket: what the server sends, and replies the way web/lib/gpu-render.ts does. */
 function fakePage({ gpu = "Test GPU", visible = true, answer = true } = {}) {
@@ -18,7 +19,12 @@ function fakePage({ gpu = "Test GPU", visible = true, answer = true } = {}) {
   return ws;
 }
 
-const services = () => ({ sockets: new Map(), auth: { identify: () => ({ kind: "session" }), issueInternal: () => "token" }, events: { subscribe: () => {} } });
+// A socket's sign-in comes with its request (`login`, "me" when not given).
+const services = () => ({
+  sockets: new Map(),
+  auth: { identify: (req) => ({ kind: "session", login: req.login ?? "me" }), issueInternal: () => "token" },
+  events: { subscribe: () => {} },
+});
 
 describe("drawing on the user's GPU", () => {
   it("picks a shown page that answers, and drives it like a Playwright page", async () => {
@@ -29,7 +35,7 @@ describe("drawing on the user's GPU", () => {
     gpus.accept(shown, {});
     hidden.hello();
     shown.hello();
-    const on = await gpus.pick();
+    const on = await gpus.pick("me");
     expect(on.gpu).toBe("NVIDIA GeForce RTX 3060");
     const page = await (await on.newContext()).newPage();
     await page.goto("http://127.0.0.1:4310/preview/render.html?module=x");
@@ -48,10 +54,24 @@ describe("drawing on the user's GPU", () => {
     gpus.accept(software, {});
     silent.hello();
     software.hello();
-    expect(await gpus.pick()).toBe(null);
+    expect(await gpus.pick("me")).toBe(null);
     expect(silent.sent.map((message) => message.op)).toEqual(["ping"]);
     expect(software.sent).toEqual([]);
   }, 10000);
+
+  it("never draws on another sign-in's page, nor for a caller without one", async () => {
+    const gpus = new GpuBrowsers(services());
+    const mine = fakePage({ visible: false });
+    const friends = fakePage({ gpu: "Friend's GPU" });
+    gpus.accept(mine, { login: "me" });
+    gpus.accept(friends, { login: "friend" });
+    friends.hello(); // in view and used last
+    mine.hello();
+    expect((await gpus.pick("me")).gpu).toBe("Test GPU");
+    expect(await gpus.pick(null)).toBe(null);
+    expect(await gpus.pick("someone else")).toBe(null);
+    expect(friends.sent).toEqual([]);
+  });
 
   it("refuses sockets that are not a person's studio page", () => {
     const gpus = new GpuBrowsers({ ...services(), auth: { identify: () => ({ kind: "token" }) } });
@@ -68,6 +88,7 @@ describe("drawing on the user's GPU", () => {
     gpus.accept(ws, {});
     ws.hello();
     const [on] = gpus.browsers.values();
+    expect(on.login).toBe("me");
     const page = await (await on.newContext()).newPage();
     const seen = [];
     page.on("pageerror", (error) => seen.push(error.message));
@@ -90,16 +111,37 @@ describe("drawing on the user's GPU", () => {
     const renderer = new Renderer(services());
     clearInterval(renderer.sweeper);
     const on = { id: "page" };
-    renderer.gpu = { pick: async () => on };
+    renderer.gpu = { pick: async (login) => (login === "me" ? on : null) };
     const tried = [];
     const result = await renderer.anywhere(async (where) => {
       tried.push(where);
       if (where) throw Object.assign(new Error("gone"), { code: "GPU_PAGE_GONE" });
       return "drawn here";
-    });
+    }, "me");
     expect(result).toBe("drawn here");
     expect(tried).toEqual([on, null]);
     // Other failures are the work's: not drawn again.
     await expect(renderer.anywhere(async () => Promise.reject(new Error("scene threw")))).rejects.toThrow("scene threw");
+  });
+});
+
+describe("telling sign-ins apart", () => {
+  const auth = (password) => {
+    const secrets = new Map();
+    return new Auth({
+      config: { password },
+      settings: { secret: (key) => secrets.get(key), setSecret: (key, value) => secrets.set(key, value), get: () => ({ tokens: [] }) },
+    });
+  };
+  const request = (cookie) => ({ url: "/api/render/gpu", headers: { cookie } });
+  it("gives each browser's sign-in its own stable login, and the local studio one", () => {
+    const studio = auth("secret-pass");
+    const first = studio.sessionCookie().split(";")[0];
+    const second = studio.sessionCookie().split(";")[0];
+    const login = (cookie) => studio.identify(request(cookie)).login;
+    expect(login(first)).toMatch(/^[0-9a-f]{16}$/);
+    expect(login(first)).toBe(login(first));
+    expect(login(second)).not.toBe(login(first));
+    expect(auth("").identify(request("")).login).toBe("local");
   });
 });
