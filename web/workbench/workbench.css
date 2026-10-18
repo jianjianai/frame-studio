@@ -2636,3 +2636,8 @@ a.btn.disabled {
   font-size: 18px;
   letter-spacing: 2px;
 }
+.pair-ready {
+  display: grid;
+  gap: 6px;
+  justify-items: start;
+}

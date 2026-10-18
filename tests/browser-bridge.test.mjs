@@ -171,10 +171,14 @@ describe("the user's own browser through the FRAME 连接器 extension", () => {
     const { unzipSync } = await import("fflate");
     const files = unzipSync(new Uint8Array(await (await fetch(`${base}/api/browser-extension.zip`)).arrayBuffer()));
     // Windows' 全部解压缩 makes the folder: a folder inside would leave the manifest a level too deep.
-    expect(Object.keys(files)).toEqual(expect.arrayContaining(["manifest.json", "background.js", "popup.html", "popup.js", "icons/128.png", "defaults.json"]));
+    expect(Object.keys(files)).toEqual(expect.arrayContaining(["manifest.json", "background.js", "popup.html", "popup.js", "pair.html", "pair.js", "icons/128.png", "defaults.json"]));
     expect(Object.keys(files).every((name) => !name.startsWith("frame-connector/"))).toBe(true);
     const manifest = JSON.parse(Buffer.from(files["manifest.json"]).toString("utf8"));
     expect(manifest).toMatchObject({ manifest_version: 3, background: { service_worker: "background.js" } });
+    // Only this studio's pages may see the extension and open its pairing page; its id is fixed by its key.
+    expect(manifest.web_accessible_resources).toEqual([{ resources: ["icons/16.png", "pair.html"], matches: [`http://${new URL(base).hostname}/*`] }]);
+    const { extension } = await api(`/api/browser/${work.repo}`);
+    expect(extension.id).toMatch(/^[a-p]{32}$/);
     for (const icon of Object.values(manifest.icons)) expect(files[icon]).toBeTruthy();
     expect(JSON.parse(Buffer.from(files["defaults.json"]).toString())).toEqual({ server: new URL(base).origin });
   });

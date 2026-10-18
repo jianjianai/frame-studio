@@ -10,7 +10,7 @@ import { writeStream, uniquePath } from "./files.mjs";
 import { importedAsset } from "./tools/asset-tools.mjs";
 import { registerBrowserTools } from "./tools/browser-tools.mjs";
 import { Bridges } from "./browser-bridge.mjs";
-import { extensionZip, studioOrigin } from "./browser-extension.mjs";
+import { extensionInfo, extensionZip, studioOrigin } from "./browser-extension.mjs";
 import { problem, notFound } from "./util.mjs";
 
 const require = createRequire(import.meta.url);
@@ -867,6 +867,7 @@ export function browserPlugin(services) {
       sites: await browser.sites(),
       computers: bridges.computers(params.repo),
       remoteTabs: bridges.remoteTabs(params.repo),
+      extension: extensionInfo(),
     };
   });
   router.post(`${base}/pair`, ({ req, params }) => ({ ...bridges.pairCode(params.repo), server: studioOrigin(req, services.config) }));

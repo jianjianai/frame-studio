@@ -37,7 +37,14 @@ export interface BrowserDownload {
  * A repository's browser: its tabs and downloads as the server announces them (its events reach
  * every page). One copy per repository for the page, loaded when the first component asks.
  */
-type BrowserState = { tabs: BrowserTabInfo[]; downloads: BrowserDownload[]; computers: BrowserComputer[]; remoteTabs: BrowserTabInfo[] };
+type BrowserState = {
+  tabs: BrowserTabInfo[];
+  downloads: BrowserDownload[];
+  computers: BrowserComputer[];
+  remoteTabs: BrowserTabInfo[];
+  /** The FRAME 连接器 extension: its fixed id (to find it in this browser) and version. */
+  extension?: { id: string; version: string };
+};
 const EMPTY: BrowserState = { tabs: [], downloads: [], computers: [], remoteTabs: [] };
 const states = new Map<string, BrowserState>();
 const watchers = new Set<() => void>();
@@ -49,7 +56,7 @@ const set = (repo: string, change: Partial<BrowserState>) => {
 };
 const load = (repo: string) =>
   api<BrowserState>(`/api/browser/${encodeURIComponent(repo)}`).then(
-    (state) => set(repo, { tabs: state.tabs, downloads: state.downloads, computers: state.computers ?? [], remoteTabs: state.remoteTabs ?? [] }),
+    (state) => set(repo, { tabs: state.tabs, downloads: state.downloads, computers: state.computers ?? [], remoteTabs: state.remoteTabs ?? [], extension: state.extension }),
     () => {},
   );
 function start(repo: string) {

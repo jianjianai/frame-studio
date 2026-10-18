@@ -549,35 +549,79 @@ function ComputerStrip({ repo, computers, remoteTabs, onManage }: { repo: string
   );
 }
 
-/** Link a browser on this computer (pairing code, how to install the extension) and see or unlink the linked ones. */
+/**
+ * Whether the FRAME 连接器 extension is in this browser: its icon loads from chrome-extension://<id>/
+ * (the zip lets this studio's pages see it). Checked again every two seconds until it is, so the
+ * dialog notices an install without a reload.
+ */
+function useExtensionInstalled(id?: string) {
+  const [installed, setInstalled] = useState(false);
+  useEffect(() => {
+    if (!id) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const probe = () => {
+      const image = new Image();
+      image.onload = () => !stopped && setInstalled(true);
+      image.onerror = () => {
+        if (!stopped) timer = setTimeout(probe, 2000);
+      };
+      image.src = `chrome-extension://${id}/icons/16.png`;
+    };
+    probe();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [id]);
+  return installed;
+}
+
+/**
+ * Link the browser on this computer: install the extension (the steps a browser does not let a
+ * page skip), then one click pairs it — the extension's page opens with a fresh code and closes
+ * itself. Also the linked browsers, to see or unlink, and the AI's tabs there.
+ */
 function ComputersDialog({ repo, onClose }: { repo: string; onClose: () => void }) {
-  const { computers, remoteTabs } = useBrowserState(repo);
+  const { computers, remoteTabs, extension } = useBrowserState(repo);
   const toast = useToast();
   const confirm = useConfirm();
+  const installed = useExtensionInstalled(extension?.id);
   const [code, setCode] = useState<{ code: string; expires: string; server: string } | null>(null);
+  const [manual, setManual] = useState(false);
   const name = repo === "local" ? "本地" : repo;
-  const create = async () => {
+  // A code is ready before the click: the pairing page has to open within the click itself.
+  const refresh = useCallback(async () => {
     try {
       setCode(await api(`${browserPath(repo)}/pair`, { method: "POST" }));
     } catch (error) {
       toast((error as Error).message, "error");
     }
+  }, [repo, toast]);
+  useEffect(() => {
+    void refresh();
+    const timer = setInterval(() => void refresh(), 8 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+  const connect = () => {
+    if (!extension || !code) return;
+    window.open(`chrome-extension://${extension.id}/pair.html#${new URLSearchParams({ server: code.server, code: code.code, repo: name })}`, "_blank");
+    // That code is used up: another one for a second try.
+    setTimeout(() => void refresh(), 3000);
   };
-  // A pairing that came through: the code is used up.
+  // A pairing that came through.
   const count = computers.length;
   const first = useRef(count);
   useEffect(() => {
-    if (code && count > first.current) {
-      setCode(null);
-      toast("已连接", "ok");
-    }
+    if (count > first.current) toast("已连接", "ok");
     first.current = count;
-  }, [count, code, toast]);
+  }, [count, toast]);
+  const online = computers.some((item) => item.online);
   return (
     <Dialog title="电脑上的浏览器" onClose={onClose} width={560}>
       <div className="computers">
         <p className="muted small-text">
-          装上 FRAME 连接器扩展后，作品库「{name}」的 AI 可以用你在那个浏览器里已经登录的网站：只在它自己开的标签页（单独的窗口和「FRAME AI」标签组）和你在扩展里交给它的页面里浏览和下载，你的登录信息不会传到服务器。同一个浏览器连接几个作品库时，它们共用这些登录。
+          装上 FRAME 连接器扩展后，作品库「{name}」的 AI 可以用你在那个浏览器里已经登录的网站：只在它自己开的标签页（单独的窗口和「FRAME AI」标签组）和你在扩展里交给它的页面里浏览和下载，你的登录信息不会传到服务器。
         </p>
         {computers.map((item) => (
           <div key={item.id} className="computer-row">
@@ -616,36 +660,58 @@ function ComputersDialog({ repo, onClose }: { repo: string; onClose: () => void 
             ))}
           </div>
         )}
-        <ol className="pair-steps">
-          <li>
-            下载扩展：
-            <a className="btn small" href="/api/browser-extension.zip" download>
-              <Download size={12} /> frame-connector.zip
-            </a>
-            ，解压到一个文件夹（例如「全部解压缩」得到的 frame-connector），里面直接就是 manifest.json。
-          </li>
-          <li>
-            Edge 打开 <code>edge://extensions</code>（Chrome 是 <code>chrome://extensions</code>），打开「开发人员模式」，点「加载解压缩的扩展」，选直接包含 manifest.json 的那个文件夹。建议给 AI 单独建一个浏览器用户资料，只在那里登录要给它用的网站。
-          </li>
-          <li>
-            点工具栏上的 FRAME 连接器图标，填 FRAME 地址和配对码：
-            {code ? (
-              <div className="pair-code">
-                <div>
-                  地址 <code>{code.server}</code>
-                </div>
-                <div>
-                  配对码 <strong className="mono">{code.code}</strong>
-                  <span className="faint small-text">（{new Date(code.expires).toLocaleTimeString()} 前有效，用一次）</span>
-                </div>
-              </div>
-            ) : (
-              <button className="btn small primary" onClick={create}>
-                生成配对码
+        {installed ? (
+          <div className="pair-ready">
+            <button className="btn primary" disabled={!code} onClick={connect}>
+              <Laptop size={14} /> {online ? "再连接这个浏览器" : "一键连接这个浏览器"}
+            </button>
+            <span className="faint small-text">检测到 FRAME 连接器。点一下会打开一个页面，连好后它自己关闭。</span>
+          </div>
+        ) : (
+          <ol className="pair-steps">
+            <li>
+              <a className="btn small" href="/api/browser-extension.zip" download>
+                <Download size={12} /> 下载 frame-connector.zip
+              </a>{" "}
+              ，右键「全部解压缩」。
+            </li>
+            <li>
+              在地址栏打开{" "}
+              <button
+                className="btn small"
+                title="复制后粘贴到地址栏（网页不能直接打开这个页面）"
+                onClick={() => {
+                  const address = /Edg\//.test(navigator.userAgent) ? "edge://extensions" : "chrome://extensions";
+                  void navigator.clipboard.writeText(address).then(
+                    () => toast(`已复制 ${address}，粘贴到地址栏打开`, "ok"),
+                    () => toast(address, "ok"),
+                  );
+                }}
+              >
+                {/Edg\//.test(navigator.userAgent) ? "edge://extensions" : "chrome://extensions"}（复制）
               </button>
-            )}
-          </li>
-        </ol>
+              ，打开「开发人员模式」，点「加载解压缩的扩展」，选解压出的 frame-connector 文件夹。
+            </li>
+            <li className="faint">
+              <Loader2 size={12} className="spin" /> 装好后这里会自动出现「一键连接」，不用刷新。
+            </li>
+          </ol>
+        )}
+        <button className="link-btn small-text" onClick={() => setManual(!manual)}>
+          {manual ? "收起" : "扩展装在别的浏览器里？手动配对"}
+        </button>
+        {manual && code && (
+          <div className="pair-code">
+            <div className="faint small-text">点那个浏览器工具栏上的 FRAME 连接器图标，填：</div>
+            <div>
+              地址 <code>{code.server}</code>
+            </div>
+            <div>
+              配对码 <strong className="mono">{code.code}</strong>
+              <span className="faint small-text">（{new Date(code.expires).toLocaleTimeString()} 前有效，用一次）</span>
+            </div>
+          </div>
+        )}
       </div>
     </Dialog>
   );
