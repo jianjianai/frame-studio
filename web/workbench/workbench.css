@@ -2593,3 +2593,46 @@ a.btn.disabled {
   font-size: 11px;
   white-space: nowrap;
 }
+.browser-note.computer {
+  background: var(--bg-elev);
+}
+.computers {
+  display: grid;
+  gap: 10px;
+}
+.computers p {
+  margin: 0;
+}
+.computer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  font-size: 13px;
+}
+.computer-tabs {
+  display: grid;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.pair-steps {
+  margin: 0;
+  padding-left: 20px;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+}
+.pair-code {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+.pair-code strong {
+  font-size: 18px;
+  letter-spacing: 2px;
+}

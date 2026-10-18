@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "FRAME 连接器",
+  "version": "1.0.0",
+  "description": "让 FRAME Studio 的 AI 用这个浏览器里你已经登录的网站：只在它自己开的标签页和你交给它的标签页里浏览和下载。",
+  "minimum_chrome_version": "116",
+  "permissions": ["debugger", "tabs", "tabGroups", "storage", "downloads", "alarms"],
+  "host_permissions": ["<all_urls>"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "FRAME 连接器",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }
+  },
+  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" }
+}

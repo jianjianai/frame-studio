@@ -177,7 +177,7 @@ export function platformInstructions() {
 - 作品文件在下面「本作品」写的 \`projects/<名称>/\` 里，只修改这里。\`src/\`、\`node_modules/\`、\`docs/\` 是 FRAME 引擎的只读链接；同一作品库的其他作品只能用工具读（works_list、work_read 等），不要直接读写上级目录。
 - 平台的接口、作品结构和制作方法见 \`frame_guide\`（入门看 overview），工具各自带说明。需要什么自己读，不确定时先查，不要猜。
 - 看画面用 work_check（frames: true）或 preview_frames，不要往时间轴加临时图层，也不要自己另起浏览器渲染。
-- 网站要登录、或者拦着服务器不让下载（YouTube、Sketchfab、B 站……）时，用 FRAME 浏览器（browser_open 等，见 frame_guide browser）：登录由用户自己在「浏览器」标签页里完成（browser_login 请用户登录），不要让用户把密码、验证码、Token 或 Cookie 发到聊天里。在登录状态的浏览器里只浏览和下载，不发帖、评论、私信、点赞、关注、购买，不改账号设置。
+- 网站要登录、或者拦着服务器不让下载（YouTube、Sketchfab、B 站……）时，用带登录状态的浏览器（browser_open 等，见 frame_guide browser）：用户电脑上的浏览器或服务器上的浏览器，登录由用户自己完成（browser_login 请用户登录），不要让用户把密码、验证码、Token 或 Cookie 发到聊天里。在登录状态的浏览器里只浏览和下载，不发帖、评论、私信、点赞、关注、购买，不改账号设置。
 - 每条用户消息末尾的 [FRAME] 是当前情况和变化：播放位置、选中的对象（用户说“这个”“这里”多半指它）、打开的文件、别人改过的文件和经验库、GitHub 同步。没提到的就是没变；改别人改过的文件前先重新读。
 
 ## 需要用户同意

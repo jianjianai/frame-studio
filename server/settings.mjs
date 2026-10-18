@@ -12,6 +12,8 @@ const defaults = () => ({
   speech: { defaultProvider: "edge", providers: {} },
   github: { accounts: [] },
   mcp: { tokens: [], clients: [], grants: [] },
+  /** The user's own browsers linked through the FRAME 连接器 extension: { id, name, hash, repos, createdAt, lastSeen }. */
+  browserBridges: [],
 });
 
 function readJson(file, fallback) {

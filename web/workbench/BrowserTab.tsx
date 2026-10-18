@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ArrowLeft, ArrowRight, Download, FolderInput, Globe, Keyboard, KeyRound, Loader2, LogOut, MoreVertical, Plus, RotateCw, Sparkles, Trash2, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Download, FolderInput, Globe, Keyboard, KeyRound, Laptop, Loader2, LogOut, MoreVertical, Plus, RotateCw, Sparkles, Trash2, X } from "lucide-react";
 import { api } from "../lib/api";
-import { browserPath, loginDone, onWantedTab, takeWantedTab, useBrowserState, type BrowserTabInfo } from "../lib/browser";
+import { browserPath, focusRemote, loginDone, onWantedTab, takeWantedTab, useBrowserState, type BrowserTabInfo } from "../lib/browser";
 import { coarsePointer } from "../lib/touch";
-import { useConfirm, useContextMenu, useToast } from "../lib/ui";
+import { Dialog, useConfirm, useContextMenu, useToast } from "../lib/ui";
 import { useTabVisible, useWorkbench } from "./store";
 
 type Viewport = { width: number; height: number };
@@ -39,7 +39,8 @@ export function BrowserTab() {
   const [openMenu, menu] = useContextMenu();
   // Each repository has its own browser: its logins are for its works only.
   const repo = work.repo;
-  const { tabs, downloads } = useBrowserState(repo);
+  const { tabs, downloads, computers, remoteTabs } = useBrowserState(repo);
+  const [pairing, setPairing] = useState(false);
   const [current, setCurrent] = useState<string | null>(null);
   const [viewport, setViewport] = useState<Viewport | null>(null);
   const [connected, setConnected] = useState(false);
@@ -404,6 +405,7 @@ export function BrowserTab() {
           <MoreVertical size={15} />
         </button>
       </div>
+      <ComputerStrip repo={repo} computers={computers} remoteTabs={remoteTabs} onManage={() => setPairing(true)} />
       {tab?.login && (
         <div className="browser-note warn">
           <KeyRound size={14} />
@@ -493,6 +495,158 @@ export function BrowserTab() {
         </div>
       )}
       {menu}
+      {pairing && <ComputersDialog repo={repo} onClose={() => setPairing(false)} />}
     </div>
+  );
+}
+
+/**
+ * The browsers on the user's computer linked to this repository (the FRAME 连接器 extension):
+ * whether one is online, the AI's tabs there and logins it asked for.
+ */
+function ComputerStrip({ repo, computers, remoteTabs, onManage }: { repo: string; computers: { online: boolean; name: string }[]; remoteTabs: BrowserTabInfo[]; onManage: () => void }) {
+  const toast = useToast();
+  const online = computers.find((item) => item.online);
+  const logins = remoteTabs.filter((item) => item.login);
+  return (
+    <>
+      <div className="browser-note computer">
+        <Laptop size={14} className={online ? "ok-text" : "faint"} />
+        <span className="grow ellipsis">
+          {online
+            ? `电脑上的浏览器已连接：${online.name}。AI 优先用它（你已经登录的网站），${remoteTabs.length ? `现在能用 ${remoteTabs.length} 个标签页` : "还没有打开标签页"}`
+            : computers.length
+              ? "电脑上的浏览器没有连着：AI 先用下面这个服务器上的浏览器"
+              : "还可以让 AI 用你电脑上的 Edge 或 Chrome（你已经登录的网站）"}
+        </span>
+        <button className="btn small" onClick={onManage}>
+          {computers.length ? "管理" : "连接电脑上的浏览器"}
+        </button>
+      </div>
+      {logins.map((item) => (
+        <div key={item.id} className="browser-note warn">
+          <KeyRound size={14} />
+          <span className="grow">
+            AI 请你在电脑上的浏览器里登录 <strong>{item.login!.host}</strong>：{item.login!.reason}
+          </span>
+          <button className="btn small" onClick={() => void focusRemote(repo, item.id).catch((error) => toast((error as Error).message, "error"))}>
+            在电脑上打开
+          </button>
+          <button
+            className="btn small primary"
+            onClick={() =>
+              loginDone(repo, item.id).then(
+                (result) => toast(result.notified ? "已告诉 AI" : "好的", "ok"),
+                (error) => toast((error as Error).message, "error"),
+              )
+            }
+          >
+            登录好了
+          </button>
+        </div>
+      ))}
+    </>
+  );
+}
+
+/** Link a browser on this computer (pairing code, how to install the extension) and see or unlink the linked ones. */
+function ComputersDialog({ repo, onClose }: { repo: string; onClose: () => void }) {
+  const { computers, remoteTabs } = useBrowserState(repo);
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [code, setCode] = useState<{ code: string; expires: string; server: string } | null>(null);
+  const name = repo === "local" ? "本地" : repo;
+  const create = async () => {
+    try {
+      setCode(await api(`${browserPath(repo)}/pair`, { method: "POST" }));
+    } catch (error) {
+      toast((error as Error).message, "error");
+    }
+  };
+  // A pairing that came through: the code is used up.
+  const count = computers.length;
+  const first = useRef(count);
+  useEffect(() => {
+    if (code && count > first.current) {
+      setCode(null);
+      toast("已连接", "ok");
+    }
+    first.current = count;
+  }, [count, code, toast]);
+  return (
+    <Dialog title="电脑上的浏览器" onClose={onClose} width={560}>
+      <div className="computers">
+        <p className="muted small-text">
+          装上 FRAME 连接器扩展后，作品库「{name}」的 AI 可以用你在那个浏览器里已经登录的网站：只在它自己开的标签页（单独的窗口和「FRAME AI」标签组）和你在扩展里交给它的页面里浏览和下载，你的登录信息不会传到服务器。同一个浏览器连接几个作品库时，它们共用这些登录。
+        </p>
+        {computers.map((item) => (
+          <div key={item.id} className="computer-row">
+            <Laptop size={15} className={item.online ? "ok-text" : "faint"} />
+            <span className="grow">
+              {item.name}
+              <span className="faint small-text">
+                {" · "}
+                {item.online ? "在线" : item.lastSeen ? `上次在线 ${new Date(item.lastSeen).toLocaleString()}` : "离线"}
+              </span>
+            </span>
+            <button
+              className="btn small danger"
+              onClick={async () => {
+                if (!(await confirm(`断开 ${item.name} 和作品库「${name}」的连接：这个作品库的 AI 不能再用它。`, { confirm: "断开", danger: true }))) return;
+                api(`${browserPath(repo)}/computers/${item.id}`, { method: "DELETE" }).catch((error) => toast((error as Error).message, "error"));
+              }}
+            >
+              断开
+            </button>
+          </div>
+        ))}
+        {remoteTabs.length > 0 && (
+          <div className="computer-tabs">
+            <div className="faint small-text">AI 在电脑上能用的标签页</div>
+            {remoteTabs.map((item) => (
+              <div key={item.id} className="computer-row">
+                {item.owner === "ai" ? <Sparkles size={13} className="accent-text" /> : <Globe size={13} className="faint" />}
+                <span className="grow ellipsis" title={item.url}>
+                  {item.title || item.url}
+                </span>
+                <button className="btn small" onClick={() => void focusRemote(repo, item.id).catch((error) => toast((error as Error).message, "error"))}>
+                  在电脑上打开
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <ol className="pair-steps">
+          <li>
+            下载扩展：
+            <a className="btn small" href="/api/browser-extension.zip" download>
+              <Download size={12} /> frame-connector.zip
+            </a>
+            ，解压出 frame-connector 文件夹。
+          </li>
+          <li>
+            Edge 打开 <code>edge://extensions</code>（Chrome 是 <code>chrome://extensions</code>），打开「开发人员模式」，点「加载解压缩的扩展」，选 frame-connector 文件夹。建议给 AI 单独建一个浏览器用户资料，只在那里登录要给它用的网站。
+          </li>
+          <li>
+            点工具栏上的 FRAME 连接器图标，填 FRAME 地址和配对码：
+            {code ? (
+              <div className="pair-code">
+                <div>
+                  地址 <code>{code.server}</code>
+                </div>
+                <div>
+                  配对码 <strong className="mono">{code.code}</strong>
+                  <span className="faint small-text">（{new Date(code.expires).toLocaleTimeString()} 前有效，用一次）</span>
+                </div>
+              </div>
+            ) : (
+              <button className="btn small primary" onClick={create}>
+                生成配对码
+              </button>
+            )}
+          </li>
+        </ol>
+      </div>
+    </Dialog>
   );
 }

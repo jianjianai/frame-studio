@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>FRAME 连接器</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #ffffff;
+        --fg: #1d2129;
+        --muted: #6b7280;
+        --border: #e1e4ea;
+        --accent: #4a63e7;
+        --soft: #eef1fd;
+        --warn: #b7791f;
+        --ok: #2f9e6b;
+        --danger: #d64545;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #15171c;
+          --fg: #dce0e7;
+          --muted: #8e96a3;
+          --border: #2a2e37;
+          --accent: #7c93ff;
+          --soft: rgb(124 147 255 / 0.14);
+        }
+      }
+      body {
+        margin: 0;
+        width: 340px;
+        font: 13px/1.5 system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--fg);
+      }
+      main {
+        display: grid;
+        gap: 12px;
+        padding: 14px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 15px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      h1 img {
+        width: 20px;
+        height: 20px;
+      }
+      h2 {
+        margin: 0 0 6px;
+        font-size: 12px;
+        color: var(--muted);
+        font-weight: 600;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      input,
+      select {
+        font: inherit;
+        padding: 6px 8px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--fg);
+      }
+      button {
+        font: inherit;
+        padding: 6px 10px;
+        border-radius: 6px;
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--fg);
+        cursor: pointer;
+      }
+      button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      button.link {
+        border: none;
+        padding: 0;
+        color: var(--accent);
+      }
+      button.danger {
+        color: var(--danger);
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .state {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--warn);
+        flex: none;
+      }
+      .dot.online {
+        background: var(--ok);
+      }
+      .card {
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        display: grid;
+        gap: 8px;
+      }
+      .tab {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+      .tab span {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+      }
+      .badge {
+        font-size: 11px;
+        padding: 1px 6px;
+        border-radius: 10px;
+        background: var(--soft);
+        color: var(--accent);
+        flex: none;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .error {
+        color: var(--danger);
+        font-size: 12px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1><img src="icons/32.png" alt="" />FRAME 连接器</h1>
+
+      <section id="pair" hidden>
+        <div class="card">
+          <div class="muted">在 FRAME 里打开一个作品，「素材」视图顶部的地球按钮 →「浏览器」→「连接电脑上的浏览器」，把配对码填到这里。</div>
+          <label>FRAME 地址<input id="server" placeholder="https://frame.example.com" autocomplete="url" /></label>
+          <label>配对码<input id="code" placeholder="8 位字母和数字" autocomplete="off" /></label>
+          <label>这个浏览器的名字（在 FRAME 里显示）<input id="name" /></label>
+          <button class="primary" id="connect">连接</button>
+          <div class="error" id="pairError" hidden></div>
+        </div>
+        <div class="muted">连接后，这个作品库的 AI 可以用你在这个浏览器里已经登录的网站，但只在它自己开的标签页（放在单独的窗口和「FRAME AI」标签组里）和你交给它的标签页里浏览和下载。</div>
+      </section>
+
+      <section id="paired" hidden>
+        <div class="state"><span class="dot" id="dot"></span><span id="stateText"></span></div>
+        <div class="muted" id="repos"></div>
+
+        <div class="card" id="current">
+          <h2>当前页面</h2>
+          <div class="tab"><span id="currentTitle"></span></div>
+          <div class="row" id="shareRow">
+            <select id="repo" hidden></select>
+            <button class="primary" id="share">让 AI 使用这个页面</button>
+          </div>
+          <div class="row" id="sharedRow" hidden>
+            <span class="badge" id="currentKind"></span>
+            <button id="unshareCurrent">不再让 AI 使用</button>
+          </div>
+          <div class="muted" id="currentNote"></div>
+        </div>
+
+        <div class="card">
+          <h2>AI 能用的标签页</h2>
+          <div id="tabs"></div>
+        </div>
+
+        <div class="row">
+          <button class="link" id="reconnect">重新连接</button>
+          <span style="flex: 1"></span>
+          <button class="danger" id="unpair">断开配对</button>
+        </div>
+      </section>
+    </main>
+    <script src="popup.js" type="module"></script>
+  </body>
+</html>

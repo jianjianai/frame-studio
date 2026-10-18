@@ -9,6 +9,8 @@ import { readJson, sendFile } from "./http.mjs";
 import { writeStream, uniquePath } from "./files.mjs";
 import { importedAsset } from "./tools/asset-tools.mjs";
 import { registerBrowserTools } from "./tools/browser-tools.mjs";
+import { Bridges } from "./browser-bridge.mjs";
+import { extensionZip, studioOrigin } from "./browser-extension.mjs";
 import { problem, notFound } from "./util.mjs";
 
 const require = createRequire(import.meta.url);
@@ -840,15 +842,37 @@ async function editableFocus(page) {
 export function browserPlugin(services) {
   const { router } = services;
   const browsers = (services.browsers = new Browsers(services));
+  const bridges = (services.bridges = new Bridges(services));
   services.closers.push(() => browsers.shutdown());
+  services.closers.push(() => bridges.close());
   services.repos.beforeRemove.push((repo) => browsers.forget(repo));
+  services.repos.beforeRemove.push((repo) => bridges.forget(repo));
   services.sockets.set("/api/browser/view", (ws, req) => browsers.view(ws, req));
+  // The extension authenticates on the socket itself (app.mjs lets this path upgrade without a session).
+  services.sockets.set("/api/browser/bridge", (ws) => bridges.socket(ws));
+
+  // The extension to load into Edge or Chrome (unpacked): extension/ as a zip.
+  router.get("/api/browser-extension.zip", ({ req, res }) => {
+    res.writeHead(200, { "Content-Type": "application/zip", "Content-Disposition": 'attachment; filename="frame-connector.zip"', "Cache-Control": "no-cache" });
+    res.end(extensionZip(studioOrigin(req, services.config)));
+  });
 
   const base = "/api/browser/:repo";
   router.get(base, async ({ params }) => {
     const browser = browsers.of(params.repo);
-    return { running: browser.running, tabs: browser.list(), downloads: browser.listDownloads(), sites: await browser.sites() };
+    return {
+      running: browser.running,
+      tabs: browser.list(),
+      downloads: browser.listDownloads(),
+      sites: await browser.sites(),
+      computers: bridges.computers(params.repo),
+      remoteTabs: bridges.remoteTabs(params.repo),
+    };
   });
+  router.post(`${base}/pair`, ({ req, params }) => ({ ...bridges.pairCode(params.repo), server: studioOrigin(req, services.config) }));
+  router.delete(`${base}/computers/:id`, ({ params }) => bridges.unlink(params.id, params.repo));
+  router.post(`${base}/remote-tabs/:tab/focus`, ({ params }) => bridges.focus(params.repo, params.tab));
+  router.post(`${base}/remote-tabs/:tab/login-done`, ({ params }) => bridges.loginDone(params.repo, params.tab));
   router.post(`${base}/tabs/:tab/login-done`, ({ params }) => browsers.of(params.repo).loginDone(params.tab));
   router.post(`${base}/tabs/:tab/sign-out`, ({ params }) => browsers.of(params.repo).signOut(params.tab));
   router.post(`${base}/clear`, ({ params }) => browsers.of(params.repo).clearAll());

@@ -233,6 +233,8 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
   server.prependListener("upgrade", (req, socket) => {
     try {
       auth.guard(req);
+      // The browser extension has no session: it proves itself with its pairing token on the socket.
+      if (new URL(req.url, "http://local").pathname === "/api/browser/bridge") return;
       const principal = auth.identify(req);
       if (!principal || principal.kind === "oauth") throw new Error("unauthorized");
     } catch {

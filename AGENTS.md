@@ -14,6 +14,7 @@
 | `src/preview/` | 预览舞台页（stage）、无界面渲染页（render）与本机导出页（export） |
 | `bin/frame.mjs` | 命令行：serve、mcp、call、export… |
 | `docs/guide/` | 作品制作指南，同时是 `frame_guide` 工具的内容 |
+| `extension/` | FRAME 连接器：Edge/Chrome 扩展（MV3），让 AI 用用户电脑上的浏览器；工作台的「浏览器」标签页提供 zip 下载 |
 | `deploy/` | Dockerfile 与 compose |
 
 架构说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。

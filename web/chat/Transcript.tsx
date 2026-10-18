@@ -25,7 +25,7 @@ import {
   KeyRound,
 } from "lucide-react";
 import { useWorkbench } from "../workbench/store";
-import { loginDone, showBrowserTab, useBrowserState } from "../lib/browser";
+import { focusRemote, loginDone, showBrowserTab, useBrowserState } from "../lib/browser";
 import { formatTime } from "../lib/api";
 import { Markdown } from "./Markdown";
 import { lineDiff, compactDiff } from "./lineDiff";
@@ -108,6 +108,7 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   experience_commit: "保存经验库版本",
   browser_open: "打开网页",
   browser_read: "读网页",
+  browser_tabs: "列出标签页",
   browser_act: "操作网页",
   browser_download: "从网页下载",
   browser_login: "请你登录",
@@ -378,13 +379,14 @@ function Permission({ block, onRespond }: { block: Extract<Block, { kind: "permi
  */
 function LoginRequest({ tool }: { tool: ToolBlock }) {
   const { openTool, work } = useWorkbench();
-  const { tabs } = useBrowserState(work.repo);
+  const { tabs, remoteTabs } = useBrowserState(work.repo);
   const input = (tool.rawInput ?? {}) as { url?: string; reason?: string };
   const text = toolResults(tool)
     .map((item) => (item.content?.type === "text" ? item.content.text : ""))
     .join("\n");
-  const tabId = /标签页 (t[0-9a-f]{6})/.exec(text)?.[1];
-  const tab = tabId ? tabs.find((item) => item.id === tabId) : undefined;
+  const tabId = /标签页 (t[0-9a-f]{6}|x\d+)/.exec(text)?.[1];
+  const remote = Boolean(tabId?.startsWith("x"));
+  const tab = tabId ? (remote ? remoteTabs : tabs).find((item) => item.id === tabId) : undefined;
   if (tool.status !== "completed" || !tabId || !tab?.login) return null;
   return (
     <div className="permission-card login-card">
@@ -393,17 +395,25 @@ function LoginRequest({ tool }: { tool: ToolBlock }) {
         <strong className="grow">AI 请你登录 {tab.login.host}</strong>
       </div>
       <div className="small-text">{tab.login.reason || input.reason}</div>
-      <div className="faint small-text">在 FRAME 浏览器里登录：扫码、密码、验证码都在那里输入，不要发到聊天里。</div>
+      <div className="faint small-text">
+        {remote ? "在你电脑上的浏览器里登录（AI 已经把那个页面切到前面）" : "在 FRAME 浏览器里登录"}：扫码、密码、验证码都在那里输入，不要发到聊天里。
+      </div>
       <div className="row wrap">
-        <button
-          className="btn small primary"
-          onClick={() => {
-            showBrowserTab(tabId);
-            openTool("browser");
-          }}
-        >
-          <Globe size={13} /> 打开浏览器
-        </button>
+        {remote ? (
+          <button className="btn small primary" onClick={() => void focusRemote(work.repo, tabId).catch(() => {})}>
+            <Globe size={13} /> 在电脑上打开那个页面
+          </button>
+        ) : (
+          <button
+            className="btn small primary"
+            onClick={() => {
+              showBrowserTab(tabId);
+              openTool("browser");
+            }}
+          >
+            <Globe size={13} /> 打开浏览器
+          </button>
+        )}
         <button className="btn small" onClick={() => void loginDone(work.repo, tabId).catch(() => {})}>
           登录好了
         </button>

@@ -134,7 +134,7 @@ describe("the logged-in browser for the AI", () => {
 
   it("browses, refuses to fill in what is the user's, and downloads with the login", async () => {
     const opened = await call("browser_open", { url: siteUrl });
-    expect(opened.text).toMatch(/标签页 t[0-9a-f]{6}：素材站/);
+    expect(opened.text).toMatch(/标签页 t[0-9a-f]{6}（服务器上的浏览器）：素材站/);
     const ref = (text, label) => new RegExp(`${label}"? \\[ref=(\\w+)\\]`).exec(text)?.[1];
     // The password, the login form's other field and the comment box are the user's.
     await expect(call("browser_act", { action: "type", ref: ref(opened.text, "密码"), text: "x" })).rejects.toThrow(/browser_login/);
