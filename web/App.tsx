@@ -1,5 +1,5 @@
 import { Component, useEffect, useState, type ReactNode } from "react";
-import { api, onConnection } from "./lib/api";
+import { api, onConnection, useServerEvent } from "./lib/api";
 import { ToastProvider, ConfirmProvider, PromptProvider } from "./lib/ui";
 import { Login } from "./pages/Login";
 import { Home } from "./home/Home";
@@ -69,6 +69,13 @@ export function App() {
         );
     });
   }, [build]);
+  // …or a new build was copied into the running studio, which did not restart.
+  useServerEvent(
+    (event) => {
+      if (event.type === "build" && build && typeof event.build === "string") setOutdated(event.build !== build);
+    },
+    [build],
+  );
   // Exports run in the background of whatever page is open; interrupted ones go on. Any open
   // page also draws for the AI on this device's GPU.
   const authenticated = Boolean(state?.authenticated);

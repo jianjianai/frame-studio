@@ -52,6 +52,10 @@ export class Tasks {
     })();
     return task;
   }
+  /** What is still running (an update that restarts the studio waits for it). */
+  running() {
+    return [...this.items.values()].filter(({ task }) => task.status === "running").map(({ task }) => ({ id: task.id, kind: task.kind, title: task.title }));
+  }
   get(id) {
     const entry = this.items.get(id);
     if (!entry) throw problem(404, "任务不存在", "NOT_FOUND");

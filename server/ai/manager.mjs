@@ -1335,6 +1335,11 @@ export class AiManager {
     }
   }
 
+  /** Conversations in a turn (running, or waiting on the user's answer): an update that restarts the studio waits for them. */
+  busy() {
+    return [...this.sessions.values()].filter(({ meta }) => meta.status !== "idle").map(({ meta }) => ({ id: meta.id, work: meta.work, title: meta.title, status: meta.status }));
+  }
+
   /**
    * The studio is shutting down (an update replaces it): turns still running are cut off. They
    * are marked, and go on by themselves after the restart (resumeInterrupted). A crash marks

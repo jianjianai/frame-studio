@@ -26,6 +26,9 @@ COPY server/speech/models.mjs server/speech/download.mjs server/speech/bundle.mj
 RUN node server/speech/bundle.mjs /opt/frame-models/speech
 COPY . .
 RUN pnpm build && pnpm prune --prod && chown -R node:node /app
+# The commit built: deploy/publish.sh compares a running studio's with the one it publishes.
+ARG FRAME_COMMIT=""
+RUN printf '%s\n' "$FRAME_COMMIT" > /app/.commit && chown node:node /app/.commit
 
 ENV FRAME_HOME=/data \
     FRAME_HOST=0.0.0.0 \

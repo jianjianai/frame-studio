@@ -54,9 +54,21 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     return work;
   };
 
-  // Which build of the studio UI is served: open pages compare it after a reconnect to offer a reload.
+  // Which build of the studio UI is served: open pages compare it after a reconnect to offer a reload,
+  // and hear of a new one copied into the running studio (deploy/publish.sh) right away.
   const builtIndex = path.join(appRoot, "web", "dist", "web", "index.html");
-  const build = fs.existsSync(builtIndex) ? createHash("sha256").update(fs.readFileSync(builtIndex)).digest("hex").slice(0, 12) : "dev";
+  const buildOf = () => (fs.existsSync(builtIndex) ? createHash("sha256").update(fs.readFileSync(builtIndex)).digest("hex").slice(0, 12) : "dev");
+  let build = buildOf();
+  if (build !== "dev") {
+    const changed = () => {
+      const next = buildOf();
+      if (next === build) return;
+      build = next;
+      events.emit({ type: "build", build });
+    };
+    fs.watchFile(builtIndex, { interval: 3000 }, changed).unref();
+    services.closers.push(() => fs.unwatchFile(builtIndex, changed));
+  }
   router.get(
     "/api/state",
     ({ principal }) => ({
@@ -82,6 +94,16 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     res.setHeader("Set-Cookie", "frame_session=; Path=/; Max-Age=0");
     return { ok: true };
   });
+  // For deploy/publish.sh, from inside the container only: replacing the studio now would cut off
+  // these AI turns (running, or waiting on the user's answer) and background tasks (exports…).
+  router.get(
+    "/api/internal/busy",
+    ({ req }) => {
+      if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(req.socket.remoteAddress)) throw problem(404, "接口不存在", "NOT_FOUND");
+      return { ai: services.ai?.busy() ?? [], tasks: services.tasks?.running() ?? [] };
+    },
+    { public: true },
+  );
 
   repoRoutes(services);
   workRoutes(services);

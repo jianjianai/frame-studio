@@ -28,7 +28,7 @@ FRAME_PASSWORD='设置一个强密码' docker compose -f deploy/compose.yaml up 
 
 - 所有数据在 `deploy/data`（容器内 `/data`）：作品库、设置、对话、导出、语音模型、AI 账号凭据（`/data/home`）。
 - 镜像包含 Chromium、中日韩字体、Beat This!（Python + CPU 版 PyTorch + 模型，约 1 GB）和语音输入的识别模型（SenseVoice + Silero VAD，约 240 MB）。三维场景在容器中用软件渲染，服务器导出较慢；AI 查看画面、测速时，给对话发消息的那个浏览器如果开着 FRAME，会代替服务器用自己的显卡画。
-- 更新：`git pull && docker compose -f deploy/compose.yaml up -d --build`。
+- 更新：`git pull && docker compose -f deploy/compose.yaml up -d --build`。替换容器会打断正在工作的 AI 对话（重启后它们会自动接着做，但正在进行的那一步要重来）。不想打断时用 `deploy/publish.sh`（`FRAME_STACK` 指向 compose 所在目录，`FRAME_CONTAINER`、`FRAME_IMAGE` 按实际填写）：它从当前提交构建镜像；如果改动只涉及运行中的服务器每次都从磁盘读的文件（构建好的界面、预览页由 Vite 现编译的 `src/` 代码、`docs/`、`public/`），就把这些文件直接换进运行中的容器，不重启，已打开的页面会提示刷新；否则等到没有 AI 对话在工作、没有导出等后台任务时再替换容器（`FRAME_NOW=1` 立即替换）。同时只有一个更新在等，之后再发布的会让它直接用最新的镜像。
 
 ### 反向代理
 

@@ -252,6 +252,16 @@ describe("studio API (password mode)", () => {
     expect((await server.call("/api/works", { headers: { Cookie: cookie } })).status).toBe(200);
   });
 
+  it("tells an update inside the container, without a login, what a restart would cut off", async () => {
+    expect((await server.call("/api/internal/busy")).body).toEqual({ ai: [], tasks: [] });
+    let finish;
+    const task = server.app.services.tasks.start({ kind: "export", title: "导出 MP4" }, () => new Promise((resolve) => (finish = resolve)));
+    expect((await server.call("/api/internal/busy")).body.tasks).toEqual([{ id: task.id, kind: "export", title: "导出 MP4" }]);
+    finish();
+    await task.done;
+    expect((await server.call("/api/internal/busy")).body.tasks).toEqual([]);
+  });
+
   it("serves any domain the studio is reached through (reverse proxies, tunnels)", async () => {
     const login = await server.call("/api/login", { method: "POST", body: { password: "secret-pass" } });
     const cookie = login.headers.get("set-cookie").split(";")[0];
