@@ -153,9 +153,9 @@ export type VersionSource = "work" | "experience" | "materials" | "reviews" | "s
 /**
  * Tools that open as editor tabs (wide, many options or much data) instead of side bar views:
  * export, reviews, the libraries' resources, the management of the material or experience
- * libraries, and the logged-in browser.
+ * libraries, the logged-in browser and the user's linked Blender.
  */
-export type Tool = "export" | "reviews" | "resources" | "libraries:materials" | "libraries:experiences" | "browser";
+export type Tool = "export" | "reviews" | "resources" | "libraries:materials" | "libraries:experiences" | "browser" | "blender";
 
 export interface WorkbenchContextValue {
   work: WorkInfo;

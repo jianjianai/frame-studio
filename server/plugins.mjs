@@ -23,6 +23,7 @@ import { coversPlugin } from "./covers.mjs";
 import { remoteSyncPlugin } from "./remote-sync.mjs";
 import { uploadsPlugin } from "./uploads.mjs";
 import { browserPlugin } from "./browser.mjs";
+import { blenderPlugin } from "./blender.mjs";
 import { studioRoutes } from "./routes/studio.mjs";
 import { aiPlugin } from "./ai/routes.mjs";
 import { speechPlugin } from "./speech/plugin.mjs";
@@ -49,4 +50,4 @@ function corePlugin(services) {
   registerSearchTools(tools);
 }
 
-export const plugins = [corePlugin, speechPlugin, librariesPlugin, experiencePlugin, materialsPlugin, reviewsPlugin, skillsPlugin, resourcesPlugin, assetPreviewsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, browserPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];
+export const plugins = [corePlugin, speechPlugin, librariesPlugin, experiencePlugin, materialsPlugin, reviewsPlugin, skillsPlugin, resourcesPlugin, assetPreviewsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, browserPlugin, blenderPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];

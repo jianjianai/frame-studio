@@ -19,11 +19,13 @@ import {
   Clapperboard,
   Play,
   FileCode2,
+  Box,
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePrompt, useToast, type MenuItem } from "../lib/ui";
 import type { FileEntry } from "../lib/types";
 import { useWorkbench } from "../workbench/store";
+import { isShot, openInBlender, useBlenderLinks } from "../lib/blender";
 import { fileIcon } from "../workbench/EditorArea";
 import { editorDrag } from "../workbench/EditorArea";
 import { coarsePointer } from "../lib/touch";
@@ -53,7 +55,8 @@ export function buildTree(entries: FileEntry[]) {
 }
 
 export function ExplorerView() {
-  const { work, openFile, openSample, addToChat, readOnly } = useWorkbench();
+  const { work, openFile, openSample, addToChat, readOnly, openTool } = useWorkbench();
+  const blender = useBlenderLinks(work.repo).some((link) => link.online);
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [open, setOpen] = useState<Set<string>>(new Set(["scenes"]));
   // Picked rows, like VS Code: a click picks one, Ctrl/⌘ adds or drops one, Shift picks a run.
@@ -178,7 +181,25 @@ export function ExplorerView() {
             { label: "打开代码", icon: <FileCode2 size={14} />, onClick: () => openFile(node.path) },
           ]
         : node.type === "file"
-        ? [{ label: "打开", onClick: () => openFile(node.path) }]
+        ? [
+            { label: "打开", onClick: () => openFile(node.path) },
+            // An AB to T shot: in the user's own Blender, linked to this repository.
+            ...(isShot(node.path) && !readOnly
+              ? [
+                  {
+                    label: blender ? "在 Blender 里打开" : "在 Blender 里打开…（先连接 Blender）",
+                    icon: <Box size={14} />,
+                    onClick: () =>
+                      blender
+                        ? openInBlender(work.repo, work.id, node.path).then(
+                            (result) => toast(result.message.split("\n")[0], "ok"),
+                            (error) => (toast((error as Error).message, "error"), openTool("blender")),
+                          )
+                        : openTool("blender"),
+                  },
+                ]
+              : []),
+          ]
         : readOnly
           ? []
           : [

@@ -14,6 +14,8 @@ const defaults = () => ({
   mcp: { tokens: [], clients: [], grants: [] },
   /** The user's own browsers linked through the FRAME 连接器 extension: { id, name, hash, repos, createdAt, lastSeen }. */
   browserBridges: [],
+  /** Blenders on the user's computers linked through the AB to T add-on: { id, name, hash, repos, createdAt, lastSeen }. */
+  blenderLinks: [],
 });
 
 function readJson(file, fallback) {

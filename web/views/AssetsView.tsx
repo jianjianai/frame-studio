@@ -14,6 +14,7 @@ import {
   Eye,
   AlertTriangle,
   Shapes,
+  Box,
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, materialsPath, workPath, useServerEvent } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, useToast, Dialog } from "../lib/ui";
@@ -112,6 +113,9 @@ export function AssetsView() {
         )}
         <button className="icon-btn" title="浏览器：在这里登录网站，AI 就能下载要登录才能下载的素材（在选项卡中打开）" onClick={() => openTool("browser")}>
           <Globe size={15} />
+        </button>
+        <button className="icon-btn" title="Blender：连接你电脑上的 Blender，AI 和你在里面调三维镜头（在选项卡中打开）" onClick={() => openTool("blender")}>
+          <Box size={15} />
         </button>
         <button className="icon-btn" title="资源：素材库里声明的角色、场景、效果、音效等（在选项卡中打开）" onClick={() => openTool("resources")}>
           <Shapes size={15} />

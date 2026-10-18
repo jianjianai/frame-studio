@@ -46,6 +46,7 @@ FRAME 作品是一个用 TypeScript 按“绝对时间”绘制的视频：播�
 | 复用素材库里的角色、场景、效果、转场、音效（Canvas 2D、三维、Pixi） | `resources_search` 找（`engine` 可以只找三维或 Pixi 的）、`resource_view` 看详情和预览图，音效用 `audio_place` 的 `sound` 放到音轨（见 `resources`） |
 | 素材 | `work_context` 的 assets、`asset_import`、`asset_view`（看素材本身：图片、视频、三维模型、Lottie、全景图、字体）；素材库 `materials_list`（库多时 `query` 查找）、`materials_link`、`materials_use`、`material_write`（见 `assets`） |
 | 要登录的网站：下载要账号、网站拦着服务器（YouTube、Sketchfab、B 站） | `browser_open` / `browser_read` / `browser_act`，`browser_login` 请用户登录，`browser_download` 下载进作品，`browser_cookies` 给 yt-dlp（见 `browser`） |
+| 三维镜头在用户电脑上的 Blender 里调（abt-scene 技能做的 `abt/<镜头>.json`），用那台电脑的显卡渲染一帧 | `blender_status`、`blender_open`、`blender_run`、`blender_view`（见 `blender`） |
 | 版本与导出 | `version_save` / `version_diff` / `version_restore`、`export_video` + `task_status`（完成时返回下载地址） |
 | 发布后的复盘 | `review_import` 导入平台后台的导出，`review_read` / `review_write` 查看和记录数据、留存（和同类比）和复盘文档，`reviews_compare` 和其他作品在同一发布天数比较（见 `reviews`） |
 
