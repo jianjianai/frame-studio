@@ -46,44 +46,60 @@ export function createPcmAudio(
           },
         }
       : {}),
-    createAudio({
-      trackId,
-      context,
-      destination,
-      when,
-      offset,
-      duration,
-      rate,
-    }: GeneratedAudioOptions) {
+    createAudio(options: GeneratedAudioOptions) {
+      const { trackId, context } = options;
       if (!Object.hasOwn(tracks, trackId))
         throw new Error("未知生成音轨: " + trackId);
       const buffer = buffers.get(trackId);
-      if (!buffer) throw new Error("请先调用 prepareAudio 准备生成音轨");
-      const length = Math.min(duration, buffer.duration - offset);
-      if (length <= 0) return { dispose() {} };
-      const source = context.createBufferSource();
-      source.buffer = buffer;
-      source.playbackRate.value = rate;
-      let disposed = false,
-        started = false;
-      const dispose = () => {
-        if (disposed) return;
-        disposed = true;
-        source.onended = null;
-        if (started) source.stop();
-        source.disconnect();
-        source.buffer = null;
+      if (buffer) return play(buffer, options);
+      if (!lazy) throw new Error("请先调用 prepareAudio 准备生成音轨");
+      // Live playback prepares only its first seconds but schedules a whole non-looping clip at
+      // once: a sound placed later is made here, and the transport waits for `ready`.
+      let voice: { dispose(): void } | undefined,
+        disposed = false;
+      const ready = prepare(trackId, context).then(() => {
+        if (!disposed) voice = play(buffers.get(trackId)!, options);
+      });
+      return {
+        ready,
+        dispose() {
+          disposed = true;
+          voice?.dispose();
+        },
       };
-      try {
-        source.connect(destination);
-        source.onended = dispose;
-        source.start(when, offset, length);
-        started = true;
-        return { dispose };
-      } catch (error) {
-        dispose();
-        throw error;
-      }
     },
   };
+}
+
+function play(
+  buffer: AudioBuffer,
+  { context, destination, when, offset, duration, rate }: GeneratedAudioOptions,
+) {
+  // A start time already passed (a sound made while the context runs) skips ahead to stay in sync.
+  const late = Math.max(0, context.currentTime - when) * rate,
+    length = Math.min(duration, buffer.duration - offset) - late;
+  if (length <= 0) return { dispose() {} };
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.playbackRate.value = rate;
+  let disposed = false,
+    started = false;
+  const dispose = () => {
+    if (disposed) return;
+    disposed = true;
+    source.onended = null;
+    if (started) source.stop();
+    source.disconnect();
+    source.buffer = null;
+  };
+  try {
+    source.connect(destination);
+    source.onended = dispose;
+    source.start(when + late / rate, offset + late, length);
+    started = true;
+    return { dispose };
+  } catch (error) {
+    dispose();
+    throw error;
+  }
 }
