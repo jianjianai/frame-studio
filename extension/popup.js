@@ -27,7 +27,9 @@ async function render(state) {
     }
   })();
   $("dot").className = `dot ${state.status.state === "online" ? "online" : ""}`;
+  const ago = state.heard ? Math.round((Date.now() - state.heard) / 1000) : null;
   $("stateText").textContent = `${STATES[state.status.state] ?? state.status.state} ${host}${state.status.message && state.status.state !== "online" ? `：${state.status.message}` : ""}`;
+  $("stateText").title = ago === null ? "" : `${ago} 秒前收到 FRAME 的消息`;
   const repos = state.status.repos ?? [];
   $("repos").textContent = repos.length ? `作品库：${repos.map((repo) => repo.title).join("、")}（这些作品库的 AI 能用这个浏览器里你已经登录的网站）` : "";
 

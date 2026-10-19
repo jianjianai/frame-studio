@@ -130,8 +130,14 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
     (event) => {
       if ((event.type === "experience-files" && event.repo === repo) || (event.type === "work-versions" && String(event.work).startsWith("experience/")))
         void reloadExperience();
+      // Back after a dropped connection: what changed meanwhile came as events that never arrived.
+      if (event.type === "reconnected") {
+        void reload();
+        void reloadStatus();
+        void reloadExperience();
+      }
     },
-    [repo],
+    [repo, reload, reloadStatus],
   );
   useEffect(() => {
     void reload();

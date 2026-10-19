@@ -282,7 +282,17 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
     const unsubscribe = events.subscribe((event) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
     });
-    const ping = setInterval(() => ws.readyState === ws.OPEN && ws.ping(), 25000);
+    // A tick every 20 s lets the page notice a connection that died without closing; a page that
+    // did not answer the last ping is gone, and its socket goes.
+    let alive = true;
+    ws.on("pong", () => (alive = true));
+    const ping = setInterval(() => {
+      if (ws.readyState !== ws.OPEN) return;
+      if (!alive) return ws.terminate();
+      alive = false;
+      ws.ping();
+      ws.send('{"type":"tick"}');
+    }, 20000);
     ws.on("close", () => {
       unsubscribe();
       clearInterval(ping);

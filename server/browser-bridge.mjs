@@ -215,12 +215,15 @@ export class Bridges {
     this.connections.get(bridge.id)?.close();
     const connection = new Connection(this, ws, bridge);
     this.connections.set(bridge.id, connection);
+    // When a browser comes and goes is what tells a dropped connection from a sleeping computer.
+    console.log(`FRAME 连接器 ${bridge.id}（${bridge.name}）连上了`);
     connection.welcome(bridge, token);
     for (const repo of bridge.repos) this.emit(repo);
     return connection;
   }
 
   closed(connection) {
+    console.log(`FRAME 连接器 ${connection.bridge.id}（${connection.bridge.name}）断开，连了 ${Math.round((Date.now() - connection.since) / 1000)} 秒，最后一次消息在 ${Math.round((Date.now() - connection.seen) / 1000)} 秒前`);
     if (this.connections.get(connection.bridge.id) !== connection) return;
     this.connections.delete(connection.bridge.id);
     const list = this.list();
@@ -255,6 +258,7 @@ class Connection {
     this.next = 1;
     this.active = Date.now();
     this.seen = Date.now();
+    this.since = Date.now();
     this.ping = setInterval(() => {
       // The extension answers pings; silence means it is gone (its service worker was stopped).
       if (Date.now() - this.seen > 70000) return this.close();

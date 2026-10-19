@@ -10,13 +10,20 @@ const PROTOCOL = 1;
 const HEADER = 16;
 const CHUNK = 256 * 1024;
 const DETACH_MS = 30 * 1000;
+/** FRAME pings every 20 s: longer silence means the connection died without closing (the computer slept). */
+const QUIET_MS = 60 * 1000;
+/** A page that does not answer a DevTools command this long is stuck (or asleep). */
+const CDP_MS = 25 * 1000;
 
 let socket = null;
+let heard = 0;
 let status = { state: "unpaired", message: "", repos: [], name: "" };
 let reconnect = null;
 const waiting = new Set();
 /** tab id → timer that detaches the debugger when the AI has left the tab alone for a while */
 const attached = new Map();
+/** tab id → when the page was last told to run (it may have been frozen) */
+const woken = new Map();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const fail = (message, status = 400, code = "REMOTE") => Object.assign(new Error(message), { status, code });
@@ -70,8 +77,14 @@ async function connect({ code } = {}) {
   ws.binaryType = "arraybuffer";
   socket = ws;
   setStatus("connecting");
-  ws.onopen = () => ws.send(JSON.stringify({ type: code ? "pair" : "hello", protocol: PROTOCOL, code, token, name: name || defaultName() }));
-  ws.onmessage = (event) => void receive(JSON.parse(event.data));
+  ws.onopen = () => {
+    heard = Date.now();
+    ws.send(JSON.stringify({ type: code ? "pair" : "hello", protocol: PROTOCOL, code, token, name: name || defaultName() }));
+  };
+  ws.onmessage = (event) => {
+    heard = Date.now();
+    void receive(JSON.parse(event.data));
+  };
   ws.onclose = () => {
     if (socket !== ws) return;
     socket = null;
@@ -81,6 +94,27 @@ async function connect({ code } = {}) {
     }
   };
 }
+
+/**
+ * A socket that went quiet died without closing (the computer slept, the network changed): it
+ * still looks open, so nothing would ever connect again. Drop it and connect anew.
+ */
+function checkQuiet(quiet = QUIET_MS) {
+  const ws = socket;
+  if (!ws || ws.readyState !== 1 || Date.now() - heard < quiet) return;
+  socket = null;
+  ws.onclose = ws.onmessage = null;
+  try {
+    ws.close();
+  } catch {}
+  setStatus("offline", "和 FRAME 的连接断了，正在重连…");
+  void connect();
+}
+setInterval(() => checkQuiet(), 10000);
+self.addEventListener("online", () => {
+  checkQuiet(20000);
+  void connect();
+});
 
 const send = (message) => socket?.readyState === 1 && socket.send(JSON.stringify(message));
 
@@ -127,10 +161,33 @@ async function access({ tab: id, repo }, { own = false } = {}) {
   const entry = (await allowed())[id];
   if (!entry || entry.repo !== repo) throw fail("这个标签页没有交给这个作品库的 AI", 403, "NOT_ALLOWED");
   if (own && entry.kind !== "ai") throw fail("这是用户的标签页，由用户自己操作", 403, "USER_ONLY");
-  const tab = await chrome.tabs.get(Number(id)).catch(() => null);
+  let tab = await chrome.tabs.get(Number(id)).catch(() => null);
   if (!tab) throw fail("标签页已经关了", 404, "NOT_FOUND");
+  // The browser let it go to save memory (Edge's sleeping tabs): load it again first.
+  if (tab.discarded) {
+    await reloaded(tab.id);
+    tab = await chrome.tabs.get(tab.id);
+  }
   return { tab, entry };
 }
+
+/** Reload a tab and wait until it has loaded (at most 30 seconds). */
+function reloaded(tabId) {
+  return new Promise((resolve) => {
+    const done = () => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timer);
+      resolve();
+    };
+    const listener = (id, change) => id === tabId && change.status === "complete" && done();
+    const timer = setTimeout(done, 30000);
+    chrome.tabs.onUpdated.addListener(listener);
+    chrome.tabs.reload(tabId).catch(done);
+  });
+}
+
+/** Tabs the AI uses are not to be discarded by the browser while it works with them. */
+const keep = (tabId) => chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => {});
 
 /** Pages the AI may open: the web, nothing of the browser or the computer. */
 function web(address) {
@@ -207,6 +264,12 @@ async function cdp(tabId, method, params = {}) {
       if (!/already attached/i.test(error.message)) throw fail(`不能操作这个标签页：${error.message}`, 409);
     }
   }
+  // A page the browser froze in the background (Edge's sleeping tabs) runs again: made sure of
+  // every few seconds while the AI works in it.
+  if (Date.now() - (woken.get(target.tabId) ?? 0) > 5000) {
+    woken.set(target.tabId, Date.now());
+    await withTimeout(chrome.debugger.sendCommand(target, "Page.setWebLifecycleState", { state: "active" }), 5000).catch(() => {});
+  }
   clearTimeout(attached.get(target.tabId));
   attached.set(
     target.tabId,
@@ -215,11 +278,17 @@ async function cdp(tabId, method, params = {}) {
       chrome.debugger.detach(target).catch(() => {});
     }, DETACH_MS),
   );
-  return chrome.debugger.sendCommand(target, method, params);
+  return withTimeout(chrome.debugger.sendCommand(target, method, params), CDP_MS, `网页 ${Math.round(CDP_MS / 1000)} 秒没有响应（${method}）：它可能卡住了，或者被浏览器休眠了`);
+}
+
+function withTimeout(promise, ms, message = "超时") {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => (timer = setTimeout(() => reject(fail(message, 504, "TIMEOUT")), ms)))]).finally(() => clearTimeout(timer));
 }
 chrome.debugger.onDetach.addListener((source) => {
   clearTimeout(attached.get(source.tabId));
   attached.delete(source.tabId);
+  woken.delete(source.tabId);
 });
 
 async function evaluate(tabId, expression) {
@@ -261,6 +330,7 @@ const OPS = {
     const place = await aiWindow();
     const tab = place.created ? place.created.tabs[0] : await chrome.tabs.create({ windowId: place, url: "about:blank", active: true });
     await setAllowed((tabs) => (tabs[tab.id] = { kind: "ai", repo }));
+    await keep(tab.id);
     await group(tab);
     if (target !== "about:blank") await go(tab.id, target);
     // FRAME looks the tab up in the list right after: send it first.
@@ -396,7 +466,10 @@ chrome.tabs.onRemoved.addListener(async (id) => {
 // A page the AI uses opened another (a login window, a new tab): it goes with its opener.
 chrome.tabs.onCreated.addListener(async (tab) => {
   const opener = tab.openerTabId && (await allowed())[tab.openerTabId];
-  if (opener) await setAllowed((tabs) => (tabs[tab.id] = { kind: opener.kind, repo: opener.repo, opener: tab.openerTabId }));
+  if (opener) {
+    await setAllowed((tabs) => (tabs[tab.id] = { kind: opener.kind, repo: opener.repo, opener: tab.openerTabId }));
+    await keep(tab.id);
+  }
 });
 
 // ---- the popup -------------------------------------------------------------------------------
@@ -408,7 +481,10 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
       void connect({ code: message.code });
       await changed();
       while (status.state === "connecting") await changed();
-    } else if (message.type === "share") await setAllowed((tabs) => (tabs[message.tab] = { kind: "shared", repo: message.repo }));
+    } else if (message.type === "share") {
+      await setAllowed((tabs) => (tabs[message.tab] = { kind: "shared", repo: message.repo }));
+      await keep(message.tab);
+    }
     else if (message.type === "unshare") await setAllowed((tabs) => delete tabs[message.tab]);
     else if (message.type === "unpair") {
       await chrome.storage.local.remove("token");
@@ -423,7 +499,7 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
       const tab = await chrome.tabs.get(Number(id)).catch(() => null);
       if (tab) tabs.push({ id: tab.id, title: tab.title, url: tab.url, ...entry });
     }
-    reply({ status, server, paired: Boolean(token), tabs, defaultName: defaultName() });
+    reply({ status, server, paired: Boolean(token), tabs, defaultName: defaultName(), heard });
   })().catch((error) => reply({ error: error.message }));
   return true;
 });
@@ -432,6 +508,9 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
 
 // The service worker stops when idle; the socket's pings keep it awake, the alarm brings it back.
 chrome.alarms.create("frame-keepalive", { periodInMinutes: 0.5 });
-chrome.alarms.onAlarm.addListener(() => void connect());
+chrome.alarms.onAlarm.addListener(() => {
+  checkQuiet();
+  void connect();
+});
 chrome.runtime.onStartup.addListener(() => void connect());
 void connect();

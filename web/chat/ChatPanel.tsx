@@ -242,6 +242,29 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, setCurrent]);
+  // Back after a dropped connection: the open conversation and the list load again, in place
+  // (events that arrive meanwhile are kept and added after, as when it first opened).
+  const [resync, setResync] = useState(0);
+  useEffect(() => {
+    if (!resync || !current) return;
+    const mine: Loading = { session: current, events: [] };
+    loading.current = mine;
+    api<History>(`/api/ai/sessions/${current}`).then(
+      (data) => {
+        if (loading.current !== mine) return;
+        loading.current = null;
+        const later = mine.events.filter((event) => event.end === undefined || event.end > data.size).map((event) => event.entry);
+        firstTurn.current = data.turn;
+        setEntries([...data.transcript, ...later]);
+        setView({ turn: data.turn, loading: false, older: false });
+        applyMeta(data.session);
+      },
+      () => {
+        if (loading.current === mine) loading.current = null;
+      },
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resync]);
   const latestSession = useRef(current);
   latestSession.current = current;
   // Scroll events come faster than renders: one page at a time.
@@ -270,7 +293,10 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
 
   useServerEvent(
     (event) => {
-      if (event.type === "ai-session") {
+      if (event.type === "reconnected") {
+        void loadSessions();
+        setResync((value) => value + 1);
+      } else if (event.type === "ai-session") {
         const meta = event.session as SessionMeta;
         if (meta.work !== work.id) return;
         setSessions((list) =>
@@ -295,7 +321,7 @@ export function ChatPanel({ ref, onClose }: { ref?: Ref<ChatHandle>; onClose: ()
         });
       else if (event.type === "ai-login") setAccounts((map) => ({ ...map, [event.agent as string]: (event.status as { loggedIn: boolean }).loggedIn }));
     },
-    [current, work.id],
+    [current, work.id, loadSessions],
   );
 
   // The history list closes like a dropdown: on a click elsewhere or Escape.
