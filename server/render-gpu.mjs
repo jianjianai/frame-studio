@@ -12,8 +12,6 @@ const PROBE_MS = 3000;
 const HEARD_MS = 5000;
 /** No answer to one drawing call for this long: the page is gone for this purpose. */
 const CALL_MS = 120000;
-/** A page holds its drawing back for playback at most 2 minutes (gpu-render.ts PATIENCE): past this, it counts again. */
-const HOLD_MS = 150000;
 
 const gone = (message = "用户电脑上的 FRAME 页面已经关闭或不再响应") => problem(503, message, "GPU_PAGE_GONE");
 export const isGone = (error) => error?.code === "GPU_PAGE_GONE";
@@ -89,8 +87,6 @@ class RemoteBrowser {
     this.activeAt = 0;
     this.heardAt = 0;
     this.closed = false;
-    this.waitingSince = 0; // while the page holds the AI's drawing back for its playing preview
-    this.waited = 0;
     let alive = true;
     ws.on("pong", () => (alive = true));
     const ping = setInterval(() => {
@@ -101,7 +97,6 @@ class RemoteBrowser {
     ping.unref?.();
     ws.on("close", () => {
       clearInterval(ping);
-      clearTimeout(this.holdTimer);
       this.closed = true;
       for (const call of this.calls.values()) call.reject(gone());
       this.calls.clear();
@@ -119,8 +114,7 @@ class RemoteBrowser {
       this.work = typeof message.work === "string" ? message.work.slice(0, 300) : null;
       this.visible = Boolean(message.visible);
       if (message.active) this.activeAt = Date.now();
-    } else if (message.type === "waiting") this.hold(Boolean(message.waiting));
-    else if (message.type === "event") this.pages.get(message.page)?.emit(message);
+    } else if (message.type === "event") this.pages.get(message.page)?.emit(message);
     else if (message.type === "result") {
       const call = this.calls.get(message.id);
       if (!call) return;
@@ -130,65 +124,19 @@ class RemoteBrowser {
     }
   }
 
-  /** How long this page has held the AI's drawing back for its playing preview, so far (ms). */
-  waitedMs() {
-    return this.waited + (this.waitingSince ? Date.now() - this.waitingSince : 0);
-  }
-
-  /**
-   * The page waits to load or draw while the person plays a preview in it (web/lib/gpu-render.ts
-   * standBy): no call times out meanwhile, and their time runs on when it goes on.
-   */
-  hold(waiting) {
-    if (waiting === Boolean(this.waitingSince) || this.closed) return;
-    clearTimeout(this.holdTimer);
-    if (waiting) {
-      this.waitingSince = Date.now();
-      for (const call of this.calls.values()) call.pause();
-      // A page that never says it goes on (frozen) times out like any other.
-      this.holdTimer = setTimeout(() => this.hold(false), HOLD_MS);
-      this.holdTimer.unref?.();
-    } else {
-      this.waited += Date.now() - this.waitingSince;
-      this.waitingSince = 0;
-      for (const call of this.calls.values()) call.resume();
-    }
-  }
-
   call(message, timeoutMs = CALL_MS) {
     if (this.closed || this.ws.readyState !== this.ws.OPEN) return Promise.reject(gone());
     const id = ++this.next;
     return new Promise((resolve, reject) => {
-      let left = timeoutMs;
-      let deadline = 0;
-      let timer = null;
-      // A quick question (is it awake, close a frame) is answered at once, waiting or not.
-      const held = message.op !== "ping" && message.op !== "close";
-      const expire = () => {
+      const timer = setTimeout(() => {
         this.calls.delete(id);
         reject(gone());
-      };
+      }, timeoutMs);
       const settle = (fn) => (value) => {
         clearTimeout(timer);
         fn(value);
       };
-      const call = {
-        resolve: settle(resolve),
-        reject: settle(reject),
-        pause() {
-          if (!held || !timer) return;
-          clearTimeout(timer);
-          timer = null;
-          left = Math.max(0, deadline - Date.now());
-        },
-        resume() {
-          if (timer) return;
-          deadline = Date.now() + left;
-          timer = setTimeout(expire, left);
-        },
-      };
-      this.calls.set(id, call);
-      if (!this.waitingSince || !held) call.resume();
+      this.calls.set(id, { resolve: settle(resolve), reject: settle(reject) });
       this.ws.send(JSON.stringify({ ...message, id }));
     });
   }

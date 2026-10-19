@@ -161,7 +161,14 @@ export async function createApp({ env = process.env, plugins = [] } = {}) {
         // Pages that play a work (the stage, a local export) carry its playback files for the browser's cache.
         const cache = ["/preview/stage.html", "/preview/export.html"].includes(pathname) ? { precache: await stageAssets(url) } : {};
         const page = await preview.html(req.url, pathname.slice(1).replace("preview/", "src/preview/"), { preload: true, cache });
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" });
+        // A frame the AI draws in inside the user's workbench (web/lib/gpu-render.ts) gets a process
+        // of its own in Chrome and Edge, so it does not hold up the preview playing beside it.
+        const isolate = url.searchParams.get("isolate") === "1" && ["/preview/render.html", "/preview/asset.html"].includes(pathname);
+        res.writeHead(200, {
+          "Content-Type": "text/html; charset=utf-8",
+          "Cache-Control": "no-store",
+          ...(isolate ? { "Document-Isolation-Policy": "isolate-and-credentialless" } : {}),
+        });
         return res.end(page);
       }
       if (!config.dev && fs.existsSync(webDist) && serveStatic(req, res, webDist, pathname)) return;

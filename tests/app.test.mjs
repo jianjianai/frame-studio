@@ -260,6 +260,15 @@ describe("studio API (local mode)", () => {
     expect([raw.status, await raw.text()]).toEqual([206, "we"]);
   });
 
+  it("isolates the AI's frames in the user's workbench in a process of their own, and only those", async () => {
+    const query = "module=/x/project.ts&assetBase=/files/local/x/";
+    const policy = async (path) => (await fetch(server.base + path)).headers.get("document-isolation-policy");
+    expect(await policy(`/preview/render.html?${query}&isolate=1`)).toBe("isolate-and-credentialless");
+    expect(await policy(`/preview/asset.html?src=x.glb&isolate=1`)).toBe("isolate-and-credentialless");
+    expect(await policy(`/preview/render.html?${query}`)).toBe(null);
+    expect(await policy(`/preview/stage.html?${query}&isolate=1`)).toBe(null);
+  });
+
   it("exposes the tool registry", async () => {
     const tools = await server.call("/api/tools");
     expect(tools.body.map((tool) => tool.name)).toEqual(expect.arrayContaining(["work_context", "preview_frames", "speech_synthesize"]));

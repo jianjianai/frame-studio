@@ -182,6 +182,6 @@ export async function checkWork(services, work, { runtime = true, frames = false
   services.checks.set(`${work.repo}/${work.id}`, result);
   services.events.emit({ type: "work-check", work: work.id, repo: work.repo, result });
   // Where it loaded and the rendered moments go to the caller only (an AI looking), not into the kept result.
-  const drawn = runtimeResult ? { gpu: runtimeResult.gpu ?? null, paused: runtimeResult.paused ?? 0 } : {};
+  const drawn = runtimeResult ? { gpu: runtimeResult.gpu ?? null } : {};
   return runtimeResult?.sheet ? { ...result, ...drawn, sheet: runtimeResult.sheet, sheetTimes: runtimeResult.checkedTimes } : { ...result, ...drawn };
 }

@@ -11,7 +11,6 @@ import { projectAudioTracks } from "../../src/engine/types.ts";
 import { formatTime, contentStamp } from "../render.mjs";
 import { readVisual, readAudio } from "../documents.mjs";
 import { offerOrder } from "../libraries.mjs";
-import { pausedText } from "./preview-tools.mjs";
 
 /** What would run past a new, shorter length: layers, audio clips, subtitles, the cover moment. */
 function pastEnd(work, meta, duration) {
@@ -36,14 +35,14 @@ const TIMING_SAMPLES = 200;
 const TIMING_BUDGET_MS = 45000;
 
 /** Where work_check loaded the work: the user's browser (`gpu`), or here. */
-const loadedOn = (runtime, gpu, paused) => (!runtime || gpu === undefined ? "" : gpu ? `，在用户电脑上加载（${gpu}）${pausedText(paused)}` : "，在服务器上加载（没有显卡，三维作品慢）");
+const loadedOn = (runtime, gpu) => (!runtime || gpu === undefined ? "" : gpu ? `，在用户电脑上加载（${gpu}）` : "，在服务器上加载（没有显卡，三维作品慢）");
 
 /**
  * Where the film is slow to draw, as text: the usual cost, stretches that stand out (by their
  * average, with the layers and the shot there) and first visits that were slow only because
  * something loaded (drawn again, they were fast).
  */
-export function timingReport(measured, project, { waited = 0, paused = 0 } = {}) {
+export function timingReport(measured, project, { waited = 0 } = {}) {
   const samples = measured.samples;
   if (!samples.length) return ["渲染耗时：一帧也没有测到。"];
   const cost = (sample) => sample.again ?? sample.ms;
@@ -55,7 +54,7 @@ export function timingReport(measured, project, { waited = 0, paused = 0 } = {})
   const seconds = (value) => Math.round(value / 100) / 10;
   const spread = measured.lastStep > measured.step ? `，${measured.gpu ? "来回传输占了时间" : "画得慢"}，后面放宽到每 ${measured.lastStep} 秒一帧才能测完` : "";
   const lines = [
-    `渲染耗时（按工作台预览的样子：${measured.width}×${measured.height}，标准画质，含字幕；每 ${measured.step} 秒取一帧${spread}；共 ${samples.length} 帧，用时 ${seconds(measured.ms)} 秒，其中加载作品 ${seconds(measured.loadMs)} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}${pausedText(paused, "，另外")}）：中位 ${ms(middle)}，九成在 ${ms(at(0.9))} 以内，最慢 ${ms(sorted[sorted.length - 1])}。`,
+    `渲染耗时（按工作台预览的样子：${measured.width}×${measured.height}，标准画质，含字幕；每 ${measured.step} 秒取一帧${spread}；共 ${samples.length} 帧，用时 ${seconds(measured.ms)} 秒，其中加载作品 ${seconds(measured.loadMs)} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}）：中位 ${ms(middle)}，九成在 ${ms(at(0.9))} 以内，最慢 ${ms(sorted[sorted.length - 1])}。`,
     measured.gpu
       ? `实时播放 ${fps} fps 每帧要在 ${Math.round(1000 / fps)} ms 内画完；这是在用户电脑上用显卡测的（${measured.gpu}），接近用户预览时的速度${measured.background ? "（测的时候页面在后台，数值可能偏大）" : ""}。`
       : `实时播放 ${fps} fps 每帧要在 ${Math.round(1000 / fps)} ms 内画完；这是在服务器上测的（没有开着这个作品、能用显卡画的 FRAME 页面，或者用户在设置里选了服务器渲染），服务器没有 GPU，数值比一般电脑慢。`,
@@ -382,7 +381,7 @@ export function registerWorkTools(registry) {
       const work = await ctx.work();
       if (timing && !runtime) throw problem(400, "timing 要在浏览器里实际画，不能和 runtime: false 一起用");
       const who = { login: services.ai?.loginOf(ctx.scope.session), repo: work.repo, work: work.id };
-      const { sheet, sheetTimes, gpu, paused, ...result } = await checkWork(services, work, { runtime, frames: frames && runtime, who });
+      const { sheet, sheetTimes, gpu, ...result } = await checkWork(services, work, { runtime, frames: frames && runtime, who });
       const lines = result.problems.map((p) => `- [${p.source}] ${p.file ? p.file + (p.line ? `:${p.line}` : "") + " " : ""}${p.message}`);
       // Console output does not fail a check, but the AI should see it (it only reads `text`).
       const logged = [...new Set((result.console ?? []).map((line) => String(line).slice(0, 300)))];
@@ -392,7 +391,7 @@ export function registerWorkTools(registry) {
           ? "浏览器控制台没有警告和错误。"
           : "";
       let text = (result.ok
-        ? `检查通过（${result.ms} ms${loadedOn(runtime, gpu, paused)}）。${lines.length ? "\n警告：\n" + lines.join("\n") : ""}`
+        ? `检查通过（${result.ms} ms${loadedOn(runtime, gpu)}）。${lines.length ? "\n警告：\n" + lines.join("\n") : ""}`
         : `发现 ${result.problems.length} 个问题：\n${lines.join("\n")}`) + consoleLines;
       if (sheet) text += `\n分镜（${sheetTimes.map((time, index) => `#${index + 1} ${formatTime(time)}`).join("，")}）见附图。`;
       let measured = null;
@@ -401,9 +400,9 @@ export function registerWorkTools(registry) {
         if (!meta.ok || result.problems.some((p) => p.source === "runtime" || p.source === "project")) text += "\n\n作品加载或渲染有错误，没有测渲染耗时。";
         else {
           const step = Math.max(0.5, Math.ceil((meta.meta.duration / TIMING_SAMPLES) * 10) / 10);
-          const { waited, paused, result: timed } = await services.renderer.heavy((on) => services.renderer.timing(work, { step, budgetMs: TIMING_BUDGET_MS, on }), who);
+          const { waited, result: timed } = await services.renderer.heavy((on) => services.renderer.timing(work, { step, budgetMs: TIMING_BUDGET_MS, on }), who);
           measured = timed;
-          text += "\n\n" + timingReport(timed, meta.meta, { waited, paused }).join("\n");
+          text += "\n\n" + timingReport(timed, meta.meta, { waited }).join("\n");
         }
       }
       return {
@@ -535,7 +534,7 @@ export function registerWorkTools(registry) {
       const checked = check && outcome.wrote ? await checkWork(services, work, { runtime: true, frames, who }) : null;
       const checkText = checked
         ? checked.ok
-          ? `\n检查通过（${checked.ms} ms${loadedOn(true, checked.gpu, checked.paused)}）。`
+          ? `\n检查通过（${checked.ms} ms${loadedOn(true, checked.gpu)}）。`
           : `\n检查发现 ${checked.problems.length} 个问题：\n${checked.problems.map((p) => `- [${p.source}] ${p.file ? p.file + (p.line ? `:${p.line}` : "") + " " : ""}${p.message}`).join("\n")}`
         : "";
       return {

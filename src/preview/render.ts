@@ -17,12 +17,18 @@ const source = workSourceFromQuery();
 let materials: number | undefined;
 try {
   await installOffline(await importWork(source));
-  // Drawn for the AI in a studio page (web/lib/gpu-render.ts): each frame first lets what plays there draw.
+  // Drawn for the AI in a studio page (web/lib/gpu-render.ts), on that page's thread: between two
+  // frames the thread is free for a moment, so a preview playing there draws when its frame is due
+  // (nothing waits for it).
   const studio = window.__FRAME_STUDIO__;
   if (window.name === "frame-ai-render" && studio) {
     const frame = studio.frame;
     studio.frame = async (time, subtitles) => {
-      await (parent as { __FRAME_AI_YIELD__?: () => Promise<void> }).__FRAME_AI_YIELD__?.();
+      await new Promise<void>((resolve) => {
+        const channel = new MessageChannel();
+        channel.port1.onmessage = () => resolve();
+        channel.port2.postMessage(null);
+      });
       return frame(time, subtitles);
     };
   }

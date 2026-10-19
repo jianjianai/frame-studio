@@ -76,15 +76,6 @@ export function ffmpegExecutable() {
  * Headless Chromium that loads works through the same Vite server as the
  * studio. Pages are kept warm per work and dropped when the work changes.
  */
-/**
- * A clock for drawing on a page in the user's browser that stands still while the page waits
- * for the preview playing there to pause (render-gpu.mjs hold): budgets count drawing only.
- */
-function drawClock(on) {
-  const base = on?.waitedMs?.() ?? 0;
-  return () => Date.now() - ((on?.waitedMs?.() ?? 0) - base);
-}
-
 export class Renderer {
   constructor(services) {
     this.services = services;
@@ -257,17 +248,12 @@ export class Renderer {
    */
   async anywhere(run, who) {
     const on = await this.gpu.pick(who);
-    if (on) {
-      const before = on.waitedMs?.() ?? 0;
+    if (on)
       try {
-        const result = await run(on);
-        // How long the page waited for the preview playing there to pause (not drawing time): `paused`.
-        if (result && typeof result === "object" && !Array.isArray(result)) result.paused = (on.waitedMs?.() ?? 0) - before;
-        return result;
+        return await run(on);
       } catch (error) {
         if (!isGone(error)) throw error;
       }
-    }
     return run(null);
   }
 
@@ -524,8 +510,7 @@ export class Renderer {
    */
   async motionFrames(work, { times, width, thumbs = [], budgetMs = 45000, consume, on }) {
     this.lastUse = Date.now();
-    const now = drawClock(on);
-    const began = now();
+    const began = Date.now();
     let lease;
     try {
       lease = await this.lease(work, { width, on });
@@ -535,7 +520,7 @@ export class Renderer {
     }
     try {
       return await lease.exclusive(width, async (handle) => {
-        const started = now();
+        const started = Date.now();
         const errorsBefore = handle.errors.length;
         const wanted = new Set(thumbs);
         const batches = [];
@@ -568,7 +553,7 @@ export class Renderer {
         for (let index = 0; index < batches.length; index++) {
           const batch = await pending;
           const failed = batch.find((item) => item.error);
-          const over = now() - began > budgetMs;
+          const over = Date.now() - began > budgetMs;
           // The page draws the next batch while this one is analysed.
           pending = index + 1 < batches.length && !over && !failed ? draw(batches[index + 1]) : null;
           pending?.catch(() => {});
@@ -584,8 +569,8 @@ export class Renderer {
         }
         if (drawn) handle.fresh = false;
         const errors = mergeTimedErrors([...new Set([...(failure ? [failure] : []), ...handle.errors.slice(errorsBefore)].map((text) => this.clean(work, text)))]);
-        const drawing = now() - started;
-        return { drawn, cut: drawn < times.length && !failure, ms: now() - began, loadMs: started - began, perFrame: drawn ? drawing / drawn : null, width: handle.size.width, height: handle.size.height, errors, gpu: handle.on?.gpu ?? null };
+        const drawing = Date.now() - started;
+        return { drawn, cut: drawn < times.length && !failure, ms: Date.now() - began, loadMs: started - began, perFrame: drawn ? drawing / drawn : null, width: handle.size.width, height: handle.size.height, errors, gpu: handle.on?.gpu ?? null };
       });
     } finally {
       lease.release();
@@ -602,8 +587,7 @@ export class Renderer {
    */
   async timing(work, { step, budgetMs = 45000, on } = {}) {
     this.lastUse = Date.now();
-    const now = drawClock(on);
-    const began = now();
+    const began = Date.now();
     const meta = this.services.works.meta(work);
     if (!meta.ok) throw problem(422, "project.ts 无法读取：" + meta.error, "WORK_INVALID");
     const project = meta.meta;
@@ -612,7 +596,7 @@ export class Renderer {
     try {
       this.freshen(work);
       handle = await this.openPage(this.sourceOf(work), { width: size.width, project, quality: "standard", timeoutMs: 60000, on });
-      const started = now();
+      const started = Date.now();
       const draw = (batch) =>
         again(handle.page, READY.work, () =>
           handle.page.evaluate(async (batch) => {
@@ -630,19 +614,19 @@ export class Renderer {
       const samples = [];
       let time = 0,
         used = step;
-      while (time < project.duration - 1e-3 && now() < passEnd) {
+      while (time < project.duration - 1e-3 && Date.now() < passEnd) {
         const batch = [];
         // Small batches here: a slow work (seconds a frame) learns that after one frame, not eight.
         // In the user's browser frames take milliseconds and each batch a round trip: more at once.
         for (; batch.length < (on ? 8 : 2) && time < project.duration - 1e-3; time += used) batch.push(Math.round(time * 1000) / 1000);
         samples.push(...(await draw(batch)));
-        const each = (now() - started) / samples.length;
-        const room = Math.floor((passEnd - now()) / each);
+        const each = (Date.now() - started) / samples.length;
+        const room = Math.floor((passEnd - Date.now()) / each);
         if (room > 0 && (project.duration - time) / used > room) used = Math.ceil(((project.duration - time) / room) * 10) / 10;
       }
       const slowest = [...samples].sort((a, b) => b.ms - a.ms).slice(0, 8);
       for (const sample of slowest) {
-        if (now() > began + budgetMs) break;
+        if (Date.now() > began + budgetMs) break;
         const [repeat] = await draw([sample.time]);
         sample.again = repeat.ms;
       }
@@ -655,7 +639,7 @@ export class Renderer {
         lastStep: used,
         complete: time >= project.duration - 1e-3,
         samples: samples.map((sample) => ({ time: sample.time, ms: Math.round(sample.ms * 10) / 10, ...(sample.again !== undefined ? { again: Math.round(sample.again * 10) / 10 } : {}) })),
-        ms: now() - began,
+        ms: Date.now() - began,
         loadMs: started - began,
         errors: mergeTimedErrors([...new Set(handle.errors.map((text) => this.clean(work, text)))]),
         layers,
@@ -717,7 +701,7 @@ export class Renderer {
   /** One labelled contact sheet; much cheaper for AI context than many images. */
   /** `cell`: the width of each picture in the sheet when the frames come bigger (crops). */
   async storyboard(work, { times, columns, width = 480, subtitles = true, format = "jpeg", scene, crop, cell, login }) {
-    const { frames, width: w, height: h, errors, gpu, paused } = await this.frames(work, { times, width, subtitles, scene, crop, login, format });
+    const { frames, width: w, height: h, errors, gpu } = await this.frames(work, { times, width, subtitles, scene, crop, login, format });
     let cells = frames,
       cw = w,
       ch = h;
@@ -734,7 +718,6 @@ export class Renderer {
       ms: frames.map((frame) => frame.ms),
       loading: frames.map((frame) => Boolean(frame.loading)),
       gpu,
-      paused,
     };
   }
 

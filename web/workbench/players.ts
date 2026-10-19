@@ -1,5 +1,4 @@
 import { Observable, type StageController } from "./store";
-import { setPlaybackCheck } from "../lib/gpu-render";
 
 /**
  * What can play in an editor (the film's preview, a sample, a video or audio file), as the
@@ -75,8 +74,6 @@ export function mediaPlayer(element: HTMLMediaElement, label: string): Player {
 
 /** The players of the open editors, by id: a document key for stages, an editor id for media files. */
 export const players = new Observable<ReadonlyMap<string, Player>>(new Map());
-// The AI's frames drawn in this page make way for them while they play.
-setPlaybackCheck(() => [...players.get().values()].some((player) => player.playing()));
 
 /** Make a player known while its editor is mounted; returns the way to forget it. */
 export function registerPlayer(id: string, player: Player) {

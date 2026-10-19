@@ -2,7 +2,9 @@
  * A page drawn for the AI in a studio page of the user's browser (web/lib/gpu-render.ts holds it
  * in a frame named "frame-ai-render", on the user's GPU) tells that page what the server's
  * headless browser sees of a page itself: uncaught errors, console warnings and errors, failed
- * requests. Elsewhere (the server, the workbench's own tabs) it does nothing.
+ * requests; and it runs what the studio page asks of it (`frameRenderCall`), since it draws in a
+ * process of its own (Document-Isolation-Policy) the studio page cannot run code in directly.
+ * Elsewhere (the server, the workbench's own tabs) it does nothing.
  */
 export function reportToStudio() {
   if (window.name !== "frame-ai-render") return;
@@ -39,6 +41,29 @@ export function reportToStudio() {
   };
   const observer = new PerformanceObserver((list) => failed(list.getEntries()));
   observer.observe({ type: "resource", buffered: true });
-  // Before the studio page answers a call: what finished loading so far, not only after the observer's delay.
-  (window as unknown as { __FRAME_RENDER_FLUSH__: () => void }).__FRAME_RENDER_FLUSH__ = () => failed(observer.takeRecords());
+  // Calls: a function the server wrote for its headless browser's pages, run here; `flush` sends what
+  // finished loading so far (not only after the observer's delay) before the studio page answers.
+  addEventListener("message", async (event) => {
+    const call = (event.data as { frameRenderCall?: { id: number; op: string; code?: string; arg?: unknown } } | null)?.frameRenderCall;
+    if (!call || event.source !== parent || event.origin !== location.origin) return;
+    const answer = (reply: Record<string, unknown>) => {
+      const send = (body: Record<string, unknown>) => parent.postMessage({ frameRenderReply: { id: call.id, ...body } }, location.origin);
+      try {
+        send(reply);
+      } catch {
+        // Not cloneable (a function, an element): what JSON keeps of it, as the server's own pages give.
+        send(JSON.parse(JSON.stringify(reply)));
+      }
+    };
+    try {
+      if (call.op === "flush") return answer({ ok: true, value: failed(observer.takeRecords()) });
+      const run = (0, eval)(`(${call.code})`) as (arg: unknown) => unknown;
+      answer({ ok: true, value: await run(call.arg) });
+    } catch (error) {
+      const { message, stack, name } = (error ?? {}) as Error;
+      answer({ ok: false, error: { message: message ?? String(error), stack, name } });
+    }
+  });
+  // Whether it draws beside the studio page (its own thread) or on that page's thread.
+  parent.postMessage({ frameRenderReady: { isolated: self.crossOriginIsolated } }, location.origin);
 }

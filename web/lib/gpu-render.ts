@@ -60,15 +60,18 @@ export function graphicsCard() {
   return card;
 }
 
-type Page = { frame: HTMLIFrameElement; loads: number; reloaded: Set<(error: Error) => void> };
+/** `loading`: navigating, not ready for calls; `isolated`: it draws in a process of its own, beside this page. */
+type Page = { frame: HTMLIFrameElement; loads: number; loading: boolean; isolated: boolean; reloaded: Set<(error: Error) => void> };
 const pages = new Map<string, Page>();
+/** Calls waiting for a frame's answer (src/preview/report.ts). */
+const calls = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>();
+let nextCall = 0;
 let socket: WebSocket | null = null;
 let started = false;
 let working = 0;
 const listeners = new Set<() => void>();
 let lingering = 0;
 let drawing = false;
-let waiting = false;
 const changed = () => listeners.forEach((listener) => listener());
 
 /** Tell the server about this page once it is signed in (what it has open, whether it draws). */
@@ -82,79 +85,6 @@ export function initGpuRender() {
   window.setInterval(() => void report(), 60000);
   for (const type of ["pointerdown", "keydown", "focus"]) window.addEventListener(type, active, { capture: true, passive: true });
   window.addEventListener("message", relay);
-  (window as { __FRAME_AI_YIELD__?: () => Promise<void> }).__FRAME_AI_YIELD__ = async () => {
-    await standBy();
-    await makeWay();
-  };
-}
-
-let playing = () => false;
-/** Whether something plays in this page (the workbench's players). */
-export function setPlaybackCheck(check: () => boolean) {
-  playing = check;
-}
-
-/** How long the AI's drawing waits for one stretch of playback; then it draws between the preview's frames. */
-const PATIENCE = 120000;
-let holding: Promise<void> | null = null;
-/** When the AI began waiting for the playback going on now (0: nothing plays). */
-let waitingFrom = 0;
-
-function mustWait() {
-  if (document.hidden || !playing()) {
-    waitingFrom = 0;
-    return false;
-  }
-  waitingFrom ||= Date.now();
-  return Date.now() - waitingFrom < PATIENCE;
-}
-
-/**
- * The AI's next step here (opening a work, taking an edit, drawing a frame) waits while something
- * plays in this page: it runs in the preview's thread, and loading a 3D work holds that thread
- * for seconds, which the preview shows as 缓冲中. The server stops the step's clock meanwhile
- * (server/render-gpu.mjs hold). Played on for longer than PATIENCE, the AI goes on, a frame at
- * a time between the preview's (makeWay).
- */
-function standBy(): Promise<void> {
-  if (!mustWait()) return Promise.resolve();
-  holding ??= new Promise<void>((resolve) => {
-    setWaiting(true);
-    const timer = window.setInterval(() => {
-      if (mustWait()) return;
-      window.clearInterval(timer);
-      holding = null;
-      setWaiting(false);
-      resolve();
-    }, 200);
-  });
-  return holding;
-}
-
-function setWaiting(value: boolean) {
-  waiting = value;
-  track();
-  if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "waiting", waiting: value }));
-  changed();
-}
-
-/**
- * A frame drawn for the AI calls this before each of its frames (src/preview/render.ts), after
- * standBy. The preview draws in the same thread: while something plays, wait until the page has
- * drawn, so a batch of the AI's frames costs playback a frame at a time instead of freezing it throughout.
- */
-function makeWay() {
-  if (document.hidden || !playing()) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    // Resumed after this animation frame's callbacks (the preview's among them) and its paint.
-    const go = () => {
-      cancelAnimationFrame(frame);
-      window.clearTimeout(timer);
-      window.setTimeout(resolve, 0);
-    };
-    const frame = requestAnimationFrame(go);
-    const timer = window.setTimeout(go, 100);
-  });
 }
 
 function connect() {
@@ -202,8 +132,6 @@ async function handle(ws: WebSocket, message: { id: number; op: string; page?: s
   const drawing = message.op !== "ping" && message.op !== "close";
   if (drawing) busy(1);
   try {
-    // What starts work in the frame (loading, drawing) waits for the preview to pause first.
-    if (message.op === "goto" || message.op === "eval") await standBy();
     reply = { type: "result", id: message.id, ok: true, value: await run(message) };
   } catch (error) {
     reply = { type: "result", id: message.id, ok: false, error: describe(error), timeout: (error as Error)?.name === "TimeoutError" };
@@ -230,10 +158,16 @@ async function run(message: { op: string; page?: string; [key: string]: unknown 
   throw new Error("Unknown operation " + op);
 }
 
-/** A hidden frame, laid out the way local exports keep theirs: the page draws on its own canvas. */
+/**
+ * A hidden frame, laid out the way local exports keep theirs: the page draws on its own canvas. It
+ * asks the server to isolate it (`isolate=1`: Document-Isolation-Policy), so Chrome and Edge run it
+ * in a process of its own: the AI loads and draws there while a preview plays here, neither
+ * holding the other up. It still signs in and uses this browser's cache like this page.
+ */
 function open(id: string, url: string, timeout: number) {
   // The pages the server's headless browser draws with: a work's frames, and media files of it (models…).
   if (!/^\/preview\/(render|asset)\.html\?/.test(url)) throw new Error("Not a render page");
+  url += "&isolate=1";
   let page = pages.get(id);
   if (!page) {
     const frame = document.createElement("iframe");
@@ -243,23 +177,27 @@ function open(id: string, url: string, timeout: number) {
     frame.tabIndex = -1;
     frame.setAttribute("aria-hidden", "true");
     frame.style.cssText = "position:fixed;left:-10000px;top:0;width:1px;height:1px;border:0;opacity:0;pointer-events:none";
-    page = { frame, loads: 0, reloaded: new Set() };
+    page = { frame, loads: 0, loading: true, isolated: false, reloaded: new Set() };
     const entry = page;
     // A second load is Vite reloading the page: calls running in the old one never finish.
     frame.addEventListener("load", () => {
+      entry.loading = false;
       if (entry.loads++) for (const reject of entry.reloaded) reject(new Error("Execution context was destroyed, most likely because of a navigation"));
     });
     pages.set(id, page);
+    track();
     hold();
     frame.src = url;
     document.body.append(frame);
-  } else page.frame.src = url;
+  } else {
+    page.loading = true;
+    page.frame.src = url;
+  }
   return loaded(page, timeout, true);
 }
 
 function loaded(page: Page, timeout: number, fresh = false) {
-  const doc = page.frame.contentDocument;
-  if (!fresh && doc?.readyState === "complete" && doc.location.href !== "about:blank") return Promise.resolve();
+  if (!fresh && !page.loading) return Promise.resolve();
   return within(new Promise<void>((resolve) => page.frame.addEventListener("load", () => resolve(), { once: true })), timeout);
 }
 
@@ -278,12 +216,23 @@ async function waitFor(page: Page, code: string, arg: unknown, timeout: number, 
 
 /** A function the server wrote for its headless browser's pages, run in the frame's page. */
 function evaluate(page: Page, code: string, arg: unknown) {
-  const view = page.frame.contentWindow as (Window & { eval(source: string): (arg: unknown) => unknown }) | null;
+  return call(page, { op: "eval", code, arg });
+}
+
+/** Ask the frame's page (src/preview/report.ts) and wait for its answer, or for it to reload. */
+function call(page: Page, message: Record<string, unknown>) {
+  const view = page.frame.contentWindow;
   if (!view) throw new Error("Target page has been closed");
+  const id = ++nextCall;
   let reject!: (error: Error) => void;
   const reloaded = new Promise<never>((_, fail) => (reject = fail));
   page.reloaded.add(reject);
-  return Promise.race([Promise.resolve().then(() => view.eval(`(${code})`)(arg)), reloaded]).finally(() => page.reloaded.delete(reject));
+  const answered = new Promise((resolve, fail) => calls.set(id, { resolve, reject: fail }));
+  view.postMessage({ frameRenderCall: { id, ...message } }, location.origin);
+  return Promise.race([answered, reloaded]).finally(() => {
+    page.reloaded.delete(reject);
+    calls.delete(id);
+  });
 }
 
 function within<T>(promise: Promise<T>, timeout: number) {
@@ -309,10 +258,35 @@ function closeAll() {
   for (const id of [...pages.keys()]) close(id);
 }
 
-/** What a frame's page reported (errors, console, failed requests), passed on as its page's events. */
+type Reply = { id: number; ok: boolean; value?: unknown; error?: { message: string; stack?: string; name?: string } };
+
+/**
+ * A frame's page answering a call, saying it is ready (and whether it draws in its own thread), or
+ * reporting what it saw (errors, console, failed requests), passed on as its page's events.
+ */
 function relay(event: MessageEvent) {
-  const news = (event.data as { frameRender?: Record<string, unknown> } | null)?.frameRender;
-  if (!news || event.origin !== location.origin) return;
+  if (event.origin !== location.origin) return;
+  const data = event.data as { frameRender?: Record<string, unknown>; frameRenderReply?: Reply; frameRenderReady?: { isolated: boolean } } | null;
+  const reply = data?.frameRenderReply;
+  if (reply) {
+    const waiting = calls.get(reply.id);
+    calls.delete(reply.id);
+    if (reply.ok) waiting?.resolve(reply.value);
+    else if (waiting) {
+      const error = new Error(reply.error?.message);
+      if (reply.error?.stack) error.stack = reply.error.stack;
+      if (reply.error?.name) error.name = reply.error.name;
+      waiting.reject(error);
+    }
+    return;
+  }
+  if (data?.frameRenderReady) {
+    for (const page of pages.values()) if (page.frame.contentWindow === event.source) page.isolated = Boolean(data.frameRenderReady.isolated);
+    track();
+    return;
+  }
+  const news = data?.frameRender;
+  if (!news) return;
   for (const [id, page] of pages)
     if (page.frame.contentWindow === event.source) {
       if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "event", page: id, ...news }));
@@ -325,15 +299,9 @@ function relay(event: MessageEvent) {
  * result: the server reads a call's errors when the result comes, as from its own pages.
  */
 async function reported(id: unknown) {
-  try {
-    (pages.get(String(id))?.frame.contentWindow as { __FRAME_RENDER_FLUSH__?: () => void } | null)?.__FRAME_RENDER_FLUSH__?.();
-  } catch {}
-  // The frame's messages are queued before this one, so relay has sent them on by the time it arrives.
-  await new Promise((resolve) => {
-    const channel = new MessageChannel();
-    channel.port1.onmessage = resolve;
-    channel.port2.postMessage(null);
-  });
+  const page = pages.get(String(id));
+  // The frame's messages come before its answer, so relay has sent them on by the time it arrives.
+  if (page && !page.loading) await within(call(page, { op: "flush" }), 3000).catch(() => {});
 }
 
 /** While frames are open, keep this tab from being frozen in the background (as exports do). */
@@ -352,11 +320,14 @@ function describe(error: unknown) {
   return text.replace(/^Error: /, "");
 }
 
-/** When this page drew for the AI (wall-clock ms, its waits for playback left out): the workbench names it as a cause of 缓冲中. */
+/**
+ * When the AI drew on this page's thread (wall-clock ms; a frame isolated in its own process does
+ * not hold the preview up): the workbench names it as a cause of 缓冲中.
+ */
 const busySpans: { start: number; end: number }[] = [];
 let busyFrom = 0;
 function track() {
-  const active = working > 0 && !waiting;
+  const active = working > 0 && [...pages.values()].some((page) => !page.isolated);
   if (active && !busyFrom) busyFrom = Date.now();
   else if (!active && busyFrom) {
     busySpans.push({ start: busyFrom, end: Date.now() });
@@ -382,10 +353,7 @@ function busy(change: number) {
   else lingering = window.setTimeout(now, 1500);
 }
 
-/**
- * Where the AI's frames are drawn from this device (`mode`, see renderMode), whether it is drawing
- * right now, and whether it waits for the preview playing here to pause (standBy).
- */
+/** Where the AI's frames are drawn from this device (`mode`, see renderMode), and whether it is drawing right now. */
 export function useRenderStatus() {
   const [, update] = useState(0);
   useEffect(() => {
@@ -393,5 +361,5 @@ export function useRenderStatus() {
     listeners.add(listener);
     return () => void listeners.delete(listener);
   }, []);
-  return { mode: renderMode(), card: graphicsCard(), drawing, waiting };
+  return { mode: renderMode(), card: graphicsCard(), drawing };
 }
