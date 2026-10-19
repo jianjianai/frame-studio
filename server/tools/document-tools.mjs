@@ -74,14 +74,14 @@ async function checkLayers(services, work, document) {
     const reach = clip.offset + (clip.loop ? clip.loop : clip.duration * clip.rate + (clip.phase ?? 0));
     if (reach > info.duration + 1e-3)
       problems.push(
-        `图层「${clip.id}」要播放到 ${clip.source.src} 的第 ${+reach.toFixed(3)} 秒，但它只有 ${info.duration} 秒（动画时间 = offset + (经过的时间 × rate + phase)，有 loop 时括号部分对 loop 取余）：${clip.loop ? "让 offset + loop 不超过动画时长" : "缩短图层、降低 rate，或加 loop"}`,
+        `图层「${clip.id}」要播放到 ${clip.source.src} 的第 ${+reach.toFixed(3)} 秒，但它只有 ${info.duration} 秒（动画时间 = offset + (经过的时间 × rate + phase)，有 loop 时括号部分对 loop 取余）`,
       );
   }
   const heavy = document.clips.filter((clip) => !clip.hidden && (clip.source.kind === "model" || (clip.source.kind === "scene" && clip.source.engine === "three")));
   for (const at of [...new Set(heavy.map((clip) => clip.start))].sort((a, b) => a - b)) {
     const active = heavy.filter((clip) => clip.start <= at && at < clip.start + clip.duration);
     if (active.length > WEBGL_LAYERS) {
-      problems.push(`${at} 秒起同时有 ${active.length} 个三维图层（${active.map((clip) => clip.id).join("、")}）：每个占一个 WebGL 上下文，同一时刻最多 ${WEBGL_LAYERS} 个，把几个物体放进同一个 three 场景`);
+      problems.push(`${at} 秒起同时有 ${active.length} 个三维图层（${active.map((clip) => clip.id).join("、")}）：每个占一个 WebGL 上下文，同一时刻最多 ${WEBGL_LAYERS} 个`);
       break;
     }
   }
@@ -131,7 +131,7 @@ export function registerDocumentTools(registry) {
     name: "layers_edit",
     title: "编辑图层",
     description:
-      "原子地编辑 visual.json：add（加图层）、update（只改给出的字段：嵌套对象逐项合并，例如 patch {transform:{opacity:0.5}} 保留原来的 x/y；数组整体替换；unset 删除字段，可写 transform.opacity）、remove、reorder（图层顺序：越靠后越在上面）、split（在某时间切开）、replace（整体替换）。transform 的 x/y/width/height 是相对画面的 0..1 比例，scale 以图层中心缩放（推近、弹出用它），都可以是数字或关键帧数组 [{at,value,easing}]。",
+      "原子地编辑 visual.json：add（加图层）、update（只改给出的字段：嵌套对象逐项合并，例如 patch {transform:{opacity:0.5}} 保留原来的 x/y；数组整体替换；unset 删除字段，可写 transform.opacity）、remove、reorder（图层顺序：越靠后越在上面）、split（在某时间切开）、replace（整体替换）。transform 的 x/y/width/height 是相对画面的 0..1 比例，scale 以图层中心缩放，都可以是数字或关键帧数组 [{at,value,easing}]。",
     guide: "layers",
     destructive: true,
     input: {

@@ -617,7 +617,7 @@ describe("reviews in the studio and for the AI", () => {
     expect(text).toContain("p1 抖音「17岁生日 #生日 #s0rrow」2026-10-07 23 点多（北京时间，按每小时数据估计）发布");
     expect(text).toContain("最新数据（统计到 2026-10-09 04:00，发布后 29 小时，来自 raw/2026-10-09/ 的 5 个文件）");
     expect(text).toContain("6–7 秒 ×8.7（1.3 1.41 | 2.4 1.7） 镜头「转折」");
-    expect(text).toContain("看这几秒的画面：preview_frames 的 times 用 [6.5, 8.5, 10.5, 12.5, 14.5]");
+    expect(text).not.toContain("看这几秒的画面");
     expect(text).not.toContain("注意：作品在这次发布之后改过");
     expect(text).toContain("2 秒跳出 30.79%（同类 29%）");
     expect(text).toContain("5 秒留存 46.46%（同类 53%）");
@@ -712,7 +712,7 @@ describe("reviews in the studio and for the AI", () => {
       files: [{ from: "/Users/me/Downloads/后台截图.png", review: true, path: "raw/2026-10-10/后台截图.png" }],
     });
     expect(link.body.text).toContain("复盘资料的 raw/2026-10-10/后台截图.png");
-    expect(link.body.text).toContain("用 review_import 的 folder 导入：raw/2026-10-10");
+    expect(link.body.text).toContain("复盘资料的文件夹：raw/2026-10-10");
     const today = new Date(Date.now() + 8 * 3600000).toISOString().slice(0, 10);
     const later = await tool("upload_link", {
       work: work.id,

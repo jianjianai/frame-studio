@@ -29,7 +29,7 @@ export function registerExportTools(registry) {
     published: true, // writes outside the work: allowed on a published (view-only) work
     title: "导出视频",
     description:
-      "在后台把作品导出为 MP4（H.264 + AAC）。Canvas 画的作品很快；用了 Pixi、三维（WebGL）的作品在没有显卡的服务器上慢得多（1080p 约每秒 1 帧），进度里有速度和预计剩余时间。导出使用调用时的作品快照，之后的修改不影响本次导出。wait 秒数内等它完成（不用再查进度）；完成时返回下载地址（1 小时内有效），没完成就返回任务 id，用 task_status 查看。以前的导出列在 work_context 的 exports 中。scene 只导出一个样片（不在时间轴上的模块），用户要把样片发给别人看时用。",
+      "在后台把作品导出为 MP4（H.264 + AAC）。Canvas 画的作品很快；用了 Pixi、三维（WebGL）的作品在没有显卡的服务器上慢得多（1080p 约每秒 1 帧），进度里有速度和预计剩余时间。导出使用调用时的作品快照，之后的修改不影响本次导出。wait 秒数内等它完成（不用再查进度）；完成时返回下载地址（1 小时内有效），没完成就返回任务 id，用 task_status 查看。以前的导出列在 work_context 的 exports 中。scene 只导出一个样片（不在时间轴上的模块）。",
     input: {
       work: workArg,
       width: z.number().int().min(16).max(3840).multipleOf(2).optional().describe("输出画面的宽度（像素），高度按作品比例算：竖屏 1080×1920 的作品写 720 得到 720×1280。不写时长边为 1920"),

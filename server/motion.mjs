@@ -5,14 +5,14 @@ import { formatTime } from "./render.mjs";
  * Motion of a stretch of a work, from consecutive small frames (8-bit luma): how the picture
  * moves as a whole (pan, zoom, roll: a similarity transform per pair of frames, coarse-to-fine
  * Lucas–Kanade with robust weights, so a few moving things or fixed captions do not drag it),
- * how much moves inside it, cuts, and what makes motion look rough — starts and stops without
- * easing, sudden changes of speed, one-frame jumps, things that change within one frame,
- * frames that repeat while the picture moves, long holds.
+ * how much moves inside it, cuts, one-frame displacements, things that change within one frame,
+ * frames that repeat while the picture moves, long holds. Measurements only: how fast or slow
+ * a move should be is the story's call, not this module's.
  */
 
 const LEVELS = 4;
 /** A still picture shorter than this is a beat to read or breathe, not worth a mention. */
-const HOLD_SECONDS = 1.5;
+export const HOLD_SECONDS = 1.5;
 
 /** 1-2-1 blur in both directions: gradients of drawn pictures (hard edges, text) need it. */
 function blurred(luma, w, h) {
@@ -273,9 +273,9 @@ const median = (values) => quantile(values, 0.5);
 /**
  * What the measurements say. Moves: stretches where the picture as a whole moves (pan; zoom
  * and roll count as how fast the picture's corners move, so the three compare on one scale),
- * each with its top speed and how it starts and stops — eased, or at full speed from one frame
- * to the next. Besides: cuts, one-frame jumps, things that change within one frame inside the
- * picture, frames that repeat while it moves, and long holds. Speeds are design pixels per second.
+ * each with its speed in its first frame, at its top and in its last frame. Besides: cuts,
+ * one-frame jumps, things that change within one frame inside the picture, frames that repeat
+ * while it moves, and long holds. Speeds are design pixels per second.
  */
 export function analyzeMotion(track) {
   const { fps, design, pairs } = track;
@@ -308,7 +308,7 @@ export function analyzeMotion(track) {
     };
   });
   const still = 0.02 * long; // px/s: slower than this the picture as a whole stands still
-  const abrupt = 0.08 * long; // px/s: starting or stopping at this speed or more is felt
+  const abrupt = 0.08 * long; // px/s: the scale one-frame events (jumps, shakes, skips) are found at
   // What changes even in a still picture (film grain, flicker): the quietest tenth.
   const floor = quantile(
     series.filter((item) => !item.cut).map((item) => item.residual),
@@ -418,47 +418,22 @@ export function analyzeMotion(track) {
       if (net < 0.3 * path && path >= 0.02 * long)
         events.push({ kind: "shake", time: series[index].time, end: series[end].time + 1 / fps, index, last: end, distance: peak / fps });
       // Less than a hundredth of the picture in all: nobody sees it move.
-      else if (net >= 0.01 * long) {
-        const sharp = Math.max(abrupt, 0.5 * peak);
-        const peakIndex = speeds.indexOf(peak);
-        // The sharpest speed-up before the top speed and slow-down after it (from or to
-        // standing still at the ends: a start or stop without easing).
-        let rise = { size: from ? 0 : speeds[0], at: 0 };
-        for (let k = 1; k <= peakIndex; k++) if (speeds[k] - speeds[k - 1] > rise.size) rise = { size: speeds[k] - speeds[k - 1], at: k };
-        let fall = { size: to ? 0 : speeds[speeds.length - 1], at: speeds.length };
-        for (let k = peakIndex + 1; k < speeds.length; k++) if (speeds[k - 1] - speeds[k] > fall.size) fall = { size: speeds[k - 1] - speeds[k], at: k };
+      else if (net >= 0.01 * long)
         moves.push({
           start: series[index].time,
           end: series[end].time + 1 / fps,
+          // Speeds in px/s: the move's first frame, its top, its last frame.
+          first: speeds[0],
           peak,
           peakAt: series[top].time,
+          last: speeds[speeds.length - 1],
           distance,
           direction: Math.atan2(sum("dy"), sum("dx")),
           zoom,
           roll: (roll * 180) / Math.PI,
           from,
           to,
-          // Speeds in px/s around the sharpest step; `at` the frame time it reaches the new speed.
-          speedUp:
-            rise.size >= sharp
-              ? {
-                  time: series[frames[Math.min(rise.at, frames.length - 1)]].time,
-                  before: rise.at ? speeds[rise.at - 1] : 0,
-                  after: speeds[rise.at],
-                  start: rise.at === 0,
-                }
-              : null,
-          slowDown:
-            fall.size >= sharp
-              ? {
-                  time: fall.at >= speeds.length ? series[end].time + 1 / fps : series[frames[fall.at]].time,
-                  before: speeds[fall.at - 1],
-                  after: fall.at >= speeds.length ? 0 : speeds[fall.at],
-                  stop: fall.at >= speeds.length,
-                }
-              : null,
         });
-      }
     }
     index = end + 1;
   }
@@ -502,9 +477,7 @@ export function analyzeMotion(track) {
     const close = cuts.find((time) => Math.abs(time - event.time) <= 0.15 || (event.end !== undefined && Math.abs(time - event.end) <= 0.15));
     if (close !== undefined && event.kind !== "hold" && event.kind !== "repeat") event.cut = close;
   }
-  // Where the moves speed up or slow down at once, for the chart.
-  const marks = moves.flatMap((move) => [move.speedUp?.time, move.slowDown?.time].filter((time) => time !== undefined));
-  return { fps, series, moves, events, marks, cuts, floor, still, abrupt };
+  return { fps, series, moves, events, cuts, floor, still, abrupt };
 }
 
 const ARROWS = ["→", "↘", "↓", "↙", "←", "↖", "↑", "↗"];
@@ -512,7 +485,10 @@ const arrow = (angle) => ARROWS[((Math.round(angle / (Math.PI / 4)) % 8) + 8) % 
 const px = (value) => `${Math.round(value)} px/s`;
 const MOVES_SHOWN = 12;
 
-/** The analysis as lines for the AI (it reads only text): the moves, cuts, then the rest by time. */
+/**
+ * The analysis as lines for the AI (it reads only text): the moves, cuts, then the rest by time.
+ * Numbers and what was measured only, no verdicts: the story decides how fast a move should be.
+ */
 export function motionText(analysis, { design }) {
   const widths = (value) => (value / design.width >= 0.3 ? `，${(value / design.width).toFixed(1)} 个画面宽/秒` : "");
   const lines = [];
@@ -525,52 +501,44 @@ export function motionText(analysis, { design }) {
         what.push(`${move.zoom > 1 ? "推近（变大）" : "拉远（变小）"}到 ${move.zoom.toFixed(Math.abs(move.zoom - 1) >= 0.05 ? 2 : 3)} 倍`);
       if (Math.abs(move.roll) >= 0.3) what.push(`${move.roll > 0 ? "顺时针" : "逆时针"}转 ${Math.abs(move.roll).toFixed(1)}°`);
       const seconds = move.end - move.start;
-      const shape = [];
-      if (move.from === "window") shape.push("范围开始前已经在动");
-      else if (move.from === "cut") shape.push("切进来就在动");
-      else if (move.from) shape.push("接在抖动或跳动后面");
-      if (move.speedUp?.start) shape.push(`起步突然：第一帧就到 ${px(move.speedUp.after)}，没有缓入`);
-      else if (move.speedUp) shape.push(`加速突然：${formatTime(move.speedUp.time)} 一帧内 ${px(move.speedUp.before)} → ${px(move.speedUp.after)}`);
-      else if (!move.from) shape.push("缓入");
-      if (move.slowDown?.stop) shape.push(`停得突然：最后一帧还有 ${px(move.slowDown.before)}，没有缓出`);
-      else if (move.slowDown) shape.push(`减速突然：${formatTime(move.slowDown.time)} 一帧内 ${px(move.slowDown.before)} → ${px(move.slowDown.after)}`);
-      else if (!move.to) shape.push("缓出");
-      if (move.to === "window") shape.push("到范围结束还在动");
-      else if (move.to === "cut") shape.push("一直动到切换");
-      else if (move.to) shape.push("后面接着抖动或跳动");
+      const around = [];
+      if (move.from === "window") around.push("范围开始前已经在动");
+      else if (move.from === "cut") around.push("从切换开始");
+      else if (move.from) around.push("前面接着单帧位移或晃动");
+      if (move.to === "window") around.push("到范围结束还在动");
+      else if (move.to === "cut") around.push("动到切换");
+      else if (move.to) around.push("后面接着单帧位移或晃动");
       lines.push(
-        `- ${formatTime(move.start)}–${formatTime(move.end)}（${seconds.toFixed(2)} 秒${seconds <= 0.2 ? "，一闪而过" : ""}）${what.join("、") || "原地晃了一下"}，最快 ${px(move.peak)}（${formatTime(move.peakAt)}${widths(move.peak)}）：${shape.join("；")}`,
+        `- ${formatTime(move.start)}–${formatTime(move.end)}（${seconds.toFixed(2)} 秒）${what.join("、") || `位移 ${Math.round(move.distance)} px`}；开头一帧 ${px(move.first)}，最快 ${px(move.peak)}（${formatTime(move.peakAt)}${widths(move.peak)}），结尾一帧 ${px(move.last)}${around.length ? "；" + around.join("；") : ""}`,
       );
     }
-    if (analysis.moves.length > MOVES_SHOWN) lines.push(`- 另外还有 ${analysis.moves.length - MOVES_SHOWN} 段运动，缩短时间范围看`);
-  } else lines.push("画面整体没有动（镜头不动）。");
-  if (analysis.cuts.length) lines.push(`切换（或一闪、很快的甩镜）：${analysis.cuts.map(formatTime).join("、")}`);
+    if (analysis.moves.length > MOVES_SHOWN) lines.push(`- 另外还有 ${analysis.moves.length - MOVES_SHOWN} 段运动没有列出`);
+  } else lines.push("画面整体没有平移、推拉或旋转。");
+  if (analysis.cuts.length) lines.push(`切换（大部分画面一帧内变了，整体运动解释不了；闪白、很快的甩镜也算在这里）：${analysis.cuts.map(formatTime).join("、")}`);
   const describe = (event) => {
     switch (event.kind) {
       case "jump":
-        return `${formatTime(event.time)} 单帧跳动：整个画面跳开 ${Math.round(event.distance)} px，下一帧又回来`;
+        return `${formatTime(event.time)} 整个画面这一帧移开 ${Math.round(event.distance)} px，下一帧回到原位`;
       case "shake":
-        return `${formatTime(event.time)}–${formatTime(event.end)} 画面来回抖动（一帧最多晃 ${Math.round(event.distance)} px；手机震动、撞击这类故意的晃动不用改）`;
+        return `${formatTime(event.time)}–${formatTime(event.end)} 画面来回晃动（一帧最多 ${Math.round(event.distance)} px）`;
       case "skip":
-        return `${formatTime(event.time)} 单帧跳位：前后几乎不动，这一帧整个画面一下移了 ${Math.round(event.distance)} px`;
+        return `${formatTime(event.time)} 整个画面一帧内移了 ${Math.round(event.distance)} px，前后的帧几乎不动`;
       case "pop":
-        return `${formatTime(event.time)} 局部突变：画面里${event.area >= 0.01 ? `约 ${Math.round(event.area * 100)}%` : "不到 1%"} 的地方一帧内变了（弹出、换图，或是穿帮）`;
+        return `${formatTime(event.time)} 一帧内${event.area >= 0.01 ? `约 ${Math.round(event.area * 100)}%` : "不到 1%"} 的画面变了（整体运动以外的变化）`;
       case "hold":
-        return `${formatTime(event.time)}–${formatTime(event.end)} 画面完全静止 ${event.seconds.toFixed(1)} 秒（镜头和画面里的东西都不动）`;
+        return `${formatTime(event.time)}–${formatTime(event.end)} 画面没有变化 ${event.seconds.toFixed(1)} 秒（整体和局部都不动）`;
       case "repeat":
-        return `${formatTime(event.time)}–${formatTime(event.end)} 有 ${event.count} 帧和前一帧一模一样（画面在动时重复，看起来会顿；动画的帧率可能比作品低）`;
+        return `${formatTime(event.time)}–${formatTime(event.end)} 有 ${event.count} 帧和前一帧完全相同（前后的帧在动）`;
       default:
         return "";
     }
   };
   const shown = analysis.events.slice(0, 12);
   if (shown.length) {
-    lines.push("其他值得看一眼的地方（故意的效果可以不改）：");
-    lines.push(
-      ...shown.map((event) => "- " + describe(event) + (event.cut !== undefined ? `（紧挨着 ${formatTime(event.cut)} 的切换，是转场的一部分就不用管）` : "")),
-    );
-    if (analysis.events.length > shown.length) lines.push(`- 另外还有 ${analysis.events.length - shown.length} 处，缩短时间范围看`);
-  } else lines.push(`没有单帧跳动、局部突变、重复帧或 ${HOLD_SECONDS} 秒以上的完全静止。`);
+    lines.push("其他测到的：");
+    lines.push(...shown.map((event) => "- " + describe(event) + (event.cut !== undefined ? `（离 ${formatTime(event.cut)} 的切换不到 0.15 秒）` : "")));
+    if (analysis.events.length > shown.length) lines.push(`- 另外还有 ${analysis.events.length - shown.length} 处没有列出`);
+  } else lines.push(`没有测到单帧的整体位移、一帧内的局部变化、重复帧，也没有 ${HOLD_SECONDS} 秒以上没有变化的画面。`);
   return lines;
 }
 
@@ -587,7 +555,8 @@ const label = (value) => String(value >= 10 ? Math.round(value) : value >= 1 ? M
 /**
  * One picture for the AI: a row of frames across the stretch, then the curves — how fast the
  * whole picture moves (pan; zoom and roll as corner speed) and how much moves inside it — with
- * cuts as grey lines, holds shaded, and the problems as red dots on the curve they belong to.
+ * cuts as grey lines, holds and shakes shaded, and the one-frame events as dots on the curve
+ * they belong to. Neutral colours: these are measurements, not faults.
  */
 export async function motionChart(analysis, { start, end, thumbs = [] }) {
   const W = 1000,
@@ -609,7 +578,7 @@ export async function motionChart(analysis, { start, end, thumbs = [] }) {
         { key: "turn", color: "#f0a03c", dash: true },
       ],
       kinds: ["jump", "skip"],
-      marks: true,
+      shakes: true,
     },
     { title: "画面里自己在动的量（去掉整体运动后的灰度差）", h: 110, lines: [{ key: "residual", color: "#46b37a" }], kinds: ["pop", "repeat"] },
   ];
@@ -644,9 +613,9 @@ export async function motionChart(analysis, { start, end, thumbs = [] }) {
       parts.push(`<text x="${left - 6}" y="${y(value) + 4}" fill="#8b949e" font-size="11" font-family="sans-serif" text-anchor="end">${label(value)}</text>`);
     }
     for (const event of analysis.events)
-      if (event.kind === "hold" || (event.kind === "shake" && panel.marks))
+      if (event.kind === "hold" || (event.kind === "shake" && panel.shakes))
         parts.push(
-          `<rect x="${x(event.time)}" y="${y0}" width="${Math.max(1, x(event.end) - x(event.time))}" height="${panel.h}" fill="#f85149" opacity="0.12"/>`,
+          `<rect x="${x(event.time)}" y="${y0}" width="${Math.max(1, x(event.end) - x(event.time))}" height="${panel.h}" fill="#8b949e" opacity="0.18"/>`,
         );
     for (const cut of analysis.cuts) parts.push(`<line x1="${x(cut)}" x2="${x(cut)}" y1="${y0}" y2="${y1}" stroke="#6e7681" stroke-width="2"/>`);
     for (const line of panel.lines) {
@@ -664,8 +633,7 @@ export async function motionChart(analysis, { start, end, thumbs = [] }) {
       parts.push(`<path d="${path}" fill="none" stroke="${line.color}" stroke-width="2"${line.dash ? ' stroke-dasharray="5,4"' : ""}/>`);
     }
     for (const event of analysis.events)
-      if (panel.kinds.includes(event.kind)) parts.push(`<circle cx="${x(event.time)}" cy="${y1 - 7}" r="5" fill="#f85149"/>`);
-    if (panel.marks) for (const time of analysis.marks) parts.push(`<circle cx="${x(time)}" cy="${y1 - 7}" r="5" fill="#f85149"/>`);
+      if (panel.kinds.includes(event.kind)) parts.push(`<circle cx="${x(event.time)}" cy="${y1 - 7}" r="5" fill="#d2d8de"/>`);
     top = y1 + 12;
   }
   // Time axis under the last panel, on round seconds.

@@ -1,6 +1,6 @@
 # experience：经验库
 
-经验库是同类作品共用的制作经验（例如“知识类视频”“音乐视频”），是一个 Markdown 文档文件夹，用 Git 管理版本。一个作品可以关联多个经验库（`project.ts` 的 `experiences`，由用户在「经验」面板中选择；用户要求时用 `experience_link` 关联、取消关联或新建）。作品库里的经验库可能很多：`experience_list` 按名称、介绍和文档标题查找（`query`，例如“开场”“卡点”），不给 query 时本作品关联的在前，其余按适合本作品的程度和使用次数排列，并说明为什么适合（名称相近、同一系列或类似的作品在用）；关联前先征得用户同意，没关联的也可以先用 `experience_read`（`library` 参数）看看。删除的经验库在回收站里，AI 用不了也恢复不了：提示里说某个经验库“在回收站里”时，请用户在「经验库」选项卡的回收站中恢复。关联了多个时，读写文档用工具的 `library` 参数指定是哪个，新经验写进内容最相关的那个。还没有作品时，`experience_read` / `experience_write` / `experience_commit` 用 `repo` 指定作品库，读写用 `library` 写明经验库。作品关联经验库后：
+经验库是同类作品共用的制作经验（例如“知识类视频”“音乐视频”），是一个 Markdown 文档文件夹，用 Git 管理版本。一个作品可以关联多个经验库（`project.ts` 的 `experiences`，由用户在「经验」面板中选择；用户要求时用 `experience_link` 关联、取消关联或新建）。作品库里的经验库可能很多：`experience_list` 按名称、介绍和文档标题查找（`query`，例如“开场”“卡点”），不给 query 时本作品关联的在前，其余按和本作品的相近程度和使用次数排列，并写出相近的地方（名称、介绍或内容相近，类似的作品在用）；关联前先征得用户同意，没关联的也可以先用 `experience_read`（`library` 参数）看看。删除的经验库在回收站里，AI 用不了也恢复不了：提示里说某个经验库“在回收站里”时，请用户在「经验库」选项卡的回收站中恢复。关联了多个时，读写文档用工具的 `library` 参数指定是哪个，新经验写进内容最相关的那个。还没有作品时，`experience_read` / `experience_write` / `experience_commit` 用 `repo` 指定作品库，读写用 `library` 写明经验库。作品关联经验库后：
 
 - 会话说明只写了作品关联了哪些经验库，内容由你按需要用 `experience_read` 读（不给 path 时是 README 和文档目录）；找某个主题的经验用 `search`，`scope: ["experience"]`。外部 AI 用 `work_context` 的 `experiences`。
 - 用户或其他对话改了经验库时，下一条消息的 `[FRAME]` 会说明哪些文档变了，需要时重新读。

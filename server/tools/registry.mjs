@@ -207,7 +207,7 @@ export const workArg = z
   .string()
   .regex(/^([a-z0-9-]+\/)?[A-Za-z0-9][A-Za-z0-9._-]*$/)
   .optional()
-  .describe('作品 id（或 "作品库/id"）。作品里的 AI 会话省略就是当前作品；读取类工具也可以填同一作品库的其他作品（只读，用来参考）');
+  .describe('作品 id（或 "作品库/id"）。作品里的 AI 会话省略就是当前作品；读取类工具也可以填同一作品库的其他作品（只读）');
 
 /**
  * JSON result. Without a custom text the data is also sent as MCP structuredContent;

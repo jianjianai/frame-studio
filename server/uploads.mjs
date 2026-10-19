@@ -35,7 +35,7 @@ export function uploadsPlugin(services) {
     published: true, // material libraries and reviews take uploads for a published work; its own files are checked below
     title: "上传本机文件",
     description:
-      "需要把你所在电脑上的文件（图片、音频、视频、字体、模型等）放进作品的 public/ 或素材库，或者把平台后台导出的数据表格、截图放进作品的复盘资料（review: true）时用：为每个文件返回一次性上传地址和 curl 命令（from 写你电脑上的文件路径，命令里就是它），在你的终端执行即可，文件内容不经过对话（2 GB 以内）。地址 15 分钟内有效、只能用一次；上传成功的响应里有引用地址。网上的文件直接用 asset_import / material_write 的 url。",
+      "为你所在电脑上的文件（图片、音频、视频、字体、模型、平台后台导出的表格和截图等）返回一次性上传地址和 curl 命令（from 写你电脑上的文件路径，命令里就是它）：放进作品的 public/、素材库，或作品复盘资料的 raw/（review: true）。在你的终端执行，文件内容不经过对话（2 GB 以内）。地址 15 分钟内有效、只能用一次；上传成功的响应里有引用地址。",
     input: {
       work: workArg,
       files: z
@@ -55,7 +55,7 @@ export function uploadsPlugin(services) {
               .boolean()
               .default(false)
               .describe(
-                "放进作品复盘资料的 raw/（平台导出的表格、后台截图）：同一次导出的放进同一个文件夹，path 写 raw/<导出日期>/<文件名>，不写时放进 raw/<今天>/；之后用 review_import 导入或 review_read 读取",
+                "放进作品复盘资料的 raw/（平台导出的表格、后台截图）：同一次导出的放进同一个文件夹，path 写 raw/<导出日期>/<文件名>，不写时放进 raw/<今天>/",
               ),
             replace: z.boolean().default(false).describe("同名文件已存在时替换（默认另起名字）"),
             source: z.string().max(300).optional(),
@@ -106,7 +106,7 @@ export function uploadsPlugin(services) {
       }
       return {
         data: { uploads: data, expiresInMinutes: LIFETIME_MS / 60000 },
-        text: `在你的终端执行${data.some((item) => item.command.includes("<本机文件路径>")) ? "（把 <本机文件路径> 换成文件的位置）" : ""}，15 分钟内有效、每个地址只能用一次：\n\n${lines.join("\n\n")}${folders.size ? `\n\n上传完平台后台的导出后，用 review_import 的 folder 导入：${[...folders].join("、")}（截图等其他文件用 review_read 的 file 看）。` : ""}`,
+        text: `在你的终端执行${data.some((item) => item.command.includes("<本机文件路径>")) ? "（把 <本机文件路径> 换成文件的位置）" : ""}，15 分钟内有效、每个地址只能用一次：\n\n${lines.join("\n\n")}${folders.size ? `\n\n复盘资料的文件夹：${[...folders].join("、")}` : ""}`,
       };
     },
   });

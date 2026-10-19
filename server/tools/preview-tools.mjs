@@ -10,7 +10,7 @@ import { problem } from "../util.mjs";
 import { sceneModule } from "../files.mjs";
 import { probe } from "../media.mjs";
 import { decodeAudio, loudness, loudnessStretches, beatThis, mixDown, voiceBalance, VOICE_TRACK } from "../audio-analysis.mjs";
-import { MotionTrack, analyzeMotion, motionText, motionChart } from "../motion.mjs";
+import { MotionTrack, analyzeMotion, motionText, motionChart, HOLD_SECONDS } from "../motion.mjs";
 import { projectAudioTracks } from "../../src/engine/types.ts";
 import { compositionSize, fitComposition, frameDimensions } from "../../src/engine/dimensions.mjs";
 
@@ -61,9 +61,9 @@ const listTimes = (times) => times.map((time) => time.toFixed(2)).join(" ");
 const seconds2 = (value) => Math.round(value * 1000) / 1000;
 
 /**
- * Beat This! results for the AI: the exact tempo of each steady stretch (a grid it can write
- * into project.ts and follow with beatAt / barAt), beats listed only where no grid fits, the
- * downbeats, and the tempo line with firstBeat already worked out.
+ * Beat This! results for the AI: the exact tempo of each steady stretch (a grid project.ts can
+ * hold, read by beatAt / barAt), beats listed only where no grid fits, the downbeats, and the
+ * tempo field with firstBeat already worked out. Where to cut is the work's call, not this text's.
  */
 export function rhythmText(rhythm, { file }) {
   const where = file ? "文件内时间" : "作品时间";
@@ -82,17 +82,18 @@ export function rhythmText(rhythm, { file }) {
   // Beats a grid does not describe: other stretches than the main one, or irregular ones.
   const loose = rhythm.beats.filter((time) => !main || time < main.start - 0.01 || time > main.end + 0.01 || main.maxError > 0.06);
   if (!main) lines.push(`节拍 ${rhythm.beats.length} 个（秒，${where}）：${listTimes(rhythm.beats)}`);
-  else if (loose.length) lines.push(`${main.maxError > 0.06 ? "节拍不太规整，" : ""}主段以外的节拍 ${loose.length} 个（秒，${where}）：${listTimes(loose)}`);
-  if (rhythm.downbeats.length) lines.push(`小节第一拍 ${rhythm.downbeats.length} 个（秒，${where}；段落和大的画面变化放在这里）：${listTimes(rhythm.downbeats)}`);
+  else if (main.maxError > 0.06) lines.push(`全部节拍 ${loose.length} 个（秒，${where}）：${listTimes(loose)}`);
+  else if (loose.length) lines.push(`主段以外的节拍 ${loose.length} 个（秒，${where}）：${listTimes(loose)}`);
+  if (rhythm.downbeats.length) lines.push(`小节第一拍 ${rhythm.downbeats.length} 个（秒，${where}）：${listTimes(rhythm.downbeats)}`);
   if (!main) return lines;
   // The grid's first downbeat in the main stretch: firstBeat of the tempo.
   const downbeat = rhythm.downbeats.find((time) => time >= main.start - 0.03 && time <= main.end + 0.03) ?? main.start;
   const first = seconds2(main.first + Math.round((downbeat - main.first) / main.interval) * main.interval);
   const tempo = `{ bpm: ${main.bpm}, firstBeat: ${file ? "<作品时间>" : first}${rhythm.beatsPerBar ? `, beatsPerBar: ${rhythm.beatsPerBar}` : ""} }`;
   lines.push(
-    `按这首配乐卡点：work_update 的 tempo: ${tempo}，代码里用 beatAt(k) / barAt(n)（@frame/engine/tempo）取时间。` +
+    `主段的网格（project.ts 的 tempo 字段，work_update 写入；@frame/engine/tempo 的 beatAt(k) / barAt(n) 按它算时间）：tempo: ${tempo}。` +
       (file ? `firstBeat 是第一小节第一拍在作品里的时间：文件内 ${first} 秒，放到音轨上后 = 片段 start + ${first} − 片段 offset（从作品 0 秒起放、offset 0 时就是 ${first}）。` : "") +
-      (segments.length > 1 ? `tempo 只有一个速度：${formatTime(main.start)}–${formatTime(main.end)} 以外的剪辑点用上面列出的节拍时间，不要用 beatAt。` : ""),
+      (segments.length > 1 ? `tempo 只有一个速度，只对 ${formatTime(main.start)}–${formatTime(main.end)} 准确；这段以外的节拍是上面列出的时间。` : ""),
   );
   return lines;
 }
@@ -114,27 +115,19 @@ export function audibleTracks(meta, from, to) {
   return [...groups.values()].map(({ id, name, files }) => ({ id, name, voice: VOICE_TRACK.test(name) || (files.length > 0 && files.every((src) => /\/voice\//.test(src))) }));
 }
 
-/** Each track alone, and whether the voice stands out. */
+/** Each track alone, and how the voice compares with the rest (numbers only). */
 function trackLines(solo, window) {
   const power = (rmsDb) => 10 ** (rmsDb / 10);
   const lines = ["各音轨单独的响度："];
   for (const track of solo) {
     const heard = track.windows.filter((item) => item.rmsDb > -60);
     const rms = heard.length ? Math.round(10 * Math.log10(heard.reduce((sum, item) => sum + power(item.rmsDb), 0) / heard.length) * 10) / 10 : null;
-    // Very quiet all through: often the wrong file or a gain left near zero.
-    const faint = rms !== null && rms < -45 ? "（很轻：是不是素材几乎静音，或 gain 太低？）" : "";
-    lines.push(`- 「${track.name}」${track.voice ? "（人声）" : ""}：${rms === null ? "这段没有声音" : `rms ${rms} / peak ${track.overall.peakDb}，有声 ${Math.round(heard.length * window * 10) / 10} 秒${faint}`}`);
+    lines.push(`- 「${track.name}」${track.voice ? "（人声）" : ""}：${rms === null ? "这段没有声音" : `rms ${rms} / peak ${track.overall.peakDb}，有声 ${Math.round(heard.length * window * 10) / 10} 秒`}`);
   }
   const balance = voiceBalance(solo, window);
   if (balance?.differenceDb != null) {
     const { seconds, differenceDb } = balance;
-    if (differenceDb >= 6) lines.push(`人声段（${seconds} 秒）：人声比其他声音响 ${differenceDb} dB，听得清。`);
-    else {
-      const factor = Math.round(10 ** (-(8 - differenceDb) / 20) * 100) / 100;
-      lines.push(
-        `人声段（${seconds} 秒）：人声${differenceDb >= 0 ? `只比其他声音响 ${differenceDb} dB` : `比其他声音还低 ${-differenceDb} dB`}，会被盖住。人声一般要比配乐响 6 dB 以上：用 audio_edit 把其他音轨的 gain 乘以约 ${factor}（或调高人声）；只在人声出现时压低配乐（duck）要用户明确同意。`,
-      );
-    }
+    lines.push(`人声段（${seconds} 秒）：人声比其他声音${differenceDb >= 0 ? `响 ${differenceDb} dB` : `低 ${-differenceDb} dB`}。`);
   }
   return lines;
 }
@@ -146,9 +139,9 @@ export function registerPreviewTools(registry) {
     name: "preview_frames",
     title: "查看画面",
     description:
-      "在浏览器中渲染作品画面给你看，用来亲眼确认修改效果。times 指定绝对时间（秒，超出 0–作品时长的按 0 或最后一刻 时长−0.001 秒画）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张；取的是等分后每一份的中点，不含首尾两端，看首尾和切点用 times）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。默认 JPEG；format 设为 png 时返回无损 PNG（看细小文字、颜色）。每张都有画面指纹（同一时刻两次渲染指纹相同，画面就完全一样）和画这一帧的毫秒数（整片哪里慢用 work_check 的 timing）。用户电脑上开着 FRAME 时在那台电脑上用显卡画，三维作品也快；否则在服务器上软件渲染（没有 GPU），三维作品一帧要几秒，取少量时间点。" +
-      "region 放大看一块（脸、手、细线、小字）：[x, y, 宽, 高] 按作品画面像素，scale 是放大倍数（默认放到长边约 1000 像素，最多到画面长边 3840）。" +
-      "scene 单独画作品里的另一个模块（例如 sheets/人物.ts，导出 createScene，写法和 scenes/*.ts 一样）：人物设定图、表情和动作表、一个组件单独看、样片，不用放进时间轴、不影响用户的预览；时间是这个模块自己的（0 到它 sample 的 duration，没写就是作品时长），不给 times 时样片均匀取样、其他模块画 0 秒那一刻，不叠字幕。",
+      "在浏览器中渲染作品画面，返回图片。times 指定绝对时间（秒，超出 0–作品时长的按 0 或最后一刻 时长−0.001 秒画）；或者不给 times，用 count 在全片（或 start–end 一段）均匀取样（都不给时全片取 12 张；取的是等分后每一份的中点，不含首尾两端）。4 张以内分开返回，更多时拼成一张带时间标注的总览图（sheet 可以指定，分开返回最多 8 张）。默认 JPEG；format 设为 png 时返回无损 PNG。每张都有画面指纹（同一时刻两次渲染指纹相同，画面就完全一样）和画这一帧的毫秒数。用户电脑上开着 FRAME 时在那台电脑上用显卡画；否则在服务器上软件渲染（没有 GPU），三维作品一帧要几秒。" +
+      "region 放大画面的一块：[x, y, 宽, 高] 按作品画面像素，scale 是放大倍数（默认放到长边约 1000 像素，最多到画面长边 3840）。" +
+      "scene 单独画作品里的另一个模块（例如 sheets/人物.ts，导出 createScene，写法和 scenes/*.ts 一样），它不在时间轴上、不影响用户的预览；时间是这个模块自己的（0 到它 sample 的 duration，没写就是作品时长），不给 times 时样片均匀取样、其他模块画 0 秒那一刻，不叠字幕。",
     readOnly: true,
     input: {
       work: workArg,
@@ -161,7 +154,7 @@ export function registerPreviewTools(registry) {
       width: z.number().int().min(160).max(1920).multipleOf(2).optional().describe("分开返回时每张的宽度（像素，默认 960），高度按画幅计算"),
       subtitles: z.boolean().default(true),
       format: z.enum(["jpeg", "png"]).default("jpeg").describe("图片格式：jpeg 小，png 无损"),
-      compare: workArg.describe("另一个作品：同样的时刻并排画出两个作品（左边本作品，右边这个），例如对比横屏版和竖屏版。时刻用 times 或 count 取样（最多 12 个），固定拼成一张图"),
+      compare: workArg.describe("另一个作品：同样的时刻并排画出两个作品（左边本作品，右边这个）。时刻用 times 或 count 取样（最多 12 个），固定拼成一张图"),
       region: z.tuple([seconds, seconds, seconds, seconds]).optional().describe("只看画面的一块并放大：[x, y, 宽, 高]，按作品画面像素（project.ts 的尺寸）"),
       scale: z.number().min(0.25).max(4).optional().describe("region 的放大倍数（相对作品画面像素）"),
       scene: z.string().min(1).max(300).optional().describe("单独画作品里的这个模块（作品文件夹里的路径，导出 createScene），而不是成片"),
@@ -266,10 +259,10 @@ export function registerPreviewTools(registry) {
 
   registry.add({
     name: "preview_motion",
-    title: "检查运动",
+    title: "测量运动",
     description:
-      `逐帧分析一段画面怎么动，检查动画和运镜顺不顺：画面整体的平移、推拉（缩放）、旋转速度，切换点，以及急起急停（没有缓入缓出）、突然变速、单帧跳动、局部一帧内突变（弹出、换图或穿帮）、重复帧（画面在动时有帧和前一帧一样，看起来会顿）和 1 秒以上的完全静止。返回每个镜头的运动和问题列表，附一张图：一排取样小图加速度曲线（灰线是切换，红点是问题）。` +
-      `按小图（长边 ${MOTION_EDGE} 像素）逐帧画，一次最多 ${MOTION_FRAMES} 帧；从开始算（含加载作品）满 ${MOTION_BUDGET_MS / 1000} 秒就停，并说明这个作品一次能看多长（同时只做一个这样的分析，其他的排队）。用户电脑上开着 FRAME 时用那台电脑的显卡画，三维作品也快；否则在服务器上软件渲染，三维、体素这类作品一次只能看 1–2 秒。推荐：一个镜头或一个转场 start–end 取 2–6 秒、默认帧率（30 fps 是 60–180 帧，一般作品 5–15 秒出结果）；一整段（10–20 秒）只看快慢节奏时 fps 用 10–15；全片分段看，不要一次看完。速度单位是作品画面像素/秒。`,
+      `逐帧测量一段画面的运动：按小图（长边 ${MOTION_EDGE} 像素）的亮度估计相邻两帧之间画面整体的平移、推拉（缩放）和旋转。返回每段整体运动的起止时间、位移，开头一帧、最快和结尾一帧的速度（作品画面像素/秒，推拉和旋转按画面边缘移动的速度算），切换的时刻，以及一帧内的整体位移、一帧内的局部变化（整体运动以外，变化的面积）、和前一帧完全相同的帧、${HOLD_SECONDS} 秒以上没有变化的时段；附一张图：一排取样小图，下面是整体速度曲线和局部变化曲线（灰线是切换，圆点是一帧内的事件，阴影是晃动和没有变化的时段）。` +
+      `一次最多 ${MOTION_FRAMES} 帧；从开始算（含加载作品）满 ${MOTION_BUDGET_MS / 1000} 秒就停，结果里写画到了哪里、按这个作品的速度一次大约能分析多长（同时只做一个这样的分析，其他的排队）。用户电脑上开着 FRAME 时用那台电脑的显卡画；否则在服务器上软件渲染，三维、体素这类作品一次约 1–2 秒。`,
     readOnly: true,
     input: {
       work: workArg,
@@ -293,7 +286,7 @@ export function registerPreviewTools(registry) {
         const lower = Math.max(5, Math.floor((MOTION_FRAMES - 1) / (to - start)));
         throw problem(
           400,
-          `一次最多 ${MOTION_FRAMES} 帧：${formatTime(start)}–${formatTime(to)} 按 ${rate} fps 是 ${total} 帧。把范围缩短到 ${longest} 秒以内${lower < rate && lower >= 5 ? `，或者 fps 降到 ${lower}（只看快慢节奏够用，单帧的问题会漏掉）` : "，分几段看"}`,
+          `一次最多 ${MOTION_FRAMES} 帧：${formatTime(start)}–${formatTime(to)} 按 ${rate} fps 是 ${total} 帧。按 ${rate} fps 一次最长 ${longest} 秒${lower < rate && lower >= 5 ? `；按 ${lower} fps 这一段是 ${Math.floor((to - start) * lower + 1e-6) + 1} 帧` : ""}`,
         );
       }
       const times = Array.from({ length: total }, (_, index) => Math.round((start + index / rate) * 1e6) / 1e6);
@@ -322,14 +315,14 @@ export function registerPreviewTools(registry) {
       const last = track.frames[track.frames.length - 1].time;
       const spent = Math.round(drawn.ms / 100) / 10;
       const lines = [
-        `运动检查 ${formatTime(start)}–${formatTime(last)}：${rate} fps，${track.frames.length} 帧（按 ${size.width}×${size.height} 画来分析，${drawn.gpu ? "在用户电脑上画" : "在服务器上画"}，用时 ${spent} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}${pausedText(paused, "，另外")}）。`,
+        `运动测量 ${formatTime(start)}–${formatTime(last)}：${rate} fps，${track.frames.length} 帧（按 ${size.width}×${size.height} 画来分析，${drawn.gpu ? "在用户电脑上画" : "在服务器上画"}，用时 ${spent} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}${pausedText(paused, "，另外")}）。`,
         ...motionText(analysis, { design }),
       ];
       if (drawn.cut) {
         // What fits in one call at this work's speed, so the next call is right.
         const fits = (perSecond) => Math.max(0.5, Math.floor(((MOTION_BUDGET_MS * 0.8) / 1000 / (drawn.perFrame / 1000) / perSecond) * 2) / 2);
         lines.push(
-          `画到 ${formatTime(last)} 就用满了 ${MOTION_BUDGET_MS / 1000} 秒（加载作品 ${Math.round(drawn.loadMs / 1000)} 秒，这段画一帧约 ${(drawn.perFrame / 1000).toFixed(2)} 秒），后面没有分析。这个作品一次大约能看 ${fits(rate)} 秒（${rate} fps）${rate > 10 ? `，fps 降到 10 能看约 ${fits(10)} 秒（单帧的问题会漏掉）` : ""}；按这个长度分段看。`,
+          `画到 ${formatTime(last)} 用满了 ${MOTION_BUDGET_MS / 1000} 秒（加载作品 ${Math.round(drawn.loadMs / 1000)} 秒，这段画一帧约 ${(drawn.perFrame / 1000).toFixed(2)} 秒），${formatTime(last)} 以后没有分析。按这个速度一次大约能分析 ${fits(rate)} 秒（${rate} fps）${rate > 10 ? `、${fits(10)} 秒（10 fps）` : ""}。`,
         );
       }
       if (drawn.errors.length) lines.push("渲染时出现错误：\n" + drawn.errors.join("\n"));
@@ -377,7 +370,7 @@ export function registerPreviewTools(registry) {
     name: "preview_audio",
     title: "分析声音",
     description:
-      "听不到声音时用数字确认：响度（RMS/峰值 dBFS，响度相近的时间合并成一段）、静音段和削波。默认分析作品混音（start 起 duration 秒，最多 60 秒）；src 分析单个音频或视频文件（films/…、materials/<库>/…，默认整个文件，最多 300 秒）。分析混音时（有两条以上音轨）还会单独渲染每条音轨，给出各自的响度，有人声时说明人声是否被盖住。beats: true 再用 Beat This! 模型给出准确的速度（中途变速时分段）、拍号、每小节第一拍的时间和写进 project.ts 的 tempo，用来把剪辑点、画面变化对上音乐（耗时约为音频长度的十分之一）。listen: true 同时把这一段做成 MP3：能听音频的 AI 直接收到音频，结果里还有给用户试听的下载链接（1 小时内有效）——念错字、语气、音色这些数字看不出来，交给能听的人。",
+      "测量声音：响度（RMS/峰值 dBFS，响度相近的时间合并成一段）、静音段和削波样本数。默认分析作品混音（start 起 duration 秒，最多 60 秒）；src 分析单个音频或视频文件（films/…、materials/<库>/…，默认整个文件，最多 300 秒）。分析混音时（有两条以上音轨）还会单独渲染每条音轨，给出各自的响度；有人声时给出人声段里人声比其他声音响或低多少 dB。beats: true 再用 Beat This! 模型给出速度（中途变速时分段）、拍号、每小节第一拍的时间和 project.ts 的 tempo 写法（耗时约为音频长度的十分之一）。listen: true 同时把这一段做成 MP3：能接收音频的客户端直接收到音频，结果里还有试听下载链接（1 小时内有效）。",
     readOnly: true,
     input: {
       work: workArg,
@@ -386,7 +379,7 @@ export function registerPreviewTools(registry) {
       duration: z.number().positive().max(300).optional().describe("秒数；混音默认 10（最多 60），文件默认到结尾（最多 300）"),
       window: z.number().min(0.05).max(10).optional().describe("响度窗口秒数；默认 0.5，长音频自动加大到不超过 60 个窗口"),
       beats: z.boolean().default(false).describe("同时分析节拍和小节"),
-      tracks: z.boolean().default(true).describe("分析混音时单独渲染各音轨（最多 8 条），给出各自的响度和人声是否被盖住"),
+      tracks: z.boolean().default(true).describe("分析混音时单独渲染各音轨（最多 8 条），给出各自的响度和人声与其他声音的响度差"),
       listen: z.boolean().default(false).describe("同时生成这一段的 MP3 试听（最多 60 秒）"),
     },
     async run({ src, start, duration, window, beats, tracks, listen }, ctx) {
@@ -410,10 +403,6 @@ export function registerPreviewTools(registry) {
       const quiet = stats.overall.rmsDb < -50;
       const lines = [
         `${label} ${formatTime(from)}–${formatTime(from + length)}：整体 RMS ${stats.overall.rmsDb} dB，峰值 ${stats.overall.peakDb} dB，削波样本 ${stats.overall.clippedSamples}，静音窗口 ${stats.silentWindows}/${stats.windows.length}。${quiet ? "这段几乎没有声音。" : ""}`,
-        // A number alone does not say what to do about it.
-        ...(!src && stats.overall.clippedSamples > 100
-          ? ["过载（削波）会破音：用 audio_edit 把最响的片段或音轨 gain 调低（配乐和人声同时出现时配乐常用 0.3–0.5），或调低 master 的 gain。"]
-          : []),
         `响度（${step} 秒一窗，相差 2 dB 以内的合并）：`,
         ...loudnessStretches(stats.windows, step).map((item) => `${formatTime(item.start)}–${formatTime(item.end)} ${item.silent ? "静音" : `rms ${item.rmsDb} / peak ${item.peakDb}`}`),
       ];

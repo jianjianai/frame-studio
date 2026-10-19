@@ -99,7 +99,7 @@ export async function materialReferences(services, work) {
     const library = file.ref.split("/")[0];
     if (!file.locked && !file.current) problems.push({ severity: "error", source: "assets", message: `素材不存在：${file.url}` });
     else if (!linked.has(library))
-      problems.push({ severity: "warning", source: "assets", message: `用到了没有引用的素材库「${library}」的文件 ${file.url}，用 materials_link 引用它` });
+      problems.push({ severity: "warning", source: "assets", message: `用到了没有引用的素材库「${library}」的文件 ${file.url}` });
   }
   for (const name of status.missing) problems.push({ severity: "warning", source: "assets", message: `引用的素材库「${name}」不存在` });
   for (const { spec, from } of status.unresolved ?? [])
@@ -133,7 +133,7 @@ export function mixingRules(document) {
           severity: "warning",
           source: "audio",
           file: "audio.json",
-          message: `「${owner.name ?? owner.id}」的 duck 由「${trigger?.name ?? processor.track}」触发，它不是人声音轨。混音原则：音效响时不要压低音乐，只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求；去掉这个 duck，用音量调平衡。`,
+          message: `「${owner.name ?? owner.id}」的 duck 由「${trigger?.name ?? processor.track}」触发，它不是人声音轨。混音原则（用户的要求）：音效响时不压低音乐，只有人声（配音、旁白）才可能压低音乐，而且要用户明确要求。`,
         });
       }
   return problems;

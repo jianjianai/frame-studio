@@ -275,15 +275,15 @@ describe("pictures for the AI: modules on their own, close looks, timing, motion
   );
 
   it.skipIf(!browserExecutable())(
-    "finds a start and a stop without easing and a pop, and measures the film",
+    "measures a linear pan and a pop, and times the film",
     async () => {
       const motion = await tool("preview_motion", { work: work.id, start: 0.5, end: 3 });
       expect(motion.status).toBe(200);
       const text = motion.body.text;
-      expect(text).toMatch(/运动检查 0:00\.50–0:03\.00：30 fps，76 帧（按 320×180 画来分析/);
-      expect(text).toMatch(/- 0:01\.00–0:02\.00（1\.00 秒）往 ← 移 6\d\d px，最快 6\d\d px\/s/);
-      expect(text).toMatch(/起步突然：第一帧就到 6\d\d px\/s，没有缓入；停得突然：最后一帧还有 6\d\d px\/s，没有缓出/);
-      expect(text).toContain("0:02.50 局部突变：画面里不到 1% 的地方一帧内变了");
+      expect(text).toMatch(/运动测量 0:00\.50–0:03\.00：30 fps，76 帧（按 320×180 画来分析/);
+      expect(text).toMatch(/- 0:01\.00–0:02\.00（1\.00 秒）往 ← 移 6\d\d px；开头一帧 6\d\d px\/s，最快 6\d\d px\/s（0:01\.\d\d[^）]*），结尾一帧 6\d\d px\/s/);
+      expect(text).toContain("0:02.50 一帧内不到 1% 的画面变了（整体运动以外的变化）");
+      expect(text).not.toMatch(/突然|缓入|缓出|穿帮|不用改/);
       expect(motion.body.images[0].mimeType).toBe("image/jpeg");
       const speeds = motion.body.data.series.filter((item) => item.time > 1.1 && item.time < 1.9).map((item) => item.speed);
       for (const speed of speeds) expect(Math.abs(speed - 600)).toBeLessThan(60);

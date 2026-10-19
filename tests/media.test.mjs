@@ -251,6 +251,6 @@ describe("models, Lottie and panoramas in works and libraries", () => {
     // Past the animation's end: refused before writing, naming the layer, the length and the formula.
     const late = await tool("layers_edit", { work: work.id, operations: [{ op: "update", id: "square", patch: { offset: 0.5, loop: 1 } }] });
     expect(late.status).toBe(400);
-    expect(late.body.error.message).toMatch(/图层「square」要播放到 .*square\.json 的第 1\.5 秒，但它只有 1 秒.*offset \+ loop/);
+    expect(late.body.error.message).toMatch(/图层「square」要播放到 .*square\.json 的第 1\.5 秒，但它只有 1 秒（动画时间 = offset \+ \(经过的时间 × rate \+ phase\)，有 loop 时括号部分对 loop 取余）$/);
   }, 180000);
 });

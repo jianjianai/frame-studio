@@ -190,7 +190,7 @@ export function registerAssetTools(registry) {
     name: "asset_view",
     title: "查看素材",
     description:
-      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。用户上传或导入了素材，挑选和安排之前先看一眼。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息（用 preview_audio 的 src 分析）。还没有作品时用 repo 指定作品库，看素材库的文件。只要文字信息、不需要看画面时设 image: false（快，不抽帧不渲染；FBX/OBJ 模型的三角形数和动画要渲染才知道，这时没有）。",
+      "看素材本身的样子（不是作品画面）：图片（含 SVG、GIF 首帧）缩略图，视频按时间点抽帧（默认开头、中间、结尾附近 3 帧）；三维模型（GLB/glTF/FBX/OBJ）从几个方向渲染，有动画时按 times 取动画的几个时刻；Lottie 按时间点取帧；HDR/EXR 全景图整幅显示；字体显示样张。同时给出尺寸、时长、动画名、三角形数等信息。多个文件拼成一张带编号的总览图，只有一张图片时返回大图。files 不给时看作品 public/ 里全部可以看的素材；地址可以是 films/…、public/… 或素材库 materials/<库>/…。音频只列出信息。还没有作品时用 repo 指定作品库，看素材库的文件。image: false 只返回文字信息（不抽帧不渲染；FBX/OBJ 模型的三角形数和动画要渲染才知道，这时没有）。",
     readOnly: true,
     input: {
       work: workArg,
@@ -302,9 +302,9 @@ export function registerAssetTools(registry) {
       const text = [
         single ? describe(items[0]) : `${numbered.join("\n")}\n\n${visual.map(describe).join("\n")}`,
         others.length ? `没有画面的文件：\n${others.map(describe).join("\n")}` : "",
-        trimmed ? `文件较多，每个文件只取了前 ${each} 个时间点（少看几个文件可以看全）` : "",
+        trimmed ? `文件较多，每个文件只取了前 ${each} 个时间点` : "",
         gpus.size ? `模型等在用户电脑上用显卡画（${[...gpus].join("、")}）。` : "",
-        skipped.length ? `超过 ${SHEET_CELLS} 格，没有显示：${skipped.join("、")}（用 files 分批查看）` : "",
+        skipped.length ? `超过 ${SHEET_CELLS} 格，没有显示：${skipped.join("、")}` : "",
         problems.length ? `出错：\n${problems.join("\n")}` : "",
       ]
         .filter(Boolean)
@@ -332,7 +332,7 @@ export function registerAssetTools(registry) {
   };
   const source = {
     url: z.string().url().optional(),
-    data: z.string().max(12 * 1024 * 1024).optional().describe("文件内容的 base64（≤8 MB，要同时给 name）；没有终端时用，否则用 upload_link"),
+    data: z.string().max(12 * 1024 * 1024).optional().describe("文件内容的 base64（≤8 MB，要同时给 name）"),
     file: z.string().optional().describe("服务器上的绝对路径（仅本机模式）"),
     fromWork: fromWork
       .optional()
@@ -382,7 +382,7 @@ export function registerAssetTools(registry) {
     name: "asset_import",
     title: "导入素材",
     description:
-      "把素材放进作品自己的 public/：从网址下载（url）、base64 内容（data，小文件）、同一作品库另一个作品里的文件（fromWork）或服务器本地文件（file，仅本机模式）。一次导入多个用 items（同时下载，某项失败不影响其他项，结果逐项列出，只需重试失败的）。你所在电脑上的文件用 upload_link 上传。返回代码中使用的 films/... 地址。注意素材版权，在 license 中记录来源。多个作品都要用的素材放进素材库（material_write）。",
+      "把素材放进作品自己的 public/：从网址下载（url）、base64 内容（data，小文件）、同一作品库另一个作品里的文件（fromWork）或服务器本地文件（file，仅本机模式）。一次导入多个用 items（同时下载，某项失败不影响其他项，结果逐项列出）。返回代码中使用的 films/... 地址。第三方素材在 license 中写清来源与许可（记进 production/licenses.md）。",
     input: {
       work: workArg,
       ...source,
@@ -413,7 +413,7 @@ export function registerAssetTools(registry) {
     name: "audio_place",
     title: "放置音频",
     description:
-      "把音频放到音轨上（不存在的音轨会自动创建）：作品或素材库里的音频文件（src），或素材库音效模块里的一个音效（sound，resources_search 找到的地址，时长默认用音效自己的；作品还没关联那个素材库时自动关联并锁定）。用于配乐、音效、配音和录音。",
+      "把音频放到音轨上（不存在的音轨会自动创建）：作品或素材库里的音频文件（src），或素材库音效模块里的一个音效（sound，resources_search 给出的地址，时长默认用音效自己的；作品还没关联那个素材库时自动关联并锁定）。",
     input: {
       work: workArg,
       src: z.string().optional().describe("films/<名称>/…、public/… 或 materials/<素材库>/… 地址"),
@@ -444,7 +444,7 @@ export function registerAssetTools(registry) {
         await services.materials?.lockReferenced(work);
         return asJson(
           { clip: result.clip, track: result.track.name, sha256: result.sha256 },
-          `已把音效「${found.title}」放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始${offset ? `（从音效的 ${offset}s 处）` : ""}，时长 ${result.clip.duration.toFixed(2)}s${cut(duration ?? rest(found.duration, "音效"), result.clip)}。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
+          `已把音效「${found.title}」放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始${offset ? `（从音效的 ${offset}s 处）` : ""}，时长 ${result.clip.duration.toFixed(2)}s${cut(duration ?? rest(found.duration, "音效"), result.clip)}`,
         );
       }
       const info = await probe(await resolveAsset(services, work, src));
@@ -453,7 +453,7 @@ export function registerAssetTools(registry) {
       await services.materials?.lockReferenced(work);
       return asJson(
         { clip: result.clip, track: result.track.name, sha256: result.sha256 },
-        `已放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始${offset ? `（从文件的 ${offset}s 处）` : ""}，时长 ${result.clip.duration.toFixed(2)}s${cut(duration, result.clip)}。调整用 audio_edit 的 update（collection clips，id ${result.clip.id}）`,
+        `已放到音轨「${result.track.name}」（${result.track.id}）：片段 ${result.clip.id}，${start}s 开始${offset ? `（从文件的 ${offset}s 处）` : ""}，时长 ${result.clip.duration.toFixed(2)}s${cut(duration, result.clip)}`,
       );
     },
   });

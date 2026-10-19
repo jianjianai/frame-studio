@@ -616,7 +616,7 @@ export function experiencePlugin(services) {
     name: "experience_list",
     title: "查找经验库",
     description:
-      "列出或按主题查找作品库里的经验库：名称、介绍、文档数、几个作品在用、本作品是否已关联、为什么适合本作品。query 按名称、介绍和文档标题找（例如「开场」「卡点」「知识类」），同时列出相关的文档；不给 query 时本作品关联的在前，其余按适合本作品的程度和使用次数排列。经验库很多时用它找合适的，征得用户同意后用 experience_link 关联；没关联的也可以先用 experience_read（library 参数）看看。还没有作品时用 repo 指定作品库。",
+      "列出或按主题查找作品库里的经验库：名称、介绍、文档数、几个作品在用、本作品是否已关联、和本作品相近的地方（名称、介绍或内容相近，类似的作品在用）。query 按名称、介绍和文档标题找（例如「开场」「卡点」「知识类」），同时列出相关的文档；不给 query 时本作品关联的在前，其余按和本作品的相近程度和使用次数排列。还没有作品时用 repo 指定作品库。",
     readOnly: true,
     input: {
       work: workArg,
@@ -675,7 +675,7 @@ export function experiencePlugin(services) {
     published: true, // creating libraries is fine on a published work; changing its links is checked below
     title: "关联经验库",
     description:
-      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。名称写 id 或标题（大小写、空格、标点不同也能认出）；作品按 id 关联，经验库改名（只改标题）不影响关联；作品库的技能里的文档也可以作为经验库关联（id 是 skill:<技能名>，它的文档就是技能里的 Markdown，改了就是改技能）；不存在时返回最接近的几个，经验库很多时先用 experience_list 查找。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
+      "增加或移除本作品关联的经验库（project.ts 的 experiences，可以多个）。add 关联已有的经验库，create 新建经验库（带首页模板）并关联（同名的已存在时直接关联），remove 取消关联（经验库本身不受影响）。名称写 id 或标题（大小写、空格、标点不同也能认出）；作品按 id 关联，经验库改名（只改标题）不影响关联；作品库的技能里的文档也可以作为经验库关联（id 是 skill:<技能名>，它的文档就是技能里的 Markdown，改了就是改技能）；不存在时返回最接近的几个。用户要求时使用；不确定时先问用户。返回新关联的经验库的首页和目录（小的经验库返回全文）。",
     input: { work: workArg, add: z.array(nameArg).max(10).default([]), remove: z.array(nameArg).max(10).default([]), create: z.array(nameArg).max(5).default([]) },
     async run({ add, remove, create }, ctx) {
       const work = await ctx.work();
@@ -729,7 +729,7 @@ export function experiencePlugin(services) {
     published: true, // the library branches, not the work: allowed on a published work
     title: "保存经验库版本",
     description:
-      "把经验库里未保存的修改保存为版本（Git 提交）。你用 experience_write 改的每轮结束时已经自动保存，这个工具用于用户在工作台里手动改了、要你保存的时候。每个经验库是自己的分支：library 指定只保存哪个；不写时有修改的经验库各自保存一个版本（message 相同）。message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
+      "把经验库里未保存的修改保存为版本（Git 提交）。experience_write 的修改在每轮结束时已经自动保存；这里保存其余未保存的修改（例如用户在工作台里手动改的）。每个经验库是自己的分支：library 指定只保存哪个；不写时有修改的经验库各自保存一个版本（message 相同）。message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
     input: { work: workArg, repo: repoArg, library: libraryArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
     async run({ library: name, message, push }, ctx) {
       const work = await ctx.place();
@@ -783,7 +783,7 @@ export function experiencePlugin(services) {
       repo: repoArg,
       library: libraryArg,
       operations: z.array(docOperation).min(1).max(30),
-      note: z.string().max(120).optional().describe("一句话说明这次记了什么，用作版本说明，例如“开场：前 2 秒亮出冲突”"),
+      note: z.string().max(120).optional().describe("一句话说明这次记了什么，用作版本说明"),
     },
     async run({ library: name, operations, note }, ctx) {
       const { work, library } = await libraryOf(ctx, name);

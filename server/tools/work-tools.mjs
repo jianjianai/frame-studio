@@ -58,7 +58,7 @@ export function timingReport(measured, project, { waited = 0, paused = 0 } = {})
     `渲染耗时（按工作台预览的样子：${measured.width}×${measured.height}，标准画质，含字幕；每 ${measured.step} 秒取一帧${spread}；共 ${samples.length} 帧，用时 ${seconds(measured.ms)} 秒，其中加载作品 ${seconds(measured.loadMs)} 秒${waited > 1000 ? `，另外排队 ${Math.round(waited / 1000)} 秒` : ""}${pausedText(paused, "，另外")}）：中位 ${ms(middle)}，九成在 ${ms(at(0.9))} 以内，最慢 ${ms(sorted[sorted.length - 1])}。`,
     measured.gpu
       ? `实时播放 ${fps} fps 每帧要在 ${Math.round(1000 / fps)} ms 内画完；这是在用户电脑上用显卡测的（${measured.gpu}），接近用户预览时的速度${measured.background ? "（测的时候页面在后台，数值可能偏大）" : ""}。`
-      : `实时播放 ${fps} fps 每帧要在 ${Math.round(1000 / fps)} ms 内画完；这是在服务器上测的（没有开着这个作品、能用显卡画的 FRAME 页面，或者用户在设置里选了服务器渲染），服务器没有 GPU，数值比一般电脑慢，用来比较哪里最慢、改完有没有变快。`,
+      : `实时播放 ${fps} fps 每帧要在 ${Math.round(1000 / fps)} ms 内画完；这是在服务器上测的（没有开着这个作品、能用显卡画的 FRAME 页面，或者用户在设置里选了服务器渲染），服务器没有 GPU，数值比一般电脑慢。`,
   ];
   if (!measured.complete) lines.push(`只测到 ${formatTime(samples[samples.length - 1].time)}：用满了 ${Math.round(TIMING_BUDGET_MS / 1000)} 秒，后面没测。`);
   const clips = project.visual?.clips ?? [];
@@ -85,7 +85,7 @@ export function timingReport(measured, project, { waited = 0, paused = 0 } = {})
   const mean = (stretch) => stretch.items.reduce((sum, item) => sum + cost(item), 0) / stretch.items.length;
   const top = stretches.sort((a, b) => mean(b) - mean(a)).slice(0, 5);
   if (top.length) {
-    lines.push(`明显慢的地方（是中位的 2 倍以上，按平均耗时排）：`);
+    lines.push(`耗时是中位 2 倍以上的地方（按平均耗时排）：`);
     for (const stretch of top) {
       const worst = stretch.items.reduce((a, b) => (cost(b) > cost(a) ? b : a));
       const span = stretch.end > stretch.start ? `${formatTime(stretch.start)}–${formatTime(stretch.end)}` : formatTime(stretch.start);
@@ -96,11 +96,11 @@ export function timingReport(measured, project, { waited = 0, paused = 0 } = {})
     if (stretches.length > top.length) lines.push(`- 另外还有 ${stretches.length - top.length} 段`);
   } else {
     const worst = samples.reduce((a, b) => (cost(b) > cost(a) ? b : a));
-    lines.push(`没有明显比别处慢的地方；最慢的是 ${formatTime(worst.time)} ${ms(cost(worst))}${where(worst.time) ? "（" + where(worst.time) + "）" : ""}。`);
+    lines.push(`没有耗时是中位 2 倍以上的地方；最慢的是 ${formatTime(worst.time)} ${ms(cost(worst))}${where(worst.time) ? "（" + where(worst.time) + "）" : ""}。`);
   }
   const loads = samples.filter((sample) => sample.again !== undefined && sample.again < 0.5 * sample.ms && sample.ms >= slow);
   if (loads.length)
-    lines.push(`第一次画慢、再画一次就快的（多半是第一次用到时加载图片、字体或图层；播放到这里可能卡一下）：${loads.map((sample) => `${formatTime(sample.time)} 首次 ${ms(sample.ms)} → 再画 ${ms(sample.again)}`).join("、")}`);
+    lines.push(`第一次画的耗时是再画一次的 2 倍以上：${loads.map((sample) => `${formatTime(sample.time)} 首次 ${ms(sample.ms)} → 再画 ${ms(sample.again)}`).join("、")}`);
   // Creating a layer runs on the page's one main thread: while it computes (terrain, parsing a
   // model, measuring a skinned mesh), nothing draws or schedules sound, so playback stops there.
   const holding = (measured.layers ?? []).filter((layer) => layer.longest >= 200).sort((a, b) => b.longest - a.longest);
@@ -108,7 +108,6 @@ export function timingReport(measured, project, { waited = 0, paused = 0 } = {})
     lines.push(`创建时卡住页面的图层（这些计算在浏览器的主线程上进行，显卡帮不上；卡住期间画面和声音都停，预览显示「缓冲中」）：`);
     for (const layer of holding.slice(0, 6))
       lines.push(`- 「${layer.name || layer.id}」（${formatTime(layer.at)} 出现）创建用了 ${(layer.ms / 1000).toFixed(1)} 秒，最长一次连续卡住 ${(layer.longest / 1000).toFixed(1)} 秒`);
-    lines.push(`改法（frame_guide tips 的「性能」）：createScene 里每次都一样的计算算一次存起来、几个场景共用；带骨骼的模型量尺寸不要用 Box3.setFromObject；FBX 换成 GLB；剩下的重计算拆成小段，段间 await nextTask()（@frame/engine/scheduling），或放进 Web Worker。`);
   }
   if (measured.errors?.length) lines.push("测的时候出现错误：\n" + measured.errors.join("\n"));
   return lines;
@@ -174,7 +173,7 @@ export function registerWorkTools(registry) {
     name: "works_list",
     title: "列出作品",
     description:
-      "列出作品库中的作品（id、标题、时长、尺寸、更新时间）。作品里的 AI 会话只列出同一作品库的作品：找到要参考的作品后，用 work_read 读它的文件、search 的 scope works 搜它的代码、preview_frames 等读取工具填 work 看它的画面。",
+      "列出作品库中的作品（id、标题、时长、尺寸、更新时间）。作品里的 AI 会话只列出同一作品库的作品。",
     readOnly: true,
     input: { repo: z.string().optional().describe("只列出这个作品库"), query: z.string().optional().describe("按标题过滤") },
     async run({ repo, query }, ctx) {
@@ -239,7 +238,7 @@ export function registerWorkTools(registry) {
     published: true, // copying a published (view-only) work is how it gets edited again
     title: "复制作品",
     description:
-      "把一个作品完整复制成新作品（代码、图层、混音、字幕、素材和锁定的素材库版本），在同一个作品库里，返回新作品 id。做另一个版本（例如竖屏版、换文案）时用它，再在副本上修改；width/height 同时改副本的画面尺寸（图层位置是比例会跟着变，场景代码要按 options.width/height 重新排版）。",
+      "把一个作品完整复制成新作品（代码、图层、混音、字幕、素材和锁定的素材库版本），在同一个作品库里，返回新作品 id。width/height 同时改副本的画面尺寸（图层的位置和大小是画面比例，跟着变；场景代码里写死的像素不变）。",
     input: {
       work: workArg,
       title: z.string().min(1).max(120).optional().describe("副本的标题，默认「原标题（副本）」"),
@@ -259,7 +258,7 @@ export function registerWorkTools(registry) {
       const size = meta.ok && meta.meta.composition;
       return asJson(
         { id: copy.id, repo: copy.repo, dir: copy.dir },
-        `已复制为作品 ${copy.id}（${meta.ok ? meta.meta.title : title ?? ""}${size ? `，${size.width}×${size.height}` : ""}），在作品库 ${copy.repo}。之后的工具调用写 work: "${copy.repo}/${copy.id}"。副本沿用原作品的目录名 ${copy.slug}（素材地址 films/${copy.slug}/… 不用改）${width || height ? "。尺寸变了：场景代码里写死的像素坐标要按新尺寸重新排版，先 preview_frames 看一遍" : ""}`,
+        `已复制为作品 ${copy.id}（${meta.ok ? meta.meta.title : title ?? ""}${size ? `，${size.width}×${size.height}` : ""}），在作品库 ${copy.repo}。之后的工具调用写 work: "${copy.repo}/${copy.id}"。副本沿用原作品的目录名 ${copy.slug}（素材地址 films/${copy.slug}/… 不变）`,
       );
     },
   });
@@ -268,7 +267,7 @@ export function registerWorkTools(registry) {
     name: "work_context",
     title: "作品现状",
     description:
-      "读取作品的元数据、文件、素材（地址、类型、时长、尺寸）、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果、最近的导出、作品需求和关联的经验库、作品库里的素材库（各有哪些资源和音效）、发布后的复盘数据概要，以及是否已发布、和 GitHub 是否同步（warnings 里的情况要先处理）。外部 AI 开始工作前先调用。",
+      "读取作品的元数据、文件、素材（地址、类型、时长、尺寸）、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果、最近的导出、作品需求和关联的经验库、作品库里的素材库（各有哪些资源和音效）、发布后的复盘数据概要，以及是否已发布、和 GitHub 是否同步（不在 FRAME 的 AI 对话里调用时，这时和 GitHub 比较一次；不能修改作品的情况写在 warnings 里）。",
     readOnly: true,
     input: {
       work: workArg,
@@ -370,14 +369,14 @@ export function registerWorkTools(registry) {
     name: "work_check",
     title: "检查作品",
     description:
-      "检查 project.ts 元数据、TypeScript 类型、素材引用，并在浏览器中实际加载、渲染几帧（开头、1/4、1/2、3/4、结尾）和一小段音频（用户电脑开着 FRAME 时在那台电脑上加载，否则在服务器上）。返回所有问题。修改代码后调用；frames: true 同时返回这 5 个时刻的分镜图。" +
-      `timing: true 再测全片各处画一帧要多久（按工作台预览的尺寸和画质，每 0.5 秒左右取一帧，最多 ${TIMING_SAMPLES} 帧、${TIMING_BUDGET_MS / 1000} 秒），列出明显慢的地方和那里的图层、镜头：预览卡顿、导出慢时用，改完再测一次对比。`,
+      "检查 project.ts 元数据、TypeScript 类型、素材引用，并在浏览器中实际加载、渲染几帧（开头、1/4、1/2、3/4、结尾）和一小段音频（用户电脑开着 FRAME 时在那台电脑上加载，否则在服务器上）。返回发现的错误和警告；frames: true 同时返回这 5 个时刻的分镜图。" +
+      `timing: true 再测全片各处画一帧要多久（按工作台预览的尺寸和画质，每 0.5 秒左右取一帧，最多 ${TIMING_SAMPLES} 帧、${TIMING_BUDGET_MS / 1000} 秒）：中位和最慢的耗时，耗时是中位 2 倍以上的地方和那里的图层、镜头，创建时占住页面主线程 0.2 秒以上的图层。`,
     readOnly: true,
     input: {
       work: workArg,
       runtime: z.boolean().default(true).describe("是否在浏览器中实际加载（较慢但能发现运行错误）"),
       frames: z.boolean().default(false).describe("同时返回检查时渲染的 5 个时刻的分镜图"),
-      timing: z.boolean().default(false).describe("同时测全片的渲染耗时，找出画得慢的地方（多花几十秒）"),
+      timing: z.boolean().default(false).describe("同时测全片的渲染耗时（多花几十秒）"),
     },
     async run({ runtime, frames, timing }, ctx) {
       const work = await ctx.work();
@@ -399,7 +398,7 @@ export function registerWorkTools(registry) {
       let measured = null;
       if (timing) {
         const meta = services.works.meta(work);
-        if (!meta.ok || result.problems.some((p) => p.source === "runtime" || p.source === "project")) text += "\n\n作品加载或渲染有错误，没有测渲染耗时：先修好再测。";
+        if (!meta.ok || result.problems.some((p) => p.source === "runtime" || p.source === "project")) text += "\n\n作品加载或渲染有错误，没有测渲染耗时。";
         else {
           const step = Math.max(0.5, Math.ceil((meta.meta.duration / TIMING_SAMPLES) * 10) / 10);
           const { waited, paused, result: timed } = await services.renderer.heavy((on) => services.renderer.timing(work, { step, budgetMs: TIMING_BUDGET_MS, on }), who);
@@ -433,7 +432,7 @@ export function registerWorkTools(registry) {
     name: "work_read",
     title: "读取作品文件",
     description:
-      "读取作品的文件，主要用来参考同一作品库里的其他作品：它们的故事和说明（故事.md、AGENTS.md）、场景代码、时间轴（visual.json、audio.json）、素材。work 填作品 id（works_list 查），只读，不会改动它。不给 paths 时列出作品的全部文件；paths 是作品文件夹里的文件或文件夹（例如 故事.md、scenes/act1.ts、public），一次最多 20 个，文件夹列出其中的文件。文本返回内容（长文件用 startLine / lineCount 分段读）；图片、音频、视频等只给类型和大小（看样子用 asset_view 填 work，复制到本作品用 asset_import 的 fromWork）。在代码里找东西用 search 的 scope works。",
+      "读取作品的文件，也可以是同一作品库里的其他作品（故事.md、AGENTS.md、场景代码、visual.json、audio.json、素材）。work 填作品 id（works_list 查），只读，不会改动它。不给 paths 时列出作品的全部文件；paths 是作品文件夹里的文件或文件夹（例如 故事.md、scenes/act1.ts、public），一次最多 20 个，文件夹列出其中的文件。文本返回内容（长文件用 startLine / lineCount 分段读）；图片、音频、视频等只给类型、尺寸、时长和大小。",
     readOnly: true,
     input: {
       work: workArg,
@@ -517,7 +516,7 @@ export function registerWorkTools(registry) {
       work: workArg,
       operations: z.array(batchOperation).min(1).max(100),
       atomic: z.boolean().default(false),
-      check: z.boolean().default(false).describe("写入后再运行 work_check；检查不通过时文件已经写入（不会回滚），按报错继续修改，或 version_restore"),
+      check: z.boolean().default(false).describe("写入后再运行 work_check；检查不通过时文件已经写入（不会回滚）"),
       frames: z.boolean().default(false),
     },
     async run({ operations, atomic, check, frames }, ctx) {
@@ -642,18 +641,18 @@ export function registerWorkTools(registry) {
         .array(z.strictObject({ at: z.number().nonnegative(), title: z.string(), detail: z.string().default(""), id: z.string().optional() }))
         .max(200)
         .optional()
-        .describe("镜头标记（整体替换），显示在时间轴上，方便和用户指代片段"),
+        .describe("镜头标记（整体替换），显示在时间轴上"),
       posterTime: z.number().nonnegative().optional().describe("封面用这一秒的画面（替换上传的封面图片）"),
       tempo: z
         .strictObject({ bpm: z.number().min(20).max(400), firstBeat: z.number().nonnegative().default(0), beatsPerBar: z.number().int().min(1).max(16).default(4) })
         .optional()
-        .describe("配乐的节拍：BPM、第一小节第一拍在作品里的秒数、每小节拍数（preview_audio 的 beats 给出）。代码和素材库资源用 @frame/engine/tempo 的 beatAt / barAt 跟着它卡点"),
-      width: z.number().int().min(16).max(7680).optional().describe("画面宽度（像素）：改横竖屏或尺寸。图层的位置和大小是比例，跟着变；场景代码要按 options.width/height 画"),
+        .describe("配乐的节拍：BPM、第一小节第一拍在作品里的秒数、每小节拍数（preview_audio 的 beats 给出）。作品代码和素材库资源里 @frame/engine/tempo 的 beatAt / barAt 按它算时间"),
+      width: z.number().int().min(16).max(7680).optional().describe("画面宽度（像素）。图层的位置和大小是画面比例，跟着变；场景代码按 options.width/height 画的跟着变，写死的像素不变"),
       height: z.number().int().min(16).max(7680).optional().describe("画面高度（像素）"),
       subtitleStyle: z
         .strictObject({ size: z.number().min(0.01).max(0.08).optional(), y: z.number().min(0.05).max(0.95).optional() })
         .optional()
-        .describe("字幕的样式：size 字高占画面长边的比例（默认 0.022，竖屏短视频常用 0.03–0.035），y 字幕中线的位置（0.05 顶部 – 0.95 底部，默认横屏 0.92、竖屏 0.82）"),
+        .describe("字幕的样式：size 字高占画面长边的比例（默认 0.022），y 字幕中线的位置（0.05 顶部 – 0.95 底部，默认横屏 0.92、竖屏 0.82）"),
     },
     async run({ work: _ignored, posterTime, width, height, ...changes }, ctx) {
       const work = await ctx.work();

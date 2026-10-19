@@ -665,7 +665,6 @@ export class Reviews {
       documents: documents.map((doc) => doc.path),
       files: files.length,
       notImported: files.filter((file) => !file.used).map((file) => file.path),
-      hint: "详情用 review_read，导入平台导出用 review_import，对比其他作品用 reviews_compare",
     };
   }
 }
@@ -800,7 +799,7 @@ export function reviewsPlugin(services) {
     name: "review_read",
     title: "读取复盘",
     description:
-      "作品发布后的复盘资料：发布记录、最新数据（2 秒跳出、5 秒留存、结尾留存等和同类作品的值并列）、每小时流量（首 24/48/72 小时、按天、几波、各渠道）、流量来源（和账号近 7 天平均比）、观众留存——流失率是同类几倍最高的几秒（带前后两秒）、按图层/歌词/镜头等分段的倍数和“按同类走结尾会多多少”、关键时刻还剩多少人——以及评论概况、复盘文档和原始文件。seconds 看一段时间逐秒的留存。传 file 读其中一个文件：平台导出的表格（xlsx、csv）读成文字表格，截图返回图片给你看，复盘文档返回全文。看那几秒的画面用 preview_frames。导入平台导出用 review_import，录入和写复盘用 review_write，和其他作品比较用 reviews_compare。",
+      "作品发布后的复盘资料：发布记录、最新数据（2 秒跳出、5 秒留存、结尾留存等和同类作品的值并列）、每小时流量（首 24/48/72 小时、按天、几波、各渠道）、流量来源（和账号近 7 天平均比）、观众留存——流失率是同类几倍最高的几秒（带前后两秒）、按图层/歌词/镜头等分段的倍数和“按同类走结尾会多多少”、关键时刻还剩多少人——以及评论概况、复盘文档和原始文件。seconds 看一段时间逐秒的留存。传 file 读其中一个文件：平台导出的表格（xlsx、csv）读成文字表格，截图返回图片给你看，复盘文档返回全文。",
     readOnly: true,
     input: {
       work: workArg,
@@ -943,7 +942,7 @@ export function reviewsPlugin(services) {
     title: "记录复盘",
     destructive: true,
     description:
-      "记录作品发布后的复盘资料，每次调用自动保存为一个版本。operations 按顺序执行：post 新增或修改发布记录（平台、发布时间、标题和话题、置顶评论、链接、发布的是哪个导出文件、目标）；snapshot 录入一条发布记录截至某个时间的累计数据（metrics、同类作品的值 benchmark、留存曲线 retention 和同类的 retentionBenchmark、流量来源 sources、评论概况；同一时间已有的合并）；series 每小时新增的播放、涨粉等（views、followers，分渠道写 views:抖音精选）；moment 关键时刻（例如反转在第几秒，比较时会看那一刻还剩多少人）；segments 自定义分段（例如画在代码里的镜头、歌词），同种类整体替换；remove_post、remove_snapshot、remove_moment 删除；write / edit / delete / move 修改复盘文档（.md，路径相对作品的复盘文件夹，例如 复盘.md）。平台后台导出的文件优先用 review_import 导入。raw/ 里的原始文件保持原样，不能改。失败的逐项说明原因，只需重试失败的。格式和复盘方法见 frame_guide reviews。",
+      "记录作品发布后的复盘资料，每次调用自动保存为一个版本。operations 按顺序执行：post 新增或修改发布记录（平台、发布时间、标题和话题、置顶评论、链接、发布的是哪个导出文件、目标）；snapshot 录入一条发布记录截至某个时间的累计数据（metrics、同类作品的值 benchmark、留存曲线 retention 和同类的 retentionBenchmark、流量来源 sources、评论概况；同一时间已有的合并）；series 每小时新增的播放、涨粉等（views、followers，分渠道写 views:抖音精选）；moment 关键时刻（例如反转在第几秒，比较时会看那一刻还剩多少人）；segments 自定义分段（例如画在代码里的镜头、歌词），同种类整体替换；remove_post、remove_snapshot、remove_moment 删除；write / edit / delete / move 修改复盘文档（.md，路径相对作品的复盘文件夹，例如 复盘.md）。raw/ 里的原始文件保持原样，不能改。失败的逐项说明原因，只需重试失败的。格式见 frame_guide reviews。",
     input: {
       work: workArg,
       operations: z.array(operation).min(1).max(50),
@@ -971,7 +970,7 @@ export function reviewsPlugin(services) {
   tools.add({
     name: "reviews_compare",
     title: "对比作品数据",
-    description: `把作品发布后的数据放在一起比较：每条发布记录一行，都取发布后同一天数的数据（checkpoint，不写时取大多数发布记录都到了的最大天数；总数会一直涨，不同天数的不能直接比；有每小时数据的播放、涨粉正好算到那一天），比例和留存点旁边并列同类作品的值，作品标了关键时刻的（例如反转）会多一列那一刻还剩多少人，最后给中位数和本作品（▶）是中位数的几倍。可以按平台、作品标签、关联的经验库、发布时间筛选。lyrics: true 时，用同一首歌的作品按歌词对齐比较每一句的倍数（分开歌的影响和画面的影响）。用户想知道作品表现如何、和其他作品比、哪类做法效果更好时用。指标：${metricKeys.join("、")}、moment:<关键时刻>，以及平台特有指标的中文名。`,
+    description: `把作品发布后的数据放在一起比较：每条发布记录一行，都取发布后同一天数的数据（checkpoint，不写时取大多数发布记录都到了的最大天数；总数会一直涨，不同天数的不能直接比；有每小时数据的播放、涨粉正好算到那一天），比例和留存点旁边并列同类作品的值，作品标了关键时刻的（例如反转）会多一列那一刻还剩多少人，最后给中位数和本作品（▶）是中位数的几倍。可以按平台、作品标签、关联的经验库、发布时间筛选。lyrics: true 时，用同一首歌的作品按歌词对齐比较每一句的倍数。指标：${metricKeys.join("、")}、moment:<关键时刻>，以及平台特有指标的中文名。`,
     readOnly: true,
     input: {
       work: workArg,

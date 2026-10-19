@@ -7,7 +7,7 @@
 - `audio_place`：把 `public/` 中的音频文件放到某条音轨的某个时间（音轨不存在会自动创建，audio.json 不存在会自动创建并在 project.ts 中声明）。`offset` 从音频中间开始用（例如配乐从 30 秒处的副歌开始），不写 `duration` 时放到音频结束或作品结束。
 - `speech_synthesize`：生成配音并可直接放到「配音」音轨（见 `speech`）。
 - `audio_get` / `audio_edit`：读取或原子修改混音文档（`update` 只改一项的部分字段）。
-- `preview_audio`：响度检查（响度相近的时间合并成一段，过载时会提示怎么调）。`listen: true` 同时生成这一段（最多 60 秒）的 MP3：能听音频的 AI 直接听，结果里还有给用户的试听链接——念错字、语气和音色要靠听。分析混音时，有两条以上音轨就分别单独渲染，给出每条的响度；有人声（音轨名像「配音」「旁白」，或文件在 `voice/` 下）时比较人声和其他声音，人声低于其他声音 6 dB 以内就说明会被盖住、该把其他音轨调低多少；`src` 指向配乐文件并加 `beats: true` 时给出准确的速度（整段拟合，中途变速时分段列出）、拍号、每小节第一拍的时间和可以直接写进 `tempo` 的数值，用来把切点放在节拍上、段落和大的画面变化放在小节开头（文件内时间换算到作品时间：片段 `start` + 文件内时间 − 片段 `offset`）。节拍贴合网格时不逐个列出，用 `beatAt(k)` 取；变速以后的部分会列出每拍的时间。素材库里代码生成的音乐和音效（`defineSounds`）没有文件地址：放到音轨上以后分析混音（不给 `src`，`tracks: true` 看它单独的响度，`beats: true` 分析节拍）；按 `@frame/engine/tempo` 生成的音乐，速度就是作品的 `tempo`，不用再分析。
+- `preview_audio`：测量响度（RMS、峰值，响度相近的时间合并成一段）、静音段和削波样本数。`listen: true` 同时生成这一段（最多 60 秒）的 MP3：能接收音频的 AI 直接收到，结果里还有给用户的试听链接；念错字、语气和音色在这些数字里看不出来。分析混音时，有两条以上音轨就分别单独渲染，给出每条的响度；有人声（音轨名像「配音」「旁白」，或文件在 `voice/` 下）时给出人声段里人声比其他声音响或低多少 dB；`src` 指向配乐文件并加 `beats: true` 时给出速度（整段拟合，中途变速时分段列出）、拍号、每小节第一拍的时间和 `tempo` 的写法（文件内时间换算到作品时间：片段 `start` + 文件内时间 − 片段 `offset`）。节拍贴合网格时不逐个列出，用 `beatAt(k)` 取；变速以后的部分会列出每拍的时间。素材库里代码生成的音乐和音效（`defineSounds`）没有文件地址：放到音轨上以后分析混音（不给 `src`，`tracks: true` 看它单独的响度，`beats: true` 分析节拍）；按 `@frame/engine/tempo` 生成的音乐，速度就是作品的 `tempo`，不用再分析。
 
 ## 混音原则（用户的要求，必须遵守）
 
@@ -128,5 +128,5 @@ export const { generators, createAudio } = createAudioRack({ melody, piano, nois
 
 ## 检查
 
-- 改完声音用 `preview_audio` 看响度：对白一般 RMS −20 到 −16 dBFS，峰值不要超过 −1 dBFS（master 加 limiter）。
+- 到满幅（0 dBFS）的样本就是削波，`preview_audio` 给出削波样本数；master 的 `limiter` 把峰值压在 `ceiling` 以下（默认 −1 dBFS）。
 - `silentWindows` 很多说明声音没有接上（检查 source、clip 时间和 project.ts 的声明）。

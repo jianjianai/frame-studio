@@ -19,7 +19,7 @@ const whereArg = z
   .enum(["auto", "computer", "server"])
   .default("auto")
   .describe(
-    "用哪个浏览器：computer 是用户电脑上的浏览器（装了 FRAME 连接器扩展，用户自己已经登录的网站都能用）；server 是服务器上的浏览器（用户在手机上、或要给 yt-dlp 导出登录信息时）；auto 先用这个对话已经在用的，否则电脑上的浏览器连着就用它，不然用服务器上的",
+    "用哪个浏览器：computer 是用户电脑上的浏览器（装了 FRAME 连接器扩展，用户自己已经登录的网站都能用）；server 是服务器上的浏览器（每个作品库一个，用户在「浏览器」标签页里登录；browser_cookies 导出的是它的登录）；auto 先用这个对话已经在用的，否则电脑上的浏览器连着就用它，不然用服务器上的",
   );
 
 /** Size in words. */
@@ -221,7 +221,7 @@ export function registerBrowserTools(registry) {
     ...common,
     readOnly: true,
     description:
-      "在带登录状态的浏览器里打开网页。有两个：用户电脑上的浏览器（装了 FRAME 连接器扩展时，用户自己已经登录的网站都能用，你只能用自己开的标签页和用户交给你的）；服务器上的浏览器（每个作品库一个，用户在「浏览器」标签页里登录）。where 选哪个，默认电脑上的连着就用它。普通的公开网页用你自己的联网工具更快；要登录才能看或下载、或者你自己的请求被网站拦下时用这个。每个对话有自己的标签页（newTab 再开一个）；结果是页面结构（[ref=…] 给 browser_act），screenshot 要截图。要登录时用 browser_login 请用户登录，不要自己填账号密码。只浏览和下载：不发帖、评论、私信、点赞、关注、购买，不改账号设置。",
+      "在带登录状态的浏览器里打开网页。有两个：用户电脑上的浏览器（装了 FRAME 连接器扩展时，用户自己已经登录的网站都能用，你只能用自己开的标签页和用户交给你的）；服务器上的浏览器（每个作品库一个，用户在「浏览器」标签页里登录）。where 选哪个，默认电脑上的连着就用它。每个对话有自己的标签页（newTab 再开一个）；结果是页面结构（[ref=…] 给 browser_act），screenshot 要截图。要登录时用 browser_login 请用户登录，不要自己填账号密码。只浏览和下载：不发帖、评论、私信、点赞、关注、购买，不改账号设置。",
     input: {
       work: workArg,
       url: z.string().min(1).max(4000).describe("网址"),
@@ -245,7 +245,7 @@ export function registerBrowserTools(registry) {
     ...common,
     readOnly: true,
     description:
-      "读浏览器标签页里的网页：snapshot 页面结构（默认，带 [ref=…]）；text 正文文字（offset 翻页）；links 链接（文字 → 地址）；media 图片、视频、音频的地址和尺寸（下载用 browser_download 的 url）。query 只看含某些字的部分；screenshot 截图（看登录状态、验证、布局时用）。不写 tab 就是这个对话自己的标签页；用户说“这个网页”时，[FRAME] 里写着用户正在看的服务器标签页，或者是用户交给你的电脑上的标签页（browser_tabs 列出）。",
+      "读浏览器标签页里的网页：snapshot 页面结构（默认，带 [ref=…]）；text 正文文字（offset 翻页）；links 链接（文字 → 地址）；media 图片、视频、音频的地址和尺寸（下载用 browser_download 的 url）。query 只看含某些字的部分；screenshot 截图。不写 tab 就是这个对话自己的标签页；用户正在看的服务器标签页写在 [FRAME] 里，用户交给你的电脑上的标签页由 browser_tabs 列出。",
     input: {
       work: workArg,
       tab: tabArg,
@@ -305,7 +305,7 @@ export function registerBrowserTools(registry) {
     ...common,
     readOnly: true,
     description:
-      "列出你能用的浏览器标签页：服务器上的浏览器的（t…），和用户电脑上的浏览器里你开的、用户交给你的（x…，用户在 FRAME 连接器里点「让 AI 使用这个页面」）。用户说“我打开的那个网页”“这个页面”时先看这里。",
+      "列出你能用的浏览器标签页：服务器上的浏览器的（t…），和用户电脑上的浏览器里你开的、用户交给你的（x…，用户在 FRAME 连接器里点「让 AI 使用这个页面」）。",
     input: { work: workArg },
     async run(_args, ctx) {
       const work = await ctx.work();
@@ -469,7 +469,7 @@ export function registerBrowserTools(registry) {
         });
       }
       const size = result.size ? `，${bytes(result.size)}` : "";
-      return { data: result, text: `已下载到 ${result.path}${size}，引用地址 ${result.url}${license ? "" : "（来源记在了 production/licenses.md，许可写清楚了再补上）"}` };
+      return { data: result, text: `已下载到 ${result.path}${size}，引用地址 ${result.url}${license ? "" : "（没有写 license：production/licenses.md 里记的是下载地址）"}` };
     },
   });
 
@@ -479,7 +479,7 @@ export function registerBrowserTools(registry) {
     ...common,
     readOnly: true,
     description:
-      "网页要登录（下载要账号、内容要登录才看得到、网站要求“确认你不是机器人”）时，请用户自己登录或通过验证：在这个对话的标签页打开 url（登录页或网站），聊天里出现请用户登录的卡片；在用户电脑上的浏览器里时，那个标签页会出现在用户面前。用户登录好后点「登录好了」，你会收到一条消息。不要让用户把密码、验证码、Token 或 Cookie 发到聊天里，也不要自己填。",
+      "请用户自己登录网站或通过验证（“确认你不是机器人”这类）：在这个对话的标签页打开 url（登录页或网站），聊天里出现请用户登录的卡片；在用户电脑上的浏览器里时，那个标签页会出现在用户面前。用户登录好后点「登录好了」，你会收到一条消息。不要让用户把密码、验证码、Token 或 Cookie 发到聊天里，也不要自己填。",
     input: {
       work: workArg,
       url: z.string().min(1).max(4000).describe("登录页，或者要登录的网站"),
@@ -506,7 +506,7 @@ export function registerBrowserTools(registry) {
       } else services.browsers.of(work.repo).requestLogin(driver.tab, { reason, session });
       const place = driver.where === "computer" ? "用户电脑上的浏览器里（已经切到用户面前）" : "服务器上的浏览器里";
       const text = session
-        ? `已在${place}的标签页 ${driver.id} 打开 ${address}，聊天里出现了请用户登录 ${host} 的卡片：用户登录好后点「登录好了」，你会收到一条消息。现在先做不需要登录的部分，做完就结束这一轮，在回复里说清楚要登录哪个网站、为什么。用户说登录好了以后用 browser_read 确认已经登录。`
+        ? `已在${place}的标签页 ${driver.id} 打开 ${address}，聊天里出现了请用户登录 ${host} 的卡片：用户登录好后点「登录好了」，这条消息在你这一轮结束以后发给你。`
         : `已在${place}的标签页 ${driver.id} 打开 ${address}。请用户登录 ${host}${driver.where === "server" ? "（FRAME 工作台这个作品库里任一作品的「浏览器」，在「素材」视图顶部的地球按钮）" : ""}，登录好后告诉你。`;
       return { data: { tab: driver.id, where: driver.where, host, url: address }, text };
     },
@@ -518,7 +518,7 @@ export function registerBrowserTools(registry) {
     ...common,
     readOnly: true,
     description:
-      "把服务器上的浏览器（这个作品库的）里某些网站的登录信息（cookie）写成 cookies.txt，给你运行的下载程序用，例如 yt-dlp --cookies <文件> <网址>（YouTube 说“Sign in to confirm you’re not a bot”、B 站要登录才有高清时）。文件只有服务器上能读，一小时后自动删除。用户电脑上的浏览器的登录不会传到服务器：要用 yt-dlp 时，先用 browser_login（where: \"server\"）请用户在服务器上的浏览器里登录。",
+      "把服务器上的浏览器（这个作品库的）里某些网站的登录信息（cookie）写成 cookies.txt，给你运行的下载程序用，例如 yt-dlp --cookies <文件> <网址>。文件只有服务器上能读，一小时后自动删除。只导出服务器上的浏览器的登录；用户电脑上的浏览器的登录不会传到服务器。",
     input: {
       work: workArg,
       sites: z.array(z.string().min(3).max(200)).min(1).max(10).describe("网站，例如 youtube.com、bilibili.com"),

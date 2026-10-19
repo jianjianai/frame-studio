@@ -303,7 +303,7 @@ export function reviewText({ review, title, duration, files, documents, analyses
         : []),
       ...(changed[post.id]
         ? [
-            `  注意：作品在这次发布之后改过（现在的版本 ${changed[post.id]}），preview_frames 看到的和按图层、镜头的分段是现在的作品，不一定是观众看到的；改了什么用 version_diff 对照发布时的版本`,
+            `  注意：作品在这次发布之后改过（现在的版本 ${changed[post.id]}），preview_frames 看到的和按图层、镜头的分段是现在的作品，不一定是观众看到的`,
           ]
         : []),
       ...(post.notes ? [`  备注：${post.notes}`] : []),
@@ -408,14 +408,13 @@ export function reviewText({ review, title, duration, files, documents, analyses
                   .join(" ")}）${labelsText(peak.labels) ? ` ${labelsText(peak.labels)}` : ""}`,
             )
             .join("；")}`,
-          `  看这几秒的画面：preview_frames 的 times 用 [${retention.peaks.map((peak) => peak.t + 0.5).join(", ")}]；一段时间逐秒的数字用 review_read 的 seconds`,
         );
       for (const [kind, items] of Object.entries(retention.segments))
         lines.push(`  按${kind}（${retention.hasBenchmark ? "流失率 ÷ 同类" : "这一段走掉的比例"}）：${items.map(segmentLine).join("；")}`);
       const stretch = (item, word) =>
         `${item.start}–${item.end} 秒 ${word} ${formatPercent(Math.abs(item.to - item.from))}${labelsText(item.labels) ? `（${labelsText(item.labels)}）` : ""}`;
-      if (retention.drops?.length) lines.push(`  流失明显的地方：${retention.drops.map((item) => stretch(item, "流失")).join("；")}`);
-      if (retention.rises?.length) lines.push(`  被回看的地方：${retention.rises.map((item) => stretch(item, "回升")).join("；")}`);
+      if (retention.drops?.length) lines.push(`  走掉最多的几段（比各段平均多一半以上）：${retention.drops.map((item) => stretch(item, "流失")).join("；")}`);
+      if (retention.rises?.length) lines.push(`  留存回升的地方（回升 2 个百分点以上）：${retention.rises.map((item) => stretch(item, "回升")).join("；")}`);
     }
     if (now.comments) {
       const { threads, replies, top } = now.comments;

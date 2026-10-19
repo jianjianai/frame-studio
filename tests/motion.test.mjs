@@ -25,7 +25,7 @@ const analyse = (frames) => {
 const kinds = (analysis) => analysis.events.map((event) => `${event.kind}@${event.time.toFixed(2)}`);
 
 describe("motion analysis", () => {
-  it("measures a pan in the work's pixels and finds nothing wrong with an eased one", () => {
+  it("measures an eased pan in the work's pixels, with nothing else to report", () => {
     // 60 analysis pixels in one second, eased in and out: 360 design pixels.
     const frames = [...Array.from({ length: 31 }, (_, index) => view(60 * ease(index / 30))), ...Array.from({ length: 5 }, () => view(60))];
     const analysis = analyse(frames);
@@ -37,13 +37,17 @@ describe("motion analysis", () => {
     expect(move.distance).toBeLessThan(370);
     // The window moves right, so the picture moves left.
     expect(Math.abs(move.direction)).toBeCloseTo(Math.PI, 1);
-    expect(move).toMatchObject({ from: null, to: null, speedUp: null, slowDown: null });
-    expect(motionText(analysis, { design: { width: 1080, height: 1920 } }).join("\n")).toMatch(
-      /往 ← 移 3\d\d px，最快 \d{3,4} px\/s（0:00\.\d\d，\d\.\d 个画面宽\/秒）：缓入；缓出/,
-    );
+    expect(move).toMatchObject({ from: null, to: null });
+    // Eased: the first and last frames are far slower than the top speed.
+    expect(move.first).toBeLessThan(0.3 * move.peak);
+    expect(move.last).toBeLessThan(0.3 * move.peak);
+    const text = motionText(analysis, { design: { width: 1080, height: 1920 } }).join("\n");
+    expect(text).toMatch(/往 ← 移 3\d\d px；开头一帧 \d+ px\/s，最快 \d{3,4} px\/s（0:00\.\d\d，\d\.\d 个画面宽\/秒），结尾一帧 \d+ px\/s$/m);
+    // Measurements only: no verdicts on how a move starts or stops.
+    expect(text).not.toMatch(/缓入|缓出|突然|问题|不用改/);
   });
 
-  it("finds starts and stops without easing, one-frame jumps, pops, holds, repeats and cuts", () => {
+  it("measures a linear pan, one-frame jumps, pops, holds, repeats and cuts", () => {
     const frames = [];
     for (let index = 0; index < 150; index++) {
       const t = index / fps;
@@ -62,17 +66,18 @@ describe("motion analysis", () => {
     expect(found.some((item) => item.startsWith("repeat@4."))).toBe(true);
     expect(analysis.cuts.map((time) => time.toFixed(2))).toEqual(["4.00"]);
     const [pan] = analysis.moves;
-    expect(pan.speedUp).toMatchObject({ start: true, time: 1 });
-    expect(pan.slowDown).toMatchObject({ stop: true });
+    // At full speed from its first frame to its last.
+    expect(Math.abs(pan.first - 300)).toBeLessThan(30);
+    expect(Math.abs(pan.last - 300)).toBeLessThan(30);
     expect(pan.start).toBeCloseTo(1, 2);
     expect(pan.end).toBeCloseTo(2, 2);
     expect(pan.peak).toBeLessThan(330); // the jump is not part of it
     const text = motionText(analysis, { design: { width: 1080, height: 1920 } }).join("\n");
-    expect(text).toMatch(/- 0:01\.00–0:02\.00（1\.00 秒）往 ← 移 30\d px，最快 30\d px\/s/);
-    expect(text).toMatch(/起步突然：第一帧就到 30\d px\/s，没有缓入；停得突然：最后一帧还有 30\d px\/s，没有缓出/);
-    expect(text).toContain("0:02.33 单帧跳动：整个画面跳开 72 px，下一帧又回来");
-    expect(text).toContain("切换（或一闪、很快的甩镜）：0:04.00");
-    expect(text).toMatch(/0:04\.\d\d–0:0\d\.\d\d 有 \d+ 帧和前一帧一模一样/);
+    expect(text).toMatch(/- 0:01\.00–0:02\.00（1\.00 秒）往 ← 移 30\d px；开头一帧 \d{3} px\/s，最快 30\d px\/s（0:01\.\d\d[^）]*），结尾一帧 \d{3} px\/s/);
+    expect(text).toContain("0:02.33 整个画面这一帧移开 72 px，下一帧回到原位");
+    expect(text).toMatch(/切换（[^）]+）：0:04\.00/);
+    expect(text).toMatch(/0:04\.\d\d–0:0\d\.\d\d 有 \d+ 帧和前一帧完全相同（前后的帧在动）/);
+    expect(text).not.toMatch(/突然|缓入|缓出|问题|不用改|值得/);
   });
 
   it("tells a shake from jumps, and a wobble from a move", () => {
@@ -81,7 +86,7 @@ describe("motion analysis", () => {
     const analysis = analyse(offsets.map((dx) => view(40 + dx)));
     expect(kinds(analysis)).toEqual(["shake@0.07"]);
     expect(analysis.moves).toEqual([]);
-    expect(motionText(analysis, { design: { width: 1080, height: 1920 } }).join("\n")).toContain("画面来回抖动（一帧最多晃 18 px");
+    expect(motionText(analysis, { design: { width: 1080, height: 1920 } }).join("\n")).toContain("画面来回晃动（一帧最多 18 px）");
   });
 
   it("names holds of a second and a half and more, unless something changes in them", () => {

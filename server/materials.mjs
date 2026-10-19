@@ -1151,7 +1151,7 @@ export function materialsPlugin(services) {
     name: "materials_list",
     title: "素材库",
     description:
-      "不传 library：列出或查找作品库里的素材库——名称、介绍、文件数、几个作品在用、本作品是否已引用、为什么适合本作品；本作品引用的在前，其余按适合本作品的程度和使用次数排列。query 按名称、介绍和其中资源的名称、标签查找（素材库很多时用它；要找具体的角色、效果、音效、文件用 resources_search）。传 library：列出其中的文件——地址 materials/<库>/<文件>、类型、尺寸、时长、大小，以及本作品锁定的版本是否落后；文件多时 query 按路径和类型筛选。结果多时 offset 翻页。作品只能用它引用的素材库（materials_use 会自动引用）。还没有作品时用 repo 只看某个作品库的素材库。",
+      "不传 library：列出或查找作品库里的素材库——名称、介绍、文件数、几个作品在用、本作品是否已引用、和本作品相近的地方（名称、介绍或内容相近，类似的作品在用）；本作品引用的在前，其余按和本作品的相近程度和使用次数排列。query 按名称、介绍和其中资源的名称、标签查找。传 library：列出其中的文件——地址 materials/<库>/<文件>、类型、尺寸、时长、大小，以及本作品锁定的版本是否落后；文件多时 query 按路径和类型筛选。结果多时 offset 翻页。作品只能用它引用的素材库（materials_use 会自动引用）。还没有作品时用 repo 只看某个作品库的素材库。",
     readOnly: true,
     input: {
       work: workArg,
@@ -1190,7 +1190,6 @@ export function materialsPlugin(services) {
           more(ordered.length - offset - page.length, offset + page.length, query?.trim() ? "" : "，或用 query 按名称和介绍查找").trim(),
           status.missing.length ? `本作品引用的素材库${status.missing.map((name) => `「${name}」`).join("")}已不存在。` : "",
           status.files.length ? `本作品用到素材库文件 ${status.files.filter((item) => item.used).length} 个${outdated.length ? `，其中 ${outdated.length} 个在素材库里有新版本（materials_use 加 update: true 更新）` : ""}。` : "",
-          page.length ? "用 library 列出一个素材库的文件；resources_search 找其中声明的角色、效果、音效等资源。" : "",
         ];
         return {
           data: { total: all.length, matched: ordered.length, libraries: page.map(({ extra: _extra, ...item }) => item), missing: status.missing, used: status.files },
@@ -1228,7 +1227,7 @@ export function materialsPlugin(services) {
     published: true, // creating libraries is fine on a published work; changing its links is checked below
     title: "关联素材库",
     description:
-      "增加或移除本作品关联（引用）的素材库（project.ts 的 materials，可以多个）。add 关联已有的素材库，create 新建空素材库并关联（同名的已存在时直接关联），remove 取消关联（素材库本身不受影响，已经锁定、正在使用的文件照常可用）。名称写文件夹名或标题（大小写、空格、标点不同也能认出）；不存在时返回最接近的几个，素材库很多时先用 materials_list 的 query 查找。用户要求时使用；不确定时先问用户。不针对作品、只新建素材库时用 repo 指定作品库（只能 create）。",
+      "增加或移除本作品关联（引用）的素材库（project.ts 的 materials，可以多个）。add 关联已有的素材库，create 新建空素材库并关联（同名的已存在时直接关联），remove 取消关联（素材库本身不受影响，已经锁定、正在使用的文件照常可用）。名称写文件夹名或标题（大小写、空格、标点不同也能认出）；不存在时返回最接近的几个。用户要求时使用；不确定时先问用户。不针对作品、只新建素材库时用 repo 指定作品库（只能 create）。",
     input: {
       work: workArg,
       repo: repoArg,
@@ -1243,7 +1242,7 @@ export function materialsPlugin(services) {
         const existing = await materials.libraries(work.repo);
         const created = [];
         for (const name of create) if (!findLibrary(name, existing)) created.push((await materials.create(work.repo, name)).id);
-        return asJson({ created }, created.length ? `已在作品库 ${work.repo} 新建素材库：${created.map((id) => `「${id}」`).join("")}。用 material_write（repo: "${work.repo}"）往里放文件。README.md 已有模板：把第一段改成一句介绍（work_context 和资源目录里显示），后面写资源清单和用法` : "没有新建素材库（同名的已存在）");
+        return asJson({ created }, created.length ? `已在作品库 ${work.repo} 新建素材库：${created.map((id) => `「${id}」`).join("")}。README.md 的第一段是素材库的介绍（work_context 和资源目录里显示），现在是模板文字` : "没有新建素材库（同名的已存在）");
       }
       const published = Boolean(works.published(work));
       if (published && (add.length || remove.length))
@@ -1264,7 +1263,7 @@ export function materialsPlugin(services) {
       if (published)
         return asJson(
           { created, materials: materials.names(work) },
-          `${created.length ? `已新建素材库：${created.map((id) => `「${id}」`).join("")}` : "没有新建素材库（同名的已存在）"}。作品已发布，没有关联到它；用 material_write 往里放文件。`,
+          `${created.length ? `已新建素材库：${created.map((id) => `「${id}」`).join("")}` : "没有新建素材库（同名的已存在）"}。作品已发布，没有关联到它。`,
         );
       const dropping = new Set(remove.map((name) => find(name) ?? name.trim()));
       const before = materials.names(work);
@@ -1276,7 +1275,7 @@ export function materialsPlugin(services) {
         { materials: after, added, removed },
         [
           `本作品关联的素材库：${after.map((name) => `「${name}」`).join("") || "（无）"}`,
-          added.length ? `新关联：${added.join("、")}（用 materials_list 查看文件，materials_use 使用）` : "",
+          added.length ? `新关联：${added.join("、")}` : "",
           removed.length ? `已取消关联：${removed.join("、")}` : "",
         ]
           .filter(Boolean)
@@ -1289,7 +1288,7 @@ export function materialsPlugin(services) {
     name: "materials_use",
     title: "使用素材",
     description:
-      "在作品中使用素材库里的文件前调用：锁定这些文件当前的版本（之后素材库里的改动不会影响作品），作品还没关联的素材库会自动关联。返回用法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。保存版本时只保留作品用到的文件的锁定。",
+      "给本作品锁定素材库里这些文件当前的版本（之后素材库里的改动不会影响作品），作品还没关联的素材库会自动关联。返回地址和导入写法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。保存版本时只保留作品用到的文件的锁定。",
     input: { work: workArg, files: z.array(refArg).min(1).max(100), update: z.boolean().default(false) },
     async run({ files: given, update }, ctx) {
       const work = await ctx.work();
@@ -1412,7 +1411,7 @@ export function materialsPlugin(services) {
     published: true, // the libraries are not the work: allowed on a published one
     title: "修改素材库",
     description:
-      "修改素材库，一次可以做多个操作，按顺序执行，每个操作保存为素材库的一个版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB，没有终端时用），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。素材库根目录的 README.md 是它的说明：第一个「# 」标题是素材库显示的名称，标题后的第一段是介绍（work_context 和资源目录里显示），用 put 的 content 或 edit 修改；它的「来源与许可」记录各文件的来源，随文件的移动、删除自动更新，不能删除或移动 README.md。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。你所在电脑上的文件用 upload_link 上传。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。不针对作品整理素材库时用 repo 指定作品库。",
+      "修改素材库，一次可以做多个操作，按顺序执行，每个操作保存为素材库的一个版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。素材库根目录的 README.md 是它的说明：第一个「# 」标题是素材库显示的名称，标题后的第一段是介绍（work_context 和资源目录里显示），用 put 的 content 或 edit 修改；它的「来源与许可」记录各文件的来源，随文件的移动、删除自动更新，不能删除或移动 README.md。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。不针对作品整理素材库时用 repo 指定作品库。",
     destructive: true,
     input: {
       work: workArg,

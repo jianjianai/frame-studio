@@ -33,7 +33,7 @@ export function describeBlender(link, live, work) {
   if (state.shot?.path) {
     const where = state.shot.work === own ? "这个作品" : `另一个作品 ${state.shot.work}`;
     lines.push(
-      `打开的镜头：${where}的 ${shown(state.shot.path)}，实时同步${state.live ? "开着（Blender 里的改动自动写回作品）" : "关着（改动不会写回，请用户在 AB to T 面板里打开）"}`,
+      `打开的镜头：${where}的 ${shown(state.shot.path)}，实时同步${state.live ? "开着（Blender 里的改动自动写回作品）" : "关着（Blender 里的改动不会写回作品；开关在 AB to T 面板里）"}`,
     );
     if (state.uploading) lines.push(`有改动正在写回 FRAME`);
   } else lines.push(`打开的文件：${state.file || "未保存的新文件"}（不是从 FRAME 打开的镜头）`);
@@ -54,7 +54,7 @@ export function registerBlenderTools(registry) {
     ...common,
     readOnly: true,
     description:
-      "用户电脑上的 Blender（装了 AB to T 插件、连着 FRAME）现在怎样：连没连着、开着哪个镜头、实时同步开没开、写回有没有冲突、最近执行过什么。用 blender_open / blender_run / blender_view 前不确定时先看；没连着时把结果里的说明转告用户。",
+      "用户电脑上的 Blender（装了 AB to T 插件、连着 FRAME）现在怎样：连没连着（没连着时给出原因和用户那边的连接步骤）、开着哪个镜头、实时同步开没开、写回有没有冲突、最近执行过什么。",
     input: { work: workArg },
     async run(_args, ctx) {
       const work = await ctx.work();
@@ -80,7 +80,7 @@ export function registerBlenderTools(registry) {
     title: "在 Blender 里打开镜头",
     ...common,
     description:
-      "在用户电脑上的 Blender 里打开作品的 AB to T 镜头（abt/<镜头>.json，abt-scene skill 做的 three 场景图层），让用户和你在 Blender 里一个参数一个参数地调。插件把镜头和它用的组件、字体、图片放到那台电脑上，第一次导入成 Blender 场景，以后打开上次的 .blend（保留手调），并开启实时同步：Blender 里的改动自动写回作品里的这个 JSON，FRAME 预览跟着刷新。导入以后以 Blender 为准：改这个镜头用 blender_run，不要再直接改 JSON（会和 Blender 冲突）。reimport 用作品里现在的 JSON 重新导入，会冲掉 Blender 里没写进 JSON 的调整，先问用户。",
+      "在用户电脑上的 Blender 里打开作品的 AB to T 镜头（abt/<镜头>.json，abt-scene skill 做的 three 场景图层）。插件把镜头和它用的组件、字体、图片放到那台电脑上，第一次导入成 Blender 场景，以后打开上次的 .blend（保留手调），并开启实时同步：Blender 里的改动自动写回作品里的这个 JSON，FRAME 预览跟着刷新。导入以后以 Blender 为准：改这个镜头用 blender_run，不要再直接改 JSON（会和 Blender 冲突）。reimport 用作品里现在的 JSON 重新导入，会冲掉 Blender 里没写进 JSON 的调整，先问用户。",
     input: {
       work: workArg,
       shot: z.string().min(1).max(200).describe("镜头：abt/<镜头>.json（或只写镜头名）"),
@@ -90,8 +90,7 @@ export function registerBlenderTools(registry) {
       const work = await ctx.work();
       const relative = shotPath(work, shot);
       const result = await services.blenders.open(work, relative, { reimport });
-      const next = "之后改这个镜头用 blender_run（bpy、abt 可以直接用），看 Blender 里的画面用 blender_view。";
-      return { data: result, text: `${result.message || `已在 Blender 里打开 ${shown(relative)}`}\n${next}` };
+      return { data: result, text: result.message || `已在 Blender 里打开 ${shown(relative)}` };
     },
   });
 
@@ -100,7 +99,7 @@ export function registerBlenderTools(registry) {
     title: "在 Blender 里执行代码",
     ...common,
     description:
-      "在用户电脑上的 Blender 里执行 Python（和 abt-scene skill 里的 bl.py 一样）：可以直接用 bpy、abt（AB to T 插件的 core：set_param、get_param、set_rotation、get_rotation…），print 出来的就是结果。只查、只改需要的对象，不要打印整个场景。每次执行记一步撤销（用户可以 Ctrl+Z）；开着从 FRAME 打开的镜头时改动自动写回作品。代码在用户的电脑上运行：只做和镜头有关的事，不读写镜头以外的文件、不联网、不启动其他程序。",
+      "在用户电脑上的 Blender 里执行 Python（和 abt-scene skill 里的 bl.py 一样）：可以直接用 bpy、abt（AB to T 插件的 core：set_param、get_param、set_rotation、get_rotation…），print 出来的就是结果。每次执行记一步撤销（用户可以 Ctrl+Z）；开着从 FRAME 打开的镜头时改动自动写回作品。代码在用户的电脑上运行：只做和镜头有关的事，不读写镜头以外的文件、不联网、不启动其他程序。",
     input: {
       work: workArg,
       code: z.string().min(1).max(200000).describe("Python 代码"),
@@ -125,7 +124,7 @@ export function registerBlenderTools(registry) {
     ...common,
     readOnly: true,
     description:
-      "看用户电脑上 Blender 里的画面（用那台电脑的显卡画）：camera 相机视角的视口预览（快，和 3D 视图的材质预览一样）；render 用场景的渲染引擎正式渲染一帧（EEVEE 或 Cycles，几秒到几分钟）；window 截 Blender 整个窗口（看用户在看什么、面板和节点）。frame 是第几帧，默认当前帧。最宽 1280。检查效果时取少量帧；FRAME 里的 three.js 画面用 preview_frames 看。",
+      "看用户电脑上 Blender 里的画面（用那台电脑的显卡画）：camera 相机视角的视口预览（快，和 3D 视图的材质预览一样）；render 用场景的渲染引擎正式渲染一帧（EEVEE 或 Cycles，几秒到几分钟）；window 截 Blender 整个窗口（看用户在看什么、面板和节点）。frame 是第几帧，默认当前帧。最宽 1280。",
     input: {
       work: workArg,
       what: z.enum(["camera", "render", "window"]).default("camera"),

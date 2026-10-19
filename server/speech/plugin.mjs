@@ -95,7 +95,7 @@ export function speechPlugin(services) {
       text: z.string().min(1).max(5000).optional(),
       lines: z.array(lineSchema).min(1).max(100).optional(),
       provider: z.string().optional(),
-      voice: z.string().optional().describe("speech_voices 返回的声音 id；Edge 中文常用 zh-CN-XiaoxiaoNeural / zh-CN-YunxiNeural"),
+      voice: z.string().optional().describe("speech_voices 返回的声音 id，例如 zh-CN-XiaoxiaoNeural（Edge）"),
       rate: z.number().min(0.5).max(2).default(1),
       gap: z.number().min(0).max(30).default(0.3).describe("lines 中句与句之间的间隔秒数"),
       name: z.string().max(60).optional().describe("文件名（不含扩展名）；lines 时作为前缀"),
@@ -150,8 +150,7 @@ export function speechPlugin(services) {
           results.map(describe).join("\n") +
           (place ? `\n最后一句结束于 ${round(at)} 秒。` : "") +
           (cut.length
-            ? `\n注意：作品只有 ${total} 秒，${cut.map((item) => `「${item.text.slice(0, 12)}」${item.clip ? "被截断" : "没有放上音轨"}`).join("、")}。` +
-              `用 work_update 把 duration 改到至少 ${Math.ceil(at)} 秒，再重新放置这些句子（audio_place 用上面的地址，或 audio_edit 的 update 把被截断片段的 duration 改回音频时长）。`
+            ? `\n注意：作品只有 ${total} 秒，${cut.map((item) => `「${item.text.slice(0, 12)}」${item.clip ? "被截断" : "没有放上音轨"}`).join("、")}（全部放下要到 ${round(at)} 秒）。`
             : ""),
       };
     },

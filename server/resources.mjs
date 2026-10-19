@@ -865,7 +865,7 @@ export class ResourceCatalog {
     if (!linked.length && !total) return null;
     return {
       lines: [
-        `- 素材库：${linked.length ? `本作品引用了${linked.map((id) => `「${id}」`).join("")}` : "本作品还没有引用素材库"}${total ? `；作品库里共 ${total} 个` : ""}。可以复用的角色、效果、音效和代码用 resources_search 找，materials_list 看素材库。`,
+        `- 素材库：${linked.length ? `本作品引用了${linked.map((id) => `「${id}」`).join("")}` : "本作品还没有引用素材库"}${total ? `；作品库里共 ${total} 个` : ""}。素材库里的角色、效果、音效和代码：resources_search 查找，materials_list 列出素材库。`,
       ],
     };
   }
@@ -1087,7 +1087,7 @@ export function resourcesPlugin(services) {
     name: "resources_search",
     title: "找可复用资源",
     description:
-      "在素材库里找可以直接复用的资源：角色、物品、场景、界面、效果、转场、文字（歌词等）、音效，以及素材库代码导出的函数和类型。query 用中文或英文关键词（例如「下雨 街道」「手机 聊天」「甩镜」）；不给 query 列出目录（资源多时每类只列前几个，再用 kind 列出一类）。kind 限定类别（code 只找函数和类型）。给了 query 时还会一起找素材库里的文件（Lottie、图片、模型、音频、字体：按文件名、类型和素材库 README 里对它的说明），kind 设为 file 只找文件。动手画一个东西之前先找，有就导入复用，不要重画。看详情和预览图用 resource_view。还没有作品时用 repo 指定作品库。",
+      "在素材库里找资源：角色、物品、场景、界面、效果、转场、文字（歌词等）、音效，以及素材库代码导出的函数和类型。query 用中文或英文关键词（例如「下雨 街道」「手机 聊天」「甩镜」）；不给 query 列出目录（资源多时每类只列前几个，再用 kind 列出一类）。kind 限定类别（code 只找函数和类型）。给了 query 时还会一起找素材库里的文件（Lottie、图片、模型、音频、字体：按文件名、类型和素材库 README 里对它的说明），kind 设为 file 只找文件。还没有作品时用 repo 指定作品库。",
     readOnly: true,
     input: {
       work: workArg,

@@ -358,14 +358,16 @@ describe("tools that save the AI calls", () => {
     await tool("audio_place", { work: work.id, src, track: "配音", start: 0, duration: 2, gain: 0.1 });
     const first = await tool("preview_audio", { work: work.id, start: 0, duration: 2 });
     expect(first.body.text).toContain("「配音」（人声）");
-    expect(first.body.text).toMatch(/人声比其他声音还低 \d+(\.\d+)? dB，会被盖住/);
+    expect(first.body.text).toMatch(/人声段（[\d.]+ 秒）：人声比其他声音低 \d+(\.\d+)? dB。/);
+    // Numbers only: what to do about them is the AI's call.
+    expect(first.body.text).not.toMatch(/会被盖住|gain 乘以|听得清/);
     // Lower the music and measure straight away: the new mix, not the old one of a warm page.
     const audio = JSON.parse(fs.readFileSync(path.join(work.dir, "audio.json"), "utf8"));
     const musicTrack = audio.tracks.find((track) => track.name === "音乐").id;
     const music = audio.clips.find((clip) => clip.track === musicTrack);
     await tool("audio_edit", { work: work.id, operations: [{ op: "update", collection: "clips", id: music.id, patch: { gain: 0.01 } }] });
     const second = await tool("preview_audio", { work: work.id, start: 0, duration: 2 });
-    expect(second.body.text).toMatch(/人声比其他声音响 \d+(\.\d+)? dB，听得清/);
+    expect(second.body.text).toMatch(/人声段（[\d.]+ 秒）：人声比其他声音响 \d+(\.\d+)? dB。/);
     expect(second.body.data.overall.rmsDb).toBeLessThan(first.body.data.overall.rmsDb);
 
     // Listening: an MP3 of the passage, inline and as a link for the user.
