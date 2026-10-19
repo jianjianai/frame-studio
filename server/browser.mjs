@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
@@ -86,6 +87,40 @@ export function netscapeCookies(cookies) {
 }
 
 /**
+ * Drops the lock of a profile no running Chromium holds. Chromium refuses a profile whose lock
+ * names another host or a live process, so the lock a replaced container (new hostname) or a
+ * killed browser left would keep the repository's browser from starting for good. The studio is
+ * the profile's only user: a lock is kept only while a process on this host runs with this profile.
+ */
+export function releaseStaleLock(profile) {
+  let target;
+  try {
+    target = fs.readlinkSync(path.join(profile, "SingletonLock"));
+  } catch {
+    return false;
+  }
+  const at = target.lastIndexOf("-");
+  const pid = Number(target.slice(at + 1));
+  if (target.slice(0, at) === os.hostname() && Number.isInteger(pid) && pid > 0 && holdsProfile(pid, profile)) return false;
+  for (const name of ["SingletonLock", "SingletonSocket", "SingletonCookie"]) fs.rmSync(path.join(profile, name), { force: true });
+  return true;
+}
+
+function holdsProfile(pid, profile) {
+  try {
+    process.kill(pid, 0);
+  } catch (error) {
+    if (error.code !== "EPERM") return false;
+  }
+  // Pids start over in a restarted container: the process must be a browser on this profile.
+  try {
+    return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").includes(profile);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * The logged-in browser of one repository (作品库): a Chromium with a persistent profile in the
  * data folder (`browser/<repo>/profile`), so a site the user logged in to stays logged in for
  * that repository's works, and only for them: an AI or a grant bound to another repository
@@ -136,6 +171,7 @@ export class WebBrowser {
     if (!executablePath) throw problem(500, "没有找到 Chromium/Chrome。安装 Chrome，或设置 FRAME_BROWSER 指向浏览器程序。", "NO_BROWSER");
     fs.mkdirSync(this.profile, { recursive: true });
     fs.mkdirSync(this.keptDir, { recursive: true });
+    releaseStaleLock(this.profile);
     const args = ["--lang=zh-CN", "--disable-renderer-backgrounding", "--autoplay-policy=user-gesture-required"];
     if (this.services.auth.required) {
       const proxy = await this.hub.guardProxy();

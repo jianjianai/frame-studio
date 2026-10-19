@@ -8,7 +8,8 @@ import WebSocket from "ws";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
 import { startGuardProxy } from "../server/browser-proxy.mjs";
-import { Browsers, netscapeCookies, normalizeAddress, siteOf } from "../server/browser.mjs";
+import { spawn } from "node:child_process";
+import { Browsers, netscapeCookies, normalizeAddress, releaseStaleLock, siteOf } from "../server/browser.mjs";
 
 /** Repository browsers outside an app: `required` is a studio with a password (the guard proxy on). */
 const hub = (required) => {
@@ -184,6 +185,35 @@ describe("the logged-in browser for the AI", () => {
       // A tab of one repository is not there for the other.
       expect(() => theirs.get([...mine.tabs.keys()][0])).toThrow(/没有标签页/);
     } finally {
+      await browsers.shutdown();
+    }
+  });
+
+  it("starts on a profile another container or a killed browser left locked", async () => {
+    const browsers = hub(false);
+    const lock = (profile, target) => {
+      fs.mkdirSync(profile, { recursive: true });
+      fs.rmSync(path.join(profile, "SingletonLock"), { force: true });
+      fs.symlinkSync(target, path.join(profile, "SingletonLock"));
+    };
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "frame-lock-"));
+    const holder = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", "--", `--user-data-dir=${other}`]);
+    try {
+      const browser = browsers.of("c");
+      lock(browser.profile, "db7580b34576-2077");
+      fs.symlinkSync("/tmp/org.chromium.Chromium.gone/SingletonSocket", path.join(browser.profile, "SingletonSocket"));
+      const tab = await browser.newTab({ owner: "user" });
+      await browser.goto(tab, `${siteUrl}/search?q=1`);
+      expect(await tab.page.title()).toBe("搜索");
+
+      // A live process on this host keeps the lock only while it runs with this profile (pids start over in a new container).
+      lock(other, `${os.hostname()}-${process.pid}`);
+      expect(releaseStaleLock(other)).toBe(true);
+      lock(other, `${os.hostname()}-${holder.pid}`);
+      expect(releaseStaleLock(other)).toBe(false);
+      expect(fs.readlinkSync(path.join(other, "SingletonLock"))).toBe(`${os.hostname()}-${holder.pid}`);
+    } finally {
+      holder.kill();
       await browsers.shutdown();
     }
   });
