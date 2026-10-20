@@ -84,6 +84,27 @@ export function rfc3339Nano(date = new Date()) {
   return date.toISOString().replace(/\.(\d{3})Z$/, ".$1000000Z");
 }
 
+// WS_MESSAGE directions and opcodes (§3.5).
+export const CLIENT_TO_UPSTREAM = 1;
+export const UPSTREAM_TO_CLIENT = 2;
+export const OP_TEXT = 1;
+export const OP_BINARY = 2;
+export const OP_CLOSE = 8;
+export const WS_HEADER_SIZE = 10;
+
+// Wall-clock nanoseconds: Date's milliseconds plus the monotonic clock's finer part.
+const clockBase = BigInt(Date.now()) * 1000000n - process.hrtime.bigint();
+
+/** WS_MESSAGE payload: direction, opcode, observed-at (int64 BE ns), message data. */
+export function wsPayload(direction, opcode, data) {
+  const out = Buffer.allocUnsafe(WS_HEADER_SIZE + data.length);
+  out[0] = direction;
+  out[1] = opcode;
+  out.writeBigInt64BE(clockBase + process.hrtime.bigint(), 2);
+  data.copy(out, WS_HEADER_SIZE);
+  return out;
+}
+
 /** Convert Node rawHeaders ([n, v, n, v, ...]) to [[name, value], ...]. */
 export function pairHeaders(rawHeaders) {
   const out = [];

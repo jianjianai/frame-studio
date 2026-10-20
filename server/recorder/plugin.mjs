@@ -6,10 +6,6 @@ export async function recorderPlugin(services) {
   const recorder = (services.recorder = new Recorder(services));
   await recorder.reload();
   services.closers.push(() => recorder.stop());
-  // A changed custom API profile may add an upstream host to intercept.
-  services.events.subscribe((event) => {
-    if (event.type === "settings" && event.key === "ai") recorder.reload();
-  });
 
   router.get("/api/recorder", () => recorder.status());
   router.patch("/api/recorder", async ({ req }) => {

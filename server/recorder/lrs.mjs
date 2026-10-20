@@ -30,6 +30,7 @@ class Record {
     this.retries = 0;
     this.reqBytes = 0;
     this.respBytes = 0;
+    this.wsMessages = 0;
     this.reqPending = [];
     this.reqPendingLen = 0;
     this.respPending = [];
@@ -53,6 +54,17 @@ class Record {
     this.respPendingLen += buf.length;
     if (this.respPendingLen >= CHUNK) this.#flush("resp", false);
   }
+  /** One whole application message of an upgraded WebSocket call (after a 101 head). */
+  wsMessage(direction, opcode, data) {
+    if (this.finished || this.settled) return;
+    // A message is never split across frames (§3.5): too big for one, the record is given up.
+    if (wire.HEADER_SIZE + wire.WS_HEADER_SIZE + data.length > this.client.maxMessageBytes) {
+      this.cancel("ws_message_too_large");
+      return;
+    }
+    this.wsMessages++;
+    this.#emit(wire.encode(wire.WS_MESSAGE, this.id, wire.wsPayload(direction, opcode, data)));
+  }
   end(outcome, reason = "") {
     if (this.finished || this.settled) return;
     this.#flush("req", true);
@@ -66,7 +78,7 @@ class Record {
         ended_at: wire.rfc3339Nano(),
         request_bytes: this.reqBytes,
         response_bytes: this.respBytes,
-        ws_messages: 0,
+        ws_messages: this.wsMessages,
       }),
     );
   }
@@ -125,6 +137,7 @@ export class LrsClient {
     this.conns = [];
     this.records = new Map(); // id hex -> Record
     this.heldBytes = 0;
+    this.maxMessageBytes = 1048593; // the protocol default until a WELCOME says otherwise
     this.closed = false;
     this.stats = {
       acked: 0, duplicate: 0, dropped: 0, failures: 0,
@@ -316,6 +329,10 @@ export class LrsClient {
     const frame = wire.decode(msg);
     if (!frame) return;
     if (frame.type === wire.WELCOME) {
+      try {
+        const limit = JSON.parse(Buffer.from(frame.payload).toString("utf8")).max_message_bytes;
+        if (Number.isInteger(limit) && limit > wire.HEADER_SIZE) this.maxMessageBytes = Math.min(this.maxMessageBytes, limit);
+      } catch {}
       conn.ready = true;
       for (const record of conn.records) this._write(record);
       return;

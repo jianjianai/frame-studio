@@ -2,22 +2,32 @@
 // station over lrs.v4. The endpoint and key come from the settings page; the
 // station's self-signed certificate is trusted. Capture works by pointing the
 // Claude and Codex subprocesses at a local proxy (HTTPS_PROXY) whose CA they
-// trust, so it can read their HTTPS traffic. Meant for the Docker image.
+// trust, so it can read their HTTPS traffic and pick the AI calls by path,
+// whatever the host. Meant for the Docker image.
 import { CertStore, recorderDir, opensslAvailable } from "./ca.mjs";
 import { LrsClient } from "./lrs.mjs";
 import { RecorderProxy } from "./proxy.mjs";
 
-// AI hosts to intercept and record; everything else tunnels through untouched.
-const DEFAULT_HOSTS = [
-  "api.anthropic.com",
-  "api.openai.com",
-  "chatgpt.com",
-  "api.deepseek.com",
-  "api.moonshot.cn",
-  "open.bigmodel.cn",
-  "openrouter.ai",
-  "generativelanguage.googleapis.com",
+// AI API paths on any host (official APIs, relays, compatible providers),
+// following the routes sub2api-jian's gateway forwards. Matched on the end of
+// the path so a provider's prefix (/anthropic, /api/v1, /api/paas/v4…) is fine.
+const AI_PATHS = [
+  /\/v1\/messages(\/count_tokens)?$/, // Anthropic Messages
+  /\/chat\/completions$/, // OpenAI-compatible Chat Completions
+  /\/v1\/(complete|completions)$/, // text completions
+  /\/(v1|codex)\/responses(\/.*)?$/, // Responses API, incl. ChatGPT's Codex backend (also over WebSocket)
+  /\/embeddings$/,
+  /\/images\/(generations|edits)$/,
+  /\/audio\/(speech|transcriptions|translations)$/,
+  /\/models\/[^/]+:(generateContent|streamGenerateContent|countTokens)$/, // Gemini
+  /\/realtime(\/calls)?$/,
 ];
+
+/** Whether a request is an AI call to record: a POST, or a WebSocket upgrade, to an AI path. */
+export function isAiCall(method, path, upgrade) {
+  if (!upgrade && method !== "POST") return false;
+  return AI_PATHS.some((pattern) => pattern.test(path));
+}
 
 export class Recorder {
   constructor({ config, settings, events }) {
@@ -53,11 +63,10 @@ export class Recorder {
       this.certStore.ensure();
       this.lrs = new LrsClient({ url: conf.url, key, connections: conf.connections, logger: (s, m) => this.#log(s, m) });
       this.lrs.start();
-      this.hostSet = new Set([...DEFAULT_HOSTS, ...this.#profileHosts()]);
       this.proxy = new RecorderProxy({
         certStore: this.certStore,
         lrs: this.lrs,
-        shouldRecord: (host) => this.#shouldRecord(host),
+        shouldRecord: isAiCall,
         logger: (s, m) => this.#log(s, m),
       });
       this.port = await this.proxy.listen("127.0.0.1");
@@ -85,6 +94,7 @@ export class Recorder {
     if (!this.running) return {};
     const proxy = `http://127.0.0.1:${this.port}`;
     const noProxy = "127.0.0.1,localhost,::1,0.0.0.0";
+    const bundle = this.certStore.bundlePath();
     return {
       HTTP_PROXY: proxy,
       HTTPS_PROXY: proxy,
@@ -94,8 +104,12 @@ export class Recorder {
       all_proxy: proxy,
       NO_PROXY: noProxy,
       no_proxy: noProxy,
-      NODE_EXTRA_CA_CERTS: this.certStore.caCertPath(), // Claude (Node) appends this
-      SSL_CERT_FILE: this.certStore.bundlePath(), // Codex (rustls via openssl-probe)
+      NODE_EXTRA_CA_CERTS: this.certStore.caCertPath(), // Claude and other Node programs append this
+      SSL_CERT_FILE: bundle, // Codex (rustls via openssl-probe) and OpenSSL programs
+      // Every HTTPS connection is decrypted, so the tools an agent runs must trust the CA too.
+      REQUESTS_CA_BUNDLE: bundle, // Python requests / pip
+      CURL_CA_BUNDLE: bundle,
+      GIT_SSL_CAINFO: bundle,
     };
   }
 
@@ -110,24 +124,9 @@ export class Recorder {
       running: this.running,
       proxyPort: this.port,
       lastError: this.lastError,
+      passthrough: this.proxy ? [...this.proxy.passthrough] : [],
       stats: this.lrs ? this.lrs.statsView() : null,
     };
-  }
-
-  #profileHosts() {
-    const hosts = [];
-    for (const profile of this.settings.get("ai")?.profiles || []) {
-      if (!profile.baseUrl) continue;
-      try {
-        hosts.push(new URL(profile.baseUrl).hostname);
-      } catch {}
-    }
-    return hosts;
-  }
-
-  #shouldRecord(host) {
-    for (const h of this.hostSet) if (host === h || host.endsWith("." + h)) return true;
-    return false;
   }
 
   #log(scope, message) {

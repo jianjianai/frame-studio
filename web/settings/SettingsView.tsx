@@ -781,6 +781,7 @@ interface RecorderStatus {
   running: boolean;
   proxyPort: number;
   lastError: string;
+  passthrough: string[];
   stats: { connected: number; connections: number; active: number; heldBytes: number; acked: number; duplicate: number; dropped: number; failures: number } | null;
 }
 
@@ -817,8 +818,9 @@ function RecorderSettings() {
     <>
       <h2>日志记录（旁路）</h2>
       <p className="muted">
-        把两个 AI（Claude、Codex）发往上游的接口调用，按 lrs.v4 协议旁路记录到 log-record-sass 日志站。记录经一个本机代理完成：代理用自签证书解密 AI 的
-        HTTPS 流量，只做拷贝转发，不改变也不拖慢 AI 的请求。失败只影响记录，不影响正常使用。仅在 Docker 环境中生效。
+        把两个 AI（Claude、Codex）发往上游的接口调用，按 lrs.v4 协议旁路记录到 log-record-sass 日志站。记录经一个本机代理完成：代理用自签证书解密 AI
+        的全部 HTTPS 流量，按路径挑出 AI 接口调用（如 /v1/messages、/chat/completions、/v1/responses，含 WebSocket），不论域名；其余请求照常转发、不记录。代理只做拷贝转发，不改变也不拖慢
+        AI 的请求，失败只影响记录。仅在 Docker 环境中生效。
       </p>
       {!data.available && <p className="danger-text">当前环境不可用：{data.lastError || "未找到 openssl"}。</p>}
       <div className="field-grid">
@@ -873,10 +875,13 @@ function RecorderSettings() {
             </div>
           )}
           {data.lastError && <div className="danger-text small-text ellipsis">最近错误：{data.lastError}</div>}
+          {data.passthrough.length > 0 && (
+            <div className="muted small-text">客户端不信任证书、改为直连（不记录）的域名：{data.passthrough.join("、")}</div>
+          )}
         </div>
       </div>
       <p className="muted small-text">
-        说明：Codex 是原生程序，自签证书通过 SSL_CERT_FILE 让其 TLS 信任；个别构建若不读该变量，Codex 的调用可能连不上，此时请停用本功能。
+        说明：AI 及其运行的工具通过 NODE_EXTRA_CA_CERTS、SSL_CERT_FILE 等变量信任自签证书。不认这些变量的程序会拒绝证书，该域名随后改为直连、不记录，并列在上方。
       </p>
     </>
   );
