@@ -63,6 +63,8 @@ class AgentProcess {
   }
   async start() {
     const env = agentEnv(this.manager.services.config, this.manager.profiles.env(this.profile, this.model));
+    // Route this agent's upstream AI calls through the recording proxy (it trusts the proxy's CA).
+    Object.assign(env, this.manager.services.recorder?.agentEnv() ?? {});
     if (this.agent === "claude") env.CLAUDE_CODE_EXECUTABLE = AGENTS.claude.cli().command;
     // Claude gives an HTTP MCP tool call 60 s by default ("The operation timed out."). FRAME
     // answers once the work is done: loading a work in the user's browser, calls queued on one

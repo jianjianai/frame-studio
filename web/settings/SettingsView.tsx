@@ -16,6 +16,7 @@ import {
   Copy,
   KeyRound,
   ShieldCheck,
+  ScrollText,
 } from "lucide-react";
 import { api, del, patch, formatBytes, useServerEvent } from "../lib/api";
 import { Dialog, useAction, useConfirm, useToast } from "../lib/ui";
@@ -28,6 +29,7 @@ const SECTIONS = [
   { id: "speech", label: "语音", icon: AudioLines },
   { id: "github", label: "GitHub", icon: GithubIcon },
   { id: "mcp", label: "MCP 接入", icon: Plug },
+  { id: "recorder", label: "日志记录", icon: ScrollText },
   { id: "about", label: "关于", icon: Info },
 ];
 
@@ -47,6 +49,7 @@ export function SettingsView({ initial }: { initial?: string | null }) {
         {section === "speech" && <SpeechSettings />}
         {section === "github" && <GitHubSettings />}
         {section === "mcp" && <McpSettings />}
+        {section === "recorder" && <RecorderSettings />}
         {section === "about" && <About />}
       </div>
     </div>
@@ -765,6 +768,116 @@ function McpSettings() {
           创建令牌
         </button>
       </div>
+    </>
+  );
+}
+
+interface RecorderStatus {
+  enabled: boolean;
+  url: string;
+  hasKey: boolean;
+  connections: number;
+  available: boolean;
+  running: boolean;
+  proxyPort: number;
+  lastError: string;
+  stats: { connected: number; connections: number; active: number; heldBytes: number; acked: number; duplicate: number; dropped: number; failures: number } | null;
+}
+
+function RecorderSettings() {
+  const [data, setData] = useState<RecorderStatus | null>(null);
+  const [form, setForm] = useState({ url: "", key: "", connections: 4 });
+  const [run] = useAction();
+  const load = () =>
+    api<RecorderStatus>("/api/recorder").then((status) => {
+      setData(status);
+      setForm({ url: status.url, key: "", connections: status.connections });
+    });
+  useEffect(() => {
+    void load();
+    const timer = setInterval(() => void api<RecorderStatus>("/api/recorder").then(setData, () => {}), 4000);
+    return () => clearInterval(timer);
+  }, []);
+  if (!data) return <p className="muted">加载中…</p>;
+  const save = (enabled: boolean) =>
+    run(
+      () =>
+        patch("/api/recorder", {
+          enabled,
+          url: form.url.trim(),
+          connections: form.connections,
+          ...(form.key ? { key: form.key } : {}),
+        }).then((status) => {
+          setData(status as RecorderStatus);
+          setForm((f) => ({ ...f, key: "" }));
+        }),
+      "已保存",
+    );
+  return (
+    <>
+      <h2>日志记录（旁路）</h2>
+      <p className="muted">
+        把两个 AI（Claude、Codex）发往上游的接口调用，按 lrs.v4 协议旁路记录到 log-record-sass 日志站。记录经一个本机代理完成：代理用自签证书解密 AI 的
+        HTTPS 流量，只做拷贝转发，不改变也不拖慢 AI 的请求。失败只影响记录，不影响正常使用。仅在 Docker 环境中生效。
+      </p>
+      {!data.available && <p className="danger-text">当前环境不可用：{data.lastError || "未找到 openssl"}。</p>}
+      <div className="field-grid">
+        <label className="field">
+          <span>日志站地址</span>
+          <input
+            className="input"
+            placeholder="wss://your-log-station/api/record"
+            value={form.url}
+            onChange={(event) => setForm({ ...form, url: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>采集 Key{data.hasKey ? "（已设置，留空则不变）" : ""}</span>
+          <input className="input" type="password" value={form.key} onChange={(event) => setForm({ ...form, key: event.target.value })} />
+        </label>
+        <label className="field">
+          <span>连接数</span>
+          <input
+            className="input"
+            type="number"
+            min={1}
+            max={32}
+            value={form.connections}
+            onChange={(event) => setForm({ ...form, connections: Math.min(32, Math.max(1, Number(event.target.value) || 4)) })}
+          />
+        </label>
+      </div>
+      <div className="row wrap">
+        <button className="btn" onClick={() => save(form.url.trim() ? data.enabled : false)}>
+          保存
+        </button>
+        {data.enabled ? (
+          <button className="btn" onClick={() => save(false)}>
+            停用
+          </button>
+        ) : (
+          <button className="btn primary" disabled={!form.url.trim() || !data.available} onClick={() => save(true)}>
+            启用
+          </button>
+        )}
+      </div>
+      <div className="setting-card" style={{ marginTop: 16 }}>
+        <div className="grow">
+          <strong>
+            {data.enabled ? (data.running ? "运行中" : "已启用，未连接") : "已停用"}
+          </strong>
+          {data.stats && (
+            <div className="muted small-text">
+              连接 {data.stats.connected}/{data.stats.connections}　进行中 {data.stats.active}　已确认 {data.stats.acked}　重复 {data.stats.duplicate}　丢弃{" "}
+              {data.stats.dropped}　缓存 {formatBytes(data.stats.heldBytes)}
+            </div>
+          )}
+          {data.lastError && <div className="danger-text small-text ellipsis">最近错误：{data.lastError}</div>}
+        </div>
+      </div>
+      <p className="muted small-text">
+        说明：Codex 是原生程序，自签证书通过 SSL_CERT_FILE 让其 TLS 信任；个别构建若不读该变量，Codex 的调用可能连不上，此时请停用本功能。
+      </p>
     </>
   );
 }

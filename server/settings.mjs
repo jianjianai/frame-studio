@@ -9,6 +9,8 @@ const defaults = () => ({
   /** Works an AI asked to delete: { repo, id, reason, at }; the user confirms in the work list. */
   deleteRequests: [],
   ai: { profiles: [], defaultProfile: "claude-account", permission: "edits" },
+  /** Side-channel recording of the agents' upstream AI calls to a log-record-sass station (key in secrets.json). */
+  recorder: { enabled: false, url: "", connections: 4 },
   speech: { defaultProvider: "edge", providers: {} },
   github: { accounts: [] },
   mcp: { tokens: [], clients: [], grants: [] },

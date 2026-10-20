@@ -26,6 +26,7 @@ import { browserPlugin } from "./browser.mjs";
 import { blenderPlugin } from "./blender.mjs";
 import { studioRoutes } from "./routes/studio.mjs";
 import { aiPlugin } from "./ai/routes.mjs";
+import { recorderPlugin } from "./recorder/plugin.mjs";
 import { speechPlugin } from "./speech/plugin.mjs";
 
 /** Rendering, tasks, materials, exports and the shared tool registry. */
@@ -50,4 +51,4 @@ function corePlugin(services) {
   registerSearchTools(tools);
 }
 
-export const plugins = [corePlugin, speechPlugin, librariesPlugin, experiencePlugin, materialsPlugin, reviewsPlugin, skillsPlugin, resourcesPlugin, assetPreviewsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, browserPlugin, blenderPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, aiPlugin];
+export const plugins = [corePlugin, speechPlugin, librariesPlugin, experiencePlugin, materialsPlugin, reviewsPlugin, skillsPlugin, resourcesPlugin, assetPreviewsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, browserPlugin, blenderPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, recorderPlugin, aiPlugin];

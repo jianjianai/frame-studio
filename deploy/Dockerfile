@@ -2,7 +2,7 @@
 FROM node:24-bookworm-slim
 
 RUN apt-get update \
- && apt-get install -y --no-install-recommends git git-lfs ca-certificates chromium fonts-noto-cjk fonts-noto-color-emoji tini python3 python3-venv iproute2 \
+ && apt-get install -y --no-install-recommends git git-lfs ca-certificates openssl chromium fonts-noto-cjk fonts-noto-color-emoji tini python3 python3-venv iproute2 \
  && rm -rf /var/lib/apt/lists/*
 
 # Beat This! (beats and bars for preview_audio): CPU PyTorch in its own Python environment,
