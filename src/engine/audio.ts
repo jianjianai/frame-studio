@@ -31,6 +31,12 @@ export class AudioTransport {
   volume = 0.65;
   muted = false;
   prepareMs = 0;
+  /** The output device failed while playing; playback waits and opens it again. */
+  outputError = false;
+  private outputFailures = 0;
+  private reconnect?: ReturnType<typeof setTimeout>;
+  /** The context has run once, so it may start again without a user gesture. */
+  private started = false;
   private visualBuffering = false;
   private visualWaiters = new Set<() => void>();
   setVisualBuffering(waiting: boolean) {
@@ -90,12 +96,49 @@ export class AudioTransport {
   private createContext(): void {
     if (!this.context) {
       const saved = this.clock.time();
-      this.context = new AudioContext();
-      this.gain = this.context.createGain();
-      this.gain.connect(this.context.destination);
+      const context = (this.context = new AudioContext());
+      context.addEventListener("statechange", () => {
+        if (context.state === "running") this.started = true;
+      });
+      // Chrome and Edge report a failed output device this way and suspend the context.
+      context.addEventListener("error", () => this.outputFailed());
+      this.gain = context.createGain();
+      this.gain.connect(context.destination);
       this.clock.seek(saved);
       this.applyGain();
+      if (!this.requestedPlay) this.release();
     }
+  }
+  /**
+   * Hand the output device back while nothing plays, as a page without sound does. When Chrome
+   * cannot open the device (it is changing or waking up), it plays into a silent stand-in and
+   * tries the device again only after no stream has used it for a few seconds or the system
+   * device changes, so a context kept running would stay silent.
+   */
+  private release() {
+    const generation = this.generation;
+    this.scheduling = this.scheduling
+      .catch(() => {})
+      .then(async () => {
+        const context = this.context;
+        if (context?.state === "running" && !this.closed && !this.requestedPlay && generation === this.generation)
+          await context.suspend();
+      });
+  }
+  private outputFailed() {
+    // Paused: the next play opens the device again.
+    if (this.closed || !this.requestedPlay) return;
+    const generation = this.generation;
+    this.outputError = true;
+    this.buffering = true;
+    clearTimeout(this.reconnect);
+    // Wait for the device a little longer each time, then play on from the same moment.
+    this.reconnect = setTimeout(
+      () => {
+        if (!this.closed && generation === this.generation && this.requestedPlay) this.restart();
+      },
+      Math.min(8000, 500 * 2 ** this.outputFailures++),
+    );
   }
   private async load(): Promise<void> {
     if (this.closed) return;
@@ -297,7 +340,8 @@ export class AudioTransport {
   async unlock(): Promise<void> {
     if (this.closed) return;
     this.createContext();
-    await this.context!.resume();
+    // A context that ran before is resumed once the graph is scheduled (startSource).
+    if (!this.started) await this.context!.resume();
     await this.load();
   }
   /** Prepare the selected position while paused; never resume the audio context. */
@@ -347,8 +391,12 @@ export class AudioTransport {
     this.preparation?.abort();
     this.requestedPlay = false;
     this.buffering = false;
+    clearTimeout(this.reconnect);
+    this.outputError = false;
+    this.outputFailures = 0;
     this.clock.pause();
     this.stopSource();
+    this.release();
   }
   seek(time: number): void {
     this.clock.seek(time);
@@ -580,7 +628,10 @@ export class AudioTransport {
           this.boundary = boundary;
           this.clock.play(lead);
           await context.resume();
-          if (current()) this.buffering = false;
+          if (current()) {
+            this.buffering = false;
+            this.outputError = false;
+          }
         } finally {
           if (cancel) request.signal.removeEventListener("abort", cancel);
           if (!current()) {

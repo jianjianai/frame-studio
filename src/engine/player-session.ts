@@ -268,6 +268,7 @@ export function createPlayerSession({
       audio: {
         state: sound.context?.state ?? "locked",
         buffering: sound.buffering,
+        outputError: sound.outputError,
         starting: pendingPlay,
         prepareMs: sound.prepareMs,
         source: sound.diagnostics(),

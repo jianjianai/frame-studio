@@ -29,13 +29,15 @@ interface Load {
 interface Diagnostics {
   waiting?: boolean;
   scene?: { layerLoads?: Load[]; loading?: Load[] } | null;
-  audio?: { buffering?: boolean };
+  audio?: { buffering?: boolean; outputError?: boolean };
 }
 interface Episode {
   start: number;
   /** The picture held playback (a layer loading, a slow frame), or the sound did. */
   visual: boolean;
   audio: boolean;
+  /** The output device failed and playback waits to open it again. */
+  device: boolean;
   /** The page's thread was held (no animation frame for a while). */
   frozen: boolean;
   layers: Set<string>;
@@ -67,7 +69,7 @@ export function useStall(stage: StageController): Stall | null {
 
     const begin = (start: number) => {
       if (episode) episode.start = Math.min(episode.start, start);
-      else episode = { start, visual: false, audio: false, frozen: false, layers: new Set(), ai: false, update: false };
+      else episode = { start, visual: false, audio: false, device: false, frozen: false, layers: new Set(), ai: false, update: false };
     };
     /** What the stage says now, and what happened since the stop began. */
     const observe = (now: number) => {
@@ -78,6 +80,7 @@ export function useStall(stage: StageController): Stall | null {
       } catch {}
       if (diagnostics?.waiting) episode.visual = true;
       else if (diagnostics?.audio?.buffering) episode.audio = true;
+      if (diagnostics?.audio?.outputError) episode.device = true;
       const scene = diagnostics?.scene;
       for (const load of scene?.loading ?? []) episode.layers.add(load.name || load.id);
       for (const load of scene?.layerLoads ?? []) if ((load.end ?? now) > episode.start && load.start < now) episode.layers.add(load.name || load.id);
@@ -145,6 +148,7 @@ export function useStall(stage: StageController): Stall | null {
 /** The likely causes, most telling first: at most two. */
 function describe(episode: Episode) {
   const reasons: string[] = [];
+  if (episode.device) reasons.push("声音输出设备出错后重新打开");
   if (episode.update) reasons.push("换上刚改的版本");
   if (episode.ai) reasons.push("AI 在后台画画面");
   if (episode.layers.size) {

@@ -165,15 +165,24 @@ const api: ResourcePageApi = {
     const source = context.createBufferSource();
     source.buffer = buffer;
     source.connect(context.destination);
+    // Hand the output device back between sounds (see AudioTransport.release).
+    source.onended = () => {
+      if (playing !== source) return;
+      playing = null;
+      void context.suspend();
+    };
     source.start();
     playing = source;
     return buffer.duration;
   },
   stop() {
+    if (!playing) return;
+    playing.onended = null;
     try {
-      playing?.stop();
+      playing.stop();
     } catch {}
     playing = null;
+    void audio?.suspend();
   },
 };
 let audio: AudioContext | null = null;
