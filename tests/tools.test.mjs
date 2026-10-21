@@ -54,7 +54,8 @@ describe("tool registry", () => {
     const tools = new ToolRegistry({});
     tools.add({ name: "look", title: "", description: "", readOnly: true, input: { work: z.string().optional() }, run: async () => ({ data: 1 }) });
     tools.add({ name: "cut", title: "", description: "", input: { work: z.string().optional() }, run: async () => ({ data: 1 }) });
-    const shape = (server, name) => Object.keys(server._registeredTools[name].inputSchema.shape ?? server._registeredTools[name].inputSchema._zod?.def?.shape ?? {});
+    // The parameters as advertised to the client (both scopes send a converted JSON Schema).
+    const shape = (server, name) => Object.keys(server._registeredTools[name].inputSchema["~standard"].jsonSchema.input({ target: "draft-2020-12" }).properties ?? {});
     const agent = createMcpServer(tools, { work: "ab12", repo: "local", agent: true });
     expect(shape(agent, "look")).toContain("work");
     expect(shape(agent, "cut")).not.toContain("work");
@@ -62,6 +63,8 @@ describe("tool registry", () => {
     const grant = createMcpServer(tools, { work: "ab12", repo: "local" });
     expect(shape(grant, "look")).not.toContain("work");
     expect(shape(grant, "cut")).not.toContain("work");
+    // Unbound, every tool names its work.
+    expect(shape(createMcpServer(tools, {}), "cut")).toEqual(["work"]);
   });
   it("hides write tools in read-only scope", async () => {
     await expect(registry.call("write", {}, { readOnly: true })).rejects.toThrow(/只读/);

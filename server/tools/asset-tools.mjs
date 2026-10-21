@@ -61,7 +61,7 @@ export async function assertPublicHost(url) {
  * included, must be a public one. `headers(url)` adds request headers for each address on the
  * way (the logged-in browser's cookies, which differ from host to host).
  */
-export async function importFromUrl(work, url, { name, folder = "public/imports", limit = 1024 * 1024 * 1024, publicOnly = false, headers } = {}) {
+export async function importFromUrl(work, url, { name, folder = "public/imports", limit = 1024 * 1024 * 1024, publicOnly = false, headers, refused = "" } = {}) {
   let current = new URL(url);
   let response;
   for (let hops = 0; ; hops++) {
@@ -73,7 +73,8 @@ export async function importFromUrl(work, url, { name, folder = "public/imports"
     if (hops >= 5) throw problem(502, "下载失败：重定向次数过多");
     current = new URL(location, current);
   }
-  if (!response.ok || !response.body) throw problem(502, `下载失败：HTTP ${response.status}`);
+  // `refused`: what to add when the site turned the download away (401/403), for whoever asked.
+  if (!response.ok || !response.body) throw problem(502, `下载失败：HTTP ${response.status}${refused && [401, 403].includes(response.status) ? refused : ""}`);
   const length = Number(response.headers.get("content-length") || 0);
   if (length > limit) throw problem(413, "文件过大");
   let base = name || decodeURIComponent(path.basename(current.pathname)) || "download";
@@ -352,7 +353,14 @@ export function registerAssetTools(registry) {
   const importOne = async (work, { url, data, file, fromWork: from, name, folder = "public/imports", license }, ctx) => {
     if ([url, data, file, from].filter(Boolean).length !== 1) throw problem(400, "url、data、file、fromWork 必须且只能提供一个");
     let relative;
-    if (url) relative = await importFromUrl(work, url, { name, folder, publicOnly: services.auth.required });
+    // Sites that want an account, or turn servers away, let the logged-in browser through.
+    if (url)
+      relative = await importFromUrl(work, url, {
+        name,
+        folder,
+        publicOnly: services.auth.required,
+        refused: "（网站拒绝了服务器的这次下载）。用带登录状态的浏览器下载用 browser_download，见 frame_guide browser",
+      });
     else if (from) {
       const source = await ctx.otherWork(from.work.includes("/") ? from.work : `${work.repo}/${from.work}`);
       if (source.repo !== work.repo) throw problem(403, `fromWork 只能是同一作品库（${work.repo}）的作品`, "FORBIDDEN");

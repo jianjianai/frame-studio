@@ -27,6 +27,7 @@ describe("tools that save the AI calls", () => {
     files = http.createServer((req, res) => {
       if (req.url === "/a.png") return sharp({ create: { width: 4, height: 4, channels: 3, background: "#f00" } }).png().toBuffer().then((png) => res.end(png));
       if (req.url === "/moved") return res.writeHead(302, { location: "/a.png" }).end();
+      if (req.url === "/members-only.png") return res.writeHead(403).end();
       res.writeHead(404).end();
     });
     await new Promise((resolve) => files.listen(0, "127.0.0.1", resolve));
@@ -106,6 +107,9 @@ describe("tools that save the AI calls", () => {
     expect((await tool("speech_synthesize", { work: work.id, text: "你好", place: { start: 0, gain: 0.5 } })).body.error.message).toContain("不认识的字段 gain");
     // A source beside items would be dropped: refused instead.
     expect((await tool("asset_import", { work: work.id, url: `${url}/a.png`, items: [{ data: png, name: "x.png" }] })).body.error.message).toContain("写在每一项里");
+    // A site that turns the server away: the AI hears of the logged-in browser, the studio's own import does not.
+    expect((await tool("asset_import", { work: work.id, url: `${url}/members-only.png` })).body.error.message).toContain("HTTP 403（网站拒绝了服务器的这次下载）。用带登录状态的浏览器下载用 browser_download");
+    await expect(importFromUrl(work, `${url}/members-only.png`)).rejects.toThrow(/^下载失败：HTTP 403$/);
   });
 
   it("hands out one-time upload addresses for files on the AI's own computer", async () => {

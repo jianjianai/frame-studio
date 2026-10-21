@@ -53,6 +53,39 @@ const CLAUDE_ALLOWED_TOOLS = [
   "LS",
   ...["ls", "cat", "head", "tail", "wc", "grep", "rg", "find", "file", "git status", "git diff", "git log", "git show"].map((command) => `Bash(${command}:*)`),
 ];
+/**
+ * Claude Code tools a video work has no use for, left out of every request (in production only
+ * ScheduleWakeup was ever called, twice): claude.ai artifacts, code review findings, workflows, its own loops and
+ * schedules, worktrees, notebooks, phone notifications and remote triggers.
+ */
+const CLAUDE_DISALLOWED_TOOLS = [
+  "Artifact",
+  "ArtifactComments",
+  "ArtifactData",
+  "ReportFindings",
+  "Workflow",
+  "ScheduleWakeup",
+  "CronCreate",
+  "CronDelete",
+  "CronList",
+  "DesignSync",
+  "EnterWorktree",
+  "ExitWorktree",
+  "NotebookEdit",
+  "PushNotification",
+  "RemoteTrigger",
+];
+/**
+ * Skills of the claude.ai account that need what the studio's agent does not have (the
+ * desktop app's browser or screen, the Chrome extension, claude.ai connectors, artifacts):
+ * hidden from the model. The account's other skills and the repository's skills stay.
+ */
+const CLAUDE_UNUSABLE_SKILLS = ["built-in-browser", "chrome-browser", "computer-use", "google-workspace", "docs", "morning", "import-memory"];
+const CLAUDE_SETTINGS = {
+  // The account's claude.ai connectors (Claude Docs…): the agent works on a video, not in claude.ai.
+  disableClaudeAiConnectors: true,
+  skillOverrides: Object.fromEntries(CLAUDE_UNUSABLE_SKILLS.map((name) => [`anthropic-skills:${name}`, "off"])),
+};
 
 /** One ACP adapter process (claude-agent-acp or codex-acp) serving many sessions. */
 class AgentProcess {
@@ -585,7 +618,10 @@ export class AiManager {
     // The work root holds the platform AGENTS.md/CLAUDE.md and the engine links; the work itself is projects/<name>/.
     const common = { cwd: work.root, mcpServers: this.mcpServers(session) };
     // Claude never asks about FRAME tools (confirmTool does, following the session mode) or read-only inspection.
-    const meta = process.agent === "claude" ? { _meta: { claudeCode: { options: { allowedTools: CLAUDE_ALLOWED_TOOLS } } } } : {};
+    const meta =
+      process.agent === "claude"
+        ? { _meta: { claudeCode: { options: { allowedTools: CLAUDE_ALLOWED_TOOLS, disallowedTools: CLAUDE_DISALLOWED_TOOLS, settings: CLAUDE_SETTINGS } } } }
+        : {};
     try {
       if (!session.meta.acpSessionId && session.forkFrom) result = await this.forkContext(session, process, { ...common, ...meta });
       if (!session.meta.acpSessionId) {

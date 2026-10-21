@@ -71,3 +71,38 @@ export function withPortableJsonSchema(schema) {
     },
   };
 }
+
+/**
+ * Tool input schemas as the studio's own agents receive them: full JSON Schema without what only
+ * the server's validation needs — `$schema`, closed objects, string lengths and patterns. Every
+ * request carries the always-loaded tools' schemas; the arguments are still validated against
+ * the full zod schema, and its errors say what was wrong.
+ */
+export function leanJsonSchema(schema) {
+  if (Array.isArray(schema)) return schema.map(leanJsonSchema);
+  if (!schema || typeof schema !== "object") return schema;
+  const out = {};
+  for (const [key, value] of Object.entries(schema)) {
+    if (key === "$schema" || key === "pattern" || key === "minLength" || key === "maxLength") continue;
+    if (key === "additionalProperties" && (value === false || (value && typeof value === "object" && !Object.keys(value).length))) continue;
+    // Property and definition names are data, not keywords: a property called "pattern" stays.
+    const named = key === "properties" || key === "$defs" || key === "definitions";
+    out[key] = named ? Object.fromEntries(Object.entries(value).map(([name, item]) => [name, leanJsonSchema(item)])) : leanJsonSchema(value);
+  }
+  return out;
+}
+
+/** The same standard schema (validation unchanged) with a lean JSON Schema. */
+export function withLeanJsonSchema(schema) {
+  const standard = schema["~standard"];
+  return {
+    "~standard": {
+      ...standard,
+      validate: (value) => standard.validate(value),
+      jsonSchema: {
+        input: (options) => leanJsonSchema(standard.jsonSchema.input(options)),
+        output: (options) => leanJsonSchema(standard.jsonSchema.output(options)),
+      },
+    },
+  };
+}

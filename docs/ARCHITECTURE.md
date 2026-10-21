@@ -105,7 +105,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 内置 AI 不自己实现代理，而是通过 ACP（Agent Client Protocol）驱动官方适配器：`@agentclientprotocol/claude-agent-acp`（Claude Agent SDK）和 `@agentclientprotocol/codex-acp`（Codex app-server）。
 
 - 每个“AI 配置 + 模型”一个代理进程，多个会话共用；空闲 55 分钟退出（Claude 的提示缓存保留 1 小时，用户停下来看片、思考的这段时间里进程不退出），会话下次发送时通过 `session/resume` 恢复。`turn_end` 记下这一轮之前是否恢复过（`resumed`）、切换过哪些模型或思考强度选项（`changed`），聊天里每轮的用量提示和缓存读写一起显示。
-- Claude 进程启动时关闭 Claude Code 自己的记忆（`CLAUDE_CODE_DISABLE_AUTO_MEMORY`，经验记在经验库和作品文档里）和提交、PR 说明及 git 状态快照（`CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS`，版本经 FRAME 保存）。
+- Claude 进程启动时关闭 Claude Code 自己的记忆（`CLAUDE_CODE_DISABLE_AUTO_MEMORY`，经验记在经验库和作品文档里）和提交、PR 说明及 git 状态快照（`CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS`，版本经 FRAME 保存）。Claude 会话的 `_meta.claudeCode.options` 带 `disallowedTools`（和做视频无关的 Claude Code 工具，`CLAUDE_DISALLOWED_TOOLS`）和 `settings`（`disableClaudeAiConnectors`，以及用 `skillOverrides` 关掉要靠桌面 App、Chrome 扩展或连接器才能用的账号技能）。
 - Claude 默认只给 HTTP 的 MCP 工具调用 60 秒（超时报 "The operation timed out."，放弃的调用在 FRAME 里仍会做完，排在它后面的调用跟着超时）：启动 Claude 时设 `MCP_TOOL_TIMEOUT` 为 10 分钟，FRAME 的工具各自控制用时。
 - 新会话的工作目录是作品目录，并注入 FRAME MCP（`/mcp`，带只对该作品有效的内部令牌）。代理自己的确认不经过 FRAME 工具（Claude 预先允许，Codex 不询问），由 FRAME 按会话当前模式决定：手动确认和计划模式下，会修改作品的工具先在聊天中请求用户确认（`confirmTool`）。
 - 账号登录调用随依赖安装的 `claude` / `codex` 程序（`auth login`、`login --device-auth`），凭据在它们自己的目录（`~/.claude`、`~/.codex`；容器中为 `/data/home`）。
