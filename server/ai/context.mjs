@@ -55,6 +55,39 @@ export function describeDocument(file, content) {
   return { title, summary: summary.length > 80 ? summary.slice(0, 79) + "…" : summary };
 }
 
+/**
+ * The sections of a Markdown document: each heading below the title (## and deeper, outside
+ * fenced code) with its text up to the next heading of the same or a higher level.
+ */
+export function documentSections(content) {
+  const lines = content.split("\n");
+  const heads = [];
+  let fenced = false;
+  lines.forEach((line, index) => {
+    if (line.trim().startsWith("```")) fenced = !fenced;
+    const match = !fenced && /^(#{2,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (match) heads.push({ index, level: match[1].length, title: match[2].trim() });
+  });
+  return heads.map((head, at) => {
+    const next = heads.slice(at + 1).find((item) => item.level <= head.level);
+    const text = lines
+      .slice(head.index, next ? next.index : lines.length)
+      .join("\n")
+      .replace(/\n+$/, "");
+    return { title: head.title, level: head.level, text, chars: text.length };
+  });
+}
+
+/** A section by its heading: the one titled so, else the only one whose title contains it; null when none. */
+export function findSection(content, title) {
+  const sections = documentSections(content);
+  const wanted = title.trim().replace(/^#+\s*/, "");
+  const exact = sections.find((section) => section.title === wanted);
+  if (exact) return exact;
+  const loose = sections.filter((section) => section.title.toLowerCase().includes(wanted.toLowerCase()));
+  return loose.length === 1 ? loose[0] : null;
+}
+
 /** The Markdown documents of a library folder (`only`: which files count), README first. */
 export function readLibrary(root, only = /\.(md|txt)$/i) {
   const documents = tree(root)
@@ -76,14 +109,24 @@ export function experienceKnown(libraries) {
   return seen;
 }
 
-/** A library as experience_read shows it without a path: its README (a skill's SKILL.md) in full and the list of its documents. */
-export function libraryOverview(library, documents) {
+/** A document in a library's overview: its index line, and its sections when it has several (readable on their own). */
+const overviewLine = (doc) => {
+  const sections = documentSections(doc.content).filter((section) => section.level === 2);
+  return indexLine(doc) + (sections.length > 1 ? `\n  小节：${sections.map((section) => `${section.title}（${section.chars} 字）`).join("、")}` : "");
+};
+
+/**
+ * A library as experience_read shows it without a path: its README (a skill's SKILL.md) in full,
+ * unless the AI has it already (`known`, unchanged since it read it), and the list of its documents.
+ */
+export function libraryOverview(library, documents, { known } = {}) {
   const readme = documents.find((doc) => doc.path === "README.md") ?? documents.find((doc) => doc.path === "SKILL.md");
   const others = documents.filter((doc) => doc !== readme);
+  const readmeKnown = readme && known?.[readme.path]?.read && known[readme.path].hash === readme.hash;
   return [
     `## 经验库「${library.title}」（id ${library.id}）`,
-    readme ? `### ${readme.path}\n\n${quote(readme.content)}` : "",
-    others.length ? `### 文档\n\n${others.map(indexLine).join("\n")}` : "",
+    readme ? `### ${readme.path}\n\n${readmeKnown ? "（这个对话里已经读过，之后没有改动）" : quote(readme.content)}` : "",
+    others.length ? `### 文档\n\n${others.map(overviewLine).join("\n")}` : "",
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -126,7 +169,7 @@ function libraryDelta(known, { library, documents }) {
       continue;
     }
     if (!before) items.push(`- 新增 ${indexLine(doc).slice(2)}`);
-    else if (before.level === "content") items.push(`- \`${doc.path}\` 已修改，你之前读到的内容已过时`);
+    else if (before.level === "content" || before.sections?.length) items.push(`- \`${doc.path}\` 已修改，你之前读到的内容已过时`);
     else items.push(`- \`${doc.path}\` 已修改`);
     docs[doc.path] = { hash: doc.hash, level: "index" };
   }
@@ -162,19 +205,28 @@ export function rebaseSeen(previous, baseline) {
     const old = previous?.[id];
     const docs = { ...entry.docs };
     if (old?.docs)
-      for (const [file, doc] of Object.entries(old.docs)) if (doc.level === "content" && docs[file] && docs[file].level !== "content") docs[file] = doc;
+      for (const [file, doc] of Object.entries(old.docs))
+        if ((doc.level === "content" || doc.sections?.length) && docs[file] && docs[file].level !== "content") docs[file] = doc;
     next[id] = { ...entry, docs };
   }
   return next;
 }
 
-/** Record what the AI read or wrote itself, so it is not told about it again. */
-export function noteSeen(seen, library, file, hash, level = "content") {
+/**
+ * Record what the AI read or wrote itself, so it is not told about it again. Level "read" is the
+ * whole document read through experience_read (its text is in the AI's context), "section" one
+ * section of it (`section`, its title); what the AI wrote ("content") it knows by its own edits.
+ */
+export function noteSeen(seen, library, file, hash, level = "content", section = null) {
   const entry = seen?.[library];
   if (!entry) return seen;
   const docs = { ...entry.docs };
+  const same = docs[file]?.hash === hash ? docs[file] : null;
   if (hash === null) delete docs[file];
-  else if (!(level === "index" && docs[file]?.level === "content" && docs[file].hash === hash)) docs[file] = { hash, level };
+  else if (level === "section") {
+    if (!same?.read) docs[file] = { hash, level: same?.level ?? "index", sections: [...new Set([...(same?.sections ?? []), section])] };
+  } else if (level === "read") docs[file] = { hash, level: "content", read: true };
+  else if (level !== "index" || !(same?.level === "content" || same?.sections)) docs[file] = { hash, level };
   return { ...seen, [library]: { ...entry, docs } };
 }
 

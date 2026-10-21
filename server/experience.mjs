@@ -5,7 +5,7 @@ import { tree, readText, writeText, removePath, movePath } from "./files.mjs";
 import { readJson } from "./http.mjs";
 import { problem, notFound, confined } from "./util.mjs";
 import { workArg, repoArg, asJson } from "./tools/registry.mjs";
-import { readLibrary, experienceKnown, libraryOverview, describeDocument } from "./ai/context.mjs";
+import { readLibrary, experienceKnown, libraryOverview, describeDocument, documentSections, findSection } from "./ai/context.mjs";
 import { EXPERIENCE_INBOX } from "./works.mjs";
 import { editList, runFileOperations, describeFileOperations } from "./tools/file-ops.mjs";
 import { findLibrary, unknownLibraries, searchLibraries, searchWords, offerOrder, readmeLead, SUGGEST, trashed } from "./libraries.mjs";
@@ -394,7 +394,9 @@ export function experiencePlugin(services) {
   const experience = (services.experience = new Experience(services));
   works.briefProviders.push((work) => experience.brief(work));
   /** Tell the chat session (if any) what its AI just read or wrote, so it is not told again. */
-  const noteSeen = (ctx, library, file, hash, level) => ctx.scope.session && services.ai?.noteExperience(ctx.scope.session, library.id, file, hash, level);
+  const noteSeen = (ctx, library, file, hash, level, section) => ctx.scope.session && services.ai?.noteExperience(ctx.scope.session, library.id, file, hash, level, section);
+  /** What the session's AI has read of a library and still has (see AiManager.experienceSeen); null outside a conversation. */
+  const seenBy = (ctx, library) => (ctx.scope.session && services.ai?.experienceSeen?.(ctx.scope.session, library.id)) || null;
   const base = "/api/repos/:repo/experience";
   /** The libraries' folder, for a path that must lie in one of them (each library is its own checkout). */
   const within = async (repo, ...files) => {
@@ -551,38 +553,78 @@ export function experiencePlugin(services) {
     name: "experience_read",
     title: "阅读经验库",
     description:
-      "阅读经验库（同类作品积累的制作经验、用户偏好和避坑记录）。传 path 读一篇全文，paths 一次读多篇；不传返回 README 和文档目录。作品关联了多个经验库时用 library 指定。还没有作品时用 repo 指定作品库，library 写明经验库。",
+      "阅读经验库（同类作品积累的制作经验、用户偏好和避坑记录）。传 path 读一篇全文，paths 一次读多篇；路径后面加 #小节标题（例如 开场.md#前三秒）只读这一节，到下一个同级或更高级的标题为止。不传返回 README 和文档目录（分了小节的文档列出小节和字数）。在这个对话里读过、之后没有改动的文档或小节只返回一句说明，again: true 返回全文。作品关联了多个经验库时用 library 指定。还没有作品时用 repo 指定作品库，library 写明经验库。",
     readOnly: true,
-    input: { work: workArg, repo: repoArg, library: libraryArg, path: docPath.optional(), paths: z.array(docPath).max(30).optional().describe("一次读同一经验库的多篇文档") },
-    async run({ library: name, path: file, paths }, ctx) {
+    input: {
+      work: workArg,
+      repo: repoArg,
+      library: libraryArg,
+      path: docPath.optional(),
+      paths: z.array(docPath).max(30).optional().describe("一次读同一经验库的多篇文档或小节"),
+      again: z.boolean().default(false).describe("读过、没有改动的也返回全文"),
+    },
+    async run({ library: name, path: file, paths, again }, ctx) {
       if (file && paths?.length) throw problem(400, "path 读一篇，paths 读多篇：二选一");
-      if (paths?.length) {
+      if (file || paths?.length) {
         const { library } = await libraryOf(ctx, name);
+        const known = again ? null : seenBy(ctx, library);
+        /** One document or section: its text, or that the AI has it already (unchanged since it read it). */
+        const read = (item) => {
+          const at = item.indexOf("#");
+          const doc = at < 0 ? item : item.slice(0, at);
+          const wanted = at < 0 ? "" : item.slice(at + 1).trim();
+          const result = readText(library.root, doc);
+          const before = known?.[doc]?.hash === result.hash ? known[doc] : null;
+          if (!wanted) {
+            if (before?.read) return { path: doc, sha256: result.hash, known: "全文" };
+            noteSeen(ctx, library, doc, result.hash, "read");
+            return { path: doc, sha256: result.hash, text: result.content };
+          }
+          const section = findSection(result.content, wanted);
+          if (!section) {
+            const titles = documentSections(result.content).map((item) => item.title);
+            throw problem(404, `${doc} 里没有小节「${wanted}」${titles.length ? `（有：${titles.join("、")}）` : "（这篇没有分小节）"}`);
+          }
+          if (before?.read) return { path: doc, section: section.title, sha256: result.hash, known: "全文（包括这一节）" };
+          if (before?.sections?.includes(section.title)) return { path: doc, section: section.title, sha256: result.hash, known: "这一节" };
+          noteSeen(ctx, library, doc, result.hash, "section", section.title);
+          return { path: doc, section: section.title, sha256: result.hash, text: section.text };
+        };
+        const label = (item) => (item.section ? `${item.path}#${item.section}` : item.path);
+        const knownLine = (item) => `这个对话里已经读过${item.known}，之后没有改动（要再看用 again: true）`;
+        if (file) {
+          const item = read(file);
+          return {
+            data: { path: item.path, ...(item.section ? { section: item.section } : {}), sha256: item.sha256, ...(item.known ? { unchanged: true } : {}) },
+            meta: { library: library.id, path: item.path, sha256: item.sha256 },
+            text: item.known ? `${label(item)}：${knownLine(item)}` : item.text,
+          };
+        }
         const parts = [];
         const data = [];
-        for (const doc of paths)
+        for (const entry of paths)
           try {
-            const result = readText(library.root, doc);
-            noteSeen(ctx, library, doc, result.hash, "content");
-            parts.push(`=== ${doc}\n${result.content}`);
-            data.push({ path: doc, ok: true, sha256: result.hash });
+            const item = read(entry);
+            parts.push(item.known ? `=== ${label(item)}：${knownLine(item)}` : `=== ${label(item)}\n${item.text}`);
+            data.push({ path: item.path, ...(item.section ? { section: item.section } : {}), ok: true, sha256: item.sha256, ...(item.known ? { unchanged: true } : {}) });
           } catch (error) {
-            parts.push(`=== ${doc}：${error.message}`);
-            data.push({ path: doc, ok: false, error: error.message });
+            parts.push(`=== ${entry}：${error.message}`);
+            data.push({ path: entry, ok: false, error: error.message });
           }
         return { data: { library: library.id, documents: data }, text: parts.join("\n\n") };
       }
-      if (!file && !name) {
+      if (!name) {
         // The overview of every linked library.
         const work = await ctx.place();
         if (!work.dir) throw problem(400, "只指定作品库（repo）时，用 library 写明读哪个经验库（experience_list 查找）", "LIBRARY_REQUIRED");
         const { libraries } = await experience.linked(work);
         if (!libraries.length) await libraryOf(ctx); // explains why there is none
-        const current = libraries.map((library) => ({ library: { id: library.id, title: library.title }, documents: experience.documents(library) }));
+        const current = libraries.map((library) => ({ library, documents: experience.documents(library) }));
+        const text = current.map(({ library, documents }) => libraryOverview({ id: library.id, title: library.title }, documents, { known: seenBy(ctx, library) })).join("\n\n");
         // The READMEs come in full: the AI has read them.
         for (const { library, documents } of current) {
           const readme = documents.find((doc) => doc.path === "README.md");
-          if (readme) noteSeen(ctx, libraries.find((item) => item.id === library.id), readme.path, readme.hash, "content");
+          if (readme) noteSeen(ctx, library, readme.path, readme.hash, "read");
         }
         return {
           data: current.map(({ library, documents }) => ({
@@ -590,21 +632,17 @@ export function experiencePlugin(services) {
             title: library.title,
             documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary })),
           })),
-          text: current.map(({ library, documents }) => libraryOverview(library, documents)).join("\n\n"),
+          text,
         };
       }
       const { library } = await libraryOf(ctx, name);
-      if (file) {
-        const result = readText(library.root, file);
-        noteSeen(ctx, library, file, result.hash, "content");
-        return { data: { path: file, sha256: result.hash }, meta: { library: library.id, path: file, sha256: result.hash }, text: result.content };
-      }
       const documents = experience.documents(library);
+      const text = libraryOverview({ id: library.id, title: library.title }, documents, { known: seenBy(ctx, library) });
       const readme = documents.find((doc) => doc.path === "README.md");
-      if (readme) noteSeen(ctx, library, readme.path, readme.hash, "content");
+      if (readme) noteSeen(ctx, library, readme.path, readme.hash, "read");
       return {
         data: { library: library.id, title: library.title, documents: documents.map(({ path: doc, title, summary }) => ({ path: doc, title, summary })) },
-        text: libraryOverview({ id: library.id, title: library.title }, documents),
+        text,
       };
     },
   });

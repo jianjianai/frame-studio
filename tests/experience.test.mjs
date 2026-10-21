@@ -230,6 +230,51 @@ describe("experience libraries", () => {
     expect((await tools.call("experience_commit", { message: "已发布也能存" }, scope)).text).toBe("经验库没有未保存的修改");
   });
 
+  it("reads sections, and in a conversation does not hand back what the AI read and nothing changed", async () => {
+    const { ai, works, tools } = app.services;
+    await call(`${lib}/libraries`, { method: "POST", body: { name: "情绪镜头" } });
+    const created = (await call("/api/works", { method: "POST", body: { title: "按节读" } })).body;
+    await call(`/api/works/local/${created.id}`, { method: "PATCH", body: { experiences: ["情绪镜头"] } });
+    const work = await app.services.openWork(created.id, "local");
+    const doc = "# 情绪与镜头\n\n按情绪列出\n\n## 期待\n\n- 越推越快\n\n## 不安\n\n- 线性逼近\n- 压暗\n";
+    await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "对照.md", content: doc }] });
+    const session = { meta: { id: "read-session", work: work.id, repo: "local", queue: [], context: { experience: works.writeBrief(work).experience } } };
+    ai.sessions.set(session.meta.id, session);
+    const scope = { work: work.id, repo: "local", session: session.meta.id };
+    const read = (args) => tools.call("experience_read", args, scope);
+
+    // The overview names the sections; one section comes alone.
+    expect((await read({})).text).toMatch(/- `对照.md` 情绪与镜头：按情绪列出（约 \d+ 字）\n {2}小节：期待（\d+ 字）、不安（\d+ 字）/);
+    expect((await read({})).text).toContain("### README.md\n\n（这个对话里已经读过，之后没有改动）");
+    const section = await read({ path: "对照.md#不安" });
+    expect(section.text).toBe("## 不安\n\n- 线性逼近\n- 压暗");
+    expect(section.data).toMatchObject({ path: "对照.md", section: "不安" });
+    expect((await read({ path: "对照.md#不安" })).text).toBe("对照.md#不安：这个对话里已经读过这一节，之后没有改动（要再看用 again: true）");
+    await expect(read({ path: "对照.md#惊喜" })).rejects.toThrow("对照.md 里没有小节「惊喜」（有：期待、不安）");
+    // The whole document: once in full, then said to be known (its sections too), unless asked again.
+    expect((await read({ path: "对照.md" })).text).toBe(doc);
+    expect((await read({ paths: ["对照.md", "对照.md#期待"] })).text).toBe(
+      "=== 对照.md：这个对话里已经读过全文，之后没有改动（要再看用 again: true）\n\n=== 对照.md#期待：这个对话里已经读过全文（包括这一节），之后没有改动（要再看用 again: true）",
+    );
+    expect((await read({ path: "对照.md", again: true })).text).toBe(doc);
+    // Changed by someone else: the new text in full.
+    await call(`${lib}/file`, { method: "PUT", body: { path: "情绪镜头/对照.md", content: doc.replace("压暗", "压暗、心跳") } });
+    expect((await read({ path: "对照.md" })).text).toContain("心跳");
+    // After a compaction the AI is assumed to have only its brief: everything comes in full again.
+    session.meta.context = { ...session.meta.context, experience: works.writeBrief(work).experience };
+    expect((await read({ path: "对照.md#不安" })).text).toContain("线性逼近");
+    // What the AI wrote itself (one section read, an edit) is not taken for the whole document read.
+    await tools.call("experience_write", { library: "情绪镜头", operations: [{ op: "edit", path: "对照.md", edits: [{ oldText: "越推越快", newText: "越推越快，落在拍子上" }] }] }, scope);
+    expect((await read({ path: "对照.md" })).text).toContain("落在拍子上");
+    // Outside a conversation nothing is assumed known.
+    expect((await tool("experience_read", { work: work.id, path: "对照.md" })).body.text).toContain("心跳");
+    expect((await tool("experience_read", { work: work.id, path: "对照.md" })).body.text).toContain("心跳");
+    // work_context points the studio's own AI at the work's notes instead of repeating them.
+    const context = await tools.call("work_context", { sections: ["notesFile"] }, { ...scope, agent: true });
+    expect(context.data.notesFile).toEqual({ path: `projects/${work.slug}/AGENTS.md`, chars: expect.any(Number) });
+    expect(context.data.notes).toBeUndefined();
+  });
+
   it("tells the AI where the work's notes and 经验.md are, without their contents, sizes or limits", async () => {
     const created = (await call("/api/works", { method: "POST", body: { title: "笔记很长" } })).body;
     const work = await app.services.openWork(created.id, "local");
@@ -355,7 +400,9 @@ describe("experience libraries", () => {
     let [result] = await Promise.all([write("# 开场\n\n- 被拒绝\n"), answer("reject")]);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("用户没有允许这次修改");
-    expect((await mcp("tools/call", { name: "experience_read", arguments: { path: "开场.md" } })).content[0].text).toContain("前 3 秒给出问题");
+    // Read before and unchanged: said so in a line; the text itself on request.
+    expect((await mcp("tools/call", { name: "experience_read", arguments: { path: "开场.md" } })).content[0].text).toContain("之后没有改动");
+    expect((await mcp("tools/call", { name: "experience_read", arguments: { path: "开场.md", again: true } })).content[0].text).toContain("前 3 秒给出问题");
     [result] = await Promise.all([write("# 开场\n\n- 允许了\n"), answer("allow")]);
     expect(result.content[0].text).toContain("全部完成");
     session.meta.configOptions = [{ id: "mode", currentValue: "acceptEdits" }];

@@ -6,6 +6,8 @@ import {
   LIMITS,
   quote,
   describeDocument,
+  documentSections,
+  findSection,
   experienceKnown,
   experienceDelta,
   filesNotice,
@@ -64,6 +66,22 @@ describe("session brief and per-message context", () => {
     expect(text).not.toContain(long.slice(0, 40));
   });
 
+  it("lists the sections of a document that has several, and leaves out a README the AI has", () => {
+    const root = makeLibrary({ "README.md": "# 知识类视频\n\n偏好：暖色", "镜头.md": "# 镜头\n\n按情绪\n\n## 期待\n\n- 推近\n\n## 不安\n\n- 慢慢逼近\n", "一节.md": "# 一节\n\n## 只有这一节\n\n内容\n" });
+    const documents = readLibrary(root);
+    const text = libraryOverview(library, documents);
+    expect(text).toMatch(/- `镜头.md` 镜头：按情绪（约 \d+ 字）\n {2}小节：期待（\d+ 字）、不安（\d+ 字）/);
+    expect(text).not.toContain("小节：只有这一节");
+    const readme = documents.find((doc) => doc.path === "README.md");
+    const again = libraryOverview(library, documents, { known: { "README.md": { hash: readme.hash, level: "content", read: true } } });
+    expect(again).toContain("### README.md\n\n（这个对话里已经读过，之后没有改动）");
+    expect(again).not.toContain("偏好：暖色");
+    // One the AI wrote but did not read through experience_read comes in full.
+    expect(libraryOverview(library, documents, { known: { "README.md": { hash: readme.hash, level: "content" } } })).toContain("偏好：暖色");
+    // A README that changed since comes in full.
+    expect(libraryOverview(library, documents, { known: { "README.md": { hash: "old", level: "content", read: true } } })).toContain("偏好：暖色");
+  });
+
   it("says nothing when nothing changed, and only what others changed otherwise", () => {
     const root = makeLibrary({ "README.md": "# 知识类视频\n\n偏好：暖色", "开场.md": "# 开场\n\n前 2 秒抛出问题" });
     const seen = known(root);
@@ -101,6 +119,41 @@ describe("session brief and per-message context", () => {
     const delta = experienceDelta(seen, now(root));
     expect(delta.text).toContain("`长文.md` 已修改，你之前读到的内容已过时");
     expect(delta.text.length).toBeLessThan(500);
+  });
+
+  it("splits documents into sections the AI can read on their own", () => {
+    const content = "# 镜头\n\n开头一段\n\n## 期待\n\n- 推近\n\n### 细节\n\n- 0.4 秒\n\n## 不安\n\n```md\n## 不是标题\n```\n\n- 慢慢逼近\n";
+    const sections = documentSections(content);
+    expect(sections.map((section) => [section.level, section.title])).toEqual([
+      [2, "期待"],
+      [3, "细节"],
+      [2, "不安"],
+    ]);
+    // A section runs to the next heading of its level or higher; code is not a heading.
+    expect(sections[0].text).toBe("## 期待\n\n- 推近\n\n### 细节\n\n- 0.4 秒");
+    expect(sections[2].text).toContain("## 不是标题");
+    expect(findSection(content, "不安").text).toContain("慢慢逼近");
+    expect(findSection(content, "## 期待").title).toBe("期待");
+    expect(findSection(content, "细").title).toBe("细节");
+    expect(findSection(content, "没有")).toBeNull();
+  });
+
+  it("keeps the sections the AI read, and tells it when such a document changed", () => {
+    const root = makeLibrary({ "README.md": "# 知识类视频", "开场.md": "# 开场\n\n## 前三秒\n\n给冲突\n\n## 片名\n\n第 2 秒\n" });
+    let seen = known(root);
+    const doc = readLibrary(root).find((item) => item.path === "开场.md");
+    seen = noteSeen(seen, library.id, "开场.md", doc.hash, "section", "前三秒");
+    seen = noteSeen(seen, library.id, "开场.md", doc.hash, "section", "片名");
+    expect(seen[library.id].docs["开场.md"]).toEqual({ hash: doc.hash, level: "index", sections: ["前三秒", "片名"] });
+    // Listed again (an overview): what it read stays known.
+    expect(noteSeen(seen, library.id, "开场.md", doc.hash, "index")[library.id].docs["开场.md"].sections).toEqual(["前三秒", "片名"]);
+    // Read whole afterwards: the sections are part of it. What it wrote it knows by its edits, not as read.
+    expect(noteSeen(seen, library.id, "开场.md", doc.hash, "read")[library.id].docs["开场.md"]).toEqual({ hash: doc.hash, level: "content", read: true });
+    expect(noteSeen(seen, library.id, "开场.md", "new", "content")[library.id].docs["开场.md"]).toEqual({ hash: "new", level: "content" });
+    fs.writeFileSync(path.join(root, "开场.md"), "# 开场\n\n## 前三秒\n\n给悬念\n");
+    expect(experienceDelta(seen, now(root)).text).toContain("`开场.md` 已修改，你之前读到的内容已过时");
+    // A resumed agent still has what it read.
+    expect(rebaseSeen(seen, known(root))[library.id].docs["开场.md"].sections).toEqual(["前三秒", "片名"]);
   });
 
   it("introduces a newly linked library and forgets an unlinked one", () => {

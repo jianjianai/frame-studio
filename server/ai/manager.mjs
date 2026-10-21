@@ -1359,12 +1359,20 @@ export class AiManager {
     return blocks;
   }
 
-  /** An experience tool tells us what this session's AI just read or wrote (hash null: deleted). */
-  noteExperience(sessionId, library, file, hash, level = "content") {
+  /** An experience tool tells us what this session's AI just read or wrote (hash null: deleted; level "section": that section). */
+  noteExperience(sessionId, library, file, hash, level = "content", section = null) {
     const session = this.sessions.get(sessionId);
     if (!session?.meta.context?.experience) return;
-    session.meta.context = { ...session.meta.context, experience: noteSeen(session.meta.context.experience, library, file, hash, level) };
+    session.meta.context = { ...session.meta.context, experience: noteSeen(session.meta.context.experience, library, file, hash, level, section) };
     this.saveMeta(session);
+  }
+
+  /**
+   * What this session's AI has read of an experience library since its context last started over
+   * (a new conversation, a compaction): { [path]: { hash, level, sections? } }, null when unknown.
+   */
+  experienceSeen(sessionId, library) {
+    return this.sessions.get(sessionId)?.meta.context?.experience?.[library]?.docs ?? null;
   }
 
   /** The AI wrote to an experience library: a skill's documents are saved as a version of the skills when the turn ends. */

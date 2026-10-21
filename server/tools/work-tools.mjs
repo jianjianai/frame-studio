@@ -266,7 +266,7 @@ export function registerWorkTools(registry) {
     name: "work_context",
     title: "作品现状",
     description:
-      "读取作品的元数据、文件、素材（地址、类型、时长、尺寸）、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果、最近的导出、作品需求和关联的经验库、作品库里的素材库（各有哪些资源和音效）、发布后的复盘数据概要，以及是否已发布、和 GitHub 是否同步（不在 FRAME 的 AI 对话里调用时，这时和 GitHub 比较一次；不能修改作品的情况写在 warnings 里）。",
+      "读取作品的元数据、文件、素材（地址、类型、时长、尺寸）、图层与音轨概要、未保存的修改、用户在播放器中正在看的位置/选区、最近一次检查结果、最近的导出、作品需求（FRAME 的 AI 对话里只给需求文件 AGENTS.md 的路径和字数）和关联的经验库、作品库里的素材库（各有哪些资源和音效）、发布后的复盘数据概要，以及是否已发布、和 GitHub 是否同步（不在 FRAME 的 AI 对话里调用时，这时和 GitHub 比较一次；不能修改作品的情况写在 warnings 里）。",
     readOnly: true,
     input: {
       work: workArg,
@@ -331,8 +331,11 @@ export function registerWorkTools(registry) {
           : null,
         files,
         assets: assets.map(({ url, kind, size, duration, width, height, animations, triangles, problem }) => ({ url, kind, size, duration, width, height, animations, triangles, problem })),
-        // Built-in agents have the work's notes and its experience libraries in their session brief.
-        notes: fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8") : "",
+        // The studio's own AI is pointed at the notes by its session brief and reads the file itself: the path, not the text a second time.
+        ...(() => {
+          const notes = fs.existsSync(notesFile) ? fs.readFileSync(notesFile, "utf8") : "";
+          return ctx.scope.agent ? { notesFile: notes ? { path: `projects/${work.slug}/AGENTS.md`, chars: notes.length } : null } : { notes };
+        })(),
         unsavedChanges: status.files.map((file) => `${file.status} ${file.path}`),
         lastVersion: status.head,
         userView: view && { time: view.time, playing: view.playing, selection: view.selection, at: view.at },

@@ -54,7 +54,7 @@ AI 在作品目录中工作，拥有读写文件和运行命令的能力（与�
 - 上一轮之后用户或其他对话改动过的作品文件，提醒 AI 先读最新内容再改，不要覆盖用户的修改。
 - 经验库的变化：用户或其他对话新增、修改、删除的文档（小文档附最新全文）；作品新关联的经验库附上内容，取消关联的说明一句。AI 自己读过、写过的不再重复；经验库改名不算变化。
 
-服务端按对话记录 AI 已经知道的经验库内容（每篇文档的哈希，以及读过全文还是只看过目录），恢复对话后继续沿用。
+服务端按对话记录 AI 已经知道的经验库内容（每篇文档的哈希，以及读过全文、读过哪几节还是只看过目录），恢复对话后继续沿用。`experience_read` 据此对读过、之后没有改动的文档或小节只回一句说明（`again: true` 再给全文）；AI 自己写过的不算读过。压缩之后从头算起。
 
 **上下文用量与压缩**：两个代理都在每轮结束时报告上下文用量（`usage_update`），聊天输入框显示为圆圈。「压缩上下文」发送代理自己的 `/compact` 命令（斜杠命令原样发送，不附加 `[FRAME]`）。压缩之后（手动或自动），服务端认为 AI 只确定记得会话说明里的内容，之后经验库的变化重新完整告诉它。
 
@@ -111,7 +111,7 @@ frame export ab12cd34 --width 1920
 | `frame_guide` | 制作指南（接口与示例），按主题读取；不写主题时是总览和主题目录，按要做的事列出的工具在 `tools` |
 | `works_list` / `work_create` / `work_update` | 列出、新建作品，修改标题、时长、镜头标记、封面画面等 |
 | `work_delete` | 请求删除作品：只做标记，用户在首页作品列表中确认（移到回收站）或保留 |
-| `work_context` | 作品现状：元数据、需求、关联的经验库、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查、最近的导出、是否已发布、和 GitHub 的同步状态（外部 AI 调用时当场和 GitHub 比较，需要先处理的情况写在 `warnings`；内置 AI 的会话说明里已有需求和经验库，这里只给经验库目录） |
+| `work_context` | 作品现状：元数据、需求、关联的经验库、文件、素材、图层、音轨、未保存修改、用户正在看的位置、最近检查、最近的导出、是否已发布、和 GitHub 的同步状态（外部 AI 调用时当场和 GitHub 比较，需要先处理的情况写在 `warnings`；内置 AI 拿到的是需求文件的路径和字数，不是全文：会话说明已经让它自己读这个文件） |
 | `work_check` | 类型、素材引用、真实浏览器加载并渲染几帧和一段音频 |
 | `preview_frames` | 渲染画面：`times` 指定时刻，或 `count`（加 `start`/`end`）均匀取样；4 张以内分开返回，更多拼成一张带时间标注的总览图（`work_check` 的 `frames: true` 也会附上检查时渲染的 5 个时刻） |
 | `preview_audio` | 一段混音或一个音频文件（`src`）的响度、静音段、削波；`beats: true` 给出 BPM、拍号、每个节拍和每小节第一拍（ffmpeg 解码后交给 [Beat This!](https://github.com/CPJKU/beat_this) 模型，`server/beat-this/analyze.py`；一次只跑一个，约为音频长度的十分之一） |
@@ -124,7 +124,7 @@ frame export ab12cd34 --width 1920
 | `layers_get` / `layers_edit` | visual.json 图层（读取时每层一行、省略默认值；`update` 嵌套对象逐项合并） |
 | `audio_get` / `audio_edit` / `audio_place` | audio.json 混音（`audio_get` 可只读某些音轨、某段时间；`update` 只改给出的字段；`audio_place` 返回片段 id，`offset` 从音频中间开始用） |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
-| `experience_read` / `experience_write` | 作品关联的经验库：按需读，随时整理（`write` / `edit` / `delete` / `move`，一次可以改几篇，不会自动保存为版本；作为经验库关联的技能按技能保存，`note` 是它的版本说明）；还没有作品时用 `repo` + `library` |
+| `experience_read` / `experience_write` | 作品关联的经验库：按需读（整篇，或在路径后加 `#小节标题` 只读一节），随时整理（`write` / `edit` / `delete` / `move`，一次可以改几篇，不会自动保存为版本；作为经验库关联的技能按技能保存，`note` 是它的版本说明）；还没有作品时用 `repo` + `library` |
 | `experience_list` | 作品库里的经验库：本作品关联的在前，其余按适合本作品的程度和使用次数（附理由）；`query` 按名称、介绍和文档标题查找，并列出相关的文档；`offset` 翻页 |
 | `experience_link` / `experience_commit` | 关联、取消关联或新建经验库（名称的写法同 `materials_link`）；把经验库未保存的修改保存为版本：每个经验库是自己的分支，`library` 只存一个，不写则有修改的各存一个（可选推送到 GitHub）；`materials_commit` 对素材库做同样的事 |
 | `review_import` | 把复盘资料 `raw/` 里平台后台的导出直接导入成一次数据（不经过 AI 读表格）：抖音创作者中心的作品数据（指标、逐秒留存和同类作品、每小时播放和涨粉分渠道、流量来源和对比 7 日）和全部评论导出，按表格内容识别（`server/review-import.mjs`）；没有发布记录时新建一条；`dryRun` 只说会导入什么 |
