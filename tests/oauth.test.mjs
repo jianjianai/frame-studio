@@ -96,6 +96,13 @@ describe("MCP OAuth", () => {
     expect(tokens).toMatchObject({ token_type: "Bearer", expires_in: 3600, scope: "frame:read frame:write" });
     const listed = await mcpResult(await mcp(tokens.access_token, "tools/list"));
     expect(listed.tools.map((tool) => tool.name)).toContain("files_batch");
+    // External clients get the portable schema subset (Gemini's client fails on the rest).
+    expect(JSON.stringify(listed.tools)).not.toMatch(/"(additionalProperties|prefixItems|propertyNames|oneOf|const|\$ref|\$defs|\$schema)"|"type":"null"/);
+    const region = listed.tools.find((tool) => tool.name === "preview_frames").inputSchema.properties.region;
+    expect(region).toMatchObject({ type: "array", items: { type: "number" }, minItems: 4, maxItems: 4 });
+    // Arguments are still checked against the full schema.
+    const wrong = await mcpResult(await mcp(tokens.access_token, "tools/call", { name: "work_context", arguments: { unknown: 1 } }));
+    expect(wrong.isError).toBe(true);
     // Codes are single use.
     const again = await fetch(base + "/oauth/token", form({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: client.client_id }));
     expect((await again.json()).error).toBe("invalid_grant");

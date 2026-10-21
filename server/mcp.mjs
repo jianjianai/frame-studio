@@ -6,6 +6,7 @@ import { appVersion } from "./config.mjs";
 import { readJson } from "./http.mjs";
 import { problem } from "./util.mjs";
 import { CORE_TOOLS } from "./tools/registry.mjs";
+import { withPortableJsonSchema } from "./mcp-schema.mjs";
 
 export const MCP_INSTRUCTIONS = `FRAME Studio 视频作品工具。作品是用 TypeScript 按绝对时间绘制的动画（Canvas/Pixi/Three/Lottie/gsap/图层合成），加多轨音频；用户在播放器里实时看到保存后的修改。
 接口、作品结构和制作方法见 frame_guide（入门看 overview），工具各自带说明；需要什么自己读，不确定时先查，不要猜。work_context 是作品现状和用户正在看的地方，notes 是作品的需求与约定，experiences 是关联的经验库和作品的 经验.md。
@@ -61,7 +62,9 @@ export function createMcpServer(registry, scope = {}, { confirm } = {}) {
     // browser's: the works of a repository share its browser).
     const shape = tool.publicSchema.shape ?? {};
     const bound = scope.work && (!scope.agent || !tool.readOnly || tool.signedIn);
-    const inputSchema = bound && "work" in shape ? z.looseObject(Object.fromEntries(Object.entries(shape).filter(([key]) => key !== "work"))) : tool.publicSchema;
+    const schema = bound && "work" in shape ? z.looseObject(Object.fromEntries(Object.entries(shape).filter(([key]) => key !== "work"))) : tool.publicSchema;
+    // Built-in agents (Claude Code, Codex) read full JSON Schema; external clients get the portable subset.
+    const inputSchema = scope.agent ? schema : withPortableJsonSchema(schema);
     server.registerTool(
       tool.name,
       {
