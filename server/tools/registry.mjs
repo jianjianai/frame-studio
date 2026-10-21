@@ -165,7 +165,8 @@ export function fieldsAt(schema, path) {
 }
 
 /**
- * Tools used in almost every production task. MCP clients that defer tools behind a
+ * Tools used in many conversations (chosen from production use: most calls and most
+ * conversations, 2026-10). MCP clients that defer tools behind a
  * search (Claude Code) load these up front (`_meta["anthropic/alwaysLoad"]`), saving a
  * search round trip per tool; the rest (file tools, versions, exports, linking libraries
  * and saving experience on request) stay discoverable on demand.
@@ -174,20 +175,18 @@ export const CORE_TOOLS = new Set([
   "frame_guide",
   "search",
   "material_read",
+  "material_write",
   "work_context",
+  "work_read",
   "work_check",
   "work_update",
   "preview_frames",
   "preview_audio",
-  "layers_get",
   "layers_edit",
   "audio_get",
   "audio_edit",
-  "audio_place",
   "asset_import",
   "asset_view",
-  "speech_synthesize",
-  "subtitles_edit",
   "experience_read",
   "experience_write",
   "materials_list",
@@ -212,5 +211,7 @@ export const workArg = z
 /**
  * JSON result. Without a custom text the data is also sent as MCP structuredContent;
  * with one, only the text is sent, because some clients show structuredContent instead of text.
+ * The text is compact JSON: it stays in an AI's context for the rest of a conversation
+ * (Claude Code reads structuredContent, Codex and other clients the text).
  */
-export const asJson = (data, text) => (text === undefined ? { data, text: JSON.stringify(data, null, 2), structured: true } : { data, text });
+export const asJson = (data, text) => (text === undefined ? { data, text: JSON.stringify(data), structured: true } : { data, text });

@@ -487,6 +487,21 @@ describe("tools that save the AI calls", () => {
     expect(mix.body.text).toContain('"gain":0.5');
     expect(mix.body.text).not.toContain('"pan":0');
     expect(mix.body.text).toContain(`films/${work.slug}/hit.wav`);
+    // Part of a long mix: the clips of some tracks or of a stretch of time, and the sources they use.
+    const around = await tool("audio_get", { work: work.id, start: 0.5, end: 1.5 });
+    expect(around.body.text).toContain(`"id":"${clip}"`);
+    expect(around.body.text).toContain("是文档的一部分");
+    expect(around.body.data).toMatchObject({ partial: true });
+    expect(around.body.data.document.clips.every((item) => item.start < 1.5 && item.start + item.duration > 0.5)).toBe(true);
+    const later = await tool("audio_get", { work: work.id, start: 8 });
+    expect(later.body.text).not.toContain(`"id":"${clip}"`);
+    expect(later.body.text).not.toContain(`films/${work.slug}/hit.wav`);
+    const track = mix.body.data.document.clips.find((item) => item.id === clip).track;
+    const name = mix.body.data.document.tracks.find((item) => item.id === track).name;
+    expect((await tool("audio_get", { work: work.id, tracks: [name] })).body.data.document.clips.every((item) => item.track === track)).toBe(true);
+    const unknown = await tool("audio_get", { work: work.id, tracks: ["没有这条"] });
+    expect(unknown.status).toBe(400);
+    expect(unknown.body.error.message).toContain(`${track}「${name}」`);
 
     // work_context: exports, publishing and GitHub (a local repository has none).
     const context = await tool("work_context", { work: work.id });

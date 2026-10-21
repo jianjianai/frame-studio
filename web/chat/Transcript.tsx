@@ -535,6 +535,8 @@ function turnStats(end: TurnEnd, agent?: string) {
           .filter(Boolean)
           .join(" · ")
       : "",
+    end.resumed ? "这一轮开始前 AI 进程重新启动过，对话从记录中恢复" : "",
+    end.changed?.length ? `这一轮开始前切换了：${end.changed.join("、")}` : "",
     cost ? "费用由 Claude 按 API 价格计算，用订阅账号时只作参考" : "",
   ]
     .filter(Boolean)

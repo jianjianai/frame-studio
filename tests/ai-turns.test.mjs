@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createApp } from "../server/app.mjs";
 import { plugins } from "../server/plugins.mjs";
+import { AiManager } from "../server/ai/manager.mjs";
 
 describe("turn figures", () => {
   let app, ai, work;
@@ -70,6 +71,31 @@ describe("turn figures", () => {
     expect((await reset.turn(0.3)).cost.amount).toBeCloseTo(0.2);
     // Codex reports no cost.
     expect(await session("codex", undefined).turn(undefined)).not.toHaveProperty("cost");
+  });
+  it("says what happened before a turn that can make the agent send the conversation again", async () => {
+    const chat = session("claude", 0);
+    const option = (id, name, currentValue, values) => ({ id, name, category: id, type: "select", currentValue, options: values.map((value) => ({ value, name: value })) });
+    chat.state.meta.configOptions = [option("effort", "Effort", "high", ["high", "max"]), option("mode", "Mode", "default", ["default", "plan"])];
+    chat.state.process.connection.setSessionConfigOption = async () => ({});
+    await ai.setConfig(chat.state.meta.id, "effort", "max");
+    await ai.setConfig(chat.state.meta.id, "mode", "plan"); // the permission mode does not change what is sent
+    await ai.setConfig(chat.state.meta.id, "effort", "max"); // nor does picking what is already chosen
+    chat.state.resumed = true; // as connect() marks a conversation the agent picked up from its record
+    expect(await chat.turn(0.1)).toMatchObject({ kind: "turn_end", resumed: true, changed: ["思考强度"] });
+    const next = await chat.turn(0.2);
+    expect(next).not.toHaveProperty("resumed");
+    expect(next).not.toHaveProperty("changed");
+  });
+  it("does not take a conversation's file snapshot for a conversation", () => {
+    fs.writeFileSync(path.join(ai.sessionsDir, "snapshot-only.files.json"), JSON.stringify({ "scene.ts": "10:1" }));
+    const fresh = new AiManager(app.services);
+    try {
+      expect([...fresh.sessions.keys()]).not.toContain(undefined);
+      expect(() => fresh.list()).not.toThrow();
+    } finally {
+      clearInterval(fresh.timer);
+      clearInterval(fresh.pulse);
+    }
   });
   it("leaves out what Claude makes of another vendor's prices", async () => {
     const glm = ai.profiles.save({ kind: "anthropic", name: "GLM", baseUrl: "https://open.bigmodel.cn/api/anthropic", models: ["glm-4.6"], apiKey: "k" });

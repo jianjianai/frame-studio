@@ -388,7 +388,7 @@ describe("resources of the material libraries", () => {
     // The session brief has them too.
     await app.services.resources.overview("local");
     works.writeBrief(other);
-    expect(fs.readFileSync(path.join(other.root, "AGENTS.md"), "utf8")).toContain("- 素材库：本作品还没有引用素材库；作品库里共 1 个。");
+    expect(fs.readFileSync(path.join(other.root, "AGENTS.md"), "utf8")).toContain("- 素材库：本作品还没有引用素材库。");
     // Code that imports a library links it when locked (as materials_use does).
     fs.writeFileSync(path.join(other.dir, "scenes", "use.ts"), 'import { half } from "@materials/测试/code/shapes";\nexport const x: number = half(2);\n');
     await works.commit(other, "用形状");

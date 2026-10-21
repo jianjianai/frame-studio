@@ -343,10 +343,9 @@ export class Experience {
     const { missing } = this.linkedSync(work);
     const current = this.current(work);
     const inbox = this.inbox(work);
-    const entries = (inbox.match(/^##\s+\S/gm) ?? []).length;
     const lines = [
       inbox
-        ? `- 记下但还没整理进经验库的经验：\`projects/${work.slug}/${EXPERIENCE_INBOX}\`（${entries ? `${entries} 条` : `${Math.max(1, Math.round(Buffer.byteLength(inbox) / 1024))} KB`}）。`
+        ? `- 记下但还没整理进经验库的经验：\`projects/${work.slug}/${EXPERIENCE_INBOX}\`。`
         : `- 可以复用、但没有合适经验库的经验记在 \`projects/${work.slug}/${EXPERIENCE_INBOX}\`（还没有）。`,
       current.length
         ? `- 经验库：${current.map((item) => `「${item.library.title}」${item.library.title !== item.library.id ? `（id ${item.library.id}）` : ""}`).join("、")}，需要时用 experience_read 读。`

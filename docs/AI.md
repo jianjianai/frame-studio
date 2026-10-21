@@ -44,7 +44,7 @@ AI 在作品目录中工作，拥有读写文件和运行命令的能力（与�
 **会话说明**：每次开始或恢复对话时，FRAME 重新生成作品根目录的 `AGENTS.md`（Claude Code 通过 `CLAUDE.md` 导入，Codex 直接读取）：
 
 - 基本规则（约 2 KB）：作品文件在哪、只改当前作品、看画面用 FRAME 的工具、`[FRAME]` 的含义；哪些事要用户同意（关联或新建库、保存作品版本、删除作品、GitHub 冲突时不改、已发布的作品不改）；经验记在哪里由 AI 判断。接口、作品结构和制作方法都在 `frame_guide`，工具各自带说明，AI 需要时自己读。
-- 「本作品」：作品文件的位置；需求与约定 `projects/<名称>/AGENTS.md` 有多大（AI 开始工作前自己读）；`经验.md` 有几条；关联了哪些经验库、作品库里还有几个；引用了哪些素材库；有复盘数据时发到了哪些平台、有几次数据。都只是一行指引，内容不放进来。
+- 「本作品」：作品文件的位置；需求与约定 `projects/<名称>/AGENTS.md`（AI 开始工作前自己读）；有没有 `经验.md`；关联了哪些经验库；引用了哪些素材库；有复盘数据时发到了哪些平台。都只是一行指引，内容不放进来，也不写大小、条数这类常变的数字：恢复对话时代理会重新加载说明，同一作品的各个对话用的是同一份说明。
 
 文档大小没有限制，整理和精简由 AI 自己负责；说明本身很短，代理压缩上下文后仍然保留。
 
@@ -122,7 +122,7 @@ frame export ab12cd34 --width 1920
 | `materials_list` / `materials_link` / `materials_use` | 素材库：查看（本作品的在前，其余按适合本作品的程度和使用次数，附理由；`query` 按名称和介绍查找、`offset` 翻页；`library` 列文件，文件多时按路径筛选、翻页并按文件夹汇总其余的）、关联或取消关联（也可新建；名称大小写、空格、标点不同也能认出，不存在时给最接近的几个）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
 | `material_read` / `material_write` | 读取素材库文件；修改素材库（`put` 放入网址、作品文件或文本内容，`edit` 精确修改文本，`move`、`delete`，一次可以多个操作），修改不会自动保存为版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |
 | `layers_get` / `layers_edit` | visual.json 图层（读取时每层一行、省略默认值；`update` 嵌套对象逐项合并） |
-| `audio_get` / `audio_edit` / `audio_place` | audio.json 混音（`update` 只改给出的字段；`audio_place` 返回片段 id，`offset` 从音频中间开始用） |
+| `audio_get` / `audio_edit` / `audio_place` | audio.json 混音（`audio_get` 可只读某些音轨、某段时间；`update` 只改给出的字段；`audio_place` 返回片段 id，`offset` 从音频中间开始用） |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
 | `experience_read` / `experience_write` | 作品关联的经验库：按需读，随时整理（`write` / `edit` / `delete` / `move`，一次可以改几篇，不会自动保存为版本；作为经验库关联的技能按技能保存，`note` 是它的版本说明）；还没有作品时用 `repo` + `library` |
 | `experience_list` | 作品库里的经验库：本作品关联的在前，其余按适合本作品的程度和使用次数（附理由）；`query` 按名称、介绍和文档标题查找，并列出相关的文档；`offset` 翻页 |

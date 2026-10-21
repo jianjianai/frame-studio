@@ -858,14 +858,15 @@ export class ResourceCatalog {
   brief(work) {
     const linked = this.materials.names(work);
     const dir = this.materials.branches.root(work.repo);
-    let total = 0;
+    let any = false;
     try {
-      total = fs.readdirSync(dir).filter((name) => this.materials.branches.exists(dir, name)).length;
+      any = fs.readdirSync(dir).some((name) => this.materials.branches.exists(dir, name));
     } catch {}
-    if (!linked.length && !total) return null;
+    if (!linked.length && !any) return null;
+    // No count of the repository's libraries: the brief stays the same while libraries come and go.
     return {
       lines: [
-        `- 素材库：${linked.length ? `本作品引用了${linked.map((id) => `「${id}」`).join("")}` : "本作品还没有引用素材库"}${total ? `；作品库里共 ${total} 个` : ""}。素材库里的角色、效果、音效和代码：resources_search 查找，materials_list 列出素材库。`,
+        `- 素材库：${linked.length ? `本作品引用了${linked.map((id) => `「${id}」`).join("")}` : "本作品还没有引用素材库"}。素材库里的角色、效果、音效和代码：resources_search 查找，materials_list 列出素材库。`,
       ],
     };
   }

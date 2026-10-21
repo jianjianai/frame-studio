@@ -252,13 +252,13 @@ export class Works {
    * baseline for later per-message changes.
    */
   writeBrief(work) {
-    const size = (file) => fs.statSync(path.join(work.dir, file), { throwIfNoEntry: false })?.size ?? 0;
-    const kb = (bytes) => `${Math.max(1, Math.round(bytes / 1024))} KB`;
-    const notes = size("AGENTS.md");
+    // Only what changes rarely (no sizes or counts): agents load the brief again whenever a
+    // conversation resumes, and the same brief serves every conversation of the work.
+    const notes = fs.existsSync(path.join(work.dir, "AGENTS.md"));
     const lines = [
       `- 作品文件在 \`projects/${work.slug}/\`。`,
       notes
-        ? `- 需求和约定：\`projects/${work.slug}/AGENTS.md\`（${kb(notes)}），开始工作前先读；新确认的需求和这个作品专属的约定写回这里。`
+        ? `- 需求和约定：\`projects/${work.slug}/AGENTS.md\`，开始工作前先读；新确认的需求和这个作品专属的约定写回这里。`
         : `- 需求和约定写在 \`projects/${work.slug}/AGENTS.md\`（还没有）。`,
     ];
     const state = {};

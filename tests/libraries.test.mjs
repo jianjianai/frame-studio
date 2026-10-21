@@ -109,19 +109,19 @@ describe("many libraries", () => {
     expect(experiences.find((item) => item.id === "产品视频")).toMatchObject({ works: 2, files: 2 });
   });
 
-  it("keeps the session brief small: how many libraries there are, the AI looks for the ones that suit", async () => {
+  it("keeps the session brief small: no count of libraries, the AI looks for the ones that suit", async () => {
     const work = await app.services.openWork(ids.c, "local");
     works.writeBrief(work);
     const brief = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
     expect(Buffer.byteLength(brief)).toBeLessThan(4500);
-    expect(brief).toContain("- 素材库：本作品还没有引用素材库；作品库里共 60 个。");
+    expect(brief).toContain("- 素材库：本作品还没有引用素材库。");
     expect(brief).toContain("- 经验库：本作品没有关联。");
     // However many libraries a work links, one line names them.
     await works.update(work, { materials: listedIds(await call("/api/repos/local/materials/libraries")) });
     works.writeBrief(work);
     const crowded = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
     await works.update(work, { materials: [] });
-    expect(crowded).toMatch(/- 素材库：本作品引用了(「[^」]+」){60}；作品库里共 60 个。/);
+    expect(crowded).toMatch(/- 素材库：本作品引用了(「[^」]+」){60}。/);
   });
 
   it("pages and searches the libraries for the AI", async () => {

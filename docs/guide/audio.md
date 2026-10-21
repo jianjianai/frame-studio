@@ -63,7 +63,7 @@
 
 - `update`：按 collection（sources/tracks/clips/buses/master）+ id 只改 `patch` 里的字段，嵌套对象逐项合并，数组（processors、automation、sends）整体替换；`unset` 删除字段（有默认值的字段恢复默认）。改音量、时间、淡入淡出、静音都用它。
 - `put`：在 sources/tracks/clips/buses 中新增一项，或用完整内容**整项替换** id 相同的一项。
-- `audio_get` 每项一行，省略取默认值的字段。
+- `audio_get` 每项一行，省略取默认值的字段；`tracks`、`start` / `end` 只列出这些音轨上、和这段时间重叠的片段（文档的一部分）。
 - `remove`：按 collection + id 删除；`split`：在作品时间 `at` 切开片段；`replace`：`{ "op": "replace", "document": {…} }` 替换整个文档。
 - 只是把一个文件放上音轨时，`audio_place` 更简单。
 

@@ -640,7 +640,7 @@ export class Reviews {
     const platforms = [...new Set(review.posts.map((post) => post.platform))].join("、");
     return {
       lines: [
-        `- 复盘：${review.posts.length ? `已发布到${platforms}，记录了 ${review.snapshots.length} 次数据` : "还没有发布记录"}${documents.length ? `，复盘文档 ${documents.map((doc) => doc.path).join("、")}` : ""}${waiting.length ? `；还没导入的原始文件 ${waiting.map((file) => file.path).join("、")}（review_import）` : ""}。用 review_read 看。`,
+        `- 复盘：${review.posts.length ? `已发布到${platforms}` : "还没有发布记录"}${documents.length ? `，复盘文档 ${documents.map((doc) => doc.path).join("、")}` : ""}${waiting.length ? `；还没导入的原始文件 ${waiting.map((file) => file.path).join("、")}（review_import）` : ""}。用 review_read 看。`,
       ],
       state: {},
     };

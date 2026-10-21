@@ -49,6 +49,9 @@ export interface TurnEnd {
   usage?: Usage | null;
   /** What the turn cost, when the agent tells (Claude). */
   cost?: { amount: number; currency: string };
+  /** Before the turn: the agent process started again and resumed the conversation; options changed (their names). */
+  resumed?: boolean;
+  changed?: string[];
   /** When the turn's message was sent (undefined if it is not in the transcript) and when the turn ended. */
   startedAt?: number;
   at: number;
@@ -234,6 +237,8 @@ export class TranscriptReducer {
           stopReason: entry.stopReason as string,
           usage: entry.usage as Usage | null,
           cost: entry.cost as TurnEnd["cost"],
+          resumed: entry.resumed === true || undefined,
+          changed: Array.isArray(entry.changed) ? (entry.changed as string[]) : undefined,
           startedAt: this.turnStart,
           at: entry.at,
         });

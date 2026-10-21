@@ -556,7 +556,7 @@ describe("reviews in the studio and for the AI", () => {
     expect(detail.segments.map((segment) => segment.label)).toEqual(["开场", "产品特写"]);
     expect((await tool("work_context", { work: work.id })).body.data.reviews.posts[0]).toMatchObject({ id: "p1", platform: "抖音" });
     const opened = await app.services.openWork(work.id, "local");
-    expect(fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8")).toContain("- 复盘：已发布到抖音，记录了 1 次数据");
+    expect(fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8")).toContain("- 复盘：已发布到抖音");
     expect((await tool("search", { work: work.id, pattern: "开场太慢", scope: ["reviews"] })).body.text).toContain(`复盘 ${work.id}/复盘.md`);
 
     // Compared with another work of the same kind at the same age.

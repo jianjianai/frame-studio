@@ -14,7 +14,12 @@ import { lastReceived } from "./heartbeat.mjs";
 import { ClaudeGoalReader, CODEX_STATUSES, goalCommand, goalOutput, hookCap } from "./goal.mjs";
 import { leadingSkill, mentionedSkills } from "../skills.mjs";
 
-const IDLE_MS = 15 * 60 * 1000;
+/**
+ * An idle agent process stops after this. Claude keeps a conversation's prompt cache for an
+ * hour; a process that lives through the user's pauses within that hour keeps its sessions
+ * attached, and a resumed one rewrote the whole cached conversation about half the time.
+ */
+const IDLE_MS = 55 * 60 * 1000;
 const HEARTBEAT_MS = 3000;
 /**
  * How often a running Claude turn's goal checks are read from its conversation file (also
@@ -71,6 +76,13 @@ class AgentProcess {
     // page or a busy server can take longer, and a call given up on still runs, so the next
     // ones queued behind it timed out too. Ten minutes; FRAME's own tools keep their budgets.
     if (this.agent === "claude") env.MCP_TOOL_TIMEOUT ??= String(10 * 60 * 1000);
+    if (this.agent === "claude") {
+      // What the AI learns goes into the experience libraries and the work's notes, which the
+      // user sees, Codex reads and GitHub keeps; Claude's own hidden memory would be a second store.
+      env.CLAUDE_CODE_DISABLE_AUTO_MEMORY = "1";
+      // Commit and PR instructions and a git status snapshot: versions are saved through FRAME, with the user's consent.
+      env.CLAUDE_CODE_DISABLE_GIT_INSTRUCTIONS = "1";
+    }
     if (this.agent === "codex") env.INITIAL_AGENT_MODE = "agent";
     const logDir = path.join(this.manager.dir, "logs");
     fs.mkdirSync(logDir, { recursive: true });
@@ -132,7 +144,8 @@ export class AiManager {
     this.processes = new Map();
     this.sessions = new Map();
     this.permissions = new Map();
-    for (const name of fs.readdirSync(this.sessionsDir).filter((file) => file.endsWith(".json"))) {
+    // <id>.files.json is a session's file snapshot, not a session.
+    for (const name of fs.readdirSync(this.sessionsDir).filter((file) => file.endsWith(".json") && !file.endsWith(".files.json"))) {
       try {
         const meta = JSON.parse(fs.readFileSync(path.join(this.sessionsDir, name), "utf8"));
         this.sessions.set(meta.id, { meta: { ...meta, status: "idle", queue: [] }, process: null, attached: false });
@@ -591,6 +604,9 @@ export class AiManager {
               session.replaying = false;
             }
           }
+          // The agent process started again and picked the conversation up from its record:
+          // the next turn says so next to its cache figures (see runTurn).
+          session.resumed = true;
         } catch (error) {
           // The agent never stored this conversation (no message was sent before a restart) or
           // deleted it: continue in a new agent context instead of leaving the chat unusable.
@@ -684,8 +700,13 @@ export class AiManager {
     const work = await this.services.openWork(session.meta.work, session.meta.repo);
     this.append(session, { kind: "user", id: message.id, text: message.text, attachments: userAttachments(message) });
     let goalPoll = null;
+    // What happened since the last turn that can make the agent send its cached conversation again.
+    let before = {};
     try {
       await this.attach(session, work);
+      before = { ...(session.resumed ? { resumed: true } : {}), ...(session.changed?.size ? { changed: [...session.changed] } : {}) };
+      session.resumed = false;
+      session.changed = null;
       const prompt = this.turnPrompt(session, message, work);
       this.noteGoalCommand(session, message.text);
       // Claude writes each goal check to its conversation file; read them as the turn goes (also
@@ -722,7 +743,7 @@ export class AiManager {
       if (goalPoll) this.readGoal(session);
       if (session.goalCapped) this.applyGoal(session, { type: "capped", count: session.goalCapped });
       const cost = session.turnCost && this.pricedByClaude(session) ? { cost: session.turnCost } : {};
-      this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null, ...cost });
+      this.append(session, { kind: "turn_end", stopReason: response.stopReason, usage: response.usage ?? null, ...cost, ...before });
     } catch (error) {
       // The studio shutting down ended it: said so already (close).
       if (!this.closing) this.append(session, { kind: "error", message: authHint(error, session.process).message });
@@ -773,6 +794,9 @@ export class AiManager {
     const option = session.meta.configOptions?.find((item) => item.id === configId);
     if (option?.options && !option.options.some((item) => item.value === value)) throw problem(400, "没有这个选项");
     const before = { configOptions: session.meta.configOptions, choices: session.meta.choices };
+    // Told with the next turn's cache figures once made: another model or effort can mean the conversation is sent again.
+    const changed = option && option.currentValue !== value ? cacheOption(option) : null;
+    const noteChange = () => changed && (session.changed ??= new Set()).add(changed);
     session.meta.choices = { ...session.meta.choices, [configId]: value };
     if (session.meta.configOptions)
       session.meta.configOptions = session.meta.configOptions.map((item) => (item.id === configId ? { ...item, currentValue: value } : item));
@@ -785,10 +809,12 @@ export class AiManager {
           () => this.publish(session),
           () => {},
         );
+      noteChange();
       return this.publicMeta(session);
     }
     try {
       const result = await session.process.connection.setSessionConfigOption({ sessionId: session.meta.acpSessionId, configId, value });
+      noteChange();
       // The agent's answer is authoritative (another model may offer other efforts).
       if (result?.configOptions) session.meta.configOptions = result.configOptions;
     } catch (error) {
@@ -1378,6 +1404,9 @@ export class AiManager {
   }
 }
 
+/** An option that changes how the agent sends the conversation, by the name the chat gives it (the agents name them in English); null for others. */
+const cacheOption = (option) =>
+  (option.category || option.id) === "model" ? "模型" : ["effort", "thought_level", "reasoning_effort"].some((id) => id === option.category || id === option.id) ? "思考强度" : null;
 const isModel = (options, id) => options.some((option) => option.id === id && (option.category === "model" || option.id === "model"));
 
 /** Attachments as stored in the transcript: image data becomes an image entry (saved to a file by storeImages). */

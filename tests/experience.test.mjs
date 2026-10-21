@@ -230,7 +230,7 @@ describe("experience libraries", () => {
     expect((await tools.call("experience_commit", { message: "已发布也能存" }, scope)).text).toBe("经验库没有未保存的修改");
   });
 
-  it("tells the AI where the work's notes and 经验.md are, without their contents or limits", async () => {
+  it("tells the AI where the work's notes and 经验.md are, without their contents, sizes or limits", async () => {
     const created = (await call("/api/works", { method: "POST", body: { title: "笔记很长" } })).body;
     const work = await app.services.openWork(created.id, "local");
     const notes = "# 笔记很长\n\n## 需求\n\n- 竖屏，45 秒\n\n## 历史\n\n" + "以前试过的做法。".repeat(560); // 13 KB
@@ -238,8 +238,10 @@ describe("experience libraries", () => {
     fs.writeFileSync(path.join(work.dir, "经验.md"), "# 经验\n\n## 竖屏字幕\n\n- 字幕放在 y≈0.78\n\n## 开场\n\n- 前 2 秒给冲突\n");
     app.services.works.writeBrief(work);
     const brief = fs.readFileSync(path.join(work.root, "AGENTS.md"), "utf8");
-    expect(brief).toContain(`- 需求和约定：\`projects/${work.slug}/AGENTS.md\`（13 KB），开始工作前先读`);
-    expect(brief).toContain(`- 记下但还没整理进经验库的经验：\`projects/${work.slug}/经验.md\`（2 条）。`);
+    expect(brief).toContain(`- 需求和约定：\`projects/${work.slug}/AGENTS.md\`，开始工作前先读`);
+    expect(brief).toContain(`- 记下但还没整理进经验库的经验：\`projects/${work.slug}/经验.md\`。`);
+    // No sizes or counts: the brief stays the same while the notes grow.
+    expect(brief).not.toMatch(/KB|\d+ 条/);
     expect(brief).not.toContain("以前试过的做法");
     expect(brief).not.toContain("需要整理");
     expect(Buffer.byteLength(brief)).toBeLessThan(4500);

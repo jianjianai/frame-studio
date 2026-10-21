@@ -16,6 +16,12 @@ import { compositionSize, fitComposition, frameDimensions } from "../../src/engi
 
 const seconds = z.number().finite().nonnegative();
 const SEPARATE_MAX = 8;
+/**
+ * Default width of a frame returned on its own. Every picture stays in the AI's context for the
+ * rest of the conversation (a 960-wide portrait frame is about 2,200 tokens, 720 about 1,200);
+ * `width` and `region` give more when it is wanted.
+ */
+const SEPARATE_WIDTH = 720;
 /** Frames longest side ≤ 3840: the most a close look can enlarge. */
 const FRAME_LIMIT = 3840;
 /**
@@ -148,7 +154,7 @@ export function registerPreviewTools(registry) {
       end: seconds.optional().describe("取样范围：结束秒数"),
       sheet: z.boolean().optional().describe("拼成一张总览图（默认超过 4 张时拼）"),
       columns: z.number().int().min(1).max(8).optional().describe("总览图的列数"),
-      width: z.number().int().min(160).max(1920).multipleOf(2).optional().describe("分开返回时每张的宽度（像素，默认 960），高度按画幅计算"),
+      width: z.number().int().min(160).max(1920).multipleOf(2).optional().describe("分开返回时每张的宽度（像素，默认 720），高度按画幅计算"),
       subtitles: z.boolean().default(true),
       format: z.enum(["jpeg", "png"]).default("jpeg").describe("图片格式：jpeg 小，png 无损"),
       compare: workArg.describe("另一个作品：同样的时刻并排画出两个作品（左边本作品，右边这个）。时刻用 times 或 count 取样（最多 12 个），固定拼成一张图"),
@@ -235,7 +241,7 @@ export function registerPreviewTools(registry) {
         };
       }
       if (times.length > SEPARATE_MAX) throw problem(400, `分开返回最多 ${SEPARATE_MAX} 张；更多时用 sheet: true 拼成一张`);
-      const result = await services.renderer.frames(work, { times, width: zoom ? zoom.width : (width ?? 960), subtitles, scene, crop: zoom?.crop, login, format });
+      const result = await services.renderer.frames(work, { times, width: zoom ? zoom.width : (width ?? SEPARATE_WIDTH), subtitles, scene, crop: zoom?.crop, login, format });
       const images = await Promise.all(
         result.frames.map(async (frame) => ({
           data: format === "png" ? frame.png : await sharp(frame.png).jpeg({ quality: 82 }).toBuffer(),

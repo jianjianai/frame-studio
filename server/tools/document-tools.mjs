@@ -174,25 +174,43 @@ export function registerDocumentTools(registry) {
     name: "audio_get",
     title: "读取混音",
     description:
-      "读取 audio.json 多轨混音（sources 素材、tracks 音轨、clips 片段、buses 总线、master 主输出）及其 sha256，每项一行，取默认值的字段省略。作品还没有音频时为空（audio_edit / audio_place 会自动创建）。",
+      "读取 audio.json 多轨混音（sources 素材、tracks 音轨、clips 片段、buses 总线、master 主输出）及其 sha256，每项一行，取默认值的字段省略。tracks 和 start/end 只列出这些音轨上、和这段时间重叠的片段（sources 只列它们用到的），这时返回的是文档的一部分。作品还没有音频时为空（audio_edit / audio_place 会自动创建）。",
     readOnly: true,
-    input: { work: workArg },
-    async run(_, ctx) {
+    input: {
+      work: workArg,
+      tracks: z.array(z.string()).min(1).optional().describe("只列这些音轨（id 或名称）上的片段"),
+      start: z.number().nonnegative().optional().describe("只列和 start–end 这段时间（秒）重叠的片段"),
+      end: z.number().positive().optional(),
+    },
+    async run({ tracks, start, end }, ctx) {
       const { document, sha256, duration } = readAudio(await ctx.work());
       if (!document) return { data: { document: null, sha256: null, duration }, text: "作品还没有 audio.json（audio_place / audio_edit / speech_synthesize 会自动创建）。" };
+      if (start !== undefined && end !== undefined && end <= start) throw problem(400, "end 要大于 start");
+      const unknown = (tracks ?? []).filter((name) => !document.tracks.some((track) => track.id === name || track.name === name));
+      if (unknown.length) throw problem(400, `没有音轨 ${unknown.join("、")}（有：${document.tracks.map((track) => `${track.id}「${track.name}」`).join("、")}）`);
+      const partial = Boolean(tracks || start !== undefined || end !== undefined);
+      const clips = document.clips.filter(
+        (clip) =>
+          (!tracks || tracks.some((name) => name === clip.track || document.tracks.find((track) => track.id === clip.track)?.name === name)) &&
+          (start === undefined || clip.start + clip.duration > start) &&
+          (end === undefined || clip.start < end),
+      );
+      const used = new Set(clips.map((clip) => clip.source));
       const compact = {
         ...document,
-        sources: document.sources.map((item) => compactSource[item.kind](item)),
+        sources: document.sources.filter((item) => !partial || used.has(item.id)).map((item) => compactSource[item.kind](item)),
         tracks: document.tracks.map(compactChannel),
-        clips: document.clips.map(compactAudioClip),
+        clips: clips.map(compactAudioClip),
         buses: document.buses.map(compactChannel),
       };
       if (compact.linkedVideo) delete compact.linkedVideo;
+      const scope = [tracks ? `音轨 ${tracks.join("、")}` : "", start !== undefined || end !== undefined ? `${start ?? 0}–${end ?? duration} 秒` : ""].filter(Boolean).join("、");
       return {
-        data: { sha256, duration, document: compact },
+        data: { sha256, duration, document: compact, ...(partial ? { partial: true, clips: document.clips.length } : {}) },
         meta: { sha256 },
         text: [
           `audio.json（作品 ${duration} 秒）。每项一行，省略了取默认值的字段（gain 1、pan 0、muted false、offset 0、rate 1、fade 0、processors/sends/automation 为空等，见 frame_guide audio）。`,
+          ...(partial ? [`只列出${scope}的 ${clips.length} 个片段（共 ${document.clips.length} 个）和它们用到的素材，是文档的一部分。`] : []),
           `sources：\n${lines(compact.sources, (item) => item)}`,
           `tracks：\n${lines(compact.tracks, (item) => item)}`,
           `clips：\n${lines(compact.clips, (item) => item)}`,

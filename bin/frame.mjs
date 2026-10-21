@@ -70,7 +70,8 @@ const reachable = () =>
 
 async function callTool(name, args) {
   const result = await request(`/api/tools/${name}`, args);
-  if (result.text) console.log(result.text);
+  // A JSON result is printed indented for people (its text is compact for AIs).
+  if (result.text && !result.structured) console.log(result.text);
   else console.log(JSON.stringify(result.data, null, 2));
   if (result.meta) console.log(JSON.stringify(result.meta));
   if (result.images?.length) {
