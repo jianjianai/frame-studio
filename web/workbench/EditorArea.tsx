@@ -620,7 +620,7 @@ export function EditorArea({ ref, onActiveChange }: { ref?: Ref<EditorHandle>; o
     [work.id, work.repo],
   );
 
-  /** A library file this work locked at an older version: edited and saved here, the work goes on with the new one. */
+  /** A library file this work locked at an older version: edited and saved here, the work goes on with it as it is now. */
   const followMaterial = async (ref: string) => {
     const { files } = await api<{ files: { ref: string; outdated: boolean }[] }>(`${apis.work}/materials`);
     if (files.find((item) => item.ref === ref)?.outdated) await api(`${apis.work}/materials/lock`, { body: { refs: [ref], update: true } });
@@ -1420,7 +1420,7 @@ function SvgToolbar({
     doc.source === "materials" ? `materials/${doc.file}` : doc.file.startsWith("public/") ? `films/${work.slug}/${doc.file.slice("public/".length)}` : null;
   return (
     <div className="editor-toolbar">
-      <span className="faint small-text ellipsis grow" title={doc.source === "materials" ? "保存后成为素材库里这个文件的新版本" : undefined}>
+      <span className="faint small-text ellipsis grow" title={doc.source === "materials" ? "保存的是素材库里的这个文件（在「版本与同步」中保存为素材库的版本）" : undefined}>
         {doc.source === "materials" ? `素材库 · materials/${doc.file}` : doc.file}
         {locked ? " · 已发布，只能查看" : ""}
       </span>

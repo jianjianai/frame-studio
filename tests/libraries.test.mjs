@@ -232,7 +232,8 @@ describe("the recycle bin of libraries", () => {
     expect((await call(`/api/works/local/${work.id}/materials`)).body.libraries.map((item) => item.id)).toEqual(["旧素材"]);
     expect((await call(`${materials}/trash`)).body).toEqual([]);
     expect(await branches("materials")).toEqual(["materials/旧素材"]);
-    expect(await log(path.join(dir, "旧素材"), 3)).toEqual(["恢复素材库：旧素材", "删除素材库：旧素材（移到回收站）", "添加 logo.svg"]);
+    // Its unsaved upload went into the bin with it.
+    expect(await log(path.join(dir, "旧素材"), 3)).toEqual(["恢复素材库：旧素材", "删除素材库：旧素材（移到回收站）", "新建素材库：旧素材"]);
 
     // Deleted again, its id taken meanwhile: it comes back under another one.
     await call(`${materials}/libraries/${enc("旧素材")}`, { method: "DELETE" });
@@ -277,7 +278,7 @@ describe("the recycle bin of libraries", () => {
     expect((await call(`${experience}/trash/${enc("旧经验")}/restore`, { method: "POST" })).body).toEqual({ id: "旧经验", title: "更旧的经验", renamed: false });
     expect((await tool("experience_read", { work: work.id })).body.text).toContain("经验库「更旧的经验」");
     const restored = (await app.services.experience.dir("local")) + "/旧经验";
-    expect(await log(restored, 4)).toEqual(["恢复经验库：更旧的经验", "删除经验库：更旧的经验（移到回收站）", "经验库改名为「更旧的经验」", "新建经验库：旧经验"]);
+    expect(await log(restored, 4)).toEqual(["恢复经验库：更旧的经验", "删除经验库：更旧的经验（移到回收站）", "新建经验库：旧经验"]);
 
     // Purged: its branch goes.
     await call(`${experience}/libraries/${enc("旧经验")}`, { method: "DELETE" });

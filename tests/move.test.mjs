@@ -55,11 +55,12 @@ describe("迁移作品到其他作品库", () => {
 
     // A material library: one file the work locks now, one it locked at an older version.
     await materials.create("local", "品牌");
-    await materials.save("local", ["品牌"], "素材", (dir) => {
+    await materials.change("local", ["品牌"], (dir) => {
       fs.writeFileSync(path.join(dir, "品牌", "README.md"), "# 品牌\n");
       fs.writeFileSync(path.join(dir, "品牌", "logo.svg"), "<svg>logo</svg>");
       fs.writeFileSync(path.join(dir, "品牌", "old.svg"), "<svg>old</svg>");
     });
+    await materials.commit("local", ["品牌"], "素材");
     await experience.create("local", "短片经验");
 
     const work = await works.create({ title: "迁移的作品" });
@@ -71,7 +72,8 @@ describe("迁移作品到其他作品库", () => {
     fs.mkdirSync(path.dirname(lfsFile(local.dir, "a")), { recursive: true });
     fs.writeFileSync(lfsFile(local.dir, "a"), "mp4");
     await works.commit(work, "第二个版本");
-    await materials.save("local", ["品牌"], "更新素材", (dir) => fs.writeFileSync(path.join(dir, "品牌", "old.svg"), "<svg>new</svg>"));
+    await materials.change("local", ["品牌"], (dir) => fs.writeFileSync(path.join(dir, "品牌", "old.svg"), "<svg>new</svg>"));
+    await materials.commit("local", ["品牌"], "更新素材");
     const history = (await git(local.dir, ["rev-list", "--count", `works/${work.id}`])).trim();
 
     // Kept outside the branch: a review, an exported video, the cover, a conversation (Claude keeps its own copy by folder).

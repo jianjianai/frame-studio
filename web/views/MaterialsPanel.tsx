@@ -70,7 +70,7 @@ export function MaterialsPanel() {
       run(async () => {
         for (const file of input.files ?? []) await api(`${base}/libraries/${enc(id)}/upload?path=${enc(file.name)}`, { raw: file });
         setFolded((current) => new Set([...current].filter((item) => item !== id)));
-      }, `已添加到素材库（每次添加都会保存为一个版本）`);
+      }, `已添加到素材库（在「版本与同步」中保存为版本）`);
     input.click();
   };
   const restore = (item: TrashedLibrary) =>

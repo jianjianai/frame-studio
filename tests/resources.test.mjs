@@ -244,6 +244,8 @@ describe("resources of the material libraries", () => {
   const tool = (name, args) => call(`/api/tools/${name}`, { method: "POST", body: args });
   const lib = "/api/repos/local/materials";
   const put = (file, content) => call(`${lib}/libraries/${encodeURIComponent("测试")}/upload?path=${encodeURIComponent(file)}&replace=1`, { method: "POST", raw: content });
+  /** Save the library's changes as a version: only saved versions are locked. */
+  const save = () => call(`${lib}/libraries/${encodeURIComponent("测试")}/commit`, { method: "POST", body: { message: "保存" } });
 
   beforeAll(async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-resources-"));
@@ -254,6 +256,7 @@ describe("resources of the material libraries", () => {
     await put("code/shapes.ts", SHAPES);
     await put("code/sfx.ts", SFX);
     await put("code/solids.ts", SOLIDS);
+    await save();
     work = await works.create({ title: "用资源" });
   });
   afterAll(() => app.close());
@@ -340,6 +343,7 @@ describe("resources of the material libraries", () => {
 
   it("runs library code for previews as the library has it now, not at the work's locked versions", async () => {
     await put("code/paint.ts", 'export const SKY = "#aa0000";\n');
+    await save();
     await app.services.materials.lock(work, ["测试/code/paint.ts"]);
     await put("code/paint.ts", 'export const SKY = "#123456";\nexport const GROUND = "#654321";\n');
     const { pluginContainer } = app.services.preview.vite.environments.client;

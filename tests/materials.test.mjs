@@ -20,6 +20,8 @@ describe("material libraries", () => {
   };
   const tool = (name, args) => call(`/api/tools/${name}`, { method: "POST", body: args });
   const lib = "/api/repos/local/materials";
+  /** Save a library's unsaved changes as a version, as 版本与同步 does. */
+  const save = (id, message = "保存") => call(`${lib}/libraries/${encodeURIComponent(id)}/commit`, { method: "POST", body: { message } });
 
   beforeAll(async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-materials-"));
@@ -29,7 +31,7 @@ describe("material libraries", () => {
   });
   afterAll(() => app.close());
 
-  it("keeps each library on its own branch with every change saved as a version", async () => {
+  it("keeps each library on its own branch, its changes unsaved until saved as a version", async () => {
     expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "品牌" } })).body).toEqual({ id: "品牌", title: "品牌" });
     expect((await call(`${lib}/libraries`, { method: "POST", body: { name: "品牌" } })).status).toBe(409);
     const uploaded = await call(`${lib}/libraries/${encodeURIComponent("品牌")}/upload?path=logo.svg&source=${encodeURIComponent("自己画的")}&license=CC0`, {
@@ -42,6 +44,10 @@ describe("material libraries", () => {
     expect(files[0].blob).toMatch(/^[0-9a-f]{40}$/);
     const readme = fs.readFileSync(path.join(await materials.dir("local"), "品牌", "README.md"), "utf8");
     expect(readme).toContain("- `logo.svg`：来源 自己画的；许可 CC0");
+    expect((await call(`${lib}/libraries/${encodeURIComponent("品牌")}/history`)).body.map((version) => version.message)).toEqual(["新建素材库：品牌"]);
+    expect((await call(`${lib}/libraries/${encodeURIComponent("品牌")}/status`)).body.files.map((file) => file.path).sort()).toEqual(["README.md", "logo.svg"]);
+    expect((await call(`${lib}/versions`)).body).toMatchObject([{ id: "品牌", files: 2 }]);
+    expect((await save("品牌", "添加 logo.svg")).body.commit).toMatch(/^[0-9a-f]{40}$/);
     expect((await call(`${lib}/libraries/${encodeURIComponent("品牌")}/history`)).body.map((version) => version.message)).toEqual(["添加 logo.svg", "新建素材库：品牌"]);
     expect((await call(`${lib}/libraries/${encodeURIComponent("品牌")}/status`)).body.files).toEqual([]);
     expect((await call(`${lib}/libraries`)).body).toMatchObject([{ id: "品牌", title: "品牌", files: 1, size: 13, about: "", works: 0 }]);
@@ -53,7 +59,7 @@ describe("material libraries", () => {
     await call(`${lib}/trash/${encodeURIComponent("通用-背景-1")}`, { method: "DELETE" });
   });
 
-  it("reads and saves a library's text file for an editor tab, each save a version", async () => {
+  it("reads and saves a library's text file for an editor tab, left unsaved", async () => {
     await call(`${lib}/libraries`, { method: "POST", body: { name: "人物" } });
     await call(`${lib}/libraries/${encodeURIComponent("人物")}/upload?path=a.svg`, { method: "POST", raw: "<svg>1</svg>" });
     const text = (path) => call(`${lib}/text?path=${encodeURIComponent(path)}`);
@@ -63,7 +69,8 @@ describe("material libraries", () => {
     expect((await save("<svg>2</svg>", read.hash)).body.hash).not.toBe(read.hash);
     expect((await save("<svg>3</svg>", read.hash)).status).toBe(409);
     expect((await text("人物/a.svg")).body.content).toBe("<svg>2</svg>");
-    expect((await call(`${lib}/libraries/${encodeURIComponent("人物")}/history`)).body.map((version) => version.message)).toEqual(["更新 a.svg", "添加 a.svg", "新建素材库：人物"]);
+    expect((await call(`${lib}/libraries/${encodeURIComponent("人物")}/history`)).body.map((version) => version.message)).toEqual(["新建素材库：人物"]);
+    expect((await call(`${lib}/libraries/${encodeURIComponent("人物")}/status`)).body.files).toEqual([{ path: "a.svg", status: "?" }]);
     expect((await text("../secrets.json")).status).toBe(400);
     expect((await call(`${lib}/text`, { method: "PUT", body: { path: "人物/../../x.svg", content: "x" } })).status).toBe(400);
     await call(`${lib}/libraries/${encodeURIComponent("人物")}`, { method: "DELETE" });
@@ -116,19 +123,28 @@ describe("material libraries", () => {
     expect((await call(`${lib}/file?path=${encodeURIComponent("品牌/logo.svg")}`)).body).toBe("<svg>v2</svg>");
     const status = (await call(`${route}/materials`)).body;
     expect(status.libraries).toEqual([{ id: "品牌", title: "品牌" }]);
-    expect(status.files).toMatchObject([{ ref: "品牌/logo.svg", used: true, outdated: true }]);
-    expect((await call(`${route}/materials/lock`, { method: "POST", body: { update: true } })).body.locked).toEqual(["品牌/logo.svg"]);
+    expect(status.files).toMatchObject([{ ref: "品牌/logo.svg", used: true, outdated: true, unsaved: true }]);
+    // An unsaved change is never locked: updating unlocks the file, and the work uses it as it is now.
+    expect((await call(`${route}/materials/lock`, { method: "POST", body: { update: true } })).body).toMatchObject({ locked: [], unsaved: ["品牌/logo.svg"] });
+    expect(materials.readLocks(work.dir)).toEqual({});
+    expect((await call(asset)).body).toBe("<svg>v2</svg>");
+    await save("品牌", "新标志");
+    expect((await call(`${route}/materials/lock`, { method: "POST", body: { refs: ["品牌/logo.svg"] } })).body.locked).toEqual(["品牌/logo.svg"]);
     expect((await call(asset)).body).toBe("<svg>v2</svg>");
 
-    // References only in code are locked when a version is saved; the lock file is part of it.
+    // References only in code are locked when a version is saved (once the library saved them); the lock file is part of it.
     await call(`${lib}/libraries/${encodeURIComponent("品牌")}/upload?path=bg.svg`, { method: "POST", raw: "<svg>bg</svg>" });
     fs.writeFileSync(path.join(work.dir, "scene.ts"), fs.readFileSync(path.join(work.dir, "scene.ts"), "utf8") + '\n// assetUrl("materials/品牌/bg.svg")\n');
+    await works.commit(work, "用背景（素材库还没保存）");
+    expect(Object.keys(materials.readLocks(work.dir))).toEqual(["品牌/logo.svg"]);
+    await save("品牌", "背景");
     await works.commit(work, "用背景");
     expect(Object.keys(JSON.parse(fs.readFileSync(path.join(work.dir, "materials.lock.json"), "utf8")))).toEqual(["品牌/bg.svg", "品牌/logo.svg"]);
     expect((await works.status(work)).files).toEqual([]);
 
     // Deleting the file from the library leaves the work its locked version.
     await call(`${lib}/libraries/${encodeURIComponent("品牌")}/file?path=bg.svg`, { method: "DELETE" });
+    await save("品牌", "删除背景");
     expect((await call(`/files/local/${work.id}/materials/${encodeURIComponent("品牌")}/bg.svg`)).body).toBe("<svg>bg</svg>");
     const check = await app.services.checks.get?.(`local/${work.id}`);
     expect(check ?? null).toBeNull(); // no check stored yet: nothing to assert here
@@ -158,6 +174,7 @@ describe("material libraries", () => {
     await put("fonts/a.ttf", "font-a");
     await put("fonts/b.ttf", "font-b");
     await put("code/draw.ts", "export const draw = 1;");
+    await save("缓存");
     const work = await works.create({ title: "缓存素材" });
     const route = `/api/works/local/${work.id}`;
     await call(route, { method: "PATCH", body: { materials: ["缓存"] } });
@@ -188,6 +205,7 @@ describe("material libraries", () => {
 
     // A new library version changes nothing until the work locks it.
     await put("logo.svg", "<svg>v2!</svg>");
+    await save("缓存");
     expect((await listed())["materials/缓存/logo.svg"].version).toBe(files["materials/缓存/logo.svg"].version);
     await call(`${route}/materials/lock`, { method: "POST", body: { update: true } });
     files = await listed();
@@ -240,6 +258,14 @@ describe("material libraries", () => {
     expect(linked.body.data.materials).toEqual(["品牌", "音效"]);
     const written = await tool("material_write", { work: work.id, operations: [{ op: "put", library: "音效", path: "notes/readme.txt", content: "说明" }] });
     expect(written.body.data[0]).toMatchObject({ ok: true, ref: "音效/notes/readme.txt", url: "materials/音效/notes/readme.txt" });
+    expect(written.body.text).toContain("未保存的修改：「音效」1 个");
+    // Not locked while unsaved; the AI saves the library's version itself.
+    expect((await tool("materials_use", { work: work.id, files: ["音效/notes/readme.txt"] })).body.data).toMatchObject({ locked: [], unsaved: ["音效/notes/readme.txt"] });
+    const committed = await tool("materials_commit", { work: work.id, library: "音效素材库", message: "说明" });
+    expect(committed.body.data.saved).toMatchObject([{ library: "音效", files: ["音效/notes/readme.txt"], pushed: null }]);
+    // Without library: each library with changes gets a version of its own (品牌 has a note written earlier).
+    expect((await tool("materials_commit", { work: work.id, message: "备注" })).body.data.saved.map((item) => item.library)).toEqual(["品牌"]);
+    expect((await tool("materials_commit", { work: work.id, message: "再存" })).body.text).toBe("素材库没有未保存的修改");
     // Written as listings and layers write it, with materials/ in front.
     const used = await tool("materials_use", { work: work.id, files: ["materials/音效/notes/readme.txt"] });
     expect((await tool("material_read", { work: work.id, paths: ["materials/音效/notes/readme.txt"] })).body.text).toContain("说明");
@@ -319,6 +345,7 @@ describe("material libraries", () => {
     );
     await put("noise.ts", "export const noise = (n: number): number => n + 1;\n");
     await put("spark.svg", "<svg/>");
+    await save("特效");
 
     const work = await works.create({ title: "用代码" });
     await call(`/api/works/local/${work.id}`, { method: "PATCH", body: { materials: ["特效"] } });
@@ -352,6 +379,7 @@ describe("material libraries", () => {
     await works.commit(work, "用粒子");
     expect(Object.keys(materials.readLocks(work.dir))).toEqual(expect.arrayContaining(["特效/noise.ts", "特效/particles.ts", "特效/spark.svg"]));
     await put("noise.ts", "export const noise = (n: number): number => n + 100;\n", true);
+    await save("特效");
     await new Promise((resolve) => setTimeout(resolve, 200));
     const noiseCopy = path.join(work.root, ".materials", "特效", "noise.ts");
     expect(fs.readFileSync(noiseCopy, "utf8")).toContain("n + 1;");
@@ -383,6 +411,7 @@ describe("material libraries", () => {
       const b = await other.services.repos.clone({ url: "file://" + remote });
       await materials.create(a.id, "共享");
       await materials.put(a.id, "共享", "a.txt", { content: "from a" });
+      await materials.commit(a.id, ["共享"], "a");
       await works.push(await materials.scope(a.id, "共享"));
       // The other device asks GitHub and finds the library.
       await other.services.repos.fetch(b.id);
@@ -391,6 +420,7 @@ describe("material libraries", () => {
       // A later version comes in by pulling that library alone.
       await materials.put(a.id, "共享", "b.txt", { content: "from a" });
       await materials.rename(a.id, "共享", "大家的素材");
+      await materials.commit(a.id, ["共享"], "b");
       await works.push(await materials.scope(a.id, "共享"));
       await other.services.works.pull(await other.services.materials.scope(b.id, "共享"));
       expect((await other.services.materials.files(b.id, "共享")).map((file) => file.path)).toEqual(["a.txt", "b.txt"]);

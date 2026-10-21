@@ -213,6 +213,7 @@ describe("tools that save the AI calls", () => {
     // "used": the library code at the version the work locked, not as the library is now.
     await app.services.materials.create("local", "代码库");
     await app.services.materials.put("local", "代码库", "fx.ts", { content: "export const version = 'old';\n" });
+    await app.services.materials.commit("local", ["代码库"], "fx");
     w("uses.ts", 'import { version } from "@materials/代码库/fx";\n');
     await fetch(`${base}/api/works/local/${work.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ materials: ["上传库", "代码库"] }) });
     await app.services.materials.lockReferenced(work);

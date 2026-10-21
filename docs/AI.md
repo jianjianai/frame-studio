@@ -120,13 +120,13 @@ frame export ab12cd34 --width 1920
 | `asset_import` / `asset_view` | 作品自己的素材（public/，列表在 `work_context`）：导入网址、base64（小文件）、本机模式下的服务器文件，`items` 一次导入多个，服务器模式不能从内网地址导入；查看图片、视频素材本身（多个拼成带编号的总览图，视频按 `times` 指定的时间点抽帧；`image: false` 只返回文字信息） |
 | `upload_link` | AI 所在电脑上的文件：返回一次性上传地址（15 分钟、用一次）和写好本机路径的 curl 命令（`from`），AI 在自己的终端上传到作品 public/（默认 public/imports/）、素材库，或作品复盘资料的 raw/（`review: true`），文件不经过对话 |
 | `materials_list` / `materials_link` / `materials_use` | 素材库：查看（本作品的在前，其余按适合本作品的程度和使用次数，附理由；`query` 按名称和介绍查找、`offset` 翻页；`library` 列文件，文件多时按路径筛选、翻页并按文件夹汇总其余的）、关联或取消关联（也可新建；名称大小写、空格、标点不同也能认出，不存在时给最接近的几个）、锁定用到的文件版本并拿到 `materials/<库>/<文件>` 地址 |
-| `material_read` / `material_write` | 读取素材库文件；修改素材库（`put` 放入网址、作品文件或文本内容，`edit` 精确修改文本，`move`、`delete`，一次可以多个操作），每次修改都是素材库的一个版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |
+| `material_read` / `material_write` | 读取素材库文件；修改素材库（`put` 放入网址、作品文件或文本内容，`edit` 精确修改文本，`move`、`delete`，一次可以多个操作），修改不会自动保存为版本。素材库里的代码由作品 `import … from "@materials/<库>/<路径>"` 直接导入 |
 | `layers_get` / `layers_edit` | visual.json 图层（读取时每层一行、省略默认值；`update` 嵌套对象逐项合并） |
 | `audio_get` / `audio_edit` / `audio_place` | audio.json 混音（`update` 只改给出的字段；`audio_place` 返回片段 id，`offset` 从音频中间开始用） |
 | `speech_voices` / `speech_synthesize` | 配音；`lines` + `place` + `subtitles` 一次生成整段旁白、排上音轨并写字幕 |
-| `experience_read` / `experience_write` | 作品关联的经验库：按需读，随时整理（`write` / `edit` / `delete` / `move`，一次可以改几篇，`note` 是版本说明）。对话中每轮结束时自动保存为各经验库的版本，没有对话时立即保存；还没有作品时用 `repo` + `library` |
+| `experience_read` / `experience_write` | 作品关联的经验库：按需读，随时整理（`write` / `edit` / `delete` / `move`，一次可以改几篇，不会自动保存为版本；作为经验库关联的技能按技能保存，`note` 是它的版本说明）；还没有作品时用 `repo` + `library` |
 | `experience_list` | 作品库里的经验库：本作品关联的在前，其余按适合本作品的程度和使用次数（附理由）；`query` 按名称、介绍和文档标题查找，并列出相关的文档；`offset` 翻页 |
-| `experience_link` / `experience_commit` | 关联、取消关联或新建经验库（名称的写法同 `materials_link`）；把用户手动改的经验库修改保存为版本：每个经验库是自己的分支，`library` 只存一个，不写则有修改的各存一个（可选推送到 GitHub） |
+| `experience_link` / `experience_commit` | 关联、取消关联或新建经验库（名称的写法同 `materials_link`）；把经验库未保存的修改保存为版本：每个经验库是自己的分支，`library` 只存一个，不写则有修改的各存一个（可选推送到 GitHub）；`materials_commit` 对素材库做同样的事 |
 | `review_import` | 把复盘资料 `raw/` 里平台后台的导出直接导入成一次数据（不经过 AI 读表格）：抖音创作者中心的作品数据（指标、逐秒留存和同类作品、每小时播放和涨粉分渠道、流量来源和对比 7 日）和全部评论导出，按表格内容识别（`server/review-import.mjs`）；没有发布记录时新建一条；`dryRun` 只说会导入什么 |
 | `review_read` / `review_write` | 作品发布后的复盘（`frame/reviews` 分支，不在作品里，已发布的作品也能写）：发布记录（标题、置顶评论、目标）、按发布天数的数据（和同类并列）、每小时流量（首 24/48/72 小时、几波）、流量来源、留存分析（每秒流失率是同类的几倍、按图层 / 歌词 / 镜头 / 字幕分段的倍数和“按同类走结尾多多少”、关键时刻还剩多少人）、评论、复盘文档和原始文件；`file` 把平台导出的 xlsx / csv 读成文字表格、截图返回图片；`review_write` 的 `post` / `snapshot` / `series` / `moment` / `segments` / `remove_*` 和文档的 `write` / `edit` / `delete` / `move`，每次调用自动保存一个版本 |
 | `reviews_compare` | 各作品的发布记录在同一发布天数（`checkpoint`，不写时取大多数发布记录都到了的最大天数）比较，有每小时数据的播放、涨粉正好算到那一天；附同类值、关键时刻列、中位数和本作品相对中位数的倍数；可按平台、标签、经验库、作品、时间筛选，`curves` 附按视频进度对齐的留存曲线（和同类的），`lyrics` 按歌词对齐同一首歌的作品 |

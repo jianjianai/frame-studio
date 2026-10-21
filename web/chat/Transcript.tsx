@@ -101,6 +101,7 @@ const FRAME_TOOL_NAMES: Record<string, string> = {
   material_read: "阅读素材库文件",
   materials_use: "使用素材",
   material_write: "修改素材库",
+  materials_commit: "保存素材库版本",
   subtitles_edit: "编辑字幕",
   experience_read: "阅读经验库",
   experience_write: "整理经验库",

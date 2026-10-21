@@ -41,6 +41,13 @@ export class RemoteSync {
     for (const key of this.states.keys()) if (key.startsWith(repo + "/")) this.states.delete(key);
   }
 
+  /** A branch about to be renamed (a library going into the bin): no push waits for it, and the one running has ended. */
+  async quiet(scope) {
+    clearTimeout(this.timers.get(this.key(scope)));
+    this.timers.delete(this.key(scope));
+    await this.running.get(this.key(scope))?.catch(() => {});
+  }
+
   /** One push or check at a time per branch. */
   serial(scope, task) {
     const key = this.key(scope);

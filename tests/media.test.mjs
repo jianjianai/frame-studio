@@ -194,6 +194,8 @@ describe("models, Lottie and panoramas in works and libraries", () => {
 
   it("puts models on the timeline and keeps their files locked", async () => {
     const cube = { id: "cube", source: { kind: "model", src: "materials/三维/models/cube.glb", spin: 90, environment: "materials/三维/env/sky.hdr" }, start: 0, duration: 2 };
+    // Only saved library versions are locked.
+    await app.services.materials.commit("local", ["三维"], "三维素材");
     const placed = await tool("layers_edit", { work: work.id, operations: [{ op: "replace", document: { schemaVersion: 1, background: "#000000", clips: [cube] } }] });
     expect(placed.status).toBe(200);
     await app.services.works.commit(app.services.works.describe("local", work.id), "放模型");

@@ -314,9 +314,9 @@ function LibraryRow({ kind, library, selected, onSelect }: { kind: LibraryKind; 
  */
 export function VersionsPanel({ source, library, title, refresh = 0 }: { source: VersionSource; library?: string; title?: string; refresh?: number }) {
   const { work, reload: reloadWork, openDiff, readOnly } = useWorkbench();
-  // Shared branches use the work's version UI; material libraries, the reviews and the skills save every change at once.
+  // Shared branches use the work's version UI; the reviews and the skills save every change at once.
   const shared = source !== "work";
-  const autosaved = source === "materials" || source === "reviews" || source === "skills";
+  const autosaved = source === "reviews" || source === "skills";
   // A published work keeps its history viewable and syncs, but takes no new versions.
   const locked = !shared && readOnly;
   const scope = scopeOf(source, work.repo, work.id, library);
@@ -448,7 +448,7 @@ export function VersionsPanel({ source, library, title, refresh = 0 }: { source:
       <section className="view-section">
         {autosaved ? (
           <p className="view-hint">
-            {name}的每次修改都自动保存为一个版本{library ? "，和其他素材库互不影响" : source === "skills" ? "（AI 的修改在每轮结束时保存）" : ""}。
+            {name}的每次修改都自动保存为一个版本{source === "skills" ? "（AI 的修改在每轮结束时保存）" : ""}。
           </p>
         ) : locked ? (
           <p className="view-hint">作品已发布，不再保存新版本。</p>

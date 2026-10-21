@@ -43,6 +43,8 @@ describe("experience libraries", () => {
 
     const written = await tool("experience_write", { work: work.id, operations: [{ op: "write", path: "开场.md", content: "# 开场\n\n- 前 3 秒给出问题\n" }] });
     expect(written.status).toBe(200);
+    expect(written.body.text).toContain("未保存：经验库「知识类视频」现在有 1 个未保存的修改（开场.md）");
+    expect(written.body.data.unsaved).toEqual(["开场.md"]);
     const edited = await tool("experience_write", { work: work.id, operations: [{ op: "edit", path: "开场.md", edits: [{ oldText: "前 3 秒", newText: "前 2 秒" }] }] });
     expect(edited.body.text).toContain("1 处");
     expect((await tool("experience_read", { work: work.id, path: "开场.md" })).body.text).toContain("前 2 秒给出问题");
@@ -68,18 +70,12 @@ describe("experience libraries", () => {
     expect(linked.documents.map((doc) => doc.path)).toEqual(["README.md", "开场.md"]);
     expect(context.body.data.notes).toContain("# 科普短片");
 
-    // The library's own versions (a branch of its own). Written by the AI outside a conversation,
-    // each change was saved at once (in a conversation: when the turn ends).
+    // The library's own versions (a branch of its own). What the AI wrote stays unsaved until saved.
     const versions = `${lib}/libraries/${encodeURIComponent("知识类视频")}`;
-    expect((await call(`${versions}/status`)).body.files).toEqual([]);
-    expect((await call(`${versions}/history`)).body.map((version) => version.message)).toEqual([
-      "记录经验：归档.md",
-      "记录经验：临时.md、归档.md",
-      "记录经验：开场.md",
-      "记录经验：开场.md",
-      "新建经验库：知识类视频",
-    ]);
-    // Edits made in the studio stay unsaved until saved; paths from the library's folder.
+    expect((await call(`${versions}/status`)).body.files).toEqual([{ path: "开场.md", status: "?" }]);
+    expect((await call(`${versions}/history`)).body.map((version) => version.message)).toEqual(["新建经验库：知识类视频"]);
+    expect((await call(`${versions}/commit`, { method: "POST", body: { message: "记录开场" } })).body.commit).toMatch(/^[0-9a-f]{40}$/);
+    // Edits made in the studio stay unsaved until saved too; paths from the library's folder.
     await call(`${lib}/file`, { method: "PUT", body: { path: "知识类视频/开场.md", content: "# 开场\n\n- 前 2 秒给出问题\n- 第 3 秒给答案\n", expectedHash: undefined } });
     expect((await call(`${versions}/diff?file=${encodeURIComponent("开场.md")}`)).body.diff).toContain("+- 第 3 秒给答案");
     expect((await call(`${versions}/status`)).body.files.map((file) => file.path)).toEqual(["开场.md"]);
@@ -122,9 +118,9 @@ describe("experience libraries", () => {
     expect((await call(`${versions}/rename`, { method: "POST", body: { name: "新名称" } })).body).toEqual({ id: "旧名称", title: "新名称" });
     expect((await call(`${lib}/libraries`)).body.find((item) => item.id === "旧名称")).toMatchObject({ title: "新名称", files: 2 });
     expect((await call(`${lib}/file?path=${encodeURIComponent("旧名称/README.md")}`)).body.content).toMatch(/^# 新名称\n/);
-    // Saved as a version at once; the other unsaved edits stay unsaved.
-    expect((await call(`${versions}/history`)).body[0].message).toBe("经验库改名为「新名称」");
-    expect((await call(`${versions}/status`)).body.files.map((file) => file.path)).toEqual(["做法.md"]);
+    // Unsaved, like the other edits.
+    expect((await call(`${versions}/history`)).body.map((version) => version.message)).toEqual(["新建经验库：旧名称"]);
+    expect((await call(`${versions}/status`)).body.files.map((file) => file.path)).toEqual(["README.md", "做法.md"]);
 
     // The work links the id: nothing of it changes.
     const info = (await call(`/api/works/local/${work.id}`)).body;
@@ -215,19 +211,18 @@ describe("experience libraries", () => {
     expect((await call(`${versions("新经验")}/status`)).body.files).toEqual([]);
     expect((await call(`${versions("新经验")}/history`)).body[0].message).toBe("新经验的做法");
     // The other library's edit was not saved with it. Without `library`, every library with
-    // changes gets a version of its own.
+    // changes gets a version of its own (竖屏短片 has what the AI wrote in the test before).
     expect((await call(`${versions("知识类视频")}/status`)).body.files.map((file) => file.path)).toEqual(["备忘.md"]);
-    expect((await tools.call("experience_commit", { message: "备忘" }, scope)).data.saved.map((item) => item.library)).toEqual(["知识类视频"]);
-    // In a conversation what the AI writes waits for the turn's end, then each library it
-    // changed is a version of those files, its note the message (someone's other edits stay).
+    expect((await tools.call("experience_commit", { message: "备忘" }, scope)).data.saved.map((item) => item.library)).toEqual(["知识类视频", "竖屏短片"]);
+    // In a conversation too, what the AI writes stays unsaved after the turn's end.
     await call(`${lib}/file`, { method: "PUT", body: { path: "知识类视频/用户在改.md", content: "# 用户在改\n" } });
-    const written = await tools.call("experience_write", { library: "知识类视频", note: "开场要先给冲突", operations: [{ op: "write", path: "开场.md", content: "# 开场\n\n先给冲突\n" }] }, scope);
-    expect(written.text).toContain("这一轮结束时自动保存");
+    const written = await tools.call("experience_write", { library: "知识类视频", operations: [{ op: "write", path: "开场.md", content: "# 开场\n\n先给冲突\n" }] }, scope);
+    expect(written.text).toContain("未保存：经验库「知识类视频」现在有 2 个未保存的修改");
+    expect(session.experienceWrites ?? null).toBeNull();
+    await app.services.experience.saveTurn([...(session.experienceWrites?.values() ?? [])]);
+    expect((await call(`${versions("知识类视频")}/history`)).body[0].message).toBe("备忘");
     expect((await call(`${versions("知识类视频")}/status`)).body.files.map((file) => file.path).sort()).toEqual(["开场.md", "用户在改.md"]);
-    await app.services.experience.saveTurn([...session.experienceWrites.values()]);
-    expect((await call(`${versions("知识类视频")}/history`)).body[0].message).toBe("开场要先给冲突");
-    expect((await call(`${versions("知识类视频")}/status`)).body.files.map((file) => file.path)).toEqual(["用户在改.md"]);
-    await call(`${versions("知识类视频")}/discard`, { method: "POST", body: { files: ["用户在改.md"] } });
+    expect((await tools.call("experience_commit", { library: "知识类视频", message: "开场要先给冲突" }, scope)).data.saved).toMatchObject([{ files: ["知识类视频/开场.md", "知识类视频/用户在改.md"] }]);
     expect((await tools.call("experience_commit", { message: "再存" }, scope)).text).toBe("经验库没有未保存的修改");
     // Linking changes the work, so a published work refuses it; saving experience does not.
     await call(`/api/works/local/${work.id}/publish`, { method: "POST" });

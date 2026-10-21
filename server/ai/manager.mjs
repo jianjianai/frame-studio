@@ -731,7 +731,7 @@ export class AiManager {
         clearInterval(goalPoll);
         this.readGoal(session);
       }
-      // What the AI recorded in experience libraries this turn: a version of each.
+      // What the AI recorded in skills linked as experience libraries this turn: a version with its notes.
       const writes = session.experienceWrites;
       session.experienceWrites = null;
       if (writes?.size) await this.services.experience?.saveTurn([...writes.values()]);
@@ -1254,7 +1254,7 @@ export class AiManager {
     // Published: the files are read-only and FRAME's changing tools refuse; talking it over and the experience library are fine.
     if (services.works.published(work))
       lines.push(
-        "这个作品已发布，只能查看：不要修改作品文件（文件是只读的，修改会失败），也不能改变它关联的经验库和素材库。经验库和素材库本身不属于作品，可以照常整理：讨论、复盘，用 experience_write 整理经验并用 experience_commit 保存，用 material_write 整理素材库，需要时用 experience_link / materials_link 的 create 新建库。要改作品，请用户先取消发布或创建副本。",
+        "这个作品已发布，只能查看：不要修改作品文件（文件是只读的，修改会失败），也不能改变它关联的经验库和素材库。经验库和素材库本身不属于作品，可以照常整理：讨论、复盘，用 experience_write 整理经验并用 experience_commit 保存，用 material_write 整理素材库并用 materials_commit 保存，需要时用 experience_link / materials_link 的 create 新建库。要改作品，请用户先取消发布或创建副本。",
       );
     const remote = services.remoteSync?.get(work);
     if (remote?.state === "behind")
@@ -1305,7 +1305,7 @@ export class AiManager {
     this.saveMeta(session);
   }
 
-  /** The AI wrote to an experience library: saved as a version of that library when the turn ends. */
+  /** The AI wrote to an experience library: a skill's documents are saved as a version of the skills when the turn ends. */
   noteExperienceWrite(sessionId, { repo, library, files, note }) {
     const session = this.sessions.get(sessionId);
     if (!session) return;

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { git, gitToFile } from "./git.mjs";
+import { git, gitToFile, parseStatus } from "./git.mjs";
 import { tree, readText, writeText, writeStream, removePath, movePath, uniquePath, contentVersion, TEXT_LIMIT } from "./files.mjs";
 import { readJson, sendFile } from "./http.mjs";
 import { problem, notFound, conflict, confined, inside, sha256, Locks, Lru, writeFileAtomic } from "./util.mjs";
@@ -20,12 +20,15 @@ import { sourceFiles, prefixOf, playedFiles } from "./playback.mjs";
  * Material libraries: media shared by the works of a content repository (images, video,
  * audio, fonts, Lottie…). Each library is a branch `materials/<id>` of its own, checked out
  * at <home>/libraries/<repo>/<id>/ (library-branches.mjs), with a README that keeps the
- * files' sources and licenses. Every change is saved as a version of its library at once.
+ * files' sources and licenses. Changes stay unsaved until someone saves them as a version of
+ * the library (the 版本与同步 view, or the AI's materials_commit).
  *
  * A work references libraries by id (project.ts `materials`) and uses their files
  * directly as `materials/<library>/<path>`. The version of each file it uses is locked in
  * its materials.lock.json ("<library>/<path>" → git blob), so a later change to the file
- * does not change the work until its lock is updated; unlocked files show as they are now.
+ * does not change the work until its lock is updated; unlocked files show as they are now,
+ * unsaved changes included. Only saved versions are locked: a lock must be reachable from
+ * the library's history, here and on other devices.
  *
  * Library code is imported as `@materials/<library>/<path>` (extension optional). The
  * versions a work uses are copied into <work root>/.materials/ (generated, never committed),
@@ -99,7 +102,7 @@ export class Materials {
     this.services = services;
     this.branches = new LibraryBranches(services, { prefix: "materials", base: "libraries", noun: "素材库" });
     this.locks = new Locks();
-    this.heads = new Map(); // repo → Promise<Map path → blob>, dropped when the branch changes
+    this.heads = new Map(); // repo → Promise<Map path → current version>, dropped when a library changes
     this.blobs = new Lru(500); // blob → text of library code (blobs never change)
     this.links = new Lru(20000); // blob → what library code names: imports, materials/… addresses (small; follow() runs per listing and thumbnail)
     this.manifests = new Map(); // root → { ref: blob } of its .materials copies
@@ -128,7 +131,7 @@ export class Materials {
   }
   /**
    * The libraries: id, title, number of files and their size, and the README's introduction
-   * (`about`). Every change is a version, so the listing is kept until a branch moves.
+   * (`about`). Kept until a branch moves or a library changes here.
    */
   async libraries(repo) {
     const dir = await this.dir(repo);
@@ -151,21 +154,46 @@ export class Materials {
     this.listed.set(repo, { commit, libraries });
     return libraries.map((library) => ({ ...library }));
   }
-  /** Run a change in the libraries' folder and save what it did to each library in `ids` as a version of that library. */
-  async save(repo, ids, message, change) {
+  /** Run a change in the libraries' folder (libraries `ids`), left unsaved. */
+  async change(repo, ids, change) {
     const dir = await this.dir(repo);
-    const { works } = this.services;
     return this.locks.run(repo, async () => {
-      const result = await change(dir);
-      const saved = [];
-      for (const id of new Set(ids)) {
-        const scope = await this.scope(repo, id);
-        if (await works.locks.run(`${repo}/${scope.id}`, () => works.commitAll(scope.root, message))) saved.push(scope);
+      try {
+        return await change(dir);
+      } finally {
+        this.heads.delete(repo);
+        this.listed.delete(repo);
+        this.services.events.emit({ type: "materials", repo, paths: ids });
       }
-      this.services.events.emit({ type: "materials", repo, paths: ids });
-      for (const scope of saved) works.saved(scope);
-      return result;
     });
+  }
+  /**
+   * Save the unsaved changes of each library in `ids` (all when null) as a version of its own,
+   * pushed to GitHub with `push`. Returns the libraries that had changes: commit, files, push result.
+   */
+  async commit(repo, ids, message, { push = false } = {}) {
+    const { works } = this.services;
+    const saved = [];
+    for (const id of ids ?? (await this.branches.ids(repo))) {
+      const scope = await this.scope(repo, id);
+      const files = (await works.status(scope)).files.map((file) => `${id}/${file.path}`);
+      const commit = await works.commit(scope, message);
+      if (!commit) continue;
+      let pushed = null;
+      if (push)
+        try {
+          await works.push(scope);
+          pushed = { ok: true };
+        } catch (error) {
+          pushed = { ok: false, error: error.message };
+        }
+      saved.push({ library: id, commit, files, pushed });
+    }
+    if (saved.length) {
+      this.heads.delete(repo);
+      this.services.events.emit({ type: "materials", repo, paths: saved.map((item) => item.library) });
+    }
+    return saved;
   }
   async create(repo, name) {
     const title = String(name || "").trim();
@@ -228,15 +256,39 @@ export class Materials {
     return { purged: result.purged };
   }
 
-  /** The libraries' current files: "<id>/<path>" → blob. */
+  /**
+   * The libraries' current files: "<id>/<path>" → version, unsaved changes included. A saved
+   * file's version is its blob; an unsaved one's (listed in `unsaved`) is the blob of its
+   * content for library code (written to the object store: copies and the resource index
+   * read code by blob), else its size and time of change.
+   */
   async headMap(repo) {
     const blobs = new Map();
+    blobs.unsaved = new Set();
     const dir = await this.dir(repo);
     for (const id of await this.branches.ids(repo)) {
-      const out = await git(path.join(dir, id), ["ls-tree", "-r", "-z", "HEAD"]).catch(() => "");
+      const root = path.join(dir, id);
+      const out = await git(root, ["ls-tree", "-r", "-z", "HEAD"]).catch(() => "");
       for (const line of out.split("\0").filter(Boolean)) {
         const [info, file] = line.split("\t");
         if (file !== ".gitattributes") blobs.set(`${id}/${file}`, info.split(" ")[2]);
+      }
+      const { files } = parseStatus(await git(root, ["status", "--porcelain=v2", "--untracked-files=all"]).catch(() => ""));
+      for (const { path: file } of files) {
+        if (file === ".gitattributes") continue;
+        const ref = `${id}/${file}`;
+        const stat = fs.statSync(path.join(root, file), { throwIfNoEntry: false });
+        if (!stat?.isFile()) {
+          blobs.delete(ref);
+          continue;
+        }
+        blobs.unsaved.add(ref);
+        blobs.set(
+          ref,
+          IMPORTABLE.test(file) && stat.size <= TEXT_LIMIT
+            ? (await git(root, ["hash-object", "-w", "--", file])).trim()
+            : `unsaved-${stat.size}-${Math.round(stat.mtimeMs)}`,
+        );
       }
     }
     return blobs;
@@ -362,14 +414,14 @@ export class Materials {
     if (relative === "README.md") {
       if (typeof from.content !== "string") throw problem(400, "README.md 用 content 写入文本");
       if (!/^#\s+\S/m.test(from.content)) throw problem(400, "README.md 需要一个一级标题（# 素材库名称）：它是素材库显示的名称，标题后的第一段是介绍");
-      const kept = await this.save(repo, [id], "更新 README.md", () => this.readme(dir, id, from.content));
+      const kept = await this.change(repo, [id], () => this.readme(dir, id, from.content));
       return { ref: `${id}/README.md`, url: `materials/${id}/README.md`, path: "README.md", kind: "text", kept };
     }
     let target = `${id}/${relative}`;
     confined(dir, target);
     const existed = fs.existsSync(path.join(dir, target));
     if (existed && !replace) target = uniquePath(dir, target);
-    const saved = await this.save(repo, [id], `${existed && replace ? "更新" : "添加"} ${target.slice(id.length + 1)}`, async () => {
+    const saved = await this.change(repo, [id], async () => {
       if (from.url) {
         if (existed && replace) fs.rmSync(path.join(dir, target));
         target = await importFromUrl({ dir }, from.url, { name: path.basename(target), folder: path.dirname(target), publicOnly: this.services.auth.required });
@@ -392,7 +444,7 @@ export class Materials {
     const target = toLibrary || id;
     this.libraryOf(dir, target);
     if (from === "README.md" || to === "README.md") throw problem(400, "README.md 不能移动或被替换：直接用 put（content）或 edit 修改它");
-    const notes = await this.save(repo, [id, target], target === id ? `移动 ${from} → ${to}` : `移动 ${id}/${from} → ${target}/${to}`, () => {
+    const notes = await this.change(repo, [id, target], () => {
       movePath(dir, `${id}/${from}`, `${target}/${to}`);
       return this.recredit(dir, id, from, to, target);
     });
@@ -402,7 +454,7 @@ export class Materials {
     const dir = await this.dir(repo);
     this.libraryOf(dir, id);
     if (relative === "README.md") throw problem(400, "README.md 是素材库的说明并记录素材的来源与许可，不能删除；要改内容用 put（content）或 edit");
-    return this.save(repo, [id], `删除 ${relative}`, () => {
+    return this.change(repo, [id], () => {
       removePath(dir, `${id}/${relative}`);
       return this.recredit(dir, id, relative);
     });
@@ -612,7 +664,9 @@ export class Materials {
   /**
    * Lock files a work uses at their current version (or move existing locks to it with
    * `update`). Library code (extension optional) brings the files it imports and the
-   * materials it uses. Returns what changed and the references that point at nothing.
+   * materials it uses. Returns what changed, the references that point at nothing and those
+   * the library has unsaved changes to (`unsaved`): never locked, and with `update` unlocked,
+   * so the work uses them as they are now.
    */
   async lock(work, refs, { update = false } = {}) {
     this.services.works.assertEditable(work);
@@ -634,8 +688,18 @@ export class Materials {
     // Updated code brings what it imports now; a first lock keeps the versions locked before.
     for (const ref of (await this.follow(work.repo, update ? {} : locks, code)).refs) wanted.add(ref);
     const locked = [];
+    const unsaved = [];
+    let unlocked = false;
     for (const ref of wanted) {
       if (locks[ref] && !update) continue;
+      if (head.unsaved.has(ref)) {
+        unsaved.push(ref);
+        if (locks[ref]) {
+          delete locks[ref];
+          unlocked = true;
+        }
+        continue;
+      }
       const blob = head.get(ref);
       if (!blob) {
         if (!locks[ref]) missing.push(ref);
@@ -646,15 +710,15 @@ export class Materials {
         locked.push(ref);
       }
     }
-    if (locked.length) await this.saveLocks(work, locks);
-    return { locked, missing };
+    if (locked.length || unlocked) await this.saveLocks(work, locks);
+    return { locked, missing, unsaved };
   }
   /**
    * Lock what the work uses and has not locked yet (after placing a material, before a
    * version), and link the libraries those files are in, as materials_use does.
    */
   async lockReferenced(work) {
-    if (this.services.works.published(work)) return { locked: [], missing: [] };
+    if (this.services.works.published(work)) return { locked: [], missing: [], unsaved: [] };
     const locks = this.readLocks(work.dir);
     const refs = await this.references(work);
     const result = await this.lock(
@@ -673,7 +737,7 @@ export class Materials {
    * locked at that day's version). Addresses built at run time keep every lock they may name.
    */
   async syncLocks(work) {
-    if (this.services.works.published(work)) return { locked: [], missing: [], dropped: [] };
+    if (this.services.works.published(work)) return { locked: [], missing: [], unsaved: [], dropped: [] };
     const result = await this.lockReferenced(work);
     const locks = this.readLocks(work.dir);
     const { refs, prefixes } = await this.usage(work);
@@ -948,6 +1012,7 @@ export class Materials {
   /** After the libraries changed: works running copies of their code follow (where not locked), and so does the library root. */
   async refreshRepo(repo) {
     this.heads.delete(repo);
+    this.listed.delete(repo);
     const library = path.join(this.services.config.dirs.tmp, "library", repo);
     if (fs.existsSync(path.join(library, MATERIALIZED, ".manifest.json"))) await this.refreshCopies({ root: library, repo, dir: null }).catch(() => {});
     const base = path.join(this.services.config.dirs.works, repo);
@@ -971,6 +1036,7 @@ export class Materials {
       locked: locks[ref] ?? null,
       current: head.get(ref) ?? null,
       outdated: Boolean(locks[ref] && head.get(ref) && locks[ref] !== head.get(ref)),
+      unsaved: head.unsaved.has(ref),
     }));
     return { ...(await this.linked(work)), files, unresolved };
   }
@@ -1092,7 +1158,7 @@ export function materialsPlugin(services) {
   router.delete(`${base}/libraries/:lib/file`, ({ params, query }) => materials.delete(params.repo, params.lib, String(query.path || "")));
   /** A file as it is now (browsing a library outside a work). */
   router.get(`${base}/file`, async ({ params, query, req, res }) => sendFile(req, res, await materials.file(params.repo, {}, String(query.path || ""))));
-  // A text file edited in a tab (an SVG in the SVG editor): read with its hash, saved as a new version.
+  // A text file edited in a tab (an SVG in the SVG editor): read with its hash, written back unsaved.
   router.get(`${base}/text`, async ({ params, query }) => {
     const ref = String(query.path || "");
     if (!validRef(ref)) throw problem(400, "Invalid path");
@@ -1110,7 +1176,7 @@ export function materialsPlugin(services) {
     await materials.put(params.repo, id, rest.join("/"), { content });
     return { path: ref, hash: sha256(content) };
   });
-  // Each library's versions (every change is one already): history, restoring and sync like a work's.
+  // Each library's versions: saving, history, restoring and sync like a work's.
   libraryVersionRoutes(services, {
     base,
     branches: materials.branches,
@@ -1288,7 +1354,7 @@ export function materialsPlugin(services) {
     name: "materials_use",
     title: "使用素材",
     description:
-      "给本作品锁定素材库里这些文件当前的版本（之后素材库里的改动不会影响作品），作品还没关联的素材库会自动关联。返回地址和导入写法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新版本。保存版本时只保留作品用到的文件的锁定。",
+      "给本作品锁定素材库里这些文件当前保存的版本（之后素材库里的改动不会影响作品；有未保存修改的文件不锁定，按现在的样子使用，结果里列出），作品还没关联的素材库会自动关联。返回地址和导入写法：素材用地址 materials/<库>/<文件>（图层、音轨里直接写，代码里写 assetUrl(地址)）；素材库里的代码用 import … from \"@materials/<库>/<路径>\"（扩展名可省略），它导入的其他文件和用到的素材一并锁定。update: true 把已锁定的文件更新到最新保存的版本。保存版本时只保留作品用到的文件的锁定。",
     input: { work: workArg, files: z.array(refArg).min(1).max(100), update: z.boolean().default(false) },
     async run({ files: given, update }, ctx) {
       const work = await ctx.work();
@@ -1312,8 +1378,8 @@ export function materialsPlugin(services) {
         SCRIPT.test(ref) || !/\.[^/]+$/.test(ref) ? { ref, import: `@materials/${ref.replace(/\.(m?[jt]sx?)$/, "")}` } : { ref, url: `materials/${ref}` },
       );
       return asJson(
-        { files: usage, locked: result.locked, linked: needed },
-        `${needed.length ? `已为作品关联素材库：${needed.join("、")}。` : ""}可以使用：${usage.map((item) => (item.import ? `import … from "${item.import}"` : item.url)).join("、")}${result.locked.length ? `（已锁定 ${result.locked.length} 个文件的当前版本：${result.locked.join("、")}）` : ""}`,
+        { files: usage, locked: result.locked, unsaved: result.unsaved, linked: needed },
+        `${needed.length ? `已为作品关联素材库：${needed.join("、")}。` : ""}可以使用：${usage.map((item) => (item.import ? `import … from "${item.import}"` : item.url)).join("、")}${result.locked.length ? `（已锁定 ${result.locked.length} 个文件的当前版本：${result.locked.join("、")}）` : ""}${result.unsaved.length ? `\n素材库里有未保存的修改、没有锁定（按现在的样子使用）：${result.unsaved.join("、")}` : ""}`,
       );
     },
   });
@@ -1411,7 +1477,7 @@ export function materialsPlugin(services) {
     published: true, // the libraries are not the work: allowed on a published one
     title: "修改素材库",
     description:
-      "修改素材库，一次可以做多个操作，按顺序执行，每个操作保存为素材库的一个版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。素材库根目录的 README.md 是它的说明：第一个「# 」标题是素材库显示的名称，标题后的第一段是介绍（work_context 和资源目录里显示），用 put 的 content 或 edit 修改；它的「来源与许可」记录各文件的来源，随文件的移动、删除自动更新，不能删除或移动 README.md。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。不针对作品整理素材库时用 repo 指定作品库。",
+      "修改素材库，一次可以做多个操作，按顺序执行。修改不会自动保存为版本：保存用 materials_commit（用户也可以在「版本与同步」中保存）；作品没有锁定的文件按素材库现在的样子使用（包括未保存的修改），锁定只锁已保存的版本。每个操作的 library 不写则用外层的 library，path 是素材库内的路径（例如 logos/brand.svg）。put 放入文件（从网址 url、本作品的文件 work_file（相对 projects/<名称>/）、文本 content 如 SVG/JSON/代码、或 base64 data（≤8 MB），四选一；同名文件替换为新版本）、edit 精确替换文本文件（每个 oldText 必须逐字一致且恰好出现一次，否则设 replaceAll）、move 移动或改名（to_library 移到另一个素材库）、delete 删除。素材库根目录的 README.md 是它的说明：第一个「# 」标题是素材库显示的名称，标题后的第一段是介绍（work_context 和资源目录里显示），用 put 的 content 或 edit 修改；它的「来源与许可」记录各文件的来源，随文件的移动、删除自动更新，不能删除或移动 README.md。锁定了旧版本的作品不受影响，要用新版本时 materials_use update: true。第三方素材在 source / license 中写清来源与许可。失败的逐项说明原因，只需重试失败的。新建素材库用 materials_link 的 create。不针对作品整理素材库时用 repo 指定作品库。",
     destructive: true,
     input: {
       work: workArg,
@@ -1458,16 +1524,48 @@ export function materialsPlugin(services) {
       };
       // One after another: later operations may depend on earlier ones.
       const results = await eachSettled(operations, one, 1);
+      const touched = [...new Set(operations.flatMap((item) => [item.library ?? fallback, item.to_library]).filter(Boolean))];
+      const unsaved = [];
+      for (const id of touched)
+        try {
+          const files = (await works.status(await materials.scope(work.repo, id))).files.length;
+          if (files) unsaved.push(`「${id}」${files} 个`);
+        } catch {}
+      const text = summarize(results, (result, index) =>
+        result.ok
+          ? `✓ ${index + 1}. ${operations[index].op} ${result.value.line}`
+          : `✗ ${index + 1}. ${operations[index].op} ${operations[index].library ?? fallback ?? ""}/${operations[index].path ?? operations[index].from}：${result.error.message}`,
+      );
       return {
         data: results.map((result, index) =>
           result.ok ? { ok: true, op: operations[index].op, ...Object.fromEntries(Object.entries(result.value).filter(([key]) => key !== "line")) } : { ok: false, item: index, error: errorOf(result.error) },
         ),
-        text: summarize(results, (result, index) =>
-          result.ok
-            ? `✓ ${index + 1}. ${operations[index].op} ${result.value.line}`
-            : `✗ ${index + 1}. ${operations[index].op} ${operations[index].library ?? fallback ?? ""}/${operations[index].path ?? operations[index].from}：${result.error.message}`,
-        ),
+        text: unsaved.length ? `${text}\n未保存的修改：${unsaved.join("、")}` : text,
       };
+    },
+  });
+
+  tools.add({
+    name: "materials_commit",
+    published: true, // the library branches, not the work: allowed on a published work
+    title: "保存素材库版本",
+    description:
+      "把素材库里未保存的修改保存为版本（Git 提交）。素材库的修改（material_write、用户在工作台里上传、替换、移动、删除）不会自动保存，保存后才成为版本，作品才能锁定它们。每个素材库是自己的分支：library 指定只保存哪个；不写时有修改的素材库各自保存一个版本（message 相同）。message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
+    input: { work: workArg, repo: repoArg, library: libraryArg.optional(), message: z.string().min(1).max(200), push: z.boolean().default(false) },
+    async run({ library: name, message, push }, ctx) {
+      const place = await ctx.place();
+      let ids = null;
+      if (name?.trim()) {
+        const found = findLibrary(name, await materials.libraries(place.repo));
+        if (!found) materials.libraryOf(await materials.dir(place.repo), name.trim()); // explains which are close
+        ids = [found.id];
+      }
+      const saved = await materials.commit(place.repo, ids, message, { push });
+      const lines = saved.map(
+        (item) =>
+          `「${item.library}」${item.commit.slice(0, 7)}：${item.files.join("、")}${!item.pushed ? "" : item.pushed.ok ? "，已推送到 GitHub" : `。推送到 GitHub 失败：${item.pushed.error}（请用户在「版本与同步」中处理）`}`,
+      );
+      return asJson({ saved }, saved.length ? `已保存素材库版本：\n${lines.join("\n")}` : `${ids ? `素材库「${ids[0]}」` : "素材库"}没有未保存的修改`);
     },
   });
 }

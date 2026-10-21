@@ -216,31 +216,18 @@ export class LibraryBranches {
     return scope;
   }
 
-  /**
-   * Rename: the title only (the README's first "# " line), saved as a version at once. Other
-   * unsaved edits of the library, the README's own included, stay unsaved.
-   */
+  /** Rename: the title only (the README's first "# " line), left unsaved like any other edit of the library. */
   async retitle(repo, id, title) {
     const name = String(title || "").trim();
     if (!name) throw problem(400, `请填写${this.noun}的名称`);
     if (name.length > 80 || /[\r\n]/.test(name)) throw problem(400, "名称最多 80 个字，不能换行");
     const scope = await this.scope(repo, id);
-    const { works } = this.services;
-    const changed = await works.locks.run(`${repo}/${scope.id}`, async () => {
-      const titled = (text) => (/^#\s+.*$/m.test(text) ? text.replace(/^#\s+.*$/m, `# ${name}`) : `# ${name}\n\n${text}`);
+    await this.services.works.locks.run(`${repo}/${scope.id}`, async () => {
       const file = path.join(scope.root, "README.md");
-      const saved = await git(scope.root, ["show", "HEAD:README.md"]).catch(() => "");
-      const next = titled(saved);
-      if (next !== saved) {
-        const blob = (await git(scope.root, ["hash-object", "-w", "--stdin"], { input: next })).trim();
-        await git(scope.root, ["update-index", "--add", "--cacheinfo", `100644,${blob},README.md`]);
-        await git(scope.root, ["commit", "-q", "-m", `${this.noun}改名为「${name}」`]);
-      }
-      const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : saved;
-      if (titled(current) !== current) writeFileAtomic(file, titled(current));
-      return next !== saved;
+      const current = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+      const next = /^#\s+.*$/m.test(current) ? current.replace(/^#\s+.*$/m, `# ${name}`) : `# ${name}\n\n${current}`;
+      if (next !== current) writeFileAtomic(file, next);
     });
-    if (changed) works.saved(scope);
     return { id, title: name };
   }
 
@@ -265,8 +252,10 @@ export class LibraryBranches {
   async trash(repo, id) {
     const { repos, works } = this.services;
     const info = repos.get(repo);
-    if (info.remote) await repos.fetch(repo).catch(() => {});
     const scope = await this.scope(repo, id);
+    // A push of the old branch name after the move would bring it back on GitHub.
+    await this.services.remoteSync?.quiet(scope);
+    if (info.remote) await repos.fetch(repo).catch(() => {});
     const root = await this.dir(repo);
     const title = this.title(root, id);
     const key = await this.locks.run(repo, () =>
@@ -343,39 +332,6 @@ export class LibraryBranches {
       } catch {}
     });
     return { purged: notes.map((note) => note.key), notes };
-  }
-
-  /** Save only these paths of a library (from its root) as a version; null when they hold no change. */
-  async commitPaths(repo, id, paths, message) {
-    const { works, repos } = this.services;
-    const scope = await this.scope(repo, id);
-    const commit = await works.locks.run(`${repo}/${scope.id}`, async () => {
-      const known = [];
-      for (const item of new Set(paths))
-        if (fs.existsSync(path.join(scope.root, item)) || (await git(scope.root, ["ls-files", "--", item])).trim()) known.push(item);
-      if (!known.length) return null;
-      await git(scope.root, ["add", "-A", "--", ...known], { env: repos.env(repos.get(repo)) });
-      if (await gitOk(scope.root, ["diff", "--cached", "--quiet", "--", ...known])) return null;
-      await git(scope.root, ["commit", "-q", "-m", message, "--", ...known]);
-      return (await git(scope.root, ["rev-parse", "HEAD"])).trim();
-    });
-    if (commit) {
-      this.services.events.emit({ type: "work-versions", work: scope.id });
-      works.saved(scope);
-    }
-    return commit;
-  }
-
-  /** Save the unsaved changes of each library (`ids`, or all) as a version of its own, never one version of several. */
-  async commitEach(repo, message, ids = null) {
-    const { works } = this.services;
-    const saved = [];
-    for (const id of ids ?? (await this.ids(repo))) {
-      const scope = await this.scope(repo, id);
-      const commit = await works.commit(scope, message);
-      if (commit) saved.push({ library: id, commit });
-    }
-    return saved;
   }
 }
 

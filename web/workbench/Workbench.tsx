@@ -24,7 +24,7 @@ import {
   BarChart3,
   Puzzle,
 } from "lucide-react";
-import { api, workPath, experiencePath, useServerEvent, sendEvent } from "../lib/api";
+import { api, workPath, experiencePath, materialsPath, useServerEvent, sendEvent } from "../lib/api";
 import { Sash, usePersistent, useToast, Dialog, useConfirm, usePrompt } from "../lib/ui";
 import type { CheckResult, WorkInfo, WorkStatus } from "../lib/types";
 import { navigate } from "../App";
@@ -114,27 +114,38 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
   const readOnlyRef = useRef(false);
   const history = useTimelineHistory(base, reload, () => readOnlyRef.current);
   const reloadStatus = useCallback(() => api<WorkStatus>(base + "/status").then(setStatus, () => {}), [base]);
-  // Unsaved changes of the experience libraries the work links, for the badge on the 版本与同步 icon.
-  const [experienceVersions, setExperienceVersions] = useState<{ id: string; files: number }[]>([]);
-  const reloadExperience = useCallback(
-    () =>
-      api<{ id: string; files: number }[]>(experiencePath(repo) + "/versions").then(
-        (libraries) => setExperienceVersions(libraries),
+  // Unsaved changes of the experience and material libraries the work links, for the badge on the 版本与同步 icon.
+  const [libraryVersions, setLibraryVersions] = useState<{ experience: { id: string; files: number }[]; materials: { id: string; files: number }[] }>({
+    experience: [],
+    materials: [],
+  });
+  const reloadLibraries = useCallback(
+    (kind: "experience" | "materials") =>
+      api<{ id: string; files: number }[]>((kind === "experience" ? experiencePath(repo) : materialsPath(repo)) + "/versions").then(
+        (libraries) => setLibraryVersions((current) => ({ ...current, [kind]: libraries })),
         () => {},
       ),
     [repo],
   );
-  const experienceChanges = experienceVersions.filter((library) => work?.meta?.experiences?.includes(library.id)).reduce((sum, library) => sum + library.files, 0);
-  useEffect(() => void reloadExperience(), [reloadExperience]);
+  const changesOf = (libraries: { id: string; files: number }[], linked?: string[]) =>
+    libraries.filter((library) => linked?.includes(library.id)).reduce((sum, library) => sum + library.files, 0);
+  const libraryChanges = changesOf(libraryVersions.experience, work?.meta?.experiences) + changesOf(libraryVersions.materials, work?.meta?.materials);
+  useEffect(() => {
+    void reloadLibraries("experience");
+    void reloadLibraries("materials");
+  }, [reloadLibraries]);
   useServerEvent(
     (event) => {
       if ((event.type === "experience-files" && event.repo === repo) || (event.type === "work-versions" && String(event.work).startsWith("experience/")))
-        void reloadExperience();
+        void reloadLibraries("experience");
+      if ((event.type === "materials" && event.repo === repo) || (event.type === "work-versions" && String(event.work).startsWith("materials/")))
+        void reloadLibraries("materials");
       // Back after a dropped connection: what changed meanwhile came as events that never arrived.
       if (event.type === "reconnected") {
         void reload();
         void reloadStatus();
-        void reloadExperience();
+        void reloadLibraries("experience");
+        void reloadLibraries("materials");
       }
     },
     [repo, reload, reloadStatus],
@@ -379,7 +390,7 @@ export function Workbench({ repo, id, version }: { repo: string; id: string; ver
           <nav className="wb-activity" aria-label="视图">
             {VIEWS.map((item) => {
               // Like VS Code's Source Control: unsaved changes (the work's and the experience libraries') on 版本与同步.
-              const changes = item.id === "versions" ? (status?.files.length ?? 0) + experienceChanges : 0;
+              const changes = item.id === "versions" ? (status?.files.length ?? 0) + libraryChanges : 0;
               return (
                 <button
                   key={item.id}

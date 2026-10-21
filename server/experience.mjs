@@ -18,8 +18,8 @@ import { frontmatter, validSkillName } from "./skills.mjs";
  * at <home>/experience/<repo>/<id>/ (library-branches.mjs), with its own versions and sync.
  * A work links libraries (`experiences` in project.ts) by id, which never changes; renaming
  * changes the title (the README's first "# " line). The AI reads them before working, keeps
- * them organized, links them and saves their versions on request; people edit them in the
- * studio, and save each library's changes as its own version.
+ * them organized and links them; changes stay unsaved until someone saves them (the 版本与同步
+ * view, or the AI's experience_commit), each library's as a version of its own.
  */
 /** The introduction a new library's README starts with (it says nothing about the library). */
 const templateLead = (title) => `「${title}」类作品的制作经验。关联了这个经验库的作品，AI 开始制作时会先看这里。`;
@@ -157,7 +157,7 @@ export class Experience {
     return { id, title };
   }
 
-  /** A new name (the README's title), saved at once; the id works link stays. */
+  /** A new name (the README's title), unsaved like other edits; the id works link stays. */
   async rename(repoId, id, name) {
     const result = await this.branches.retitle(repoId, id, name);
     this.changed(repoId, [`${id}/README.md`]);
@@ -192,16 +192,14 @@ export class Experience {
   }
 
   /**
-   * At the end of an AI turn: each library the AI wrote to becomes a version of what it wrote
-   * (only those files: someone's other edits stay unsaved). `writes`: [{ repo, library, files, notes }].
+   * At the end of an AI turn: the skills whose documents the AI wrote become a version of the
+   * skills, described by its notes (experience libraries stay unsaved). `writes`: [{ repo, library, files, notes }].
    */
   async saveTurn(writes) {
     for (const { repo, library, files, notes } of writes)
       try {
         const skill = skillOf(library);
-        // A skill's documents: a version of the skills (with whatever else the AI changed in them).
         if (skill) await this.services.skills?.save(repo, versionMessage(notes, [...files].map((file) => `${skill}/${file}`)));
-        else await this.branches.commitPaths(repo, library, [...files], versionMessage(notes, [...files]));
       } catch (error) {
         console.warn(`saving experience ${repo}/${library} after a turn failed:`, error.message);
       }
@@ -729,13 +727,13 @@ export function experiencePlugin(services) {
     published: true, // the library branches, not the work: allowed on a published work
     title: "保存经验库版本",
     description:
-      "把经验库里未保存的修改保存为版本（Git 提交）。experience_write 的修改在每轮结束时已经自动保存；这里保存其余未保存的修改（例如用户在工作台里手动改的）。每个经验库是自己的分支：library 指定只保存哪个；不写时有修改的经验库各自保存一个版本（message 相同）。message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
+      "把经验库里未保存的修改保存为版本（Git 提交）。经验库的修改（experience_write 写的、用户在工作台里改的）不会自动保存，保存后才成为版本。每个经验库是自己的分支：library 指定只保存哪个；不写时有修改的经验库各自保存一个版本（message 相同）。message 用一句话说明改了什么。push: true 时保存后推送到 GitHub（作品库连接了 GitHub 时）。还没有作品时用 repo 指定作品库。",
     input: { work: workArg, repo: repoArg, library: libraryArg, message: z.string().min(1).max(200), push: z.boolean().default(false) },
     async run({ library: name, message, push }, ctx) {
       const work = await ctx.place();
       const ids = name?.trim() ? [(await libraryOf(ctx, name)).library.id] : await experience.branches.ids(work.repo);
       const saved = [];
-      // A skill's documents: their changes are saved with the skills (at once, or at the end of the turn).
+      // A skill's documents: their changes are saved with the skills (at once, or at the end of the turn); this saves what is left.
       const skill = skillOf(ids[0]);
       if (skill) {
         const commit = await services.skills.save(work.repo, message);
@@ -776,14 +774,14 @@ export function experiencePlugin(services) {
     published: true, // writes outside the work: allowed on a published (view-only) work
     title: "整理经验库",
     description:
-      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete、move（改名、移动）。怎么组织由你决定。note 一句话说明这次记了什么：对话中每轮结束时改过的经验库各自自动保存为一个版本，note 就是版本说明；没有对话时写入后立即保存。失败的逐项说明原因，只需重试失败的。还没有作品时用 repo 指定作品库，library 写明经验库。",
+      "修改经验库中的 Markdown 文档（路径相对经验库，例如 README.md、开场.md），一次可以做多个操作，按顺序执行：write（新建或整篇重写）、edit（精确替换：每个 oldText 必须与文档逐字一致且恰好出现一次，否则设 replaceAll）、delete、move（改名、移动）。怎么组织由你决定。修改不会自动保存为版本，保存用 experience_commit（用户也可以在「版本与同步」中保存）；作为经验库关联的技能（skill:<技能名>）例外：它的修改按技能保存，对话中在每轮结束时、没有对话时写入后立即保存，note 是版本说明。失败的逐项说明原因，只需重试失败的。还没有作品时用 repo 指定作品库，library 写明经验库。",
     destructive: true,
     input: {
       work: workArg,
       repo: repoArg,
       library: libraryArg,
       operations: z.array(docOperation).min(1).max(30),
-      note: z.string().max(120).optional().describe("一句话说明这次记了什么，用作版本说明"),
+      note: z.string().max(120).optional().describe("技能（skill:<技能名>）的版本说明：一句话说明这次记了什么"),
     },
     async run({ library: name, operations, note }, ctx) {
       const { work, library } = await libraryOf(ctx, name);
@@ -801,18 +799,23 @@ export function experiencePlugin(services) {
         noteSeen(ctx, library, file, exists ? readText(library.root, file).hash : null, exists ? "content" : undefined);
       }
       let saved = null;
+      let unsaved = null;
       if (changed.length) {
         experience.changed(work.repo, changed.map((file) => `${library.id}/${file}`));
-        // In a conversation the turn's end saves it; called from outside one, now.
-        if (ctx.scope.session && services.ai?.noteExperienceWrite) services.ai.noteExperienceWrite(ctx.scope.session, { repo: work.repo, library: library.id, files: changed, note });
-        else if (library.skill) saved = await services.skills.save(work.repo, versionMessage([note], changed.map((file) => `${library.skill}/${file}`)));
-        else saved = await experience.branches.commitPaths(work.repo, library.id, changed, versionMessage([note], changed));
-        if (library.skill) services.skills.changed(work.repo);
+        // A skill's documents are saved like the skill's other changes: at the turn's end in a conversation, else now.
+        if (library.skill) {
+          if (ctx.scope.session && services.ai?.noteExperienceWrite) services.ai.noteExperienceWrite(ctx.scope.session, { repo: work.repo, library: library.id, files: changed, note });
+          else saved = await services.skills.save(work.repo, versionMessage([note], changed.map((file) => `${library.skill}/${file}`)));
+          services.skills.changed(work.repo);
+        } else unsaved = (await works.status(await experience.scope(work.repo, library.id))).files.map((file) => file.path);
       }
       const { summary } = describeFileOperations(outcome);
       return {
-        data: { library: library.id, applied: outcome.applied, results: outcome.results, ...(saved ? { commit: saved } : {}) },
-        text: [`经验库「${library.title}」：${summary}`, !changed.length ? "" : saved ? `已保存为一个版本 ${saved.slice(0, 7)}。` : "这一轮结束时自动保存为一个版本。"]
+        data: { library: library.id, applied: outcome.applied, results: outcome.results, ...(saved ? { commit: saved } : {}), ...(unsaved ? { unsaved } : {}) },
+        text: [
+          `经验库「${library.title}」：${summary}`,
+          !changed.length ? "" : saved ? `已保存为技能的一个版本 ${saved.slice(0, 7)}。` : library.skill ? "这一轮结束时保存为技能的一个版本。" : `未保存：经验库「${library.id}」现在有 ${unsaved.length} 个未保存的修改（${unsaved.slice(0, 20).join("、")}${unsaved.length > 20 ? " 等" : ""}）。`,
+        ]
           .filter(Boolean)
           .join("\n"),
       };
