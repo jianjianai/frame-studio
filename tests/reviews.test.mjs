@@ -459,7 +459,8 @@ describe("reviews in the studio and for the AI", () => {
     return { status: response.status, body: await response.json().catch(() => null) };
   };
   const tool = (name, args) => call(`/api/tools/${name}`, { method: "POST", body: args });
-  const branches = async () => (await git(app.services.repos.dir("local"), ["branch", "--list", "frame/reviews"])).trim();
+  const branches = async () => (await git(app.services.repos.dir("local"), ["branch", "--list", "--format=%(refname:short)", "reviews/*"])).trim();
+  const versions = (id) => `/api/repos/local/reviews/works/${id}`;
 
   beforeAll(async () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "frame-reviews-"));
@@ -483,9 +484,9 @@ describe("reviews in the studio and for the AI", () => {
     expect((await call(`/api/works/local/${work.id}/publish`, { method: "POST" })).status).toBe(200);
     // Reading, also the versions, creates nothing: there is no reviews branch yet.
     expect((await tool("review_read", { work: work.id })).body.text).toContain("还没有发布记录");
-    expect((await call("/api/repos/local/reviews/history")).body).toEqual([]);
-    expect((await call("/api/repos/local/reviews/status")).body.files).toEqual([]);
-    expect((await call("/api/repos/local/reviews/remote")).body).toEqual({ state: "unknown" });
+    expect((await call(`${versions(work.id)}/history`)).body).toEqual([]);
+    expect((await call(`${versions(work.id)}/status`)).body).toMatchObject({ branch: `reviews/${work.id}`, files: [] });
+    expect((await call(`${versions(work.id)}/remote`)).body).toEqual({ state: "unknown" });
     expect(await branches()).toBe("");
 
     const csv = Buffer.from("﻿日期,播放量,点赞\n2026-10-15,12034,830\n");
@@ -527,14 +528,15 @@ describe("reviews in the studio and for the AI", () => {
     expect(read.body.text).toContain("raw/抖音 近7天.csv（已录入）");
     expect(read.body.text).toContain("复盘.md（夏日海报复盘）");
 
-    // Autosaved: one version per change, on the reviews branch, not the work's.
-    const history = (await call("/api/repos/local/reviews/history")).body.map((version) => version.message);
+    // Autosaved: one version per change, on the work's own review branch, not the work's.
+    const history = (await call(`${versions(work.id)}/history`)).body.map((version) => version.message);
     expect(history).toEqual([
       "复盘「夏日海报」：新增发布记录 p1（抖音）；抖音 发布后 7 天的数据；复盘文档 复盘.md",
       "复盘「夏日海报」：上传原始文件 抖音 近7天.csv",
-      "创建复盘分支",
+      "创建复盘",
     ]);
-    expect((await call("/api/repos/local/reviews/status")).body.files).toEqual([]);
+    expect((await call(`${versions(work.id)}/status`)).body.files).toEqual([]);
+    expect(await branches()).toBe(`reviews/${work.id}`);
 
     // The editor saves documents the same way.
     const doc = await call(`/api/repos/local/reviews/file?path=${encodeURIComponent(`${work.id}/复盘.md`)}`);
@@ -546,7 +548,7 @@ describe("reviews in the studio and for the AI", () => {
         })
       ).status,
     ).toBe(200);
-    expect((await call("/api/repos/local/reviews/history")).body[0].message).toBe("复盘「夏日海报」：编辑 复盘.md");
+    expect((await call(`${versions(work.id)}/history`)).body[0].message).toBe("复盘「夏日海报」：编辑 复盘.md");
     expect((await call("/api/repos/local/reviews/file", { method: "PUT", body: { path: `${work.id}/review.json`, content: "{}" } })).status).toBe(400);
 
     // The studio's view of it, and the AI's other places.
@@ -559,23 +561,64 @@ describe("reviews in the studio and for the AI", () => {
     expect(fs.readFileSync(path.join(opened.root, "AGENTS.md"), "utf8")).toContain("- 复盘：已发布到抖音");
     expect((await tool("search", { work: work.id, pattern: "开场太慢", scope: ["reviews"] })).body.text).toContain(`复盘 ${work.id}/复盘.md`);
 
-    // Compared with another work of the same kind at the same age.
+    // Works are compared only with works of the same type, set by hand or by the AI (never guessed).
+    const untyped = await tool("reviews_compare", { work: work.id });
+    expect(untyped.status).toBe(400);
+    expect(untyped.body.error.message).toContain("这个作品还没有设置复盘类型，不和别的作品比较");
+    expect((await tool("review_write", { work: work.id, operations: [{ op: "types", types: ["海报/夏 季/多"] }] })).body.text).toContain("写成 大类 或 大类/小类");
+    expect((await tool("review_write", { work: work.id, operations: [{ op: "types", types: [" 海报 / 夏季 ", "海报/夏季"] }] })).body.text).toContain("类型：海报/夏季");
+    expect((await tool("review_read", { work: work.id })).body.text).toContain("复盘类型：海报/夏季");
     const other = (await call("/api/works", { method: "POST", body: { title: "秋日海报", duration: 20 } })).body;
     await call(`/api/works/local/${other.id}`, { method: "PATCH", body: { tags: ["促销"] } });
     await tool("review_write", {
       work: other.id,
       operations: [
+        { op: "types", types: ["海报/秋季"] },
         { op: "post", platform: "抖音", postedAt: "2026-09-01T20:00:00+08:00" },
         { op: "snapshot", post: "p1", at: "2026-09-08T12:00:00+08:00", metrics: { views: 6000, likes: 300 } },
         { op: "snapshot", post: "p1", at: "2026-10-01T12:00:00+08:00", metrics: { views: 9000, likes: 420 } },
+        { op: "write", path: "复盘.md", content: "# 秋日海报复盘\n\n开场太慢，和夏天一样。\n" },
       ],
     });
-    const compared = await tool("reviews_compare", { work: work.id, tags: ["促销"], columns: ["views", "likeRate"] });
+    const lesson = (await call("/api/works", { method: "POST", body: { title: "知识讲解" } })).body;
+    await tool("review_write", {
+      work: lesson.id,
+      operations: [
+        { op: "types", types: ["知识类"] },
+        { op: "post", platform: "抖音", postedAt: "2026-09-02T20:00:00+08:00" },
+        { op: "snapshot", post: "p1", at: "2026-09-09T12:00:00+08:00", metrics: { views: 50000, likes: 900 } },
+        { op: "write", path: "复盘.md", content: "# 知识讲解复盘\n\n开场太慢。\n" },
+      ],
+    });
+    // Each work's review is a branch of its own.
+    expect((await branches()).split("\n").sort()).toEqual([`reviews/${work.id}`, `reviews/${other.id}`, `reviews/${lesson.id}`].sort());
+    // Its own type: the subcategory alone.
+    const alone = await tool("reviews_compare", { work: work.id });
+    expect(alone.body.text).toContain("复盘类型「海报/夏季」的作品");
+    expect(alone.body.data.rows.map((row) => row.work)).toEqual([work.id]);
+    // The category takes in its subcategories, and never another type.
+    const compared = await tool("reviews_compare", { work: work.id, type: "海报", tags: ["促销"], columns: ["views", "likeRate"] });
+    expect(compared.body.data.rows.map((row) => row.work).sort()).toEqual([work.id, other.id].sort());
     expect(compared.body.text).toContain(`| ▶ 夏日海报 ${work.id} | 抖音 | 2026-10-08 20:00 | 12,034 | 6.9% |`);
     expect(compared.body.text).toContain(`| 秋日海报 ${other.id} | 抖音 | 2026-09-01 20:00 | 6,000 | 5% |`);
     expect(compared.body.text).toContain("本作品（抖音）：播放 12,034，是中位数的 1.33 倍");
-    expect((await tool("reviews_compare", { work: work.id, tags: ["别的"] })).body.text).toContain("没有符合条件的发布记录");
-    const latestRows = (await call("/api/reviews/compare?checkpoint=latest&curves=1")).body.rows;
+    expect((await tool("reviews_compare", { work: work.id, type: "海报", tags: ["别的"] })).body.text).toContain("复盘类型「海报」里没有符合条件的发布记录");
+    expect((await tool("reviews_compare", { type: "海报/秋季" })).body.data.rows.map((row) => row.work)).toEqual([other.id]);
+    expect((await tool("reviews_compare", {})).body.error.message).toMatch(/用 type 写比较哪个类型的作品（已有的类型：海报（2 个作品）、海报\/秋季（1 个作品）、海报\/夏季（1 个作品）、知识类（1 个作品））/);
+    // Searching reviews: the work's own and those of works sharing a type with it.
+    await tool("review_write", { work: work.id, operations: [{ op: "types", types: ["海报"] }] });
+    const found = (await tool("search", { work: work.id, pattern: "开场太慢", scope: ["reviews"] })).body.text;
+    expect(found).toContain(`复盘 ${other.id}/复盘.md`);
+    expect(found).not.toContain(`复盘 ${lesson.id}/复盘.md`);
+    expect((await call("/api/repos/local/reviews/types")).body).toEqual([
+      { type: "海报", works: 2 },
+      { type: "海报/秋季", works: 1 },
+      { type: "知识类", works: 1 },
+    ]);
+    // The home page: one type at a time; without one, only the types.
+    expect((await call("/api/reviews/compare")).body).toMatchObject({ type: null, rows: [] });
+    const latestRows = (await call(`/api/reviews/compare?checkpoint=latest&curves=1&type=${encodeURIComponent("海报")}`)).body.rows;
+    expect(latestRows.some((row) => row.work === lesson.id)).toBe(false);
     expect(latestRows.find((row) => row.work === other.id).metrics.views).toBe(9000);
     expect(latestRows.find((row) => row.work === work.id).curve).toHaveLength(51);
   });
@@ -699,9 +742,10 @@ describe("reviews in the studio and for the AI", () => {
     expect((await tool("review_read", { work: work.id })).body.text).toContain("注意：作品在这次发布之后改过");
 
     // At day 1 the hourly data gives exact views, though the only snapshot is at 29 hours.
+    await tool("review_write", { work: work.id, operations: [{ op: "types", types: ["生日视频"] }] });
     const day1 = await tool("reviews_compare", { work: work.id, checkpoint: "1d", works: [work.id] });
     expect(day1.body.text).toContain("| 2,970* |");
-    const day2 = (await call("/api/reviews/compare?checkpoint=2d")).body;
+    const day2 = (await call(`/api/reviews/compare?checkpoint=2d&type=${encodeURIComponent("生日视频")}`)).body;
     expect(day2.columns).toContain("moment:反转");
   });
 
@@ -739,6 +783,8 @@ describe("reviews in the studio and for the AI", () => {
     await call(`/api/works/local/${work.id}`, { method: "DELETE" });
     expect((await call(`/api/trash/local/${work.id}`, { method: "DELETE" })).status).toBe(200);
     expect(fs.existsSync(dir)).toBe(false);
-    expect((await call("/api/repos/local/reviews/history")).body[0].message).toBe("删除复盘：临时作品（作品已永久删除）");
+    // Its review branch went with it.
+    expect(await branches()).not.toContain(`reviews/${work.id}`);
+    expect((await call(`${versions(work.id)}/history`)).body).toEqual([]);
   });
 });

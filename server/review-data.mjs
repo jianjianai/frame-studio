@@ -2,7 +2,7 @@ import { z } from "zod";
 import { problem } from "./util.mjs";
 
 /**
- * The review data of a work (review.json in its folder on the frame/reviews branch): where
+ * The review data of a work (review.json on its reviews/<work id> branch): where
  * the video was posted, the platforms' numbers over time, the audience retention curve next
  * to the platform's curve for similar videos ("同类作品"), hourly series, traffic sources and
  * the moments and segments the analysis looks at. Numbers are totals up to the moment of a
@@ -114,7 +114,26 @@ export const isBenchmarked = (key) => BENCHMARKED.has(key) || key.startsWith("mo
 
 // ---- the file -----------------------------------------------------------------------
 
-export const emptyReview = (work, title = "") => ({ work, title, posts: [], snapshots: [], series: [], moments: [], segments: [] });
+export const emptyReview = (work, title = "") => ({ work, title, types: [], posts: [], snapshots: [], series: [], moments: [], segments: [] });
+
+// ---- types ----------------------------------------------------------------------------
+
+/**
+ * What kind of work a review is about, set by hand or by the AI (never guessed): a category
+ * ("剧情音乐短片") or a category and a subcategory ("剧情音乐短片/s0rrow"). A work may have
+ * several. Only works of the same type are compared; a category takes in its subcategories.
+ */
+export function normalizeType(value) {
+  const parts = String(value ?? "")
+    .split("/")
+    .map((part) => part.trim().replace(/\s+/g, " "));
+  if (parts.length > 2 || parts.some((part) => !part || part.length > 40)) return null;
+  return parts.join("/");
+}
+/** Whether a work with these types belongs to `type` (the type itself, or a subcategory of it). */
+export const ofType = (types, type) => (types ?? []).some((item) => item === type || item.startsWith(type + "/"));
+/** Whether two works share a type: the same one, or one's category holds the other's subcategory. */
+export const shareType = (a, b) => (a ?? []).some((type) => ofType(b, type)) || (b ?? []).some((type) => ofType(a, type));
 
 const isTime = (value) => typeof value === "string" && !Number.isNaN(Date.parse(value));
 const finite = (value) => typeof value === "number" && Number.isFinite(value);
@@ -135,6 +154,10 @@ export function parseReview(source, work) {
     return emptyReview(work);
   }
   const review = emptyReview(work, text(value?.title, 300));
+  for (const type of Array.isArray(value?.types) ? value.types : []) {
+    const clean = typeof type === "string" ? normalizeType(type) : null;
+    if (clean && !review.types.includes(clean)) review.types.push(clean);
+  }
   for (const post of Array.isArray(value?.posts) ? value.posts : [])
     if (post && typeof post.id === "string" && typeof post.platform === "string" && isTime(post.postedAt) && !review.posts.some((item) => item.id === post.id))
       review.posts.push(cleanPost(post));
@@ -325,7 +348,11 @@ export const segmentsOperation = z.strictObject({
 export const removePostOperation = z.strictObject({ op: z.literal("remove_post"), id: postId });
 export const removeSnapshotOperation = z.strictObject({ op: z.literal("remove_snapshot"), post: postId, at: time });
 export const removeMomentOperation = z.strictObject({ op: z.literal("remove_moment"), label: z.string().min(1).max(20) });
-export const DATA_OPERATIONS = new Set(["post", "snapshot", "series", "moment", "segments", "remove_post", "remove_snapshot", "remove_moment"]);
+export const typesOperation = z.strictObject({
+  op: z.literal("types"),
+  types: z.array(z.string().max(81)).max(10).describe("作品的复盘类型，整体替换：大类，或 大类/小类（例如 剧情音乐短片/s0rrow），可以几个；[] 清除"),
+});
+export const DATA_OPERATIONS = new Set(["post", "snapshot", "series", "moment", "segments", "remove_post", "remove_snapshot", "remove_moment", "types"]);
 
 /**
  * Apply data operations in order. Like the file operations: what can be done is done, each
@@ -373,6 +400,16 @@ function applyOne(review, item, defaults, notes = []) {
   const postOf = (id) =>
     review.posts.find((post) => post.id === id) ??
     fail(`没有发布记录 ${id}（现有：${review.posts.map((post) => `${post.id} ${post.platform}`).join("、") || "无"}）`);
+  if (item.op === "types") {
+    const types = [];
+    for (const value of item.types) {
+      const type = normalizeType(value);
+      if (!type) fail(`类型「${value}」写成 大类 或 大类/小类，每一级不超过 40 个字`);
+      if (!types.includes(type)) types.push(type);
+    }
+    review.types = types;
+    return types.length ? `类型：${types.join("、")}` : "清除类型";
+  }
   if (item.op === "post") {
     const { op: _op, id, ...fields } = item;
     if (fields.export) {
@@ -667,6 +704,7 @@ export function compareRows(entries, { checkpoint = "7d", platform, since, until
         ...(work.missing ? { missing: true } : {}),
         post: post.id,
         platform: post.platform,
+        types: review.types,
         postTitle: post.title ?? "",
         url: post.url ?? "",
         postedAt: post.postedAt,

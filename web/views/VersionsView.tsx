@@ -26,7 +26,7 @@ import { useWorkbench, type VersionSource } from "../workbench/store";
 import { RepoDialog } from "../components/RepoDialog";
 import { MoveWorkDialog } from "../components/MoveWorkDialog";
 import { RemoteBar, useRemoteState } from "../workbench/RemoteBar";
-import { reviewsPath } from "../lib/reviews";
+import { reviewPath } from "../lib/reviews";
 import { ViewHeader } from "./ViewHeader";
 
 const statusLabel: Record<string, string> = { M: "修改", A: "新增", D: "删除", "?": "新增", R: "重命名", U: "冲突", C: "复制", T: "类型改变" };
@@ -49,18 +49,18 @@ interface LibraryVersions {
   behind: number;
 }
 
-/** The API base of what has versions: the work, one library (`library`), or the repository's reviews or skills. */
+/** The API base of what has versions: the work, one library (`library`), the work's review, or the repository's skills. */
 export const versionsBase = (source: VersionSource, repo: string, id: string, library?: string) =>
   isLibraryKind(source)
     ? `${source === "experience" ? experiencePath(repo) : materialsPath(repo)}${library ? `/libraries/${encodeURIComponent(library)}` : ""}`
     : source === "reviews"
-      ? reviewsPath(repo)
+      ? reviewPath(repo, id)
       : source === "skills"
         ? skillsPath(repo)
         : workPath(repo, id);
-/** The server's name of it in events: the work's id, a library's branch, the reviews' or skills' scope. */
+/** The server's name of it in events: the work's id, a library's branch, the work's review scope or the skills'. */
 export const scopeOf = (source: VersionSource, repo: string, id: string, library?: string) =>
-  source === "work" ? id : isLibraryKind(source) ? `${source}/${library}` : `${source}-${repo}`;
+  source === "work" ? id : isLibraryKind(source) ? `${source}/${library}` : source === "reviews" ? `reviews-${id}` : `${source}-${repo}`;
 
 /** The libraries of each kind this work links, by id. */
 const linkedIds = (work: WorkInfo, kind: LibraryKind) => (kind === "experience" ? work.meta?.experiences : work.meta?.materials) ?? [];

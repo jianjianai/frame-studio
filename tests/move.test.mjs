@@ -77,9 +77,8 @@ describe("迁移作品到其他作品库", () => {
     const history = (await git(local.dir, ["rev-list", "--count", `works/${work.id}`])).trim();
 
     // Kept outside the branch: a review, an exported video, the cover, a conversation (Claude keeps its own copy by folder).
-    const reviewDir = await reviews.dir("local");
-    fs.mkdirSync(path.join(reviewDir, work.id));
-    fs.writeFileSync(path.join(reviewDir, work.id, "review.json"), formatReview({ ...emptyReview(work.id), title: "迁移的作品" }));
+    const reviewDir = await reviews.dir("local", work.id);
+    fs.writeFileSync(path.join(reviewDir, "review.json"), formatReview({ ...emptyReview(work.id), title: "迁移的作品" }));
     await git(reviewDir, ["add", "-A"]);
     await git(reviewDir, ["commit", "-q", "-m", "复盘"]);
     const video = path.join(services.config.dirs.exports, "local", work.id, "成片.mp4");

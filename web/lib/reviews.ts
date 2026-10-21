@@ -64,6 +64,8 @@ export interface Segment {
 export interface Review {
   work: string;
   title: string;
+  /** What kind of work it is: "大类" or "大类/小类", set by hand or by the AI; only works of a type are compared. */
+  types: string[];
   posts: Post[];
   snapshots: Snapshot[];
   series: Series[];
@@ -188,6 +190,7 @@ export interface CompareRow {
   duration: number;
   shape: string;
   tags: string[];
+  types: string[];
   experiences: string[];
   moments: Moment[];
   /** Days after posting of the numbers shown (null: none near the checkpoint). */
@@ -206,6 +209,13 @@ export interface CompareRow {
 }
 
 export const reviewsPath = (repo: string) => `/api/repos/${encodeURIComponent(repo)}/reviews`;
+/** One work's review (its data, files and versions: each work's review is a branch of its own). */
+export const reviewPath = (repo: string, work: string) => `${reviewsPath(repo)}/works/${encodeURIComponent(work)}`;
+/** A type and how many works have it (a category counts its subcategories' works). */
+export interface ReviewType {
+  type: string;
+  works: number;
+}
 
 export const CHECKPOINT_LABELS: Record<string, string> = {
   "1d": "第 1 天",

@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { shareType } from "../review-data.mjs";
 import path from "node:path";
 import { z } from "zod";
 import { workArg, repoArg } from "./registry.mjs";
@@ -96,9 +97,16 @@ export function registerSearchTools(registry) {
       if (scope === "materials" && services.materials) await folder(scope, await services.materials.dir(work.repo), (file) => `materials/${file}`);
       if (scope === "experience" && services.experience) await folder(scope, await services.experience.dir(work.repo), (file) => `经验库 ${file}`);
       if (scope === "reviews" && services.reviews) {
-        // Every work's review of the repository (folders are work ids); none yet, nothing to search.
-        const dir = await services.reviews.existing(work.repo);
-        if (dir) await folder(scope, dir, (file) => `复盘 ${file}`);
+        // The work's own review and those of works sharing a type with it (other types are not reviewed
+        // together); without a work, every review of the repository.
+        const reviews = await services.reviews.all(work.repo);
+        const typesOf = ({ id, dir }) => services.reviews.readFrom(dir, id).review.types;
+        const own = reviews.find((item) => item.id === work.id);
+        const mine = work.id ? (own ? typesOf(own) : []) : null;
+        for (const { id, dir } of reviews) {
+          if (mine && id !== work.id && !shareType(mine, typesOf({ id, dir }))) continue;
+          await folder(scope, dir, (file) => `复盘 ${id}/${file}`);
+        }
       }
       if (scope === "guide") await folder(scope, path.join(appRoot, "docs", "guide"), (file) => `frame_guide ${file.replace(/\.md$/, "")}`);
       if (scope === "engine") await folder(scope, path.join(appRoot, "src", "engine"), (file) => `src/engine/${file}`);
@@ -139,7 +147,7 @@ export function registerSearchTools(registry) {
     name: "search",
     title: "搜索",
     description:
-      "搜索文字或正则，返回 文件:行号 和上下文（长行只显示匹配附近）。scope：work 作品、works 同一作品库的其他作品（只读）、used 作品用到的素材库文件（按锁定的版本，即实际运行的代码）、materials 素材库当前版本、experience 经验库、reviews 各作品的复盘资料（数据和复盘文档）、guide 制作指南、engine 引擎源码，可以组合。几个关键词一起搜用 patterns（任一匹配）；wholeWord 整词；multiline 跨行匹配（正则里用 \\n）；glob / exclude 选文件。还没有作品时用 repo 指定作品库（scope 不含 work、used）；只搜 guide、engine 时两者都不用。",
+      "搜索文字或正则，返回 文件:行号 和上下文（长行只显示匹配附近）。scope：work 作品、works 同一作品库的其他作品（只读）、used 作品用到的素材库文件（按锁定的版本，即实际运行的代码）、materials 素材库当前版本、experience 经验库、reviews 复盘资料（数据和复盘文档：本作品的，和复盘类型相同的作品的；没有作品时是作品库里全部的）、guide 制作指南、engine 引擎源码，可以组合。几个关键词一起搜用 patterns（任一匹配）；wholeWord 整词；multiline 跨行匹配（正则里用 \\n）；glob / exclude 选文件。还没有作品时用 repo 指定作品库（scope 不含 work、used）；只搜 guide、engine 时两者都不用。",
     readOnly: true,
     input: {
       work: workArg,

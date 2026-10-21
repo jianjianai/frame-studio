@@ -16,6 +16,7 @@ import {
   seriesColor,
   type CompareRow,
   type Definitions,
+  type ReviewType,
 } from "../lib/reviews";
 import { ChartLegend, LineChart, type ChartSeries } from "./LineChart";
 import "../pages/pages.css";
@@ -38,9 +39,12 @@ function openReview(row: CompareRow) {
 }
 
 interface Compare {
+  /** The types the reviews have; the rows are of `type` only (none without one). */
+  types: ReviewType[];
+  type: string | null;
   rows: CompareRow[];
   /** The age the rows are at (the server picks one when none is asked for). */
-  checkpoint: string;
+  checkpoint: string | null;
   columns: string[];
   definitions: Definitions;
 }
@@ -53,7 +57,10 @@ interface Compare {
  * account show up together).
  */
 export function ComparePage() {
-  const focus = new URLSearchParams(location.search).get("focus") ?? "";
+  const search = new URLSearchParams(location.search);
+  const focus = search.get("focus") ?? "";
+  // Works of different types are never compared: one type at a time (a category takes in its subcategories).
+  const [type, setType] = usePersistent("compare-type", search.get("type") ?? "");
   const toast = useToast();
   // "" lets the server pick the latest age most posts have reached; it moves on as they age.
   const [checkpoint, setCheckpoint] = useState("");
@@ -71,19 +78,28 @@ export function ComparePage() {
 
   const load = () => {
     setLoading(true);
-    return api<Compare>(`/api/reviews/compare?${checkpoint ? `checkpoint=${encodeURIComponent(checkpoint)}&` : ""}curves=1`).then(
-      (next) => (setData(next), setLoading(false)),
+    const query = [type ? `type=${encodeURIComponent(type)}` : "", checkpoint ? `checkpoint=${encodeURIComponent(checkpoint)}` : "", "curves=1"].filter(Boolean).join("&");
+    return api<Compare>(`/api/reviews/compare?${query}`).then(
+      (next) => {
+        // No type chosen yet, or one no work has any more: the first there is.
+        if (next.types.length && !next.types.some((item) => item.type === type)) return setType(next.types[0].type);
+        setData(next);
+        setLoading(false);
+      },
       (error: Error) => (toast(error.message, "error"), setLoading(false)),
     );
   };
   useEffect(() => {
     document.title = "复盘对比 · FRAME Studio";
     void api<Repo[]>("/api/repos").then(setRepos, () => {});
+    const wanted = search.get("type");
+    if (wanted) setType(wanted);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checkpoint]);
+  }, [checkpoint, type]);
   useServerEvent((event) => {
     if (event.type === "reviews") void load();
   });
@@ -208,9 +224,18 @@ export function ComparePage() {
       <div className="compare-page">
         <main className="compare-main">
           <p className="muted" style={{ margin: 0 }}>
-            每条发布记录一行，都取发布后同一天数的数据：总数会一直增长，不同天数的数字不能直接比。比例和留存旁边是平台给的同类作品的值，更能说明内容本身。
+            只比较同一个复盘类型的作品（类型在作品的「复盘」里设置）。每条发布记录一行，都取发布后同一天数的数据：总数会一直增长，不同天数的数字不能直接比。比例和留存旁边是平台给的同类作品的值，更能说明内容本身。
           </p>
           <div className="compare-filters">
+            {(data?.types.length ?? 0) > 0 && (
+              <select className="select" value={type} onChange={(event) => setType(event.target.value)} aria-label="复盘类型">
+                {data!.types.map((item) => (
+                  <option key={item.type} value={item.type}>
+                    {`${item.type.replace("/", " / ")}（${item.works} 个作品）`}
+                  </option>
+                ))}
+              </select>
+            )}
             <div className="segmented" role="group" aria-label="发布后天数">
               {(definitions?.checkpoints ?? Object.keys(CHECKPOINT_LABELS)).map((key) => (
                 <button key={key} className={(checkpoint || data?.checkpoint) === key ? "active" : ""} onClick={() => setCheckpoint(key)}>
@@ -250,8 +275,10 @@ export function ComparePage() {
 
           {!data ? (
             <div className="empty">正在读取…</div>
+          ) : !data.types.length ? (
+            <div className="empty">还没有作品设置复盘类型。在作品的「复盘」里设置类型（大类，或 大类/小类）以后，同类型的作品会在这里放在一起比较。</div>
           ) : !all.length ? (
-            <div className="empty">还没有复盘数据。在作品的「复盘」里上传平台后台导出的数据（或手动记录发布和数据）以后，所有作品会在这里放在一起比较。</div>
+            <div className="empty">这个类型的作品还没有复盘数据。在作品的「复盘」里上传平台后台导出的数据（或手动记录发布和数据）以后会在这里出现。</div>
           ) : (
             <div style={{ opacity: loading ? 0.6 : 1, transition: "opacity 0.15s" }}>
               <div className="compare-charts">

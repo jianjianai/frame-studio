@@ -13,7 +13,7 @@ export const appVersion = JSON.parse(fs.readFileSync(path.join(appRoot, "package
  *   works/<repo>/<work>/           git worktree of branch works/<work>
  *   libraries/<repo>/<id>/         worktree of each material library's branch materials/<id> (.trash/<key>/: materials-trash/<key>)
  *   experience/<repo>/<id>/        worktree of each experience library's branch experience/<id> (.trash/<key>/: experience-trash/<key>)
- *   reviews/<repo>/                worktree of the frame/reviews branch (data of posted videos)
+ *   reviews/<repo>/<work>/         worktree of each work's review branch reviews/<work> (data of posted videos)
  *   skills/<repo>/                 worktree of the frame/skills branch (the AI skills of the repository's works)
  *   exports/<work>/                rendered videos
  *   models/                        installed speech models

@@ -8,6 +8,7 @@ import { tree, readText, writeText, writeStream, removePath, uniquePath } from "
 import { readJson, sendFile } from "./http.mjs";
 import { problem, notFound, conflict, confined, writeFileAtomic, mediaKind } from "./util.mjs";
 import { GIT_ATTRIBUTES } from "./templates.mjs";
+import { copyLfs, lfsObjects } from "./works.mjs";
 import { readProjectSource, validSlug } from "./project-meta.mjs";
 import { workArg, describeIssues } from "./tools/registry.mjs";
 import { editList, runFileOperations } from "./tools/file-ops.mjs";
@@ -31,6 +32,9 @@ import {
   removePostOperation,
   removeSnapshotOperation,
   removeMomentOperation,
+  typesOperation,
+  normalizeType,
+  ofType,
   latest,
   snapshotsOf,
   derive,
@@ -51,23 +55,16 @@ import { sharedBranchRoutes } from "./branch-routes.mjs";
 /**
  * Reviews of posted videos: for each work, where it was posted, the platforms' numbers over
  * time, the original files they came from (spreadsheets and screenshots from the creator
- * centers) and review documents. They live on the repository's `frame/reviews` branch
- * (checked out at <home>/reviews/<repo>/), one folder per work id, outside the work's own
- * branch: a published work stays view-only while its numbers keep coming in, and all works
- * of a repository are compared from one folder. Every change is saved as a version at once.
+ * centers) and review documents. Each work's review is a branch of its own, `reviews/<work id>`
+ * (checked out at <home>/reviews/<repo>/<work id>/, the folder itself), outside the work's
+ * branch: a published work stays view-only while its numbers keep coming in, and each review
+ * has its own versions and sync. Every change is saved as a version at once.
  */
-export const REVIEWS_BRANCH = "frame/reviews";
+export const REVIEW_PREFIX = "reviews/";
+const branchOf = (id) => REVIEW_PREFIX + id;
 const DATA_FILE = "review.json";
 const RAW = "raw";
 const RAW_LIMIT = 512 * 1024 * 1024;
-const ROOT_README = `# FRAME 复盘
-
-每个文件夹是一个作品（文件夹名是作品 id）发布后的复盘资料，在 FRAME Studio 的「复盘」中查看和对比：
-
-- \`review.json\`：发到了哪些平台、各次统计的数据、观众留存（和同类作品的）、每小时数据、流量来源、关键时刻
-- \`raw/\`：平台后台导出的表格、截图等原始文件，原样保存
-- 其他 \`.md\`：复盘文档
-`;
 const validWorkId = (id) => typeof id === "string" && /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(id);
 const isDocument = (file) => /\.(md|txt)$/i.test(file) && !file.startsWith(`${RAW}/`);
 /** An original file or folder as people write it ("2026-10-10/流量数据.xlsx", "./raw/2026-10-10/") → "raw/…". */
@@ -105,42 +102,58 @@ export class Reviews {
     this.services = services;
   }
 
-  /** The reviews worktree of a repository, created (or checked out from GitHub) on first use. */
-  dir(repo) {
+  /** Where a work's review is checked out. */
+  folderOf(repo, id) {
+    return path.join(this.services.config.dirs.reviews, repo, id);
+  }
+  /** A work's review checkout, created (or checked out from GitHub) on first use. */
+  dir(repo, id) {
+    if (!validWorkId(id)) throw problem(400, `无效的作品 id：${id}`);
     return this.services.repos.branchWorktree(repo, {
-      branch: REVIEWS_BRANCH,
-      dir: path.join(this.services.config.dirs.reviews, repo),
-      files: { "README.md": ROOT_README, ".gitattributes": GIT_ATTRIBUTES },
-      message: "创建复盘分支",
+      branch: branchOf(id),
+      dir: this.folderOf(repo, id),
+      files: { ".gitattributes": GIT_ATTRIBUTES },
+      message: "创建复盘",
     });
   }
-  /** The worktree when the repository has reviews, without starting the branch (reading creates nothing). */
-  async existing(repo) {
+  /** The checkout when the work has a review, here or on GitHub, without starting one (reading creates nothing). */
+  async existing(repo, id) {
     this.services.repos.get(repo); // a known repository, not a path
-    const dir = this.existingSync(repo);
-    if (dir) return dir;
-    return (await this.services.repos.hasBranch(repo, REVIEWS_BRANCH)) ? this.dir(repo) : null;
+    if (!validWorkId(id)) return null;
+    return this.existingSync(repo, id) ?? ((await this.services.repos.hasBranch(repo, branchOf(id))) ? this.dir(repo, id) : null);
   }
-  existingSync(repo) {
-    const dir = path.join(this.services.config.dirs.reviews, repo);
-    return fs.existsSync(path.join(dir, ".git")) ? dir : null;
+  existingSync(repo, id) {
+    const dir = this.folderOf(repo, id);
+    return validWorkId(id) && fs.existsSync(path.join(dir, ".git")) ? dir : null;
+  }
+  /** Every work of the repository that has a review (here or on GitHub), checked out: [{ id, dir }]. */
+  async all(repo) {
+    const { dir } = this.services.repos.get(repo);
+    const refs = await git(dir, ["for-each-ref", "--format=%(refname)", `refs/heads/${REVIEW_PREFIX}`, `refs/remotes/origin/${REVIEW_PREFIX}`]).catch(() => "");
+    const ids = new Set();
+    for (const ref of refs.split("\n")) {
+      const id = /^refs\/(?:heads|remotes\/origin)\/reviews\/(.+)$/.exec(ref)?.[1];
+      if (validWorkId(id)) ids.add(id);
+    }
+    const list = [];
+    for (const id of [...ids].sort()) list.push({ id, dir: await this.dir(repo, id) });
+    return list;
   }
   /** A work-like handle, so the works' version functions (history, push, pull…) apply. */
-  async scope(repo) {
-    return this.handle(repo, await this.dir(repo));
+  async scope(repo, id) {
+    return this.handle(repo, id, await this.dir(repo, id));
   }
-  /** The same, or null while the repository has no reviews (looking at versions starts nothing). */
-  async scopeIfAny(repo) {
-    const dir = await this.existing(repo);
-    return dir ? this.handle(repo, dir) : null;
+  /** The same, or null while the work has no review (looking at versions starts nothing). */
+  async scopeIfAny(repo, id) {
+    const dir = await this.existing(repo, id);
+    return dir ? this.handle(repo, id, dir) : null;
   }
-  handle(repo, root) {
-    return { id: `reviews-${repo}`, repo, root, dir: root, branch: REVIEWS_BRANCH };
+  handle(repo, id, root) {
+    return { id: `reviews-${id}`, repo, root, dir: root, branch: branchOf(id) };
   }
 
-  /** A work's review folder as it is: the data, the documents and the original files. */
-  readFrom(dir, id) {
-    const folder = path.join(dir, id);
+  /** A work's review folder (its checkout) as it is: the data, the documents and the original files. */
+  readFrom(folder, id) {
     const file = path.join(folder, DATA_FILE);
     const review = fs.existsSync(file) ? parseReview(fs.readFileSync(file, "utf8"), id) : emptyReview(id);
     const entries = fs.existsSync(folder) ? tree(folder).filter((entry) => entry.type === "file") : [];
@@ -159,7 +172,7 @@ export class Reviews {
     };
   }
   async read(work) {
-    const dir = await this.existing(work.repo);
+    const dir = await this.existing(work.repo, work.id);
     return dir ? this.readFrom(dir, work.id) : { review: emptyReview(work.id), files: [], documents: [] };
   }
 
@@ -257,24 +270,22 @@ export class Reviews {
    */
   async save(work, change) {
     const { works, events } = this.services;
-    const dir = await this.dir(work.repo);
-    const folder = path.join(dir, work.id);
+    const folder = await this.dir(work.repo, work.id);
     const title = works.meta(work).meta?.title || work.id;
-    const scope = this.handle(work.repo, dir);
+    const scope = this.handle(work.repo, work.id, folder);
     return works.locks.run(`${scope.repo}/${scope.id}`, async () => {
       const { message, result } = await change({ folder, title });
-      // The folder names its work (by id); review.json keeps the title for people browsing the branch and after the work is gone.
+      // The branch names its work (by id); review.json keeps the title for people browsing it and after the work is gone.
       const file = path.join(folder, DATA_FILE);
-      if (message && fs.existsSync(folder)) {
+      if (message) {
         const review = fs.existsSync(file) ? parseReview(fs.readFileSync(file, "utf8"), work.id) : emptyReview(work.id);
         if (review.title !== title || !fs.existsSync(file)) writeFileAtomic(file, formatReview({ ...review, title }));
       }
-      const tracked = (await git(dir, ["ls-files", "--", work.id])).trim();
       let saved = false;
-      if (message && (fs.existsSync(folder) || tracked)) {
-        await git(dir, ["add", "-A", "--", work.id]);
-        if ((await git(dir, ["diff", "--cached", "--name-only"])).trim()) {
-          await git(dir, ["commit", "-q", "-m", `复盘「${title}」：${message}`.slice(0, 300)]);
+      if (message) {
+        await git(folder, ["add", "-A", "--", "."]);
+        if ((await git(folder, ["diff", "--cached", "--name-only"])).trim()) {
+          await git(folder, ["commit", "-q", "-m", `复盘「${title}」：${message}`.slice(0, 300)]);
           saved = true;
         }
       }
@@ -373,8 +384,7 @@ export class Reviews {
    * (the files were imported before).
    */
   async importExports(work, { files = [], folder, post: postId, at, postedAt, dryRun = false } = {}) {
-    const dir = await this.existing(work.repo);
-    const root = dir ? path.join(dir, work.id) : null;
+    const root = await this.existing(work.repo, work.id);
     const folders = () => (root && fs.existsSync(path.join(root, RAW)) ? tree(path.join(root, RAW)).filter((entry) => entry.type === "dir") : []);
     if (!root || !fs.existsSync(path.join(root, RAW)))
       throw notFound("这个作品的复盘资料里还没有原始文件：先在「复盘」上传平台后台导出的文件（外部 AI 用 upload_link 的 review: true 上传）");
@@ -406,7 +416,7 @@ export class Reviews {
           .join("\n")}`,
         "MIXED_EXPORTS",
       );
-    const { review } = this.readFrom(dir, work.id);
+    const { review } = this.readFrom(root, work.id);
     const candidates = review.posts.filter((item) => item.platform === parsed.platform);
     const post = postId
       ? (review.posts.find((item) => item.id === postId) ?? fail404(`没有发布记录 ${postId}`))
@@ -524,80 +534,87 @@ export class Reviews {
     return this.save(work, async ({ folder }) => ({ message: `编辑 ${relative}`, result: writeText(folder, relative, content, { expectedHash }) }));
   }
 
-  /** A permanently deleted work takes its review folder along. */
+  /** Delete a work's review branch here and on GitHub (its checkout too). */
+  async dropBranch(repo, id) {
+    const { repos, works } = this.services;
+    const info = repos.get(repo);
+    const branch = branchOf(id);
+    const dir = this.folderOf(repo, id);
+    if (fs.existsSync(path.join(dir, ".git"))) await git(info.dir, ["worktree", "remove", "--force", "--", dir]);
+    const remote = info.remote ? await works.tip(info.dir, `refs/remotes/origin/${branch}`) : "";
+    if (remote) {
+      await git(info.dir, ["push", `--force-with-lease=refs/heads/${branch}:${remote}`, "origin", `:refs/heads/${branch}`], { env: repos.env(info) });
+      await git(info.dir, ["update-ref", "-d", `refs/remotes/origin/${branch}`]);
+    }
+    if (await works.tip(info.dir, `refs/heads/${branch}`)) await git(info.dir, ["branch", "-D", branch]);
+  }
+
+  /** A permanently deleted work takes its review along. */
   async forget(repo, id) {
-    const dir = this.existingSync(repo);
-    if (!dir || !validWorkId(id) || !fs.existsSync(path.join(dir, id))) return;
-    const { review } = this.readFrom(dir, id);
-    const scope = this.handle(repo, dir);
-    const saved = await this.services.works.locks.run(`${scope.repo}/${scope.id}`, async () => {
-      const tracked = (await git(dir, ["ls-files", "--", id])).trim();
-      fs.rmSync(path.join(dir, id), { recursive: true, force: true });
-      if (!tracked) return false;
-      await git(dir, ["add", "-A", "--", id]);
-      await git(dir, ["commit", "-q", "-m", `删除复盘：${review.title || id}（作品已永久删除）`]);
-      return true;
-    });
+    if (!validWorkId(id) || !(await this.has(repo, id))) return;
+    await this.services.works.locks.run(`${repo}/reviews-${id}`, () => this.dropBranch(repo, id));
     this.services.events.emit({ type: "reviews", repo, work: id });
-    if (saved) this.services.works.saved(scope);
   }
 
-  /** Whether a work has a review folder in its repository (looking starts no branch). */
+  /** Whether a work has a review here or on GitHub (looking starts nothing). */
   async has(repo, id) {
-    const dir = await this.existing(repo);
-    return Boolean(dir && validWorkId(id) && fs.existsSync(path.join(dir, id)));
+    return validWorkId(id) && Boolean(this.existingSync(repo, id) || (await this.services.repos.hasBranch(repo, branchOf(id))));
   }
 
-  /** A work moved to another repository (works.move): its review goes along, saved on both branches. */
-  async move(from, to, id, names) {
-    const source = await this.existing(from);
-    if (!source || !validWorkId(id) || !fs.existsSync(path.join(source, id))) return false;
-    const { works, events } = this.services;
-    const { review } = this.readFrom(source, id);
-    const title = review.title || id;
-    const target = this.handle(to, await this.dir(to));
-    const added = await works.locks.run(`${target.repo}/${target.id}`, async () => {
-      if (fs.existsSync(path.join(target.root, id))) throw conflict(`「${names.to}」里已经有这个作品的复盘`);
-      fs.cpSync(path.join(source, id), path.join(target.root, id), { recursive: true });
-      await git(target.root, ["add", "-A", "--", id]);
-      await git(target.root, ["commit", "-q", "-m", `迁入复盘：${title}（作品从「${names.from}」迁入）`]);
-      return true;
+  /** A work moved to another repository (works.move): its review branch goes along, and leaves this one (and its GitHub). */
+  async move(from, to, id) {
+    if (!(await this.has(from, id))) return false;
+    const { repos, works, events } = this.services;
+    const source = repos.get(from);
+    const target = repos.get(to);
+    const branch = branchOf(id);
+    await this.dir(from, id); // a review only on GitHub comes here first
+    await works.locks.run(`${from}/reviews-${id}`, async () => {
+      const tip = await works.tip(source.dir, `refs/heads/${branch}`);
+      if (await repos.hasBranch(to, branch)) throw conflict("目标作品库里已经有这个作品的复盘");
+      copyLfs(source.dir, target.dir, await lfsObjects(source.dir, [`refs/heads/${branch}`]));
+      await git(target.dir, ["fetch", "--quiet", "--no-tags", "--no-write-fetch-head", source.dir, `refs/heads/${branch}:refs/heads/${branch}`]);
+      if ((await works.tip(target.dir, `refs/heads/${branch}`)) !== tip) throw problem(500, "复盘没有完整地复制到目标作品库");
+      await this.dropBranch(from, id);
     });
-    const scope = this.handle(from, source);
-    const removed = await works.locks.run(`${scope.repo}/${scope.id}`, async () => {
-      const tracked = (await git(source, ["ls-files", "--", id])).trim();
-      fs.rmSync(path.join(source, id), { recursive: true, force: true });
-      if (!tracked) return false;
-      await git(source, ["add", "-A", "--", id]);
-      await git(source, ["commit", "-q", "-m", `迁出复盘：${title}（作品迁移到「${names.to}」）`]);
-      return true;
-    });
+    works.saved(await this.scope(to, id));
     events.emit({ type: "reviews", repo: from, work: id });
     events.emit({ type: "reviews", repo: to, work: id });
-    if (added) works.saved(target);
-    if (removed) works.saved(scope);
     return true;
+  }
+
+  /** The types the works of these repositories have, each with how many works (a category counts its subcategories' works). */
+  async types(repos) {
+    const counts = new Map();
+    for (const repo of repos)
+      for (const { id, dir } of await this.all(repo)) {
+        const { review } = this.readFrom(dir, id);
+        const names = new Set(review.types.flatMap((type) => [type, ...(type.includes("/") ? [type.split("/")[0]] : [])]));
+        for (const name of names) counts.set(name, (counts.get(name) ?? 0) + 1);
+      }
+    return [...counts].map(([type, works]) => ({ type, works })).sort((a, b) => a.type.localeCompare(b.type, "zh"));
   }
 
   // ---- comparing --------------------------------------------------------------------------
 
   /**
-   * One row per post of the works in `repos` that have review data (see compareRows), filtered
-   * by what the works are like: `tags` (any of them), a linked experience library, given ids.
-   * With `lyrics`, rows of works with lyrics carry each line's multiplier (lyricsText). Returns
-   * { rows, checkpoint }: without a `checkpoint`, the age most of the posts have reached.
+   * One row per post of the works in `repos` that have review data (see compareRows), only of
+   * works of `type` (the type or one of its subcategories; works of other types are never put
+   * together), filtered further by what the works are like: `tags` (any of them), a linked
+   * experience library, given ids. With `lyrics`, rows of works with lyrics carry each line's
+   * multiplier (lyricsText). Returns { rows, checkpoint }: without a `checkpoint`, the age most
+   * of the posts have reached.
    */
-  async compare({ repos, works: ids, tags, experience, lyrics = false, ...options }) {
+  async compare({ repos, type, works: ids, tags, experience, lyrics = false, ...options }) {
     const entries = [];
     for (const repo of repos) {
-      const dir = await this.existing(repo);
-      if (!dir) continue;
       const catalog = await this.services.works.catalog(repo);
-      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-        if (!entry.isDirectory() || !validWorkId(entry.name) || (ids?.length && !ids.includes(entry.name))) continue;
-        if (!fs.existsSync(path.join(dir, entry.name, DATA_FILE))) continue;
-        const review = parseReview(fs.readFileSync(path.join(dir, entry.name, DATA_FILE), "utf8"), entry.name);
-        const work = catalog.get(entry.name);
+      for (const { id, dir } of await this.all(repo)) {
+        if (ids?.length && !ids.includes(id)) continue;
+        if (!fs.existsSync(path.join(dir, DATA_FILE))) continue;
+        const review = parseReview(fs.readFileSync(path.join(dir, DATA_FILE), "utf8"), id);
+        if (!ofType(review.types, type)) continue;
+        const work = catalog.get(id);
         if (tags?.length && !work?.tags?.some((tag) => tags.includes(tag))) continue;
         if (experience && !work?.experiences?.includes(experience)) continue;
         entries.push({
@@ -632,15 +649,15 @@ export class Reviews {
 
   /** The session brief says that the work has review data (the numbers are read on demand). */
   brief(work) {
-    const dir = this.existingSync(work.repo);
-    if (!dir || !fs.existsSync(path.join(dir, work.id))) return null;
+    const dir = this.existingSync(work.repo, work.id);
+    if (!dir) return null;
     const { review, documents, files } = this.readFrom(dir, work.id);
     const waiting = files.filter((file) => !file.used);
     if (!review.posts.length && !waiting.length) return null;
     const platforms = [...new Set(review.posts.map((post) => post.platform))].join("、");
     return {
       lines: [
-        `- 复盘：${review.posts.length ? `已发布到${platforms}` : "还没有发布记录"}${documents.length ? `，复盘文档 ${documents.map((doc) => doc.path).join("、")}` : ""}${waiting.length ? `；还没导入的原始文件 ${waiting.map((file) => file.path).join("、")}（review_import）` : ""}。用 review_read 看。`,
+        `- 复盘：${review.posts.length ? `已发布到${platforms}` : "还没有发布记录"}，类型${review.types.length ? ` ${review.types.join("、")}` : "未设置"}${documents.length ? `，复盘文档 ${documents.map((doc) => doc.path).join("、")}` : ""}${waiting.length ? `；还没导入的原始文件 ${waiting.map((file) => file.path).join("、")}（review_import）` : ""}。用 review_read 看。`,
       ],
       state: {},
     };
@@ -648,11 +665,12 @@ export class Reviews {
 
   /** For work_context: what review data there is (null when none). */
   async summary(work) {
-    const dir = await this.existing(work.repo);
+    const dir = await this.existing(work.repo, work.id);
     if (!dir) return null;
     const { review, files, documents } = this.readFrom(dir, work.id);
-    if (!review.posts.length && !files.length && !documents.length) return null;
+    if (!review.posts.length && !files.length && !documents.length && !review.types.length) return null;
     return {
+      types: review.types,
       posts: review.posts.map((post) => {
         const now = latest(review, post);
         return {
@@ -685,9 +703,9 @@ export function reviewsPlugin(services) {
   const workOf = (params) => services.openWork(params.work, params.repo);
   const folderFile = async (params, file) => {
     const work = await workOf(params);
-    const dir = await reviews.existing(work.repo);
+    const dir = await reviews.existing(work.repo, work.id);
     if (!dir) throw notFound("这个作品还没有复盘资料");
-    const full = confined(path.join(dir, work.id), String(file || ""));
+    const full = confined(dir, String(file || ""));
     if (!fs.statSync(full, { throwIfNoEntry: false })?.isFile()) throw notFound(`文件不存在：${file}`);
     return full;
   };
@@ -703,6 +721,7 @@ export function reviewsPlugin(services) {
     removePostOperation,
     removeSnapshotOperation,
     removeMomentOperation,
+    typesOperation,
     z.strictObject({ op: z.literal("write"), path: docPath, content: z.string().max(512 * 1024), expectedSha256: z.string().optional() }),
     z.strictObject({ op: z.literal("edit"), path: docPath, edits: editList }),
     z.strictObject({ op: z.literal("delete"), path: docPath }),
@@ -761,23 +780,30 @@ export function reviewsPlugin(services) {
 
   // ---- documents as editor tabs (paths `<work id>/<document>`, like the experience files) --
   router.get(`${base}/file`, async ({ params, query }) => {
-    const dir = await reviews.existing(params.repo);
-    if (!dir) throw notFound("还没有复盘资料");
-    return readText(dir, query.path);
+    const [id, ...rest] = String(query.path || "").split("/");
+    const dir = await reviews.existing(params.repo, id);
+    if (!dir) throw notFound("这个作品还没有复盘资料");
+    return { ...readText(dir, rest.join("/")), path: query.path };
   });
   router.put(`${base}/file`, async ({ params, req }) => {
     const body = await readJson(req);
     return reviews.writeDocument(params.repo, body.path, body.content, body.expectedHash);
   });
 
-  // ---- versions: every change is one already; history and sync like a work's --------------
-  sharedBranchRoutes(services, base, {
-    branch: REVIEWS_BRANCH,
-    scopeIfAny: (repo) => reviews.scopeIfAny(repo),
-    changed: (repo) => services.events.emit({ type: "reviews", repo }),
+  // ---- versions of a work's review: every change is one already; history and sync like a work's
+  sharedBranchRoutes(services, `${base}/works/:work`, {
+    branch: (params) => `${REVIEW_PREFIX}${params.work}`,
+    scopeIfAny: (repo, params) => reviews.scopeIfAny(repo, params.work),
+    changed: (repo, params) => services.events.emit({ type: "reviews", repo, work: params.work }),
   });
 
-  /** All works' posts side by side (the home page's comparison). */
+  /** The types the repository's reviews have (for choosing one). */
+  router.get(`${base}/types`, async ({ params }) => reviews.types([services.repos.get(params.repo).id]));
+
+  /**
+   * The posts of one type side by side (the home page's comparison): works of other types are
+   * never in it. Without a `type`, no rows, only the types there are.
+   */
   router.get("/api/reviews/compare", async ({ query }) => {
     const ready = services.repos
       .list()
@@ -785,13 +811,18 @@ export function reviewsPlugin(services) {
       .map((repo) => repo.id);
     if (query.repo && !ready.includes(query.repo)) throw notFound(`作品库不存在：${query.repo}`);
     const repos = query.repo ? [query.repo] : ready;
+    const types = await reviews.types(repos);
+    const type = query.type ? normalizeType(query.type) : null;
+    if (query.type && !type) throw problem(400, `无效的类型：${query.type}`);
+    if (!type) return { types, type: null, rows: [], checkpoint: null, columns: DEFAULT_COLUMNS, definitions: DEFINITIONS };
     const { rows, checkpoint } = await reviews.compare({
       repos,
+      type,
       checkpoint: query.checkpoint,
       platform: query.platform || undefined,
       curves: query.curves === "1",
     });
-    return { rows, checkpoint, columns: [...DEFAULT_COLUMNS, ...momentColumns(rows)], definitions: DEFINITIONS };
+    return { types, type, rows, checkpoint, columns: [...DEFAULT_COLUMNS, ...momentColumns(rows)], definitions: DEFINITIONS };
   });
 
   // ---- AI tools ---------------------------------------------------------------------------
@@ -872,11 +903,10 @@ export function reviewsPlugin(services) {
 
   /** One file of the folder, in the form the AI can use. */
   async function readFile(work, file, ctx) {
-    const dir = await reviews.existing(work.repo);
-    const folder = dir ? path.join(dir, work.id) : null;
+    const folder = await reviews.existing(work.repo, work.id);
     const full = folder ? confined(folder, file) : null;
     if (!full || !fs.statSync(full, { throwIfNoEntry: false })?.isFile()) {
-      const listed = folder ? reviews.readFrom(dir, work.id) : null;
+      const listed = folder ? reviews.readFrom(folder, work.id) : null;
       const names = listed ? [...listed.documents, ...listed.files].map((item) => item.path) : [];
       throw problem(404, `没有这个文件：${file}${names.length ? `（现有：${names.join("、")}）` : "（这个作品还没有复盘文件）"}`, "NOT_FOUND");
     }
@@ -942,7 +972,7 @@ export function reviewsPlugin(services) {
     title: "记录复盘",
     destructive: true,
     description:
-      "记录作品发布后的复盘资料，每次调用自动保存为一个版本。operations 按顺序执行：post 新增或修改发布记录（平台、发布时间、标题和话题、置顶评论、链接、发布的是哪个导出文件、目标）；snapshot 录入一条发布记录截至某个时间的累计数据（metrics、同类作品的值 benchmark、留存曲线 retention 和同类的 retentionBenchmark、流量来源 sources、评论概况；同一时间已有的合并）；series 每小时新增的播放、涨粉等（views、followers，分渠道写 views:抖音精选）；moment 关键时刻（例如反转在第几秒，比较时会看那一刻还剩多少人）；segments 自定义分段（例如画在代码里的镜头、歌词），同种类整体替换；remove_post、remove_snapshot、remove_moment 删除；write / edit / delete / move 修改复盘文档（.md，路径相对作品的复盘文件夹，例如 复盘.md）。raw/ 里的原始文件保持原样，不能改。失败的逐项说明原因，只需重试失败的。格式见 frame_guide reviews。",
+      "记录作品发布后的复盘资料，每次调用自动保存为一个版本。operations 按顺序执行：post 新增或修改发布记录（平台、发布时间、标题和话题、置顶评论、链接、发布的是哪个导出文件、目标）；snapshot 录入一条发布记录截至某个时间的累计数据（metrics、同类作品的值 benchmark、留存曲线 retention 和同类的 retentionBenchmark、流量来源 sources、评论概况；同一时间已有的合并）；series 每小时新增的播放、涨粉等（views、followers，分渠道写 views:抖音精选）；moment 关键时刻（例如反转在第几秒，比较时会看那一刻还剩多少人）；segments 自定义分段（例如画在代码里的镜头、歌词），同种类整体替换；remove_post、remove_snapshot、remove_moment 删除；types 设置作品的复盘类型（大类，或 大类/小类，可以几个，整体替换；只有类型相同的作品放在一起比较）；write / edit / delete / move 修改复盘文档（.md，路径相对作品的复盘文件夹，例如 复盘.md）。raw/ 里的原始文件保持原样，不能改。失败的逐项说明原因，只需重试失败的。格式见 frame_guide reviews。",
     input: {
       work: workArg,
       operations: z.array(operation).min(1).max(50),
@@ -970,7 +1000,7 @@ export function reviewsPlugin(services) {
   tools.add({
     name: "reviews_compare",
     title: "对比作品数据",
-    description: `把作品发布后的数据放在一起比较：每条发布记录一行，都取发布后同一天数的数据（checkpoint，不写时取大多数发布记录都到了的最大天数；总数会一直涨，不同天数的不能直接比；有每小时数据的播放、涨粉正好算到那一天），比例和留存点旁边并列同类作品的值，作品标了关键时刻的（例如反转）会多一列那一刻还剩多少人，最后给中位数和本作品（▶）是中位数的几倍。可以按平台、作品标签、关联的经验库、发布时间筛选。lyrics: true 时，用同一首歌的作品按歌词对齐比较每一句的倍数。指标：${metricKeys.join("、")}、moment:<关键时刻>，以及平台特有指标的中文名。`,
+    description: `把作品发布后的数据放在一起比较：每条发布记录一行，都取发布后同一天数的数据（checkpoint，不写时取大多数发布记录都到了的最大天数；总数会一直涨，不同天数的不能直接比；有每小时数据的播放、涨粉正好算到那一天），比例和留存点旁边并列同类作品的值，作品标了关键时刻的（例如反转）会多一列那一刻还剩多少人，最后给中位数和本作品（▶）是中位数的几倍。只比较同一个复盘类型的作品（type：大类，或 大类/小类；大类包括它的小类）：不写 type 时用当前作品的类型（它只有一个类型时），没有类型的作品不和别的作品比较。还可以按平台、作品标签、关联的经验库、发布时间筛选。lyrics: true 时，用同一首歌的作品按歌词对齐比较每一句的倍数。指标：${metricKeys.join("、")}、moment:<关键时刻>，以及平台特有指标的中文名。`,
     readOnly: true,
     input: {
       work: workArg,
@@ -978,9 +1008,10 @@ export function reviewsPlugin(services) {
         .enum(Object.keys(CHECKPOINTS))
         .optional()
         .describe("发布后第几天：1d、2d、3d、7d、14d、30d，或 latest（各自最新的数据，天数不同只能粗看）。不写时取大多数发布记录都到了的最大天数"),
+      type: z.string().max(81).optional().describe("比较哪个复盘类型的作品：大类，或 大类/小类"),
       platform: z.string().max(40).optional().describe("只看这个平台"),
       tags: z.array(z.string().max(60)).max(10).optional().describe("只看带这些标签之一的作品（project.ts 的 tags）"),
-      experience: z.string().max(60).optional().describe("只看关联了这个经验库的作品（同类作品）"),
+      experience: z.string().max(60).optional().describe("只看关联了这个经验库的作品"),
       works: z.array(z.string().max(64)).max(50).optional().describe("只看这些作品（id）"),
       since: z.string().max(40).optional().describe("发布时间不早于（ISO 日期）"),
       until: z.string().max(40).optional().describe("发布时间不晚于（ISO 日期）"),
@@ -1008,7 +1039,22 @@ export function reviewsPlugin(services) {
               .filter((repo) => repo.ready)
               .map((repo) => repo.id);
       for (const since of [args.since, args.until]) if (since && Number.isNaN(Date.parse(since))) throw problem(400, `无法识别的日期：${since}`);
-      const { rows, checkpoint } = await reviews.compare({ repos, ...args });
+      // One type at a time: works of different types are never compared.
+      const known = async () => {
+        const types = await reviews.types(repos);
+        return types.length ? `（已有的类型：${types.map((item) => `${item.type}（${item.works} 个作品）`).join("、")}）` : "（还没有作品设置类型）";
+      };
+      let type = args.type ? normalizeType(args.type) : null;
+      if (args.type && !type) throw problem(400, `type「${args.type}」写成 大类 或 大类/小类`);
+      if (!type) {
+        if (!work) throw problem(400, `用 type 写比较哪个类型的作品${await known()}`, "TYPE_REQUIRED");
+        const { review } = await reviews.read(work);
+        if (!review.types.length)
+          throw problem(400, `这个作品还没有设置复盘类型，不和别的作品比较：类型用 review_write 的 types 设置${await known()}`, "TYPE_REQUIRED");
+        if (review.types.length > 1) throw problem(400, `这个作品有 ${review.types.length} 个类型（${review.types.join("、")}）：用 type 写按哪一个比较`, "TYPE_REQUIRED");
+        type = review.types[0];
+      }
+      const { rows, checkpoint } = await reviews.compare({ repos, ...args, type });
       const value = (row) => row.metrics[args.sort];
       rows.sort((a, b) => (Number.isFinite(value(b)) ? value(b) : -Infinity) - (Number.isFinite(value(a)) ? value(a) : -Infinity));
       let text = compareText(rows, { checkpoint, columns: args.columns, current: work?.id });
@@ -1027,9 +1073,10 @@ export function reviewsPlugin(services) {
       }
       if (args.lyrics)
         text += `\n\n${lyricsText(rows) || "没有两个以上作品用到同一首歌的歌词（需要作品里的 .lrc 歌词或复盘里写的歌词分段，以及留存和同类曲线）。"}`;
-      if (!rows.length)
-        text = `没有符合条件的发布记录${work ? "（只看了当前作品所在的作品库）" : ""}。先用 review_import 导入平台数据，或用 review_write 记下发布记录和数据。`;
-      return { data: { checkpoint, rows: rows.map(({ curve, curveBenchmark, history, hourly, ...row }) => row) }, text };
+      text = rows.length
+        ? `复盘类型「${type}」的作品：\n${text}`
+        : `复盘类型「${type}」里没有符合条件的发布记录${work ? "（只看了当前作品所在的作品库）" : ""}${await known()}。`;
+      return { data: { type, checkpoint, rows: rows.map(({ curve, curveBenchmark, history, hourly, ...row }) => row) }, text };
     },
   });
 }

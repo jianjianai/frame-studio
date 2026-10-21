@@ -5,11 +5,11 @@ import { problem, notFound, Locks, diskUsage, writable } from "./util.mjs";
 
 export const LOCAL_REPO = "local";
 /** Branches of a repository besides its works: libraries (and their recycle bins) and the reviews. */
-export const SHARED_BRANCHES = ["materials", "materials-trash", "experience", "experience-trash", "frame"];
+export const SHARED_BRANCHES = ["materials", "materials-trash", "experience", "experience-trash", "reviews", "frame"];
 const REPO_README = `# FRAME 作品库
 
 本仓库由 FRAME Studio 管理。每个作品是一个独立分支 \`works/<作品 id>\`，作品文件位于 \`projects/<名称>/\`；
-每个素材库是一个分支 \`materials/<id>\`，每个经验库是一个分支 \`experience/<id>\`（回收站里的在 \`materials-trash/\`、\`experience-trash/\`），作品发布后的复盘数据位于 \`frame/reviews\` 分支，AI 技能位于 \`frame/skills\` 分支。请在 FRAME Studio 中打开与编辑。
+每个素材库是一个分支 \`materials/<id>\`，每个经验库是一个分支 \`experience/<id>\`（回收站里的在 \`materials-trash/\`、\`experience-trash/\`），每个作品发布后的复盘数据是一个分支 \`reviews/<作品 id>\`，AI 技能位于 \`frame/skills\` 分支。请在 FRAME Studio 中打开与编辑。
 `;
 
 const repoIdFrom = (fullName) =>
@@ -253,7 +253,7 @@ export class Repos {
   }
 
   /**
-   * The checkout of a branch the works of a repository share (the reviews) at `dir`: on first use from the local branch, else from GitHub's, else a new
+   * The checkout of a branch outside the works (a work's review, the skills) at `dir`: on first use from the local branch, else from GitHub's, else a new
    * branch with no history that starts with `files`.
    */
   async branchWorktree(id, { branch, dir, files, message }) {

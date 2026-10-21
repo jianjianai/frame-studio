@@ -269,19 +269,19 @@ export function remoteSyncPlugin(services) {
   later.unref?.();
   services.closers.push(() => (clearTimeout(first), clearInterval(later)));
 
-  // A work, each experience and material library, and the repository's review and skill branches (null: none yet).
+  // A work, each experience and material library, each work's review, and the repository's skills (null: none yet).
   const scopes = {
     work: (params) => services.openWork(params.id, params.repo),
     experience: (params) => services.experience.scope(params.repo, params.lib),
     materials: (params) => services.materials.scope(params.repo, params.lib),
-    reviews: (params) => services.reviews.scopeIfAny(params.repo),
+    reviews: (params) => services.reviews.scopeIfAny(params.repo, params.work),
     skills: (params) => services.skills.scopeIfAny(params.repo),
   };
   const bases = {
     work: "/api/works/:repo/:id/remote",
     experience: "/api/repos/:repo/experience/libraries/:lib/remote",
     materials: "/api/repos/:repo/materials/libraries/:lib/remote",
-    reviews: "/api/repos/:repo/reviews/remote",
+    reviews: "/api/repos/:repo/reviews/works/:work/remote",
     skills: "/api/repos/:repo/skills/remote",
   };
   for (const [kind, base] of Object.entries(bases)) {

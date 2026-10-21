@@ -21,6 +21,7 @@ import {
   TrendingDown,
   TrendingUp,
   Upload,
+  X,
 } from "lucide-react";
 import { api, del, formatBytes, formatTime, useServerEvent, type ApiError } from "../lib/api";
 import { useAction, useConfirm, useContextMenu, usePersistent, usePrompt, useToast } from "../lib/ui";
@@ -49,6 +50,7 @@ import {
   type PostSummary,
   type RetentionAnalysis,
   type ReviewDetail,
+  type ReviewType,
   type Series,
   type Snapshot,
   type Stretch,
@@ -144,7 +146,7 @@ export function ReviewView() {
   useServerEvent(
     (event) => {
       if (event.type === "reviews" && event.repo === work.repo && (!event.work || event.work === work.id)) void load();
-      if (event.type === "work-versions" && event.work === `reviews-${work.repo}`) void load();
+      if (event.type === "work-versions" && event.work === `reviews-${work.id}`) void load();
     },
     [work.repo, work.id],
   );
@@ -293,7 +295,12 @@ export function ReviewView() {
         <button className="icon-btn" title="上传平台后台导出的数据或截图（抖音创作者中心的导出会直接导入）" onClick={pickFiles}>
           <Upload size={15} />
         </button>
-        <button className="icon-btn" title="和其他作品对比" onClick={() => navigate(`/reviews?focus=${encodeURIComponent(`${work.repo}/${work.id}`)}`)}>
+        <button className="icon-btn" title="和其他作品对比" onClick={() =>
+            navigate(
+              `/reviews?focus=${encodeURIComponent(`${work.repo}/${work.id}`)}${review?.types.length ? `&type=${encodeURIComponent(review.types[0])}` : ""}`,
+            )
+          }
+        >
           <BarChart3 size={15} />
         </button>
         <button className="icon-btn" title="刷新" onClick={load}>
@@ -301,6 +308,17 @@ export function ReviewView() {
         </button>
       </ViewHeader>
       {busy && <div className="view-progress" />}
+      {detail && (
+        <TypesRow
+          types={detail.review.types}
+          base={base}
+          onChange={(types) =>
+            run(async () => {
+              setDetail(await api<ReviewDetail>(workBase, { method: "POST", body: { operations: [{ op: "types", types }] } }));
+            })
+          }
+        />
+      )}
       {!detail ? (
         <div className="empty">正在读取…</div>
       ) : !posts.length ? (
@@ -646,6 +664,68 @@ export function ReviewView() {
 }
 
 /** The newest numbers: similar videos' value, the rate, the goal and the day under each when there is one. */
+/**
+ * What kind of work this is, for comparing: only works of the same type are put together. Set
+ * here or by the AI, never guessed. A type is a category, or a category and a subcategory.
+ */
+function TypesRow({ types, base, onChange }: { types: string[]; base: string; onChange: (types: string[]) => void }) {
+  const [known, setKnown] = useState<ReviewType[]>([]);
+  const [draft, setDraft] = useState("");
+  useEffect(() => {
+    void api<ReviewType[]>(`${base}/types`).then(setKnown, () => {});
+  }, [base, types]);
+  const add = () => {
+    const type = draft
+      .split("/")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .join("/");
+    if (!type || types.includes(type)) return setDraft("");
+    setDraft("");
+    onChange([...types, type]);
+  };
+  return (
+    <div className="review-types">
+      <span className="faint small-text">复盘类型</span>
+      {types.map((type) => (
+        <span key={type} className="review-post-chip active">
+          {type.replace("/", " / ")}
+          <button className="review-type-remove" aria-label={`去掉类型 ${type}`} onClick={() => onChange(types.filter((item) => item !== type))}>
+            <X size={12} />
+          </button>
+        </span>
+      ))}
+      {!types.length && <span className="faint small-text">未设置：只有类型相同的作品放在一起比较</span>}
+      <form
+        className="review-type-add"
+        onSubmit={(event) => {
+          event.preventDefault();
+          add();
+        }}
+      >
+        <input
+          className="input"
+          value={draft}
+          list="review-types-known"
+          placeholder="大类 或 大类/小类"
+          aria-label="添加复盘类型"
+          onChange={(event) => setDraft(event.target.value)}
+        />
+        <datalist id="review-types-known">
+          {known
+            .filter((item) => !types.includes(item.type))
+            .map((item) => (
+              <option key={item.type} value={item.type}>{`${item.works} 个作品`}</option>
+            ))}
+        </datalist>
+        <button className="btn small" type="submit" disabled={!draft.trim()}>
+          <Plus size={13} /> 添加
+        </button>
+      </form>
+    </div>
+  );
+}
+
 function Tiles({ numbers, definitions, goals }: { numbers: PostSummary; definitions: Definitions | null; goals?: Record<string, number> }) {
   const known = new Set([...(definitions?.metrics ?? []), ...(definitions?.derived ?? [])].map((item) => item.key));
   const keys: [string, string?][] = [

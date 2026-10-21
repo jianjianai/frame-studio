@@ -272,7 +272,10 @@ const postedText = (review, post) => {
  * { 幕: 4, 歌词: 17 }; `changed[post]` = the work's version now, when the picture changed since that post.
  */
 export function reviewText({ review, title, duration, files, documents, analyses, segmentKinds = {}, changed = {} }) {
-  const lines = [`复盘「${title}」（作品 ${review.work}${duration ? `，时长 ${round(duration, 2)} 秒` : ""}）`];
+  const lines = [
+    `复盘「${title}」（作品 ${review.work}${duration ? `，时长 ${round(duration, 2)} 秒` : ""}）`,
+    `复盘类型：${review.types?.length ? review.types.join("、") : "未设置"}`,
+  ];
   if (review.moments.length) lines.push(`关键时刻：${review.moments.map((moment) => `${moment.label} ${moment.at} 秒`).join("、")}`);
   const kinds = Object.entries(segmentKinds);
   if (kinds.length) lines.push(`分段：${kinds.map(([kind, count]) => `${kind} ${count} 段`).join("、")}（按幕、按歌词等统计流失）`);

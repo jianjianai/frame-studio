@@ -936,10 +936,10 @@ async function pointerOids(dir, objects) {
 }
 
 /** The LFS files every version of these refs names. */
-const lfsObjects = async (dir, refs) => pointerOids(dir, await revObjects(dir, refs));
+export const lfsObjects = async (dir, refs) => pointerOids(dir, await revObjects(dir, refs));
 
 /** Put LFS files of one repository into another's store (linked: they never change). Files this copy lacks are skipped. */
-function copyLfs(from, to, oids) {
+export function copyLfs(from, to, oids) {
   for (const oid of oids) {
     const part = path.join("lfs", "objects", oid.slice(0, 2), oid.slice(2, 4), oid);
     const source = path.join(from, part);

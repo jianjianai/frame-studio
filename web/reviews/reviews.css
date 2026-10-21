@@ -154,6 +154,40 @@
 }
 
 /* ---- the workbench view ---- */
+.review-types {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+.review-type-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: -4px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.review-type-remove:hover {
+  background: var(--accent-soft);
+}
+.review-type-add {
+  display: inline-flex;
+  gap: 4px;
+  min-width: 0;
+}
+.review-type-add .input {
+  width: 150px;
+  min-width: 0;
+  height: 26px;
+}
 .review-posts {
   display: flex;
   flex-wrap: wrap;
