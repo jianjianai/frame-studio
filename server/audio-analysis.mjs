@@ -1,7 +1,10 @@
+import fs from "node:fs";
+import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { problem } from "./util.mjs";
 import { ffmpegExecutable } from "./render.mjs";
+import { fetchFile } from "./speech/download.mjs";
 
 /**
  * Sound an AI cannot hear, as numbers: loudness per window, and for music the tempo, the
@@ -131,13 +134,40 @@ export function voiceBalance(tracks, window) {
 
 let queue = Promise.resolve(); // one model run at a time: each takes several cores
 
+/** Beat This!'s weights (final0, MIT license, about 80 MB), as its own code downloads them. */
+export const BEAT_THIS_MODEL = { url: "https://cloud.cp.jku.at/public.php/dav/files/7ik4RrBKTS273gp/final0.ckpt", file: "final0.ckpt" };
+const fetching = new Map();
+
+/**
+ * The model file in `dir` (the data folder's models/beat-this), downloaded first when it is not
+ * there: by the studio as it starts (FRAME_DOWNLOAD_MODELS, the Docker image) or by the first
+ * analysis. One download per file at a time; the analysis never fetches anything itself.
+ */
+export function beatThisModel(dir) {
+  const file = path.join(dir, BEAT_THIS_MODEL.file);
+  if (fs.existsSync(file)) return Promise.resolve(file);
+  if (!fetching.has(file))
+    fetching.set(
+      file,
+      fetchFile(BEAT_THIS_MODEL.url, file, { timeoutMs: 15 * 60 * 1000 })
+        .catch((error) =>
+          Promise.reject(problem(503, `节拍模型（Beat This! final0，约 80 MB，从 cloud.cp.jku.at 下载）还没有下载好：${error.message}`, "NO_BEAT_MODEL")),
+        )
+        .finally(() => fetching.delete(file)),
+    );
+  return fetching.get(file);
+}
+
 /**
  * Beats and downbeats (first beat of each bar) of mono PCM, by the Beat This! model run in
- * Python (server/beat-this/analyze.py). Times are shifted by `start`. `modelsDir` is where
- * the model is downloaded on first use, unless TORCH_HOME says otherwise (the image has it).
+ * Python (server/beat-this/analyze.py). Times are shifted by `start`. `modelsDir` holds the
+ * model (beatThisModel).
  */
 export function beatThis(mono, rate, { start = 0, modelsDir } = {}) {
-  const run = queue.then(() => runBeatThis(mono, rate, modelsDir));
+  const run = queue.then(async () => {
+    await beatThisInstalled();
+    return runBeatThis(mono, rate, await beatThisModel(modelsDir));
+  });
   queue = run.catch(() => {});
   return run.then(({ beats, downbeats }) =>
     describeRhythm(
@@ -147,19 +177,31 @@ export function beatThis(mono, rate, { start = 0, modelsDir } = {}) {
   );
 }
 
-function runBeatThis(mono, rate, modelsDir) {
-  const python = process.env.FRAME_BEAT_PYTHON || "python3";
-  const script = fileURLToPath(new URL("./beat-this/analyze.py", import.meta.url));
-  const missing = () =>
-    problem(
-      503,
-      "节拍分析需要 Beat This!（Python + PyTorch）。Docker 镜像里已经装好；在本机运行时按 server/beat-this/requirements.txt 装进一个 Python 环境，再用 FRAME_BEAT_PYTHON 指向它的 python。",
-      "NO_BEAT_THIS",
-    );
+const python = () => process.env.FRAME_BEAT_PYTHON || "python3";
+const missing = () =>
+  problem(
+    503,
+    "节拍分析需要 Beat This!（Python + PyTorch）。Docker 镜像里已经装好；在本机运行时按 server/beat-this/requirements.txt 装进一个 Python 环境，再用 FRAME_BEAT_PYTHON 指向它的 python。",
+    "NO_BEAT_THIS",
+  );
+let installed = false;
+
+/** Whether the Python environment has Beat This! (asked without loading PyTorch), before its model is fetched. */
+function beatThisInstalled() {
+  if (installed) return Promise.resolve();
   return new Promise((resolve, reject) => {
-    const child = spawn(python, [script, String(rate)], {
+    const child = spawn(python(), ["-c", "import importlib.util, sys; sys.exit(0 if importlib.util.find_spec('beat_this') else 3)"], { windowsHide: true });
+    child.on("error", (error) => reject(error.code === "ENOENT" ? missing() : error));
+    child.on("close", (code) => (code === 0 ? ((installed = true), resolve()) : reject(missing())));
+  });
+}
+
+function runBeatThis(mono, rate, model) {
+  const script = fileURLToPath(new URL("./beat-this/analyze.py", import.meta.url));
+  return new Promise((resolve, reject) => {
+    const child = spawn(python(), [script, String(rate)], {
       windowsHide: true,
-      env: { ...process.env, TORCH_HOME: process.env.TORCH_HOME || modelsDir, PYTHONUNBUFFERED: "1" },
+      env: { ...process.env, FRAME_BEAT_MODEL: model, PYTHONUNBUFFERED: "1" },
     });
     const out = [];
     let errors = "";
@@ -179,10 +221,9 @@ function runBeatThis(mono, rate, modelsDir) {
         } catch {}
       }
       if (/No module named '?(beat_this|torch|torchaudio|numpy|soxr)/.test(errors)) return reject(missing());
-      // The last line that is not a download progress figure.
       const reason = errors
         .split(/[\r\n]+/)
-        .filter((line) => line.trim() && !/^\s*[\d.]+%\s*$/.test(line))
+        .filter((line) => line.trim())
         .pop();
       reject(problem(500, `节拍分析失败：${reason || `退出码 ${code}`}`, "BEAT_ANALYSIS_FAILED"));
     });

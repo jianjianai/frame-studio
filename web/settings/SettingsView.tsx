@@ -378,7 +378,6 @@ interface SpeechModel {
   languages: string[];
   size: number;
   installed: boolean;
-  builtin?: boolean;
   installing?: { progress: number | null; message: string } | null;
   license: string;
   licenseUrl?: string;
@@ -446,9 +445,7 @@ function SpeechSettings() {
           </div>
         )}
       </div>
-      {model.builtin ? (
-        <span className="badge ok">随程序提供</span>
-      ) : model.installed ? (
+      {model.installed ? (
         <button
           className="btn small"
           onClick={async () =>

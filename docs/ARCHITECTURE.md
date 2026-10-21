@@ -29,8 +29,8 @@ experience/<库>/<id>/                经验库：每个库是分支 experience/
 reviews/<库>/                        frame/reviews 分支的 worktree：作品发布后的复盘（每个作品一个文件夹 <作品 id>/：review.json、复盘文档、raw/ 原始文件）
 skills/<库>/                         frame/skills 分支的 worktree：作品库的 AI 技能（每个技能一个文件夹，入口 SKILL.md）；还没有技能时是普通文件夹
 exports/<库>/<作品>/                  导出的视频
-models/speech/                       下载的语音模型
-models/beat-this/                    节拍分析模型（本机运行时第一次分析下载；Docker 镜像自带）
+models/speech/                       下载的语音模型（Docker 里启动后自动下载语音输入的模型）
+models/beat-this/final0.ckpt         节拍分析模型（Docker 里启动后自动下载；本机运行时第一次分析下载）
 ai/sessions/                         AI 对话记录（JSONL）、图片、AI 上一轮结束时的作品文件快照
 browser/<库>/profile/                每个作品库的登录状态浏览器的用户数据（网站的登录、缓存）；session-cookies.json(0600) 是浏览器关闭时没有有效期的 cookie，下次启动时放回
 tmp/                                 导出快照、Vite 缓存；library/<库>/.materials/ 是资源预览运行的素材库代码副本（素材库现在的版本，不属于任何作品）
@@ -64,7 +64,7 @@ cache/covers/<库>/<作品>.webp|.json   首页封面（作品画面或封面图
 | `mcp.mjs` | `/mcp`（Streamable HTTP）与 `/api/tools` |
 | `ai/` | ACP 客户端：代理进程池、会话、权限、登录、自定义 API |
 | `speech/` | 配音引擎、语音输入与模型下载。语音输入（`listen.mjs`）：聊天输入框把麦克风的 16 位 PCM 通过 `/api/speech/listen` 发来，Silero VAD 在停顿处分句，SenseVoice（sherpa-onnx，离线）识别每一句；正在说的那句隔一会儿重新识别一次，边说边出字。也可以改用 OpenAI 兼容的 `/v1/audio/transcriptions`（每句说完后出字）。识别在服务端排队，一次一句，说完的句子先于正在说的。每次语音输入在服务日志里记一行（时长、收到的音频和音量、说话多久、几句、浏览器那边的情况，不含说了什么），用来查"为什么没出字" |
-| `audio-analysis.mjs` `beat-this/` | AI 的“听”：ffmpeg 解码后算响度；节拍和小节交给 [Beat This!](https://github.com/CPJKU/beat_this)（MIT）模型，由 `beat-this/analyze.py` 在独立的 Python 进程中运行（`FRAME_BEAT_PYTHON`），一次只跑一个 |
+| `audio-analysis.mjs` `beat-this/` | AI 的“听”：ffmpeg 解码后算响度；节拍和小节交给 [Beat This!](https://github.com/CPJKU/beat_this)（MIT）模型，由 `beat-this/analyze.py` 在独立的 Python 进程中运行（`FRAME_BEAT_PYTHON`），一次只跑一个；模型文件 `models/beat-this/final0.ckpt` 由 FRAME 下载（`beatThisModel`），分析进程不联网 |
 | `asset-previews.mjs` `thumbnails.mjs` | 模型、Lottie、全景图、字体的缩略图：作品 `public/` 里的按大小和修改时间、素材库的按 Git blob 缓存在 `cache/assets/`；`thumbnails.mjs` 是资源和素材共用的后台队列（一次一个，最新的请求先画，画不出来的记住几分钟），画好后广播 `asset-thumb` / `resource-thumb` |
 | `resources.mjs` | 素材库代码里声明的资源（`defineResources` 的角色、场景、效果……，`defineSounds` 的音效）和导出的函数：不运行代码，用 Babel 静态读出字面量字段、zod 参数和注释，按 Git blob 缓存；`resources_search` / `resource_view` 工具、工作台的资源列表、缩略图（无界面浏览器在后台逐个渲染，最新的请求先画；没画好时接口返回 202，画好后广播 `resource-thumb`；按代码版本缓存在 `cache/resources/`，画不出来的按版本记住几分钟）；素材库概况（资源和音效数量、常用画布、README 第一段）给 `work_context` 和会话说明。预览和缩略图运行素材库现在的代码（`tmp/library/<库>/`，素材地址 `/files/<库>/-/`），不混用作品锁定的旧文件 |
 | `reviews.mjs` `review-data.mjs` `review-analysis.mjs` `review-import.mjs` `review-segments.mjs` `sheets.mjs` | 复盘：作品发到平台后的发布记录、按时间记录的累计数据、留存曲线（和同类作品的）、每小时数据、关键时刻和自定义分段（`review.json`）、平台导出的原始文件（`raw/`，原样保存）和复盘文档，放在 `frame/reviews` 分支而不是作品分支（已发布的作品只读，数据却一直在增加；所有作品在一个文件夹里便于对比）。每次修改立即保存为一个版本并自动推送；只读的请求不会建出这个分支。`review-data.mjs`：数据格式和操作、按发布后同一天数取数（有每小时数据时正好算到那一天）、比例、中位数；`review-analysis.mjs`：每秒和每段流失率是同类的几倍、“按同类走”的收益、流量的几波，以及给 AI 的文字；`review-import.mjs`：按表格内容认出抖音创作者中心的导出和评论导出，直接读成数据；`review-segments.mjs`：从作品本身取分段（visual.json 的图层、镜头标记、字幕，配乐旁的 .lrc 按 audio.json 的剪辑换算到作品时间）；`sheets.mjs` 不执行公式地把 xlsx / csv 读成文字表格（GB18030、UTF-16 编码的导出也能读）。工具 `review_import` / `review_read` / `review_write` / `reviews_compare`，工作台「复盘」视图和首页的复盘对比页 |

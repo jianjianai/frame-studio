@@ -36,8 +36,10 @@ export function loadConfig(env = process.env) {
     password,
     dev: env.FRAME_DEV === "1",
     publicUrl: env.FRAME_PUBLIC_URL || "",
-    // Speech models that come with the program (the Docker image's), besides the downloaded ones.
-    speechModels: env.FRAME_SPEECH_MODELS ? path.resolve(env.FRAME_SPEECH_MODELS) : "",
+    // Download the models features need (voice input, beat analysis) into dirs.models as the
+    // studio starts, when they are not there yet: the Docker image sets it; elsewhere they are
+    // fetched when first used or installed in the settings.
+    downloadModels: env.FRAME_DOWNLOAD_MODELS === "1",
     dirs: {
       repos: path.join(home, "repos"),
       works: path.join(home, "works"),

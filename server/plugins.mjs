@@ -1,3 +1,4 @@
+import path from "node:path";
 import { Renderer } from "./render.mjs";
 import { Tasks } from "./tasks.mjs";
 import { Exports } from "./exports.mjs";
@@ -28,6 +29,7 @@ import { studioRoutes } from "./routes/studio.mjs";
 import { aiPlugin } from "./ai/routes.mjs";
 import { recorderPlugin } from "./recorder/plugin.mjs";
 import { speechPlugin } from "./speech/plugin.mjs";
+import { beatThisModel } from "./audio-analysis.mjs";
 
 /** Rendering, tasks, materials, exports and the shared tool registry. */
 function corePlugin(services) {
@@ -51,4 +53,29 @@ function corePlugin(services) {
   registerSearchTools(tools);
 }
 
-export const plugins = [corePlugin, speechPlugin, librariesPlugin, experiencePlugin, materialsPlugin, reviewsPlugin, skillsPlugin, resourcesPlugin, assetPreviewsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, browserPlugin, blenderPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, recorderPlugin, aiPlugin];
+/**
+ * The models features need, fetched into the data folder as the studio starts when they are
+ * not there (config.downloadModels, the Docker image): voice input's and beat analysis's.
+ * Nothing waits for them; a failed download is tried again every ten minutes, and until then
+ * the feature says what is missing.
+ */
+function modelsPlugin(services) {
+  if (!services.config.downloadModels) return;
+  const fetchUntilThere = (name, fetch) => {
+    const attempt = () =>
+      fetch().then(
+        () => console.log(`${name}已就绪`),
+        (error) => {
+          console.warn(`${name}下载失败，10 分钟后再试：${error.message}`);
+          setTimeout(attempt, 10 * 60 * 1000).unref();
+        },
+      );
+    attempt();
+  };
+  services.starters.push(() => {
+    fetchUntilThere("语音输入模型", () => services.speech.ensureRecognition());
+    fetchUntilThere("节拍模型", () => beatThisModel(path.join(services.config.dirs.models, "beat-this")));
+  });
+}
+
+export const plugins = [corePlugin, speechPlugin, modelsPlugin, librariesPlugin, experiencePlugin, materialsPlugin, reviewsPlugin, skillsPlugin, resourcesPlugin, assetPreviewsPlugin, coversPlugin, remoteSyncPlugin, uploadsPlugin, browserPlugin, blenderPlugin, promptsPlugin, mcpPlugin, oauthPlugin, studioRoutes, recorderPlugin, aiPlugin];

@@ -34,12 +34,21 @@ export async function fetchModel(model, dir, { signal, progress } = {}) {
   }
 }
 
-/** Download one file (the VAD model). */
-export async function fetchFile(url, file) {
-  const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(120000) });
-  if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`);
+/**
+ * Download one file (the VAD model, Beat This!'s weights) through `<file>.partial`, so an
+ * interrupted download is never taken for the file.
+ */
+export async function fetchFile(url, file, { timeoutMs = 120000 } = {}) {
+  const temp = file + ".partial";
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file + ".partial", Buffer.from(await response.arrayBuffer()));
-  fs.renameSync(file + ".partial", file);
+  try {
+    const response = await fetch(url, { redirect: "follow", signal: AbortSignal.timeout(timeoutMs) });
+    if (!response.ok || !response.body) throw new Error(`下载失败：HTTP ${response.status}`);
+    await pipeline(Readable.fromWeb(response.body), fs.createWriteStream(temp));
+    fs.renameSync(temp, file);
+  } catch (error) {
+    fs.rmSync(temp, { force: true });
+    throw error;
+  }
   return file;
 }

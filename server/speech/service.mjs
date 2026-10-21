@@ -40,8 +40,6 @@ export class SpeechService {
   constructor({ config, settings, tasks, events }) {
     this.dir = path.join(config.dirs.models, "speech");
     fs.mkdirSync(this.dir, { recursive: true });
-    // Models that come with the program (the Docker image has the voice input ones): used in place, never deleted.
-    this.shipped = config.speechModels;
     this.settings = settings;
     this.tasks = tasks;
     this.events = events;
@@ -54,11 +52,8 @@ export class SpeechService {
   conf() {
     return this.settings.get("speech");
   }
-  builtin(id) {
-    return Boolean(this.shipped) && fs.existsSync(path.join(this.shipped, id, ".installed"));
-  }
   modelDir(id) {
-    return this.builtin(id) ? path.join(this.shipped, id) : path.join(this.dir, id);
+    return path.join(this.dir, id);
   }
   installed(id) {
     return fs.existsSync(path.join(this.modelDir(id), ".installed"));
@@ -67,7 +62,6 @@ export class SpeechService {
     return list.map((model) => ({
       ...model,
       installed: this.installed(model.id),
-      builtin: this.builtin(model.id),
       installing: this.installing.get(model.id) ?? null,
     }));
   }
@@ -317,10 +311,8 @@ export class SpeechService {
       },
     });
   }
-  /** The VAD model file: shipped, or downloaded the first time (under 1 MB). */
+  /** The VAD model file, downloaded the first time (under 1 MB). */
   vadModel() {
-    const shipped = this.shipped && path.join(this.shipped, VAD_MODEL.id, VAD_MODEL.file);
-    if (shipped && fs.existsSync(shipped)) return Promise.resolve(shipped);
     const file = path.join(this.dir, VAD_MODEL.id, VAD_MODEL.file);
     if (fs.existsSync(file)) return Promise.resolve(file);
     this.vadDownload ??= fetchFile(VAD_MODEL.url, file)
@@ -407,8 +399,20 @@ export class SpeechService {
       }
     });
   }
+  /**
+   * The voice input model and its pause detector, downloaded when they are not there: the
+   * studio does this as it starts (FRAME_DOWNLOAD_MODELS, the Docker image), so the
+   * microphone works without anyone asking for a download. Resolves once both are there.
+   */
+  async ensureRecognition() {
+    const [model] = RECOGNITION_MODELS;
+    await this.vadModel();
+    if (this.installed(model.id)) return;
+    const task = this.installing.has(model.id) ? null : this.install(model.id);
+    const finished = task ? await task.done : null;
+    if (finished?.status === "failed") throw new Error(finished.error);
+  }
   remove(id) {
-    if (this.builtin(id)) throw problem(400, "这个模型随程序提供，不能删除");
     this.engines.delete(id);
     this.recognizers.delete(id);
     fs.rmSync(this.modelDir(id), { recursive: true, force: true });

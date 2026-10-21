@@ -27,7 +27,7 @@ FRAME_PASSWORD='设置一个强密码' docker compose -f deploy/compose.yaml up 
 ```
 
 - 所有数据在 `deploy/data`（容器内 `/data`）：作品库、设置、对话、导出、语音模型、AI 账号凭据（`/data/home`）。
-- 镜像包含 Chromium、中日韩字体、Beat This!（Python + CPU 版 PyTorch + 模型，约 1 GB）和语音输入的识别模型（SenseVoice + Silero VAD，约 240 MB）。三维场景在容器中用软件渲染，服务器导出较慢；AI 查看画面、测速时，给对话发消息的那个浏览器如果开着 FRAME，会代替服务器用自己的显卡画。
+- 镜像包含 Chromium、中日韩字体和 Beat This! 的 Python 环境（CPU 版 PyTorch，约 1 GB）。模型不在镜像里：FRAME 启动后检查 `/data/models`，缺的在后台下载（`FRAME_DOWNLOAD_MODELS=1`）——语音输入的识别模型（SenseVoice + Silero VAD，约 240 MB，从 GitHub）和节拍模型（81 MB，从 cloud.cp.jku.at）。下载失败（比如对方服务器暂时不可用）每 10 分钟再试一次，在那之前对应功能会说明还没下载好；构建镜像不受这些服务器影响。三维场景在容器中用软件渲染，服务器导出较慢；AI 查看画面、测速时，给对话发消息的那个浏览器如果开着 FRAME，会代替服务器用自己的显卡画。
 - 更新：`git pull && docker compose -f deploy/compose.yaml up -d --build`。替换容器会打断正在工作的 AI 对话（重启后它们会自动接着做，但正在进行的那一步要重来）。不想打断时用 `deploy/publish.sh`（`FRAME_STACK` 指向 compose 所在目录，`FRAME_CONTAINER`、`FRAME_IMAGE` 按实际填写）：它从当前提交构建镜像；如果改动只涉及运行中的服务器每次都从磁盘读的文件（构建好的界面、预览页由 Vite 现编译的 `src/` 代码、`docs/`、`public/`），就把这些文件直接换进运行中的容器，不重启，已打开的页面会提示刷新；否则等到没有 AI 对话在工作、没有导出等后台任务时再替换容器（`FRAME_NOW=1` 立即替换）。同时只有一个更新在等，之后再发布的会让它直接用最新的镜像。
 
 ### 反向代理
@@ -51,7 +51,6 @@ frame.example.com {
 | `FRAME_BROWSER` | 自动查找 | Chrome/Chromium 路径 |
 | `FFMPEG_PATH` | 自动查找 | ffmpeg 路径 |
 | `FRAME_BEAT_PYTHON` | `python3` | 装有 Beat This! 的 Python（镜像中为 `/opt/beat-this/bin/python`） |
-| `TORCH_HOME` | `FRAME_HOME/models/beat-this` | Beat This! 模型位置（镜像中为构建时下载好的 `/opt/beat-this/torch`） |
-| `FRAME_SPEECH_MODELS` | （无） | 随程序提供的语音模型目录，直接使用、不能删除（镜像中为构建时下载好的 `/opt/frame-models/speech`：语音输入的 SenseVoice 和 Silero VAD）；用 `node server/speech/bundle.mjs <目录>` 准备 |
+| `FRAME_DOWNLOAD_MODELS` | （无） | 设为 `1` 时，启动后把缺少的模型（语音输入、节拍分析）下载到 `FRAME_HOME/models`（镜像中已设置）；不设时语音模型在设置里或第一次使用时下载，节拍模型在第一次分析时下载 |
 | `FRAME_AGENT_HOME` | 用户主目录 | AI 代理（claude/codex）的 HOME，凭据保存于此 |
 | `FRAME_DEV` | （无） | `1` 时界面使用源码热更新 |

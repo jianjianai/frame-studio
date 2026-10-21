@@ -426,19 +426,31 @@ describe("websocket access", () => {
     }
   });
 
-  it("uses the recognition model that comes with the program, and keeps it", async () => {
-    const shipped = fs.mkdtempSync(path.join(os.tmpdir(), "frame-models-"));
-    const { RECOGNITION_MODELS } = await import("../server/speech/models.mjs");
-    const id = RECOGNITION_MODELS[0].id;
-    fs.mkdirSync(path.join(shipped, id));
-    fs.writeFileSync(path.join(shipped, id, ".installed"), "");
-    const server = await start({ FRAME_SPEECH_MODELS: shipped });
+  it("downloads the voice input model as the studio starts, when it is told to and the model is missing", async () => {
+    const { loadConfig } = await import("../server/config.mjs");
+    expect(loadConfig({ FRAME_HOME: os.tmpdir() }).downloadModels).toBe(false);
+    expect(loadConfig({ FRAME_HOME: os.tmpdir(), FRAME_DOWNLOAD_MODELS: "1" }).downloadModels).toBe(true);
+    const server = await start();
     try {
-      const { recognition } = (await server.call("/api/speech/providers")).body;
-      expect(recognition.provider).toBe("local:" + id);
-      expect(recognition.models[0]).toMatchObject({ id, installed: true, builtin: true });
-      expect((await server.call(`/api/speech/models/${id}`, { method: "DELETE" })).status).toBe(400);
-      expect(fs.existsSync(path.join(shipped, id, ".installed"))).toBe(true);
+      const { RECOGNITION_MODELS, VAD_MODEL } = await import("../server/speech/models.mjs");
+      const speech = server.app.services.speech;
+      const [model] = RECOGNITION_MODELS;
+      // Both already there: nothing to fetch.
+      fs.mkdirSync(path.join(speech.dir, model.id), { recursive: true });
+      fs.writeFileSync(path.join(speech.dir, model.id, ".installed"), "");
+      fs.mkdirSync(path.join(speech.dir, VAD_MODEL.id), { recursive: true });
+      fs.writeFileSync(path.join(speech.dir, VAD_MODEL.id, VAD_MODEL.file), "");
+      let installs = 0;
+      speech.install = () => (installs++, null);
+      await speech.ensureRecognition();
+      expect(installs).toBe(0);
+      // The model missing: installed through the same task as the settings' download button.
+      fs.rmSync(path.join(speech.dir, model.id), { recursive: true });
+      speech.install = (id) => (installs++, { done: Promise.resolve({ status: "failed", error: `下载失败：HTTP 503 (${id})` }) });
+      await expect(speech.ensureRecognition()).rejects.toThrow("HTTP 503");
+      expect(installs).toBe(1);
+      // Downloaded models are like any other: they can be deleted.
+      expect((await server.call("/api/speech/providers")).body.recognition.models[0]).not.toHaveProperty("builtin");
     } finally {
       await server.app.close();
     }
