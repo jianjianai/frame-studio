@@ -203,7 +203,8 @@ export class Auth {
     const origin = req.headers.origin;
     if (origin && !crossOrigin && req.method !== "GET" && req.method !== "HEAD") {
       const expected = new URL(`http://${req.headers.host}`).host;
-      if (new URL(origin).host !== expected) throw problem(403, "Cross-origin request rejected", "FORBIDDEN");
+      // `Origin: null` (opaque origins, no-referrer pages) cannot be checked, so it counts as cross-site.
+      if (URL.parse(origin)?.host !== expected) throw problem(403, "Cross-origin request rejected", "FORBIDDEN");
     }
   }
 }

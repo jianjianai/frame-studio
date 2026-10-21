@@ -155,6 +155,23 @@ describe("MCP OAuth", () => {
     expect(new URL(denied.headers.get("location")).searchParams.get("error")).toBe("access_denied");
   });
 
+  it("accepts the consent form with the origin a browser sends and refuses Origin: null", async () => {
+    const client = await (await fetch(base + "/oauth/register", json({ redirect_uris: [REDIRECT] }))).json();
+    const query = new URLSearchParams({ response_type: "code", client_id: client.client_id, redirect_uri: REDIRECT, code_challenge: "c", code_challenge_method: "S256" });
+    const page = await fetch(`${base}/oauth/authorize?${query}`);
+    // no-referrer would make the browser post the form with `Origin: null`.
+    expect(page.headers.get("referrer-policy")).toBe("same-origin");
+    const sealed = /name="request" value="([^"]+)"/.exec(await page.text())[1];
+    const post = (origin) => {
+      const request = form({ request: sealed, decision: "allow", password: PASSWORD, access: "write" });
+      return fetch(base + "/oauth/authorize", { ...request, headers: { ...request.headers, Origin: origin } });
+    };
+    expect((await post(new URL(base).origin)).status).toBe(302);
+    const opaque = await post("null");
+    expect(opaque.status).toBe(403);
+    expect((await opaque.json()).error.code).toBe("FORBIDDEN");
+  });
+
   it("validates redirect URIs", () => {
     expect(validRedirect("https://claude.ai/api/mcp/auth_callback")).toBe(true);
     expect(validRedirect("http://localhost:8080/cb")).toBe(true);

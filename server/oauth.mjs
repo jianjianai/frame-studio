@@ -472,7 +472,9 @@ function sendPage(res, status, html) {
     "Cache-Control": "no-store",
     "X-Frame-Options": "DENY",
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
-    "Referrer-Policy": "no-referrer",
+    // Not no-referrer: browsers then send `Origin: null` with the consent form's POST,
+    // which the cross-site check has to refuse. same-origin still keeps the query from the client.
+    "Referrer-Policy": "same-origin",
   });
   res.end(html);
 }
