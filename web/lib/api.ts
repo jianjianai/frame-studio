@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { serverEvents, type ServerEvent } from "../../src/preview/server-events";
 
 export class ApiError extends Error {
   constructor(
@@ -54,94 +55,13 @@ export const put = <T = unknown>(path: string, body: unknown) => api<T>(path, { 
 export const patch = <T = unknown>(path: string, body: unknown) => api<T>(path, { method: "PATCH", body });
 
 // ---- server events over one shared WebSocket ----
-export type ServerEvent = { type: string; [key: string]: unknown };
+export type { ServerEvent };
 type Listener = (event: ServerEvent) => void;
-const listeners = new Set<Listener>();
-let socket: WebSocket | null = null;
-let connected = false;
-const statusListeners = new Set<(connected: boolean) => void>();
-let queue: string[] = [];
-/** When the server last said anything (it sends a tick every 20 s). */
-let heard = 0;
-/** The connection dropped since the page first connected: what happened meanwhile was missed. */
-let dropped = false;
-let retry: ReturnType<typeof setTimeout> | undefined;
-
-function connect() {
-  clearTimeout(retry);
-  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
-  socket = ws;
-  ws.onopen = () => {
-    connected = true;
-    heard = Date.now();
-    statusListeners.forEach((listener) => listener(true));
-    // Views that keep what live events told them (the chat) load it again.
-    if (dropped) listeners.forEach((listener) => listener({ type: "reconnected" }));
-    dropped = false;
-    for (const message of queue) ws.send(message);
-    queue = [];
-  };
-  ws.onmessage = (message) => {
-    heard = Date.now();
-    const event = JSON.parse(message.data) as ServerEvent;
-    if (event.type === "tick") return;
-    listeners.forEach((listener) => listener(event));
-  };
-  ws.onclose = () => lost(ws);
-}
-
-/** The connection is gone: say so once and connect again. */
-function lost(ws: WebSocket) {
-  if (socket !== ws) return;
-  socket = null;
-  if (connected) statusListeners.forEach((listener) => listener(false));
-  connected = false;
-  dropped = true;
-  retry = setTimeout(connect, 1500);
-}
-
-/**
- * A connection can die without closing (a computer that slept, a changed network, a tab the
- * browser froze): silence longer than a few ticks means it is gone, so it is dropped and made
- * again at once instead of waiting for a close that never comes.
- */
-function check(quiet: number) {
-  const ws = socket;
-  if (!ws || ws.readyState !== WebSocket.OPEN || Date.now() - heard < quiet) return;
-  ws.onclose = ws.onmessage = null;
-  try {
-    ws.close();
-  } catch {}
-  lost(ws);
-  clearTimeout(retry);
-  connect();
-}
-if (typeof window !== "undefined") {
-  setInterval(() => check(45000), 10000);
-  // Back in front, back online, out of the browser's freezer: check sooner.
-  const soon = () => check(25000);
-  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && soon());
-  document.addEventListener("resume", soon);
-  window.addEventListener("online", soon);
-  window.addEventListener("pageshow", soon);
-}
-
-export function sendEvent(event: ServerEvent) {
-  const text = JSON.stringify(event);
-  if (socket?.readyState === WebSocket.OPEN) socket.send(text);
-  else queue = [...queue.slice(-20), text];
-}
-
-export function subscribe(listener: Listener) {
-  if (!socket) connect();
-  listeners.add(listener);
-  return () => void listeners.delete(listener);
-}
-
-export function onConnection(listener: (connected: boolean) => void) {
-  statusListeners.add(listener);
-  return () => void statusListeners.delete(listener);
-}
+// Views that keep what live events told them (the chat, the work) load it again on `reconnected`.
+const events = serverEvents();
+export const sendEvent = events.send;
+export const subscribe = events.subscribe;
+export const onConnection = events.onConnection;
 
 /** Subscribe to server events for the lifetime of a component. */
 export function useServerEvent(handler: Listener, deps: unknown[] = []) {

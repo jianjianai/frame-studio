@@ -3,6 +3,7 @@ import { projectAudioTracks, type AnimationProject, type Quality } from "../engi
 import type { StudioApi } from "../engine/debug";
 import { importWork, workSourceFromQuery, changeKinds } from "./load-work";
 import { attachZoom, type Zoom } from "./zoom";
+import { serverEvents } from "./server-events";
 import "./stage.css";
 
 /**
@@ -181,14 +182,16 @@ async function dropCachedAssets(files: string[]) {
 /**
  * Edits that come while one is being swapped in are taken together (all their files, the newest
  * timestamp), as the server merges edits close together: only the newest version is built.
+ * `files` null: which files changed is not known (edits made while the connection was down).
  */
-let queued: { timestamp: number; files: Set<string> } | null = null;
+let queued: { timestamp: number; files: Set<string> | null } | null = null;
 let draining = false;
-function hotUpdate(timestamp: number, files: string[]) {
+function hotUpdate(timestamp: number, files: string[] | null) {
   if (queued) {
     queued.timestamp = Math.max(queued.timestamp, timestamp);
-    for (const file of files) queued.files.add(file);
-  } else queued = { timestamp, files: new Set(files) };
+    if (!files) queued.files = null;
+    else for (const file of files) queued.files?.add(file);
+  } else queued = { timestamp, files: files && new Set(files) };
   if (draining) return;
   draining = true;
   void (async () => {
@@ -196,7 +199,7 @@ function hotUpdate(timestamp: number, files: string[]) {
       while (queued) {
         const next = queued;
         queued = null;
-        await applyUpdate(next.timestamp, [...next.files]);
+        await applyUpdate(next.timestamp, next.files && [...next.files]);
       }
     } finally {
       draining = false;
@@ -204,15 +207,15 @@ function hotUpdate(timestamp: number, files: string[]) {
   })();
 }
 
-async function applyUpdate(timestamp: number, files: string[]) {
+async function applyUpdate(timestamp: number, files: string[] | null) {
   setStatus({ updating: true });
   try {
-    await dropCachedAssets(files);
-    if (files.some((file) => file.includes("/.materials/"))) materialStamp = timestamp;
+    if (files) await dropCachedAssets(files);
+    if (!files || files.some((file) => file.includes("/.materials/"))) materialStamp = timestamp;
     const next = await importWork(source, timestamp, materialStamp);
     // Scene code may compute beat times when it is imported: a new grid needs fresh modules.
     if (JSON.stringify(next.tempo) !== JSON.stringify(project?.tempo) && project) return location.reload();
-    const kinds = changeKinds(files);
+    const kinds = files ? changeKinds(files) : { visual: true, audio: true };
     if (!session || state.status === "error" || next.renderer !== project?.renderer) start(next, lastSnapshot);
     else {
       // A sample that plays the work's sound from elsewhere hears another part of it.
@@ -227,7 +230,7 @@ async function applyUpdate(timestamp: number, files: string[]) {
       revision: state.revision + 1,
       project: summary(next),
     });
-    post({ type: "updated", files, revision: state.revision });
+    post({ type: "updated", files: files ?? [], revision: state.revision });
   } catch (error) {
     setStatus({ updating: false, error: "修改未能生效，仍显示上一个可用版本：" + messageOf(error) });
   }
@@ -257,18 +260,15 @@ window.addEventListener("unhandledrejection", (event) => setStatus({ error: "运
 
 if (params.get("live") !== "0") {
   const work = params.get("work");
-  const connect = () => {
-    const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`);
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type !== "preview-update" || message.work !== work) return;
-      // Material library files keep their address when the work's lock moves to another
-      // version, but decoded media are cached by address: start over.
-      if ((message.files as string[]).some((file) => file.endsWith("materials.lock.json"))) location.reload();
-      else void hotUpdate(message.timestamp, message.files);
-    };
-    ws.onclose = () => setTimeout(connect, 1500);
-  };
-  connect();
+  serverEvents().subscribe((message) => {
+    // Edits saved while the connection was down never arrived: take whatever changed since.
+    if (message.type === "reconnected") return hotUpdate(Date.now(), null);
+    if (message.type !== "preview-update" || message.work !== work) return;
+    const files = message.files as string[];
+    // Material library files keep their address when the work's lock moves to another
+    // version, but decoded media are cached by address: start over.
+    if (files.some((file) => file.endsWith("materials.lock.json"))) location.reload();
+    else hotUpdate(message.timestamp as number, files);
+  });
 }
 void load();
